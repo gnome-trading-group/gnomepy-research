@@ -1,0 +1,35 @@
+[project]
+name = "gnomepy-research"
+version = "0.1.0"
+description = "Signal research, replay, metrics, and strategy modules for gnomepy"
+authors = [
+    {name = "mprey", email = "masonprey7@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "gnomepy (>=0.1.6)",
+    "numpy (>=2.2.4)",
+    "pandas (>=2.2.3)",
+    "plotly (>=6.0.0)",
+    "scipy (>=1.15.0)",
+    "scikit-learn (>=1.8.0)",
+    "lightgbm (>=4.6.0)",
+    "matplotlib (>=3.10.1)",
+    "seaborn (>=0.13.2)",
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.4.1"
+notebook = "^7.5.5"
+
+[tool.poetry.group.local]
+optional = true
+
+[tool.poetry.group.local.dependencies]
+gnomepy = {path = "../gnomepy", develop = true}
