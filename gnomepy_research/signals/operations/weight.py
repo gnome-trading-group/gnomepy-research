@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Generic, TypeVar
 
-from gnomepy.java.schemas import JavaMBP10Schema
+from gnomepy.java.schemas import Mbp10Schema
 from gnomepy_research.signals.base import Signal
 from gnomepy_research.signals.fair_value.base import FairValueSignal
 from gnomepy_research.signals.flow.base import FlowSignal
@@ -24,7 +24,7 @@ class _WeightedSignal(Signal[T], Generic[T]):
         total = sum(weights)
         self.weights = [w / total for w in weights]
 
-    def update(self, timestamp: int, data: JavaMBP10Schema) -> None:
+    def update(self, timestamp: int, data: Mbp10Schema) -> None:
         for s in self.signals:
             s.update(timestamp, data)
 

@@ -21,7 +21,7 @@ from gnomepy_research.signals import (
     PerAsset,
 )
 
-# A signal ingests JavaMBP10Schema ticks and exposes value()
+# A signal ingests Mbp10Schema ticks and exposes value()
 fv = EWMA(MicropriceFairValue(), alpha=0.95)
 
 for ts, tick in stream:

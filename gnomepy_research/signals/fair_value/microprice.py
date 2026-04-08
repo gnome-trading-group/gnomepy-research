@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gnomepy.java.schemas import JavaMBP10Schema
+from gnomepy.java.schemas import Mbp10Schema
 from gnomepy_research.signals.fair_value.base import FairValueSignal
 
 
@@ -17,7 +17,7 @@ class MicropriceFairValue(FairValueSignal):
         self._fair_value = 0
         self._ready = False
 
-    def update(self, timestamp: int, data: JavaMBP10Schema) -> None:
+    def update(self, timestamp: int, data: Mbp10Schema) -> None:
         bid = data.bid_price(0)
         ask = data.ask_price(0)
         bid_size = data.bid_size(0)
@@ -63,7 +63,7 @@ class WeightedMicropriceFairValue(FairValueSignal):
         self._ready = False
         self._weights = [decay ** i for i in range(self.num_levels)]
 
-    def update(self, timestamp: int, data: JavaMBP10Schema) -> None:
+    def update(self, timestamp: int, data: Mbp10Schema) -> None:
         numerator = 0.0
         denominator = 0.0
 

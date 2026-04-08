@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import deque
 
 from gnomepy.java.enums import Side
-from gnomepy.java.schemas import JavaMBP10Schema
+from gnomepy.java.schemas import Mbp10Schema
 from gnomepy_research.signals.flow.base import FlowSignal
 
 
@@ -29,7 +29,7 @@ class TradeImbalance(FlowSignal):
         self._sell_volume = 0
         self._trade_count = 0
 
-    def update(self, timestamp: int, data: JavaMBP10Schema) -> None:
+    def update(self, timestamp: int, data: Mbp10Schema) -> None:
         size = data.size
         side = data.side
 

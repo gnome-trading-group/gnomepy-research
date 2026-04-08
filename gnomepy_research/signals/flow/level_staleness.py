@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from gnomepy.java.enums import Side
-from gnomepy.java.schemas import JavaMBP10Schema
+from gnomepy.java.schemas import Mbp10Schema
 from gnomepy_research.signals.flow.base import FlowSignal
 
 
@@ -28,7 +28,7 @@ class LevelStaleness(FlowSignal):
         self._staleness_ns = 0
         self._tick_count = 0
 
-    def update(self, timestamp: int, data: JavaMBP10Schema) -> None:
+    def update(self, timestamp: int, data: Mbp10Schema) -> None:
         exchange_ts = data.timestamp_event
 
         if self.side == Side.BID:

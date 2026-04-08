@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from gnomepy.java.schemas import JavaMBP10Schema
+from gnomepy.java.schemas import Mbp10Schema
 from gnomepy_research.signals.base import Signal
 
 
@@ -25,7 +25,7 @@ class CompositeSignal(Signal[float]):
         self.op = op
         self.op_name = op_name
 
-    def update(self, timestamp: int, data: JavaMBP10Schema) -> None:
+    def update(self, timestamp: int, data: Mbp10Schema) -> None:
         self.left.update(timestamp, data)
         self.right.update(timestamp, data)
 
@@ -61,7 +61,7 @@ class ScalarOpSignal(Signal[float]):
         self.op_name = op_name
         self.scalar_left = scalar_left
 
-    def update(self, timestamp: int, data: JavaMBP10Schema) -> None:
+    def update(self, timestamp: int, data: Mbp10Schema) -> None:
         self.signal.update(timestamp, data)
 
     def value(self) -> float:

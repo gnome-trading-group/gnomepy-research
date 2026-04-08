@@ -4,7 +4,7 @@ import operator
 from abc import ABC, abstractmethod
 from typing import Generic, TypeVar
 
-from gnomepy.java.schemas import JavaMBP10Schema
+from gnomepy.java.schemas import Mbp10Schema
 
 T = TypeVar("T", int, float)
 
@@ -19,7 +19,7 @@ class Signal(ABC, Generic[T]):
     """
 
     @abstractmethod
-    def update(self, timestamp: int, data: JavaMBP10Schema) -> None:
+    def update(self, timestamp: int, data: Mbp10Schema) -> None:
         """Feed market data for the current tick."""
         ...
 

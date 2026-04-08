@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gnomepy.java.schemas import JavaMBP10Schema
+from gnomepy.java.schemas import Mbp10Schema
 from gnomepy_research.signals.volatility.base import VolatilitySignal
 
 
@@ -22,7 +22,7 @@ class SpreadVolatility(VolatilitySignal):
         self._spread_bps = 0.0
         self._tick_count = 0
 
-    def update(self, timestamp: int, data: JavaMBP10Schema) -> None:
+    def update(self, timestamp: int, data: Mbp10Schema) -> None:
         bid = data.bid_price(0)
         ask = data.ask_price(0)
         if bid <= 0 or ask <= 0:

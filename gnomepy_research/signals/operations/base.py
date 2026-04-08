@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Generic, TypeVar
 
-from gnomepy.java.schemas import JavaMBP10Schema
+from gnomepy.java.schemas import Mbp10Schema
 from gnomepy_research.signals.base import Signal
 from gnomepy_research.signals.fair_value.base import FairValueSignal
 from gnomepy_research.signals.flow.base import FlowSignal
@@ -47,7 +47,7 @@ class _OperationAdapter(Signal[T], Generic[T]):
         self.signal = signal
         self.op = op
 
-    def update(self, timestamp: int, data: JavaMBP10Schema) -> None:
+    def update(self, timestamp: int, data: Mbp10Schema) -> None:
         self.signal.update(timestamp, data)
         if self.signal.is_ready():
             self.op.update(float(self.signal.value()))
