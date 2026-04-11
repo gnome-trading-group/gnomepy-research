@@ -1797,7 +1797,7 @@ version = "2.18.1"
 description = "Extremely lightweight compatibility layer between dataframe libraries"
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "local"]
+groups = ["main", "dev", "local"]
 files = [
     {file = "narwhals-2.18.1-py3-none-any.whl", hash = "sha256:a0a8bb80205323851338888ba3a12b4f65d352362c8a94be591244faf36504ad"},
     {file = "narwhals-2.18.1.tar.gz", hash = "sha256:652a1fcc9d432bbf114846688884c215f17eb118aa640b7419295d2f910d2a8b"},
@@ -2344,7 +2344,7 @@ version = "6.6.0"
 description = "An open-source interactive data visualization library for Python"
 optional = false
 python-versions = ">=3.8"
-groups = ["main", "local"]
+groups = ["main", "dev", "local"]
 files = [
     {file = "plotly-6.6.0-py3-none-any.whl", hash = "sha256:8d6daf0f87412e0c0bfe72e809d615217ab57cc715899a1e5145135a7800d1d0"},
     {file = "plotly-6.6.0.tar.gz", hash = "sha256:b897f15f3b02028d69f755f236be890ba950d0a42d7dfc619b44e2d8cea8748c"},
@@ -3698,4 +3698,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<3.14"
-content-hash = "e8311792a750f76d812cea4697821f2cfa1cb6907381fa9d69ba1e63c28b06f8"
+content-hash = "f83fa4c454d8638853fc54e7576340f845ca5c46147bc9b6b450fc48b9b4cd45"

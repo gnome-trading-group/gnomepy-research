@@ -1,0 +1,24 @@
+strategy: gnomepy_research.strategies.market_maker:MarketMaker
+strategy_args:
+  exchange_id: 1
+  security_id: 1
+  size: 100000
+  max_position: 10
+  gamma: 2.0
+  delta: 4.0
+  min_spread_bps: 0.05
+  warmup_ticks: 100
+  processing_time_ns: 500000
+
+schema_type: MBP_10
+
+exchanges:
+  - exchange_id: 1
+    security_id: 1
+    fee:
+      taker_fee: 0.0005
+      maker_fee: -0.0001
+    network_latency_ns: 5000000
+    order_processing_latency_ns: 1000000
+    queue:
+      kind: risk_averse

@@ -19,6 +19,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"
 notebook = "^7.5.5"
+plotly = "^6.6.0"
 
 [tool.poetry.group.local]
 optional = true
