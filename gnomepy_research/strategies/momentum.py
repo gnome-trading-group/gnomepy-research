@@ -16,6 +16,8 @@ from gnomepy_research.signals import EWMA, MicropriceFairValue
 
 
 class MomentumTaker(Strategy):
+    """Momentum-taking strategy with EWMA smoothing and dynamic exits."""
+    
     def __init__(
         self,
         exchange_id: int,
