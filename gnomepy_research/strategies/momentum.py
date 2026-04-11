@@ -16,11 +16,6 @@ from gnomepy_research.signals import EWMA, MicropriceFairValue
 
 
 class MomentumTaker(Strategy):
-    """Momentum-taking strategy with EWMA smoothing and dynamic exits."""
-    
-    # Basis point conversion constant (1 bp = 0.0001)
-    BPS_CONVERSION = 10_000
-    
     def __init__(
         self,
         exchange_id: int,
