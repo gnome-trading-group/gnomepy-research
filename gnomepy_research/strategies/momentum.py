@@ -95,8 +95,10 @@ class MomentumTaker(Strategy):
         if smoothed <= 0:
             return []
 
+        # Calculate momentum as deviation from EWMA in basis points
         delta_bps = (micro - smoothed) / smoothed * 10_000
 
+        # Buy on positive momentum (microprice > EWMA), sell on negative momentum
         if delta_bps > self.threshold_bps and position < self.max_position:
             return [self._take(Side.ASK)]
         if delta_bps < -self.threshold_bps and position > -self.max_position:
