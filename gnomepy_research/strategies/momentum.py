@@ -69,19 +69,20 @@ class MomentumTaker(Strategy):
         # --- Exit logic: stop-loss / take-profit ---
         if position != 0:
             pos_info = self.oms.get_position(self.exchange_id, self.security_id)
-            entry_price = pos_info.avg_entry_price
-            if entry_price > 0:
-                if position > 0:
-                    pnl_bps = (micro - entry_price) / entry_price * 10_000
-                else:
-                    pnl_bps = (entry_price - micro) / entry_price * 10_000
+            if pos_info is not None:
+                entry_price = pos_info.avg_entry_price
+                if entry_price > 0:
+                    if position > 0:
+                        pnl_bps = (micro - entry_price) / entry_price * 10_000
+                    else:
+                        pnl_bps = (entry_price - micro) / entry_price * 10_000
 
-                if pnl_bps <= -self.stop_loss_bps:
-                    self._ticks_since_exit = 0
-                    return [self._close(position)]
-                if pnl_bps >= self.take_profit_bps:
-                    self._ticks_since_exit = 0
-                    return [self._close(position)]
+                    if pnl_bps <= -self.stop_loss_bps:
+                        self._ticks_since_exit = 0
+                        return [self._close(position)]
+                    if pnl_bps >= self.take_profit_bps:
+                        self._ticks_since_exit = 0
+                        return [self._close(position)]
 
         # --- Cooldown after exit ---
         if self._ticks_since_exit < self.cooldown_ticks:
