@@ -83,6 +83,10 @@ class MomentumTaker(Strategy):
                     if pnl_bps >= self.take_profit_bps:
                         self._ticks_since_exit = 0
                         return [self._close(position)]
+                else:
+                    # Invalid entry price, force close position
+                    self._ticks_since_exit = 0
+                    return [self._close(position)]
 
         # --- Cooldown after exit ---
         if self._ticks_since_exit < self.cooldown_ticks:
@@ -96,9 +100,9 @@ class MomentumTaker(Strategy):
         delta_bps = (micro - smoothed) / smoothed * 10_000
 
         if delta_bps > self.threshold_bps and position < self.max_position:
-            return [self._take(Side.BID)]
-        if delta_bps < -self.threshold_bps and position > -self.max_position:
             return [self._take(Side.ASK)]
+        if delta_bps < -self.threshold_bps and position > -self.max_position:
+            return [self._take(Side.BID)]
         return []
 
     def on_execution_report(self, timestamp: int, report: ExecutionReport) -> None:
