@@ -96,9 +96,9 @@ class MomentumTaker(Strategy):
         delta_bps = (micro - smoothed) / smoothed * 10_000
 
         if delta_bps > self.threshold_bps and position < self.max_position:
-            return [self._take(Side.ASK)]
-        if delta_bps < -self.threshold_bps and position > -self.max_position:
             return [self._take(Side.BID)]
+        if delta_bps < -self.threshold_bps and position > -self.max_position:
+            return [self._take(Side.ASK)]
         return []
 
     def on_execution_report(self, timestamp: int, report: ExecutionReport) -> None:
