@@ -102,7 +102,7 @@ class MomentumTaker(Strategy):
         return []
 
     def on_execution_report(self, timestamp: int, report: ExecutionReport) -> None:
-        return None
+        pass
 
     def _take(self, side: Side) -> Intent:
         return Intent(
