@@ -14,6 +14,26 @@ if TYPE_CHECKING:
     from gnomepy.java.recorder import BacktestResults
 
 
+def _with_mid_price(market_df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure market_df has a ``mid_price`` column.
+
+    The gnomepy recorder writes depth-indexed BBO (``bid_price_0`` /
+    ``ask_price_0``) rather than a pre-computed mid. Plot and metric code
+    assumes ``mid_price`` exists, so derive it once here.
+    """
+    if market_df is None or market_df.empty:
+        return market_df
+    if "mid_price" in market_df.columns:
+        return market_df
+    if "bid_price_0" in market_df.columns and "ask_price_0" in market_df.columns:
+        df = market_df.copy()
+        df["mid_price"] = (
+            df["bid_price_0"].astype(float) + df["ask_price_0"].astype(float)
+        ) / 2.0
+        return df
+    return market_df
+
+
 def _extract_config(backtest) -> dict:
     """Build a config dict from a Backtest object's attributes."""
     from dataclasses import asdict
@@ -86,8 +106,8 @@ class BacktestReport:
             self._config = _extract_config(backtest)
         else:
             self._config = None
-        self._market_df: pd.DataFrame = results.market_records_df()
-        self._exec_df: pd.DataFrame = results.execution_records_df()
+        self._market_df: pd.DataFrame = _with_mid_price(results.market_records_df())
+        self._exec_df: pd.DataFrame = results.fills_df()
         self._intent_df: pd.DataFrame = results.intent_records_df()
 
         if start_date is not None or end_date is not None:
@@ -111,7 +131,7 @@ class BacktestReport:
         obj = object.__new__(cls)
         obj._results = None
         obj._config = config
-        obj._market_df = market_df
+        obj._market_df = _with_mid_price(market_df)
         obj._exec_df = exec_df
         obj._intent_df = intent_df if intent_df is not None else pd.DataFrame()
         return obj

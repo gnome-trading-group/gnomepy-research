@@ -339,7 +339,7 @@ def plot_spread(
             spread = _downsample(sym_mkt["spread"].astype(float), max_points)
         else:
             spread = _downsample(
-                (sym_mkt["best_ask_price"] - sym_mkt["best_bid_price"]).astype(float),
+                (sym_mkt["ask_price_0"] - sym_mkt["bid_price_0"]).astype(float),
                 max_points,
             )
         name = f"spread {_sym_label(eid, sid)}" if multi else "spread"
@@ -452,7 +452,7 @@ def _fills_table_html(report: "BacktestReport") -> str:
     truncated = total > MAX_FILLS_DISPLAY
     df = fills.head(MAX_FILLS_DISPLAY) if truncated else fills
 
-    cols = ["side", "fill_price", "filled_qty", "fee"]
+    cols = ["side", "fill_price", "fill_qty", "fee"]
     available = [c for c in cols if c in df.columns]
     df = df[available].copy()
     df.index = df.index.strftime("%Y-%m-%d %H:%M:%S.%f")

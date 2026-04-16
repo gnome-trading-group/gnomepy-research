@@ -27,7 +27,7 @@ def _is_buy(side) -> bool:
 def _signed_fills(executions_df: pd.DataFrame) -> pd.DataFrame:
     """Filter to actual fills and add ``signed_qty`` and ``cash_flow`` columns.
 
-    ``signed_qty``  = +filled_qty for buys, -filled_qty for sells.
+    ``signed_qty``  = +fill_qty for buys, -fill_qty for sells.
     ``cash_flow``   = -signed_qty * fill_price - fee
                       (cash *increases* when selling, *decreases* when buying,
                        and fees always reduce cash).
@@ -36,18 +36,18 @@ def _signed_fills(executions_df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(
             columns=[
                 "exchange_id", "security_id", "side",
-                "filled_qty", "fill_price", "fee",
+                "fill_qty", "fill_price", "fee",
                 "signed_qty", "cash_flow",
             ],
         )
 
-    df = executions_df[executions_df["filled_qty"] > 0].copy()
+    df = executions_df[executions_df["fill_qty"] > 0].copy()
     if df.empty:
         return df.assign(signed_qty=pd.Series(dtype=float), cash_flow=pd.Series(dtype=float))
 
     df = df.sort_index()
     is_buy = df["side"].map(_is_buy)
-    df["signed_qty"] = df["filled_qty"].where(is_buy, -df["filled_qty"]).astype(float)
+    df["signed_qty"] = df["fill_qty"].where(is_buy, -df["fill_qty"]).astype(float)
     fee = df["fee"].fillna(0.0).astype(float)
     df["cash_flow"] = -df["signed_qty"] * df["fill_price"].astype(float) - fee
     return df
@@ -76,8 +76,8 @@ def _per_symbol_cumsums(fills: pd.DataFrame) -> pd.DataFrame:
     fills["cum_fees"] = fills["fee"].fillna(0.0).groupby(
         [fills["exchange_id"], fills["security_id"]], sort=False,
     ).cumsum()
-    fills["cum_volume"] = grp["filled_qty"].cumsum()
-    fills["cum_notional"] = (fills["filled_qty"].astype(float) * fills["fill_price"].astype(float)).groupby(
+    fills["cum_volume"] = grp["fill_qty"].cumsum()
+    fills["cum_notional"] = (fills["fill_qty"].astype(float) * fills["fill_price"].astype(float)).groupby(
         [fills["exchange_id"], fills["security_id"]], sort=False,
     ).cumsum()
     return fills
@@ -142,7 +142,7 @@ def build_curves(
 
     .. code-block:: text
 
-        signed_qty_t = +filled_qty if BID else -filled_qty
+        signed_qty_t = +fill_qty if BID else -fill_qty
         position_t   = cumsum(signed_qty)                      # per symbol
         cash_t       = -cumsum(signed_qty * fill_price) - cumsum(fee)
         pnl_t        = cash_t + position_t * mid_t             # net of fees
@@ -174,6 +174,14 @@ def build_curves(
     # Sort market data and assign a monotonic sequence number so we can
     # align across symbols without relying on (possibly duplicate) timestamps.
     mkt = market_df.sort_index().copy()
+    # The gnomepy recorder writes top-of-book as bid_price_0 / ask_price_0
+    # (depth-indexed), not a pre-computed mid. Derive mid_price here so the
+    # rest of this function can treat it as a scalar column.
+    if "mid_price" not in mkt.columns:
+        if "bid_price_0" in mkt.columns and "ask_price_0" in mkt.columns:
+            mkt["mid_price"] = (mkt["bid_price_0"].astype(float) + mkt["ask_price_0"].astype(float)) / 2.0
+        else:
+            mkt["mid_price"] = 0.0
     mkt["_seq"] = range(len(mkt))
     n = len(mkt)
 

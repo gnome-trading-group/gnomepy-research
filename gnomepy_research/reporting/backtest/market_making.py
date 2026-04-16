@@ -70,7 +70,7 @@ def compute_mm_stats(report: "BacktestReport") -> dict:
         quoted_spread_raw = both_sided["ask_price"].astype(float) - both_sided["bid_price"].astype(float)
         # Get market data at each intent time via merge_asof.
         intent_ts = pd.DataFrame({"timestamp": both_sided.index}).reset_index(drop=True)
-        mkt_cols = market[["mid_price", "best_bid_price", "best_ask_price"]].sort_index().reset_index()
+        mkt_cols = market[["mid_price", "bid_price_0", "ask_price_0"]].sort_index().reset_index()
         mkt_cols.columns = ["timestamp", "mid_price", "mkt_bid", "mkt_ask"]
         merged_mkt = pd.merge_asof(
             intent_ts.sort_values("timestamp"),
@@ -269,7 +269,7 @@ def plot_mm_dashboard(
         if not active.empty:
             active_reset = active.reset_index()
             active_reset.columns = ["timestamp"] + list(active.columns)
-            mkt_cols = market[["mid_price", "best_bid_price", "best_ask_price"]].sort_index().reset_index()
+            mkt_cols = market[["mid_price", "bid_price_0", "ask_price_0"]].sort_index().reset_index()
             mkt_cols.columns = ["timestamp", "mid", "mkt_bid", "mkt_ask"]
             merged = pd.merge_asof(
                 active_reset.sort_values("timestamp"),
