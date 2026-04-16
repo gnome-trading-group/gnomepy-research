@@ -1,6 +1,7 @@
 """Plotly chart builders for BacktestReport."""
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
@@ -32,6 +33,26 @@ class ReportSection:
 pio.templates.default = "ggplot2"
 
 
+_MUTED_COLORS = [
+    "rgba(150,150,150,0.5)", "rgba(100,149,237,0.5)", "rgba(180,120,80,0.5)",
+    "rgba(120,180,120,0.5)", "rgba(180,100,180,0.5)", "rgba(200,180,100,0.5)",
+]
+
+
+def _iter_symbols(market_df: pd.DataFrame) -> list[tuple[int, int]]:
+    """Get unique (exchange_id, security_id) pairs from market data."""
+    if market_df.empty:
+        return []
+    return list(
+        market_df.groupby(["exchange_id", "security_id"], sort=False).ngroups
+        and market_df.groupby(["exchange_id", "security_id"], sort=False).groups.keys()
+    )
+
+
+def _sym_label(eid: int, sid: int) -> str:
+    return f"{eid}/{sid}"
+
+
 def _downsample(series: pd.Series, max_points: int | None) -> pd.Series:
     """Evenly downsample a Series if it exceeds *max_points*."""
     if max_points is None or len(series) <= max_points:
@@ -61,17 +82,27 @@ def plot_pnl(
         specs=specs,
     )
 
-    # Mid price — dull grey, behind everything.
+    # Mid price — one line per symbol, behind everything.
+    # Dedupe timestamps for cleaner display (keep last mid per nanosecond).
     if show_mid and not report._market_df.empty:
-        mid = _downsample(report._market_df.sort_index()["mid_price"].astype(float), max_points)
-        fig.add_trace(
-            go.Scatter(
-                x=mid.index, y=mid.values, mode="lines", name="mid price",
-                line=dict(width=0.8, color="rgba(180,180,180,0.5)"),
-                hoverinfo="skip",
-            ),
-            row=1, col=1, secondary_y=True,
-        )
+        symbols = _iter_symbols(report._market_df)
+        for i, (eid, sid) in enumerate(symbols):
+            sym_mkt = report._market_df[
+                (report._market_df["exchange_id"] == eid)
+                & (report._market_df["security_id"] == sid)
+            ].sort_index()
+            sym_mkt = sym_mkt[~sym_mkt.index.duplicated(keep="last")]
+            mid = _downsample(sym_mkt["mid_price"].astype(float), max_points)
+            color = _MUTED_COLORS[i % len(_MUTED_COLORS)]
+            name = "mid price" if len(symbols) == 1 else f"mid {_sym_label(eid, sid)}"
+            fig.add_trace(
+                go.Scatter(
+                    x=mid.index, y=mid.values, mode="lines", name=name,
+                    line=dict(width=0.8, color=color),
+                    hoverinfo="skip",
+                ),
+                row=1, col=1, secondary_y=True,
+            )
 
     fig.add_trace(
         go.Scatter(x=pnl.index, y=pnl.values, mode="lines", name="PnL",
@@ -129,6 +160,9 @@ def plot_pnl(
     return fig
 
 
+_POSITION_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+
+
 def plot_position(
     report: "BacktestReport",
     *,
@@ -136,23 +170,51 @@ def plot_position(
     max_points: int | None = None,
 ) -> go.Figure:
     """Position, cumulative fees, and cumulative volume subplots."""
-    pos = _downsample(report.position_curve, max_points)
+    pos_by_sym = report.position_by_symbol
     fees = _downsample(report.fees_curve, max_points)
     vol = _downsample(report.volume_curve, max_points)
+
+    multi = len(pos_by_sym.columns) > 1
 
     fig = make_subplots(
         rows=3, cols=1, shared_xaxes=True, row_heights=[0.4, 0.3, 0.3],
         vertical_spacing=0.04,
         subplot_titles=("Position", "Cumulative fees", "Cumulative volume"),
     )
-    fig.add_trace(
-        go.Scatter(
-            x=pos.index, y=pos.values, mode="lines", name="position",
-            line=dict(width=1, shape="hv", color="#1f77b4"),
-            fill="tozeroy", fillcolor="rgba(31,119,180,0.2)",
-        ),
-        row=1, col=1,
-    )
+
+    if multi:
+        # Per-symbol position lines.
+        for i, col in enumerate(pos_by_sym.columns):
+            label = _sym_label(*col) if isinstance(col, tuple) else str(col)
+            s = _downsample(pos_by_sym[col], max_points)
+            color = _POSITION_COLORS[i % len(_POSITION_COLORS)]
+            fig.add_trace(
+                go.Scatter(
+                    x=s.index, y=s.values, mode="lines", name=label,
+                    line=dict(width=1, shape="hv", color=color),
+                ),
+                row=1, col=1,
+            )
+        # Also plot total as dashed.
+        total = _downsample(report.position_curve, max_points)
+        fig.add_trace(
+            go.Scatter(
+                x=total.index, y=total.values, mode="lines", name="total",
+                line=dict(width=1.5, shape="hv", color="#333", dash="dash"),
+            ),
+            row=1, col=1,
+        )
+    else:
+        pos = _downsample(report.position_curve, max_points)
+        fig.add_trace(
+            go.Scatter(
+                x=pos.index, y=pos.values, mode="lines", name="position",
+                line=dict(width=1, shape="hv", color="#1f77b4"),
+                fill="tozeroy", fillcolor="rgba(31,119,180,0.2)",
+            ),
+            row=1, col=1,
+        )
+
     fig.add_trace(
         go.Scatter(
             x=fees.index, y=fees.values, mode="lines", name="fees",
@@ -168,7 +230,9 @@ def plot_position(
         row=3, col=1,
     )
     fig.update_layout(
-        height=650, hovermode="x unified", showlegend=False,
+        height=650, hovermode="x unified",
+        showlegend=multi,
+        legend=dict(orientation="h", y=1.05) if multi else None,
         title=title or "Position / Fees / Volume",
     )
     return fig
@@ -254,33 +318,123 @@ def _kpi_cards_html(summary: dict) -> str:
     return '<div class="kpi-row">' + "".join(items) + '</div>'
 
 
+_SPREAD_COLORS = ["#6366f1", "#e11d48", "#059669", "#d97706", "#7c3aed"]
+
+
 def plot_spread(
     report: "BacktestReport",
     *,
     title: str | None = None,
     max_points: int | None = None,
 ) -> go.Figure:
-    """Bid-ask spread over time."""
+    """Bid-ask spread over time, one line per symbol."""
     mkt = report._market_df.sort_index()
-    if "spread" in mkt.columns:
-        spread = _downsample(mkt["spread"].astype(float), max_points)
-    else:
-        spread = _downsample((mkt["best_ask_price"] - mkt["best_bid_price"]).astype(float), max_points)
+    symbols = _iter_symbols(mkt)
+    multi = len(symbols) > 1
 
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=spread.index, y=spread.values, mode="lines", name="spread",
-            line=dict(width=0.8, color="#6366f1"),
-        ),
-    )
+    for i, (eid, sid) in enumerate(symbols):
+        sym_mkt = mkt[(mkt["exchange_id"] == eid) & (mkt["security_id"] == sid)]
+        if "spread" in sym_mkt.columns:
+            spread = _downsample(sym_mkt["spread"].astype(float), max_points)
+        else:
+            spread = _downsample(
+                (sym_mkt["best_ask_price"] - sym_mkt["best_bid_price"]).astype(float),
+                max_points,
+            )
+        name = f"spread {_sym_label(eid, sid)}" if multi else "spread"
+        color = _SPREAD_COLORS[i % len(_SPREAD_COLORS)]
+        fig.add_trace(
+            go.Scatter(
+                x=spread.index, y=spread.values, mode="lines", name=name,
+                line=dict(width=0.8, color=color),
+            ),
+        )
+
     fig.update_layout(
         height=350,
         title=title or "Bid-Ask Spread",
         hovermode="x unified",
         yaxis_title="spread",
         xaxis_title="time",
-        showlegend=False,
+        showlegend=multi,
+    )
+    return fig
+
+
+def plot_cross_exchange_spread(
+    report: "BacktestReport",
+    exchange_id_a: int | None = None,
+    exchange_id_b: int | None = None,
+    security_id: int | None = None,
+    *,
+    title: str | None = None,
+    max_points: int | None = None,
+) -> go.Figure:
+    """Spread between two exchanges for the same security (in bps).
+
+    If exchange/security IDs are not provided, auto-detects from the first
+    two distinct exchange_ids in the market data.
+    """
+    mkt = report._market_df.sort_index()
+    symbols = _iter_symbols(mkt)
+
+    # Auto-detect exchanges if not specified.
+    if exchange_id_a is None or exchange_id_b is None:
+        exchange_ids = sorted(set(eid for eid, _ in symbols))
+        if len(exchange_ids) < 2:
+            fig = go.Figure()
+            fig.update_layout(title="Cross-Exchange Spread (need 2+ exchanges)", height=350)
+            return fig
+        exchange_id_a = exchange_ids[0]
+        exchange_id_b = exchange_ids[1]
+    if security_id is None:
+        security_id = symbols[0][1] if symbols else 1
+
+    mkt_a = mkt[(mkt["exchange_id"] == exchange_id_a) & (mkt["security_id"] == security_id)]
+    mkt_b = mkt[(mkt["exchange_id"] == exchange_id_b) & (mkt["security_id"] == security_id)]
+
+    if mkt_a.empty or mkt_b.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Cross-Exchange Spread (missing data)", height=350)
+        return fig
+
+    # Align via merge_asof — for each tick of A, find latest B mid.
+    a_df = pd.DataFrame({"timestamp": mkt_a.index, "mid_a": mkt_a["mid_price"].astype(float).values}).reset_index(drop=True)
+    b_df = pd.DataFrame({"timestamp": mkt_b.index, "mid_b": mkt_b["mid_price"].astype(float).values}).reset_index(drop=True)
+
+    merged = pd.merge_asof(
+        a_df.sort_values("timestamp"),
+        b_df.sort_values("timestamp"),
+        on="timestamp",
+        direction="backward",
+    ).dropna()
+
+    avg_mid = (merged["mid_a"] + merged["mid_b"]) / 2
+    valid = avg_mid > 0
+    spread_bps = pd.Series(
+        ((merged["mid_b"] - merged["mid_a"]) / avg_mid * 10_000).values,
+        index=pd.DatetimeIndex(merged["timestamp"].values),
+    )[valid.values]
+
+    spread_bps = _downsample(spread_bps, max_points)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=spread_bps.index, y=spread_bps.values, mode="lines",
+            name=f"{exchange_id_b} - {exchange_id_a}",
+            line=dict(width=1, color="#6366f1"),
+        ),
+    )
+    fig.add_hline(y=0, line_dash="dot", line_color="grey", opacity=0.4)
+
+    fig.update_layout(
+        height=350,
+        title=title or f"Cross-Exchange Spread (ex {exchange_id_a} vs {exchange_id_b}, bps)",
+        hovermode="x unified",
+        yaxis_title="spread (bps)",
+        xaxis_title="time",
     )
     return fig
 
@@ -405,6 +559,57 @@ DEFAULT_SECTIONS: list[ReportSection] = [
     ReportSection("per_symbol", "Per-Symbol Breakdown", _render_per_symbol),
     ReportSection("fills", "Fills", _render_fills),
 ]
+
+
+def _render_cross_exchange(report: "BacktestReport", **kwargs) -> go.Figure:
+    return plot_cross_exchange_spread(report, **kwargs)
+
+
+def _render_adverse_selection(report: "BacktestReport", **kwargs) -> "go.Figure | None":
+    from gnomepy_research.reporting.backtest.adverse_selection import adverse_selection_section
+    return adverse_selection_section(report)
+
+
+def _render_market_making(report: "BacktestReport", **kwargs) -> "str | None":
+    from gnomepy_research.reporting.backtest.market_making import market_making_section
+    return market_making_section(report)
+
+
+SECTION_REGISTRY: dict[str, ReportSection] = {
+    "adverse_selection": ReportSection("adverse_selection", "Adverse Selection", _render_adverse_selection),
+    "market_making": ReportSection("market_making", "Market Making", _render_market_making),
+    "cross_exchange_spread": ReportSection("cross_exchange_spread", "Cross-Exchange Spread", _render_cross_exchange),
+}
+
+
+def resolve_sections(config: dict) -> tuple[list[str], list[ReportSection], int | None]:
+    """Read the ``report`` key from a backtest config and resolve sections.
+
+    Returns ``(exclude, extra_sections, max_points)``.
+    """
+    report_cfg = config.get("report") if config else None
+    if not report_cfg:
+        return [], [], None
+
+    exclude = list(report_cfg.get("exclude") or [])
+    max_points = report_cfg.get("max_points")
+
+    extra: list[ReportSection] = []
+    for entry in report_cfg.get("sections") or []:
+        name = entry if isinstance(entry, str) else entry.get("name")
+        if not name:
+            continue
+        section = SECTION_REGISTRY.get(name)
+        if not section:
+            continue
+        args = entry.get("args", {}) if isinstance(entry, dict) else {}
+        if args:
+            bound_render = functools.partial(section.render, **args)
+            extra.append(ReportSection(section.name, section.title, bound_render))
+        else:
+            extra.append(section)
+
+    return exclude, extra, max_points
 
 
 def assemble_html(

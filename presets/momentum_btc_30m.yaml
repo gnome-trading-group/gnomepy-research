@@ -1,26 +1,36 @@
-strategy: gnomepy_research.strategies.momentum:MomentumTaker
-strategy_args:
-  exchange_id: 1
-  security_id: 1
-  size: 100000
-  max_position: 5
-  threshold_bps: 2.0
-  ewma_alpha: 0.95
-  warmup_ticks: 100
-  stop_loss_bps: 10.0
-  take_profit_bps: 15.0
-  cooldown_ticks: 50
-  processing_time_ns: 500000
-
-schema_type: MBP_10
-
-exchanges:
-  - exchange_id: 1
+strategy:
+  class_name: "gnomepy_research.strategies.momentum:MomentumTaker"
+  args:
+    exchange_id: 1
     security_id: 1
-    fee:
+    size: 100000
+    max_position: 5
+    threshold_bps: 2.0
+    ewma_alpha: 0.95
+    warmup_ticks: 100
+    stop_loss_bps: 10.0
+    take_profit_bps: 15.0
+    cooldown_ticks: 50
+    processing_time_ns: 500000
+
+listings:
+  - listing_id: 1
+    profile: default
+
+profiles:
+  default:
+    fee_model:
+      type: static
       taker_fee: 0.0005
       maker_fee: 0.0002
-    network_latency_ns: 5000000
-    order_processing_latency_ns: 1000000
-    queue:
-      kind: risk_averse
+    network_latency:
+      type: static
+      latency_nanos: 5000000
+    order_processing_latency:
+      type: static
+      latency_nanos: 1000000
+    queue_model:
+      type: risk_averse
+
+s3:
+  bucket: gnome-market-data-prod

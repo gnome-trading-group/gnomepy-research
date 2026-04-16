@@ -99,6 +99,23 @@ class BacktestReport:
             if not self._intent_df.empty:
                 self._intent_df = self._intent_df.loc[start:end]
 
+    @classmethod
+    def from_dataframes(
+        cls,
+        market_df: pd.DataFrame,
+        exec_df: pd.DataFrame,
+        intent_df: pd.DataFrame | None = None,
+        config: dict | None = None,
+    ) -> "BacktestReport":
+        """Create a report from pre-loaded DataFrames (e.g. from parquet files)."""
+        obj = object.__new__(cls)
+        obj._results = None
+        obj._config = config
+        obj._market_df = market_df
+        obj._exec_df = exec_df
+        obj._intent_df = intent_df if intent_df is not None else pd.DataFrame()
+        return obj
+
     @cached_property
     def _curves(self) -> Curves:
         return build_curves(self._market_df, self._exec_df)
@@ -202,8 +219,8 @@ class BacktestReport:
 
         return {
             "duration_seconds": duration,
-            "market_record_count": int(self._results.market_record_count),
-            "intent_record_count": int(self._results.intent_record_count),
+            "market_record_count": int(self._results.market_record_count) if self._results else len(self._market_df),
+            "intent_record_count": int(self._results.intent_record_count) if self._results else len(self._intent_df),
             "fill_count": c.fill_count,
             "total_volume": total_volume,
             "total_notional": total_notional,
@@ -241,6 +258,11 @@ class BacktestReport:
         from gnomepy_research.reporting.backtest.adverse_selection import plot_adverse_selection
         return plot_adverse_selection(self, **kwargs)
 
+    def plot_cross_exchange_spread(self, **kwargs) -> "go.Figure":
+        """Spread between two exchanges for the same security (bps)."""
+        from gnomepy_research.reporting.backtest.plots import plot_cross_exchange_spread
+        return plot_cross_exchange_spread(self, **kwargs)
+
     def plot_spread(self, **kwargs) -> "go.Figure":
         """Bid-ask spread over time."""
         from gnomepy_research.reporting.backtest.plots import plot_spread
@@ -276,9 +298,18 @@ class BacktestReport:
             Downsample chart traces to at most this many points.
             ``None`` (default) keeps all data points.
         """
-        from gnomepy_research.reporting.backtest.plots import assemble_html
+        from gnomepy_research.reporting.backtest.plots import assemble_html, resolve_sections
+
+        # Merge config-driven sections with explicit args.
+        cfg_exclude, cfg_sections, cfg_max_points = resolve_sections(self._config or {})
+
+        merged_exclude = list(exclude or []) + cfg_exclude
+        merged_sections = list(extra_sections or []) + cfg_sections
+        if max_points is None:
+            max_points = cfg_max_points
+
         Path(path).write_text(assemble_html(
-            self, exclude=exclude, extra_sections=extra_sections,
+            self, exclude=merged_exclude or None, extra_sections=merged_sections or None,
             extra_figs=extra_figs, max_points=max_points,
         ))
 

@@ -49,10 +49,11 @@ class MomentumTaker(Strategy):
     def simulate_processing_time(self) -> int:
         return self._processing_time_ns
 
-    def on_market_data(self, timestamp: int, data: Schema) -> list[Intent]:
+    def on_market_data(self, data: Schema) -> list[Intent]:
         if data.security_id != self.security_id or data.exchange_id != self.exchange_id:
             return []
 
+        timestamp = data.event_timestamp
         self._micro.update(timestamp, data)
         self._smoothed.update(timestamp, data)
         self._tick_count += 1
@@ -100,8 +101,8 @@ class MomentumTaker(Strategy):
             return [self._take(Side.BID)]
         return []
 
-    def on_execution_report(self, timestamp: int, report: ExecutionReport) -> None:
-        return None
+    def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
+        return []
 
     def _take(self, side: Side) -> Intent:
         return Intent(

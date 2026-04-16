@@ -1,0 +1,51 @@
+strategy:
+  class_name: "gnomepy_research.strategies.cross_exchange_arb:CrossExchangeArb"
+  args:
+    exchange_id_a: 1
+    exchange_id_b: 2
+    security_id: 1
+    size: 100000
+    max_position: 5
+    entry_threshold_bps: 2.0
+    close_threshold_bps: 0.5
+    max_imbalance_ticks: 100
+    max_staleness_ns: 200000000
+    warmup_ticks: 50
+    processing_time_ns: 500000
+
+listings:
+  - listing_id: 1
+    profile: exchange_a
+  - listing_id: 2
+    profile: exchange_b
+
+profiles:
+  exchange_a:
+    fee_model:
+      type: static
+      taker_fee: 0.0005
+      maker_fee: -0.0002
+    network_latency:
+      type: static
+      latency_nanos: 5000000
+    order_processing_latency:
+      type: static
+      latency_nanos: 1000000
+    queue_model:
+      type: risk_averse
+  exchange_b:
+    fee_model:
+      type: static
+      taker_fee: 0.0005
+      maker_fee: -0.0002
+    network_latency:
+      type: static
+      latency_nanos: 8000000
+    order_processing_latency:
+      type: static
+      latency_nanos: 1000000
+    queue_model:
+      type: risk_averse
+
+s3:
+  bucket: gnome-market-data-prod

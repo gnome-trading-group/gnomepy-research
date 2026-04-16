@@ -61,10 +61,11 @@ class MarketMaker(Strategy):
     def simulate_processing_time(self) -> int:
         return self._processing_time_ns
 
-    def on_market_data(self, timestamp: int, data: Schema) -> list[Intent]:
+    def on_market_data(self, data: Schema) -> list[Intent]:
         if data.security_id != self.security_id or data.exchange_id != self.exchange_id:
             return []
 
+        timestamp = data.event_timestamp
         self._fv.update(timestamp, data)
         self._vol.update(timestamp, data)
         self._tick_count += 1
@@ -118,5 +119,5 @@ class MarketMaker(Strategy):
             ask_size=ask_size,
         )]
 
-    def on_execution_report(self, timestamp: int, report: ExecutionReport) -> None:
-        return None
+    def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
+        return []
