@@ -8,7 +8,9 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "gnomepy (>=0.1.6)",
+    "gnomepy @ file:///Users/mprey/Programming/gnome-trading-group/gnomepy",
+    "pandas-stubs (>=2.3.3,<2.4.0)",
+    "plotly (~=6.6.0)",
 ]
 
 
@@ -19,7 +21,6 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"
 notebook = "^7.5.5"
-plotly = "^6.6.0"
 
 [tool.poetry.group.local]
 optional = true

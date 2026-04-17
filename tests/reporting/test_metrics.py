@@ -44,7 +44,7 @@ def _exec_df(rows: list[dict]) -> pd.DataFrame:
     """Build an execution_records_df-shaped DataFrame.
 
     Each row dict should contain: ts (int ns offset), exchange_id,
-    security_id, side ("BID" or "ASK"), filled_qty, fill_price, fee.
+    security_id, side ("BID" or "ASK"), fill_qty, fill_price, fee.
     """
     records = []
     for r in rows:
@@ -52,7 +52,7 @@ def _exec_df(rows: list[dict]) -> pd.DataFrame:
             "exchange_id": r["exchange_id"],
             "security_id": r["security_id"],
             "side": r["side"],
-            "filled_qty": r["filled_qty"],
+            "fill_qty": r["fill_qty"],
             "fill_price": r["fill_price"],
             "fee": r.get("fee", 0.0),
         })
@@ -78,9 +78,9 @@ class TestBuyThenSell:
         ])
         execs = _exec_df([
             {"ts": 50,  "exchange_id": 1, "security_id": 1, "side": "BID",
-             "filled_qty": 1.0, "fill_price": 100.0, "fee": 0.5},
+             "fill_qty": 1.0, "fill_price": 100.0, "fee": 0.5},
             {"ts": 250, "exchange_id": 1, "security_id": 1, "side": "ASK",
-             "filled_qty": 1.0, "fill_price": 110.0, "fee": 0.5},
+             "fill_qty": 1.0, "fill_price": 110.0, "fee": 0.5},
         ])
         return build_curves(mkt, execs)
 
@@ -119,9 +119,9 @@ class TestFlipThroughZero:
         ])
         execs = _exec_df([
             {"ts": 50,  "exchange_id": 1, "security_id": 1, "side": "BID",
-             "filled_qty": 1.0, "fill_price": 100.0, "fee": 0.0},
+             "fill_qty": 1.0, "fill_price": 100.0, "fee": 0.0},
             {"ts": 150, "exchange_id": 1, "security_id": 1, "side": "ASK",
-             "filled_qty": 2.0, "fill_price": 100.0, "fee": 0.0},
+             "fill_qty": 2.0, "fill_price": 100.0, "fee": 0.0},
         ])
         return build_curves(mkt, execs)
 
@@ -148,9 +148,9 @@ class TestMultipleSymbols:
         ])
         execs = _exec_df([
             {"ts": 50, "exchange_id": 1, "security_id": 1, "side": "BID",
-             "filled_qty": 1.0, "fill_price": 100.0, "fee": 0.0},
+             "fill_qty": 1.0, "fill_price": 100.0, "fee": 0.0},
             {"ts": 50, "exchange_id": 2, "security_id": 2, "side": "BID",
-             "filled_qty": 2.0, "fill_price": 50.0, "fee": 0.0},
+             "fill_qty": 2.0, "fill_price": 50.0, "fee": 0.0},
         ])
         return build_curves(mkt, execs)
 
@@ -213,7 +213,7 @@ class TestDuplicateTimestamps:
         ])
         execs = _exec_df([
             {"ts": 50, "exchange_id": 1, "security_id": 1, "side": "BID",
-             "filled_qty": 1.0, "fill_price": 100.0, "fee": 0.0},
+             "fill_qty": 1.0, "fill_price": 100.0, "fee": 0.0},
         ])
         return build_curves(mkt, execs)
 
@@ -240,7 +240,7 @@ class TestEmptyMarket:
         mkt = _market_df([])
         execs = _exec_df([
             {"ts": 50, "exchange_id": 1, "security_id": 1, "side": "BID",
-             "filled_qty": 1.0, "fill_price": 100.0, "fee": 0.0},
+             "fill_qty": 1.0, "fill_price": 100.0, "fee": 0.0},
         ])
         curves = build_curves(mkt, execs)
         assert curves.pnl.empty or (curves.pnl == 0.0).all()

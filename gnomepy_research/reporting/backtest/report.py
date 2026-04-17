@@ -34,23 +34,43 @@ def _with_mid_price(market_df: pd.DataFrame) -> pd.DataFrame:
     return market_df
 
 
+def _config_from_metadata(metadata) -> dict:
+    """Build a config dict from BacktestMetadata."""
+    config: dict = {}
+    if metadata.strategy is not None:
+        if ":" in metadata.strategy:
+            config["strategy"] = metadata.strategy
+        else:
+            config["java_strategy"] = metadata.strategy
+    if metadata.start_date is not None:
+        config["start_date"] = metadata.start_date
+    if metadata.end_date is not None:
+        config["end_date"] = metadata.end_date
+    if metadata.config_path is not None:
+        config["config_path"] = metadata.config_path
+    if metadata.preset_name is not None:
+        config["preset_name"] = metadata.preset_name
+    if metadata.backtest_id is not None:
+        config["backtest_id"] = metadata.backtest_id
+    if metadata.config is not None:
+        config.update(metadata.config)
+    return config
+
+
 def _extract_config(backtest) -> dict:
     """Build a config dict from a Backtest object's attributes."""
-    from dataclasses import asdict
-
     config: dict = {}
 
     strategy = getattr(backtest, "_strategy", None)
     if strategy is not None:
         if isinstance(strategy, str):
-            config["java_strategy"] = strategy
+            if ":" in strategy:
+                config["strategy"] = strategy
+            else:
+                config["java_strategy"] = strategy
         else:
             cls = type(strategy)
             config["strategy"] = f"{cls.__module__}:{cls.__name__}"
-
-    schema = getattr(backtest, "_schema_type", None)
-    if schema is not None:
-        config["schema_type"] = schema.name
 
     start = getattr(backtest, "_start_date", None)
     if start is not None:
@@ -60,13 +80,9 @@ def _extract_config(backtest) -> dict:
     if end is not None:
         config["end_date"] = str(end)
 
-    exchanges = getattr(backtest, "_exchanges", None)
-    if exchanges:
-        config["exchanges"] = [asdict(e) for e in exchanges]
-
-    bucket = getattr(backtest, "_bucket", None)
-    if bucket and bucket != "gnome-market-data-prod":
-        config["bucket"] = bucket
+    raw_config = getattr(backtest, "_config", None)
+    if isinstance(raw_config, str):
+        config["config_path"] = raw_config
 
     return config
 
@@ -98,12 +114,15 @@ class BacktestReport:
     ):
         self._results = results
         # Config priority: explicit > preset stashed on backtest > auto-extract from backtest
+        # > metadata carried on results (covers the from_parquet case)
         if config is not None:
             self._config = config
         elif backtest is not None and hasattr(backtest, "_preset_config"):
             self._config = backtest._preset_config
         elif backtest is not None:
             self._config = _extract_config(backtest)
+        elif results.metadata is not None:
+            self._config = _config_from_metadata(results.metadata)
         else:
             self._config = None
         self._market_df: pd.DataFrame = _with_mid_price(results.market_records_df())
@@ -184,6 +203,13 @@ class BacktestReport:
     def notional_by_symbol(self) -> pd.DataFrame:
         return self._curves.notional_by_symbol
 
+    # -- Metadata ------------------------------------------------------------
+
+    @property
+    def metadata(self):
+        """BacktestMetadata from the results (None if not available)."""
+        return self._results.metadata
+
     # -- Fills ---------------------------------------------------------------
 
     @property
@@ -238,6 +264,7 @@ class BacktestReport:
         sharpe = self.sharpe_metrics()
 
         return {
+            "backtest_id": self._results.backtest_id,
             "duration_seconds": duration,
             "market_record_count": int(self._results.market_record_count) if self._results else len(self._market_df),
             "intent_record_count": int(self._results.intent_record_count) if self._results else len(self._intent_df),
