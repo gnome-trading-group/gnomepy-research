@@ -1,0 +1,57 @@
+name: hyperliquid_btc_mm
+description: >
+  Market maker quoting around BTC/USDE (listing 28) on Hyperliquid, a new secondary BTC
+  market. BTC/USDC (listing 1), the main high-volume BTC pair on Hyperliquid, is available
+  as a reference for fair value and flow signals. Strategy should quote passively on BTC/USDE
+  using signals derived from both listings.
+
+data:
+  listings:
+    - listing_id: 28
+      profile: hyperliquid
+    - listing_id: 1
+      profile: hyperliquid
+  date_ranges:
+    - start: "2026-05-13T00:00:00"
+      end: "2026-05-14T23:59:59"
+
+profiles:
+  hyperliquid:
+    fee_model:
+      type: static
+      taker_fee: 0.0004
+      maker_fee: 0.00012
+    network_latency:
+      type: static
+      latency_nanos: 5000000
+    order_processing_latency:
+      type: static
+      latency_nanos: 500000
+    queue_model: risk_averse
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    sharpe: ">0"
+    fill_count: ">50"
+    final_pnl: ">0"
+  targets:
+    sharpe: ">1.0"
+    sortino: ">1.5"
+    pct_positive_buckets: ">0.6"
+  mm_targets:
+    time_quoting_both_sides: ">0.8"
+    avg_net_edge_captured_bps: ">0.1"
+
+constraints:
+  strategy_type: market_maker
+  max_iterations: 20
+  avoid: []
+
+meta:
+  execution_mode: auto
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous

@@ -1,0 +1,66 @@
+{
+  "session_name": "hyperliquid_btc_mm",
+  "status": "running",
+  "created_at": "2026-05-15T00:00:00Z",
+  "iterations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-05-15T00:00:00Z",
+      "type": "local",
+      "hypothesis": "Use BTC/USDC (listing 1) microprice as the primary fair value reference for quoting BTC/USDE (listing 28). BTC/USDC has higher volume and should give a more reliable price signal. BTC/USDE spread volatility (EWMA-smoothed) sizes the half-spread. min_spread_bps=3.0 to cover the 1.2 bps maker fee on each side.",
+      "changes": ["Initial strategy implementation"],
+      "config": "configs/iter_001.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
+        "run_id": null,
+        "best_params": {
+          "exchange_id": 1,
+          "usdc_security_id": 1,
+          "usde_security_id": 28,
+          "size": 100000,
+          "max_position": 5,
+          "gamma": 0.1,
+          "delta": 1.0,
+          "min_spread_bps": 3.0,
+          "warmup_ticks": 100,
+          "vol_alpha": 0.99
+        },
+        "summary": {
+          "fill_count": 128,
+          "total_volume": 6.00842,
+          "total_notional": 484387.11,
+          "final_position": -0.194,
+          "total_fees": 0.00118,
+          "final_pnl": -206.92,
+          "sharpe": -0.00496,
+          "sortino": -0.00580,
+          "pct_positive_buckets": 0.4
+        },
+        "custom_metrics": {
+          "bid_fill_edge_bps": -0.003,
+          "ask_fill_edge_bps": -1.687,
+          "fills_day1": 128,
+          "fills_day2": 0,
+          "usde_median_spread_bps": 0.125,
+          "usdc_usde_basis_usd": 20.0,
+          "usde_spread_pct_above_2bps": 1.0
+        },
+        "thresholds_met": false,
+        "threshold_failures": [
+          "sharpe >0 FAILED (-0.00496)",
+          "final_pnl >0 FAILED (-206.92)"
+        ],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": false
+        }
+      },
+      "analysis": "BTC/USDE trades $15-27 above BTC/USDC persistently (structural basis). Using USDC microprice as fair value caused our asks to land INSIDE the USDE spread when the basis was large — takers hit us because we were offering BTC/USDE below the USDE market price. Ask fills averaged -1.687 bps edge (selling below mid = adverse selection). All 128 fills occurred on May 13 00:00-12:31; zero on day 2 despite full USDE data. BTC/USDE typically trades at 0.125 bps spread (1 tick wide), so our min_spread_bps=3.0 quotes were normally far outside the market. Fills only happened during brief basis-driven windows where USDC reference put us inside USDE spread. PnL loss driven by: (a) selling below mid on adverse ask fills, (b) residual short position of -0.194 BTC with market rising from $80,459 to $81,043.",
+      "next_action": "Switch to BTC/USDE own MicropriceFairValue (security_id=28) as the fair value reference to eliminate basis-driven adverse selection. Reduce min_spread_bps to 2.5 (covers 1.2 bps maker fee with 0.05 bps buffer per side) and use vol_alpha=0.9 for faster response to USDE spread changes. Keep USDC data available but use only for supplementary flow analysis in later iterations."
+    }
+  ],
+  "best_iteration": null,
+  "best_pnl": null,
+  "best_sharpe": null
+}
