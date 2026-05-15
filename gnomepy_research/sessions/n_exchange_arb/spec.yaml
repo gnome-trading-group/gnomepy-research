@@ -1,0 +1,68 @@
+name: n_exchange_arb
+description: >
+  Cross-exchange perpetual futures arb across N exchanges (starting with 3 listings:
+  hyperliquid listings 1 and 28, lighter listing 36). The exact arb mechanism is
+  open-ended — Claude should experiment with various approaches (spread trading,
+  basis arb, latency arb, etc.).
+
+data:
+  listings:
+    - listing_id: 1
+      profile: hyperliquid
+    - listing_id: 28
+      profile: hyperliquid
+    - listing_id: 36
+      profile: lighter
+  date_ranges:
+    - start: "2026-05-12T23:28:00"
+      end: "2026-05-13T19:50:00"
+
+profiles:
+  hyperliquid:
+    fee_model:
+      type: static
+      taker_fee: 0.0004
+      maker_fee: 0.00012
+    network_latency:
+      type: static
+      latency_nanos: 20000000
+    order_processing_latency:
+      type: static
+      latency_nanos: 5000000
+    queue_model: risk_averse
+  lighter:
+    fee_model:
+      type: static
+      taker_fee: 0.00028
+      maker_fee: 0.00004
+    network_latency:
+      type: static
+      latency_nanos: 200000000
+    order_processing_latency:
+      type: static
+      latency_nanos: 500000
+    queue_model: risk_averse
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    sharpe: ">0"
+    fill_count: ">10"
+    final_pnl: ">0"
+  targets:
+    sharpe: ">1.0"
+    sortino: ">1.5"
+    pct_positive_buckets: ">0.6"
+
+constraints:
+  strategy_type: arb
+  max_iterations: 20
+  avoid: []
+
+meta:
+  execution_mode: auto
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous

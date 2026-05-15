@@ -1,0 +1,14 @@
+{
+  "backtest_id": "019e2c43-4ba1-7320-9dd9-dd67fa0bf9ac",
+  "created_at": "2026-05-15T15:33:41.926479+00:00",
+  "start_date": "2026-05-12 23:28:00",
+  "end_date": "2026-05-13 19:50:00",
+  "wall_time_seconds": 153.402,
+  "event_count": 4087618,
+  "config_path": "gnomepy_research/sessions/n-exchange-arb/configs/iter_036.yaml",
+  "gnomepy_version": "2.1.0",
+  "gnomepy_research_version": "0.1.0",
+  "data_scaled": true,
+  "warnings": [],
+  "extra": {}
+}

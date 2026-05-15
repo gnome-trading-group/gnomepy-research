@@ -104,3 +104,7 @@ dmypy.json
 
 # Cython
 cython_debug/
+
+# From research sessions
+*.parquet
+*.html

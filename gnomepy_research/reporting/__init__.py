@@ -1,18 +1,17 @@
-# Re-export everything from reporting.backtest so existing imports keep working.
-from gnomepy_research.reporting.backtest import (  # noqa: F401
-    DEFAULT_SECTIONS,
+from gnomepy.reporting import (  # noqa: F401
     BacktestReport,
     Curves,
+    DEFAULT_SECTIONS,
     ReportSection,
-    adverse_selection_section,
     build_curves,
-    market_making_section,
     compute_sharpe,
     plot_pnl,
     plot_pnl_by_symbol,
     plot_position,
     plot_spread,
 )
+from gnomepy_research.reporting.backtest.adverse_selection import adverse_selection_section  # noqa: F401
+from gnomepy_research.reporting.backtest.market_making import market_making_section  # noqa: F401
 
 __all__ = [
     "BacktestReport",

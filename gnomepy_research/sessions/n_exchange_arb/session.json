@@ -1,0 +1,50 @@
+{
+  "session_name": "n_exchange_arb",
+  "status": "running",
+  "created_at": "2026-05-13T00:00:00Z",
+  "iterations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-05-13T16:22:20Z",
+      "type": "local",
+      "hypothesis": "Generalized N-listing pairwise arb auto-discovering (exchange_id, security_id) pairs from market data. Entry threshold 8 bps to cover combined taker fees (~6.8 bps). Staleness guard 500ms to tolerate Lighter's 200ms latency.",
+      "changes": [
+        "Initial strategy implementation"
+      ],
+      "config": "configs/iter_001.yaml",
+      "results": {
+        "date_range": "2026-05-12T23:28:00 to 2026-05-13T19:50:00",
+        "run_id": null,
+        "best_params": {
+          "entry_threshold_bps": 8.0,
+          "close_threshold_bps": 2.0,
+          "size": 100000
+        },
+        "summary": {
+          "fill_count": 4,
+          "final_pnl": 1.32,
+          "sharpe": 0.000122,
+          "sortino": 0.000159,
+          "pct_positive_buckets": 0.6,
+          "total_volume": 0.4,
+          "total_notional": 32195.11,
+          "final_positions": {
+            "(1, 28)": 0.2,
+            "(2, 1)": -0.2,
+            "(1, 1)": 0.0
+          }
+        },
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": [
+          "fill_count >10 FAILED (4)"
+        ]
+      },
+      "analysis": "The strategy is now finding and trading. It auto-discovered 3 listings: (1,1), (1,28), and (2,1). The active pair was (1,28) vs (2,1) \u2014 these are DIFFERENT securities (security_id=28 on Hyperliquid vs security_id=1 on Lighter). True cross-exchange arb would be (1,1) vs (2,1) \u2014 same security_id on different exchanges. The 8 bps threshold is too high relative to actual spread opportunities between same-security pairs, so only 4 fills occurred over a 20hr window. The cross-asset trade was profitable by accident but is not a reliable arb.",
+      "next_action": "Filter to same-security pairs only (sid_a == sid_b) to focus on true cross-exchange arb between (1,1) and (2,1). Reduce entry_threshold_bps to 6.5 bps (just above 6.8 bps total fee, accounting for the 200ms Lighter latency risk). Reduce close_threshold to 1 bps to take PnL sooner."
+    }
+  ],
+  "best_iteration": 1,
+  "best_pnl": 1.32,
+  "best_sharpe": 0.000122
+}

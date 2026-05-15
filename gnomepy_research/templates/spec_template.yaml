@@ -1,0 +1,113 @@
+# Strategy Research Session Spec
+# Fill in all sections before running /research <session-name>
+
+# Short identifier matching the session directory name
+name: "my-session"
+
+# Natural language description of the strategy idea.
+# Be specific: what signals, what logic, what market conditions you're targeting.
+description: |
+  Describe your strategy idea here. For example:
+  "Market maker that widens spread when trade flow imbalance is high,
+  using microprice fair value and EWMA-smoothed spread volatility.
+  Should avoid holding inventory overnight and skew quotes aggressively
+  when position approaches limits."
+
+# Market data to backtest against.
+# The FIRST date_range is used during development iterations (keep it short: 30min-2hr).
+# Additional ranges are used for validation once the primary range looks good.
+data:
+  listings:
+    - listing_id: 1       # numeric ID from the registry
+      profile: default
+  date_ranges:
+    - start: "2026-01-23T10:30:00"
+      end: "2026-01-23T13:00:00"
+    # Add more ranges for out-of-sample validation:
+    # - start: "2026-02-15T14:00:00"
+    #   end: "2026-02-15T16:30:00"
+
+# Exchange simulation parameters. Copied into each backtest config.
+profiles:
+  default:
+    fee_model:
+      type: static
+      taker_fee: 0.0005     # 5 bps taker fee
+      maker_fee: -0.0001    # 1 bps maker rebate (negative = rebate)
+    network_latency:
+      type: static
+      latency_nanos: 5000000      # 5ms
+    order_processing_latency:
+      type: static
+      latency_nanos: 1000000      # 1ms
+    queue_model:
+      type: risk_averse     # options: risk_averse, optimistic, probabilistic
+
+# What "good" looks like. Claude evaluates every backtest against these.
+goals:
+  # The metric Claude will try to maximize/minimize across iterations.
+  # Options: final_pnl, sharpe, sortino, avg_net_edge_captured_bps, etc.
+  primary_metric: final_pnl
+  direction: maximize   # maximize or minimize
+
+  # Hard constraints — if ANY fail, the iteration is marked unsuccessful.
+  # Supported operators: >, <, >=, <=, !=
+  thresholds:
+    sharpe: ">0"
+    fill_count: ">10"
+    final_pnl: ">0"
+
+  # Aspirational targets — keep improving until all are met.
+  targets:
+    sharpe: ">1.0"
+    sortino: ">1.5"
+    pct_positive_buckets: ">0.6"
+
+  # Market-making specific targets (only checked when strategy quotes passively).
+  # Remove this section if building a taker/momentum strategy.
+  mm_targets:
+    time_quoting_both_sides: ">0.8"
+    avg_net_edge_captured_bps: ">0.1"
+
+# Constraints on the research process.
+constraints:
+  # Optional: start from an existing preset config (e.g., mm_btc_30m, momentum_btc_30m).
+  # Claude will use this as the initial backtest config instead of building from scratch.
+  # base_preset: "mm_btc_30m"
+
+  # Hint for Claude: market_maker, momentum, arb, or custom
+  strategy_type: "market_maker"
+
+  # Max number of iterations before stopping (whether successful or not).
+  max_iterations: 20
+
+  # Signals Claude should consider exploring (optional hints, not requirements).
+  signals_to_explore:
+    - "MicropriceFairValue for fair value"
+    - "EWMA(SpreadVolatility()) for volatility"
+    # - "TradeImbalance for flow-based skew"
+
+  # Hard constraints on strategy design that Claude must respect.
+  avoid:
+    - "max_position must stay under 20"
+    # - "Don't use Kalman filter"
+    # - "No taking (aggressive orders only) — must be passive only"
+
+# Meta-settings that control the research loop itself (not the strategy).
+meta:
+  # Controls how each iteration is executed.
+  # local  — always run locally via poetry run python
+  # batch  — always submit to AWS Batch as a sweep
+  # auto   — Claude decides based on the nature of the change (default)
+  execution_mode: auto
+
+  # Robustness checks — run once after a strategy first meets all thresholds.
+  # Each re-runs the best iteration with a modified profile to test sensitivity.
+  sensitivity_tests:
+    latency: true      # re-run at 2x and 0.5x latency; flag if thresholds fail
+    queue_model: true  # re-run with risk_averse queue; flag if thresholds fail
+
+  # Controls whether the loop pauses for user input at the hypothesis stage.
+  # autonomous — runs hands-off; picks up hints.md if present, then proceeds
+  # interactive — pauses each iteration with AskUserQuestion to check in
+  interaction_mode: autonomous

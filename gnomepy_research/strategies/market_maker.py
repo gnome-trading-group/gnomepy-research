@@ -57,6 +57,18 @@ class MarketMaker(Strategy):
         self._fv = fair_value or MicropriceFairValue()
         self._vol = volatility or SpreadVolatility()
         self._tick_count = 0
+        self._metrics_buf = None
+
+    def register_metrics(self):
+        buf = self.metrics.create_buffer("mm_signals")
+        self._m_ts = buf.add_long_column("timestamp")
+        self._m_fv = buf.add_double_column("fair_value")
+        self._m_vol_bps = buf.add_double_column("vol_bps")
+        self._m_spread_bps = buf.add_double_column("spread_bps")
+        self._m_skew_bps = buf.add_double_column("skew_bps")
+        self._m_position = buf.add_double_column("position")
+        buf.freeze()
+        self._metrics_buf = buf
 
     def simulate_processing_time(self) -> int:
         return self._processing_time_ns
@@ -109,6 +121,17 @@ class MarketMaker(Strategy):
         if position <= -self.max_position:
             ask_size = 0
             ask_price = 0
+
+        if self._metrics_buf is not None:
+            row = self._metrics_buf.append_row()
+            spread_bps = half_spread * 2 * 10_000 / fv
+            skew_bps_val = skew * 10_000 / fv
+            self._metrics_buf.set_long(row, self._m_ts, timestamp)
+            self._metrics_buf.set_double(row, self._m_fv, fv / 1_000_000_000.0)
+            self._metrics_buf.set_double(row, self._m_vol_bps, float(vol_bps))
+            self._metrics_buf.set_double(row, self._m_spread_bps, spread_bps)
+            self._metrics_buf.set_double(row, self._m_skew_bps, skew_bps_val)
+            self._metrics_buf.set_double(row, self._m_position, float(position))
 
         return [Intent(
             exchange_id=self.exchange_id,

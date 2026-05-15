@@ -8,10 +8,10 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from gnomepy_research.reporting.backtest.metrics import _is_buy
+from gnomepy.reporting.metrics import _is_buy
 
 if TYPE_CHECKING:
-    from gnomepy_research.reporting.backtest.report import BacktestReport
+    from gnomepy.reporting.report import BacktestReport
 
 
 def _is_mm_strategy(report: "BacktestReport") -> bool:

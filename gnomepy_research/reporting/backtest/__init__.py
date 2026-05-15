@@ -1,7 +1,7 @@
 from gnomepy_research.reporting.backtest.adverse_selection import adverse_selection_section
 from gnomepy_research.reporting.backtest.market_making import market_making_section
-from gnomepy_research.reporting.backtest.metrics import Curves, build_curves, compute_sharpe
-from gnomepy_research.reporting.backtest.plots import (
+from gnomepy.reporting.metrics import Curves, build_curves, compute_sharpe
+from gnomepy.reporting.plots import (
     DEFAULT_SECTIONS,
     SECTION_REGISTRY,
     ReportSection,
@@ -11,7 +11,7 @@ from gnomepy_research.reporting.backtest.plots import (
     plot_spread,
     resolve_sections,
 )
-from gnomepy_research.reporting.backtest.report import BacktestReport
+from gnomepy.reporting.report import BacktestReport
 
 __all__ = [
     "BacktestReport",

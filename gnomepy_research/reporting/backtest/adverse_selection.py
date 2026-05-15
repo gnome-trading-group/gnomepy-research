@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING
 import pandas as pd
 import plotly.graph_objects as go
 
-from gnomepy_research.reporting.backtest.metrics import _is_buy
+from gnomepy.reporting.metrics import _is_buy
 
 if TYPE_CHECKING:
-    from gnomepy_research.reporting.backtest.report import BacktestReport
+    from gnomepy.reporting.report import BacktestReport
 
 DEFAULT_HORIZONS_MS = [100, 500, 1_000, 5_000, 10_000, 30_000, 60_000]
 

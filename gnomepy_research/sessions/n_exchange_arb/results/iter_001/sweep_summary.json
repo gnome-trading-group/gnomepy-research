@@ -1,0 +1,41 @@
+{
+  "sweep_id": "019e22ee-ab68-7c1f-9b4e-7b2d8d1a7857",
+  "job_count": 3,
+  "completed_count": 0,
+  "sweep_params": {
+    "exchange_ids": [
+      "1",
+      "28",
+      "36"
+    ]
+  },
+  "jobs": [
+    {
+      "job_index": 0,
+      "job_id": "019e22ee-ab68-7c1f-9b4e-7b2d8d1a7857-0000",
+      "config_params": {
+        "exchange_ids": "1"
+      },
+      "status": "FAILED",
+      "error": "Cannot discover GNOME JARs. Set GNOME_JARS or GNOME_ROOT environment variable, or pass gnome_root to ensure_jvm_started()."
+    },
+    {
+      "job_index": 1,
+      "job_id": "019e22ee-ab68-7c1f-9b4e-7b2d8d1a7857-0001",
+      "config_params": {
+        "exchange_ids": "28"
+      },
+      "status": "FAILED",
+      "error": "Cannot discover GNOME JARs. Set GNOME_JARS or GNOME_ROOT environment variable, or pass gnome_root to ensure_jvm_started()."
+    },
+    {
+      "job_index": 2,
+      "job_id": "019e22ee-ab68-7c1f-9b4e-7b2d8d1a7857-0002",
+      "config_params": {
+        "exchange_ids": "36"
+      },
+      "status": "FAILED",
+      "error": "Cannot discover GNOME JARs. Set GNOME_JARS or GNOME_ROOT environment variable, or pass gnome_root to ensure_jvm_started()."
+    }
+  ]
+}

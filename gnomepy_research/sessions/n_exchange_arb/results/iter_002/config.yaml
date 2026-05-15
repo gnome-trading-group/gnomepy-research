@@ -1,0 +1,50 @@
+strategy:
+  class_name: "gnomepy_research.sessions.n_exchange_arb.strategy:NExchangeArb"
+  args:
+    size: 100000
+    max_position: 5
+    entry_threshold_bps: 8.0
+    close_threshold_bps: 1.0
+    max_imbalance_ticks: 150
+    max_staleness_ns: 300000000
+    warmup_ticks: 50
+    processing_time_ns: 0
+
+start_date: "2026-05-12T23:28:00"
+end_date: "2026-05-13T19:50:00"
+
+listings:
+  - listing_id: 1
+    profile: hyperliquid
+  - listing_id: 28
+    profile: hyperliquid
+  - listing_id: 36
+    profile: lighter
+
+profiles:
+  hyperliquid:
+    fee_model:
+      type: static
+      taker_fee: 0.0004
+      maker_fee: 0.00012
+    network_latency:
+      type: static
+      latency_nanos: 20000000
+    order_processing_latency:
+      type: static
+      latency_nanos: 5000000
+    queue_model:
+      type: risk_averse
+  lighter:
+    fee_model:
+      type: static
+      taker_fee: 0.00028
+      maker_fee: 0.00004
+    network_latency:
+      type: static
+      latency_nanos: 200000000
+    order_processing_latency:
+      type: static
+      latency_nanos: 500000
+    queue_model:
+      type: risk_averse

@@ -46,6 +46,3 @@ profiles:
       latency_nanos: 1000000
     queue_model:
       type: risk_averse
-
-s3:
-  bucket: gnome-market-data-prod
