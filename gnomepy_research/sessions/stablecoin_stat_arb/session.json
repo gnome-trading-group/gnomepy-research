@@ -21,7 +21,7 @@
         "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false},
         "custom_metrics": {"spread_mean_bps": 1.68, "spread_std_bps": 2.30, "spread_autocorr_lag1": 0.9948, "ewma_halflife_seconds": 21.8, "fills_per_day": 30179}
       },
-      "analysis": "90k+ fills in 3 days. Tick-based EWMA alpha=0.99 has half-life of only 22s at 3.16 ticks/sec. The std is tiny (tick-level noise ~0.22 bps), so z=1.0 fires constantly on noise. pct_positive_buckets=0.0: EWMA mean catches up to persistent spread, close fires when mean meets spread (not when spread reverts). Systematic losses.",
+      "analysis": "90k+ fills in 3 days. Tick-based EWMA alpha=0.99 has half-life of only 22s at 3.16 ticks/sec. Fires constantly on noise. Systematic losses.",
       "next_action": "Increase entry_z to 2.5, set close_z=0.0 to exit only when spread crosses mean."
     },
     {
@@ -40,105 +40,104 @@
         "thresholds_met": false,
         "threshold_failures": ["sharpe >0 FAILED (-0.120)", "final_pnl >0 FAILED (-22.45)"],
         "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false},
-        "custom_metrics": {"ewma_halflife_seconds": 21.8, "ticks_per_sec": 3.16, "entry_z_actual_spread_bps": "~2.3 (0.55 above mean)", "sec28_avg_sell": 80176.81, "sec28_avg_buy": 83183.55}
+        "custom_metrics": {"ewma_halflife_seconds": 21.8, "ticks_per_sec": 3.16}
       },
-      "analysis": "79% PnL improvement but still losing. Root cause confirmed: with tick-based EWMA, z=2.5 still fires at only ~0.55 bps above the mean because tick-level std is ~0.22 bps. close_z=0.0 helps but EWMA still adapts in 22s so z crosses 0 quickly due to mean drift, not spread reversion. Security 28 bought back at higher price after entry → spread widened.",
-      "next_action": "Replace tick-based EWMA with time-weighted EWMA (halflife=300s). Lock entry reference (mean/std) at entry time so close is based on actual spread reversion, not EWMA adaptation."
+      "analysis": "79% improvement but still losing. Tick-based EWMA std too small (~0.22 bps) so z=2.5 fires at only 0.55 bps above mean. EWMA adapts in 22s, close fires on mean drift not spread reversion.",
+      "next_action": "Replace tick-based EWMA with time-weighted EWMA (halflife=300s). Lock entry reference."
     },
     {
       "iteration": 3,
       "timestamp": "2026-05-16T11:05:00Z",
       "type": "local",
-      "hypothesis": "Time-weighted EWMA (halflife=300s) gives a meaningful z-score reflecting genuine 5-min scale deviations. Locked entry reference prevents false closes when EWMA mean drifts up to meet persistent spread. entry_z=2.5, close_z=0.0, max_hold=10min.",
-      "changes": ["Replaced tick-based _SpreadEWMA with time-weighted _TimedSpreadEWMA (halflife_seconds=300)", "Added _locked_mean/_locked_std: store EWMA state at entry, use for all close z-score computations", "max_staleness_ns 30s->60s"],
+      "hypothesis": "Time-weighted EWMA (halflife=300s) gives a meaningful z-score. Locked entry reference prevents false closes.",
+      "changes": ["Replaced tick-based _SpreadEWMA with time-weighted _TimedSpreadEWMA (halflife_seconds=300)", "Added _locked_mean/_locked_std at entry", "max_staleness_ns 30s->60s"],
       "config": "configs/iter_003.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
         "run_id": null,
-        "best_params": {
-          "size": 1000,
-          "halflife_seconds": 300.0,
-          "entry_z": 2.5,
-          "close_z": 0.0,
-          "max_hold_ns": 600000000000,
-          "min_spread_bps": 0.5
-        },
-        "summary": {
-          "fill_count": 6864,
-          "final_pnl": 4.175,
-          "sharpe": 0.0281,
-          "sortino": 0.0127,
-          "pct_positive_buckets": 1.0,
-          "total_fees": 0.0633
-        },
+        "best_params": {"size": 1000, "halflife_seconds": 300.0, "entry_z": 2.5, "close_z": 0.0, "max_hold_ns": 600000000000, "min_spread_bps": 0.5},
+        "summary": {"fill_count": 6864, "final_pnl": 4.175, "sharpe": 0.0281, "sortino": 0.0127, "pct_positive_buckets": 1.0, "total_fees": 0.0633},
         "mm_stats": null,
         "thresholds_met": true,
         "threshold_failures": [],
         "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
-        "custom_metrics": {
-          "round_trips": 1716,
-          "pnl_per_round_trip": 0.00243,
-          "sec1_avg_sell": 80256.47,
-          "sec1_avg_buy": 80250.26,
-          "sec28_avg_sell": 80266.35,
-          "sec28_avg_buy": 80270.09,
-          "fills_per_day": 2288
-        },
+        "custom_metrics": {"round_trips": 1716, "pnl_per_round_trip": 0.00243, "fills_per_day": 2288},
         "sensitivity": {
           "latency_2x": {"primary_metric": 4.1636, "sharpe": 0.0280, "pct_positive_buckets": 1.0, "thresholds_met": true},
           "latency_0.5x": {"primary_metric": 4.1746, "sharpe": 0.0281, "pct_positive_buckets": 1.0, "thresholds_met": true}
         }
       },
-      "analysis": "Breakthrough: PnL +4.175, pct_positive_buckets=1.0. The 300s time-weighted EWMA correctly computes z-scores against a 5-minute scale baseline, making z=2.5 correspond to genuine spread anomalies. Locked entry reference ensures we close only when the spread truly reverts below the pre-entry mean, not when the EWMA drifts up. 1716 round trips at +0.00243 each. Security 1 profits (sell>buy by 6.21) are partially offset by Security 28 losses (buy>sell by 3.74), but net is positive. Latency insensitive: 2x and 0.5x latency produce identical results, as expected for a medium-term strategy. Queue model already risk_averse (skip test).",
-      "next_action": "Targets met but continuing to maximize PnL (user requested up to iteration 20). Current PnL=4.175 with 1716 round trips. Try sweeping halflife_seconds and entry_z to find the optimal trade-off between trade frequency and per-trade edge. Also explore lowering close_z below 0.0 (e.g. -0.5) to hold trades longer and capture more of the spread reversion. Consider increasing size to amplify PnL."
+      "analysis": "Breakthrough: PnL +4.175, pct_positive_buckets=1.0. 1716 round trips at +0.00243 each. Latency insensitive.",
+      "next_action": "Sweep halflife, entry_z, close_z to optimize."
     },
     {
       "iteration": 4,
       "timestamp": "2026-05-16T11:35:00Z",
       "type": "sweep",
-      "hypothesis": "Lower close_z captures more reversion; shorter halflife and lower entry_z increase trade frequency. Sweep halflife=[120,300,600,1800] x entry_z=[1.5,2.0,2.5,3.5] x close_z=[-0.5,0.0] to find optimal combination.",
+      "hypothesis": "Lower close_z captures more reversion; shorter halflife and lower entry_z increase trade frequency.",
       "changes": ["Remote sweep: halflife_seconds=[120,300,600,1800], entry_z=[1.5,2.0,2.5,3.5], close_z=[-0.5,0.0]"],
       "config": "configs/sweep_004.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
         "run_id": "0000019e31592d34",
+        "best_params": {"size": 1000, "halflife_seconds": 120.0, "entry_z": 1.5, "close_z": -0.5, "max_hold_ns": 600000000000, "min_spread_bps": 0.5},
+        "summary": {"fill_count": 21402, "final_pnl": 18.3771, "sharpe": 0.0830, "sortino": 0.0718, "pct_positive_buckets": 1.0, "total_fees": 0.1974},
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
+        "custom_metrics": {"round_trips": 5350, "pnl_per_round_trip": 0.00344, "fills_per_day": 7138, "gross_pnl_sec1": 126.09, "gross_pnl_sec28": -107.53}
+      },
+      "analysis": "340% PnL improvement (4.175->18.38). Monotonic trends: close_z=-0.5 beats 0.0 everywhere; shorter halflife better; lower entry_z better. Optima suggest lying outside tested grid.",
+      "next_action": "Extend grid: halflife=[30,60,90,120], entry_z=[0.75,1.0,1.25,1.5], close_z=[-1.0,-0.5]."
+    },
+    {
+      "iteration": 5,
+      "timestamp": "2026-05-16T13:20:00Z",
+      "type": "sweep",
+      "hypothesis": "Continuing trend: even shorter halflife and lower entry_z; close_z=-1.0 may hold trades to deeper reversion for more edge per round trip.",
+      "changes": ["Remote sweep: halflife_seconds=[30,60,90,120], entry_z=[0.75,1.0,1.25,1.5], close_z=[-1.0,-0.5]"],
+      "config": "configs/sweep_005.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e31915912",
         "best_params": {
           "size": 1000,
-          "halflife_seconds": 120.0,
-          "entry_z": 1.5,
-          "close_z": -0.5,
+          "halflife_seconds": 90.0,
+          "entry_z": 1.0,
+          "close_z": -1.0,
           "max_hold_ns": 600000000000,
           "min_spread_bps": 0.5
         },
         "summary": {
-          "fill_count": 21402,
-          "final_pnl": 18.3771,
-          "sharpe": 0.0830,
-          "sortino": 0.0718,
+          "fill_count": 21430,
+          "final_pnl": 25.0077,
+          "sharpe": 0.0980,
+          "sortino": 0.1035,
           "pct_positive_buckets": 1.0,
-          "total_fees": 0.1974
+          "total_fees": 0.1977
         },
         "mm_stats": null,
         "thresholds_met": true,
         "threshold_failures": [],
         "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
         "custom_metrics": {
-          "round_trips": 5350,
-          "pnl_per_round_trip": 0.00344,
-          "sec1_avg_sell": 80205.16,
-          "sec1_avg_buy": 80196.59,
-          "sec28_avg_sell": 80212.58,
-          "sec28_avg_buy": 80217.69,
-          "fills_per_day": 7138,
-          "gross_pnl_sec1": 126.09,
-          "gross_pnl_sec28": -107.53
+          "round_trips": 5357,
+          "pnl_per_round_trip": 0.00466,
+          "sec1_avg_sell": 80197.75,
+          "sec1_avg_buy": 80188.34,
+          "sec28_avg_sell": 80204.80,
+          "sec28_avg_buy": 80209.51,
+          "fills_per_day": 7144,
+          "gross_pnl_sec1": 130.63,
+          "gross_pnl_sec28": -105.44
         }
       },
-      "analysis": "340% PnL improvement (4.175 -> 18.38). Clear monotonic trends: (1) close_z=-0.5 beats close_z=0.0 in EVERY parameter combination — holding until -0.5σ below the locked mean captures more reversion vs exiting at the mean. (2) Shorter halflife is universally better: halflife=120 (18.38) > 300 (17.27) > 600 (14.88) > 1800 (12.49) at entry_z=1.5, close_z=-0.5. (3) Lower entry_z is better: 1.5 > 2.0 > 2.5 > 3.5. Secular trend in both dimensions suggests optima lie outside the tested grid. Sec1 is the profitable leg (+126 gross), sec28 is the loss leg (-107 gross), net edge ~18.4. Security 28 (USDE) spreads wider on average — we're selling USDE high and buying it back lower but the reversion is partial.",
-      "next_action": "Extend grid toward even shorter halflife (30,60,90,120) and lower entry_z (0.75,1.0,1.25,1.5) with close_z=[-1.0,-0.5]. The monotonic trends strongly suggest optima below the current grid boundaries."
+      "analysis": "36% PnL improvement (18.38->25.01). close_z=-1.0 dominates close_z=-0.5 in EVERY parameter combination by ~5 PnL units — holding to deeper reversion consistently captures more spread. PnL/round-trip improved 35% (0.00344->0.00466) with same trade frequency. Halflife trend less clear: optimal at 90s with 60s and 120s close behind; halflife=30s is not better despite earlier trend — suggests diminishing returns below ~60s. entry_z=1.0 is optimal: 0.75 generates too many marginal trades (more fills, lower PnL/RT), 1.25+ too selective. close_z trend still monotonically decreasing — optima may lie further below -1.0. User hint: sweep size to find slippage breakeven.",
+      "next_action": "Per user hint: sweep size=[1000,2000,5000,10000,20000,50000] at best params (halflife=90, entry_z=1.0, close_z=-1.0) to find where slippage starts degrading PnL/round-trip."
     }
   ],
-  "best_iteration": 4,
-  "best_pnl": 18.3771,
-  "best_sharpe": 0.0830
+  "best_iteration": 5,
+  "best_pnl": 25.0077,
+  "best_sharpe": 0.0980
 }
