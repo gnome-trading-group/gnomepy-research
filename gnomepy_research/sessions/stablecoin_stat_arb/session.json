@@ -1,68 +1,99 @@
 {
   "session_name": "stablecoin_stat_arb",
-  "status": "running",
+  "status": "completed",
   "created_at": "2026-05-16T00:00:00Z",
   "iterations": [
     {
       "iteration": 1,
       "timestamp": "2026-05-16T10:35:00Z",
       "type": "local",
-      "hypothesis": "USDC (listing 1) and USDE (listing 28) are USD-pegged stablecoins on Hyperliquid whose midprices should be tightly correlated. Transient divergences in the spread, measured as EWMA z-scores, are mean-reverting opportunities. Iteration 1 uses the NExchangeArb framework adapted for same-exchange stat-arb with moderate z=1.0 entry and 60s max hold.",
-      "changes": ["Initial strategy: StablecoinStatArb based on NExchangeArb pattern, entry_z=1.0, close_z=0.2, ewma_alpha=0.99, max_hold_ns=60s, size=1000"],
+      "hypothesis": "USDC (listing 1) and USDE (listing 28) spread is mean-reverting; tick-based EWMA z-score with alpha=0.99, entry_z=1.0, close_z=0.2, max_hold=60s.",
+      "changes": ["Initial strategy: StablecoinStatArb based on NExchangeArb, entry_z=1.0, close_z=0.2, ewma_alpha=0.99, max_hold=60s"],
       "config": "configs/iter_001.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": null,
+        "best_params": {"size": 1000, "entry_z": 1.0, "close_z": 0.2, "ewma_alpha": 0.99, "max_hold_ns": 60000000000},
+        "summary": {"fill_count": 90538, "final_pnl": -104.05, "sharpe": -0.307, "sortino": -0.265, "pct_positive_buckets": 0.0, "total_fees": 0.835},
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": ["sharpe >0 FAILED (-0.307)", "final_pnl >0 FAILED (-104.05)"],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false},
+        "custom_metrics": {"spread_mean_bps": 1.68, "spread_std_bps": 2.30, "spread_autocorr_lag1": 0.9948, "ewma_halflife_seconds": 21.8, "fills_per_day": 30179}
+      },
+      "analysis": "90k+ fills in 3 days. Tick-based EWMA alpha=0.99 has half-life of only 22s at 3.16 ticks/sec. The std is tiny (tick-level noise ~0.22 bps), so z=1.0 fires constantly on noise. pct_positive_buckets=0.0: EWMA mean catches up to persistent spread, close fires when mean meets spread (not when spread reverts). Systematic losses.",
+      "next_action": "Increase entry_z to 2.5, set close_z=0.0 to exit only when spread crosses mean."
+    },
+    {
+      "iteration": 2,
+      "timestamp": "2026-05-16T10:50:00Z",
+      "type": "local",
+      "hypothesis": "Higher entry_z=2.5 filters noise; close_z=0.0 ensures exit only on true mean crossing; max_hold 10min.",
+      "changes": ["entry_z 1.0->2.5", "close_z 0.2->0.0", "max_hold_ns 60s->600s", "min_spread_bps 0.02->0.5"],
+      "config": "configs/iter_002.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": null,
+        "best_params": {"size": 1000, "entry_z": 2.5, "close_z": 0.0, "ewma_alpha": 0.99, "max_hold_ns": 600000000000, "min_spread_bps": 0.5},
+        "summary": {"fill_count": 22964, "final_pnl": -22.45, "sharpe": -0.120, "sortino": -0.071, "pct_positive_buckets": 0.0, "total_fees": 0.212},
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": ["sharpe >0 FAILED (-0.120)", "final_pnl >0 FAILED (-22.45)"],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false},
+        "custom_metrics": {"ewma_halflife_seconds": 21.8, "ticks_per_sec": 3.16, "entry_z_actual_spread_bps": "~2.3 (0.55 above mean)", "sec28_avg_sell": 80176.81, "sec28_avg_buy": 83183.55}
+      },
+      "analysis": "79% PnL improvement but still losing. Root cause confirmed: with tick-based EWMA, z=2.5 still fires at only ~0.55 bps above the mean because tick-level std is ~0.22 bps. close_z=0.0 helps but EWMA still adapts in 22s so z crosses 0 quickly due to mean drift, not spread reversion. Security 28 bought back at higher price after entry → spread widened.",
+      "next_action": "Replace tick-based EWMA with time-weighted EWMA (halflife=300s). Lock entry reference (mean/std) at entry time so close is based on actual spread reversion, not EWMA adaptation."
+    },
+    {
+      "iteration": 3,
+      "timestamp": "2026-05-16T11:05:00Z",
+      "type": "local",
+      "hypothesis": "Time-weighted EWMA (halflife=300s) gives a meaningful z-score reflecting genuine 5-min scale deviations. Locked entry reference prevents false closes when EWMA mean drifts up to meet persistent spread. entry_z=2.5, close_z=0.0, max_hold=10min.",
+      "changes": ["Replaced tick-based _SpreadEWMA with time-weighted _TimedSpreadEWMA (halflife_seconds=300)", "Added _locked_mean/_locked_std: store EWMA state at entry, use for all close z-score computations", "max_staleness_ns 30s->60s"],
+      "config": "configs/iter_003.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
         "run_id": null,
         "best_params": {
           "size": 1000,
-          "entry_z": 1.0,
-          "close_z": 0.2,
-          "ewma_alpha": 0.99,
-          "ewma_warmup": 200,
-          "max_hold_ns": 60000000000,
-          "min_spread_bps": 0.02
+          "halflife_seconds": 300.0,
+          "entry_z": 2.5,
+          "close_z": 0.0,
+          "max_hold_ns": 600000000000,
+          "min_spread_bps": 0.5
         },
         "summary": {
-          "fill_count": 90538,
-          "total_volume": 90.538,
-          "total_notional": 7260953.4,
-          "total_fees": 0.835,
-          "final_pnl": -104.05,
-          "sharpe": -0.307,
-          "sortino": -0.265,
-          "pct_positive_buckets": 0.0,
-          "final_position": 0.0
+          "fill_count": 6864,
+          "final_pnl": 4.175,
+          "sharpe": 0.0281,
+          "sortino": 0.0127,
+          "pct_positive_buckets": 1.0,
+          "total_fees": 0.0633
         },
         "mm_stats": null,
-        "thresholds_met": false,
-        "threshold_failures": [
-          "sharpe >0 FAILED (-0.307)",
-          "final_pnl >0 FAILED (-104.05)"
-        ],
-        "targets_met": {
-          "sharpe": false,
-          "sortino": false,
-          "pct_positive_buckets": false
-        },
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
         "custom_metrics": {
-          "spread_mean_bps": 1.68,
-          "spread_std_bps": 2.30,
-          "spread_min_bps": -19.98,
-          "spread_max_bps": 28.06,
-          "spread_autocorr_lag1": 0.9948,
-          "spread_autocorr_lag60": 0.8708,
-          "fills_per_day": 30179,
-          "sec1_avg_buy": 80192.29,
-          "sec1_avg_sell": 80190.39,
-          "sec28_avg_buy": 80201.14,
-          "sec28_avg_sell": 80207.60
+          "round_trips": 1716,
+          "pnl_per_round_trip": 0.00243,
+          "sec1_avg_sell": 80256.47,
+          "sec1_avg_buy": 80250.26,
+          "sec28_avg_sell": 80266.35,
+          "sec28_avg_buy": 80270.09,
+          "fills_per_day": 2288
+        },
+        "sensitivity": {
+          "latency_2x": {"primary_metric": 4.1636, "sharpe": 0.0280, "pct_positive_buckets": 1.0, "thresholds_met": true},
+          "latency_0.5x": {"primary_metric": 4.1746, "sharpe": 0.0281, "pct_positive_buckets": 1.0, "thresholds_met": true}
         }
       },
-      "analysis": "Strategy overtraded severely (90,538 fills over 3 days = 1 trade every ~3s). Root cause: the EWMA z-score with alpha=0.99 adapts to a trending/persistent spread (autocorr=0.9948 at lag-1). When z-score drops below close_z=0.2, it is because the EWMA mean caught up to the spread level, NOT because the spread reverted. This means the strategy systematically exits trades at the current elevated price rather than after a reversion, creating systematic adverse selection. pct_positive_buckets=0.0 confirms this bias is persistent across all time periods. The spread averages 1.68 bps (Security 28 premium) with high persistence — a different regime requires much longer hold periods or more selective entries.",
-      "next_action": "Increase entry_z to 2.5 to enter only on larger deviations less likely to be pure trend. Set close_z=0.0 so we exit only when spread actually crosses back through the EWMA mean (true reversion), not when the mean drifts up to meet the spread. Extend max_hold_ns to 10 minutes to allow time for genuine reversion. Increase min_spread_bps to 0.5 to avoid noise trades. Keep ewma_alpha=0.99 to maintain a stable long-term mean."
+      "analysis": "Breakthrough: PnL +4.175, pct_positive_buckets=1.0. The 300s time-weighted EWMA correctly computes z-scores against a 5-minute scale baseline, making z=2.5 correspond to genuine spread anomalies. Locked entry reference ensures we close only when the spread truly reverts below the pre-entry mean, not when the EWMA drifts up. 1716 round trips at +0.00243 each. Security 1 profits (sell>buy by 6.21) are partially offset by Security 28 losses (buy>sell by 3.74), but net is positive. Latency insensitive: 2x and 0.5x latency produce identical results, as expected for a medium-term strategy. Queue model already risk_averse (skip test).",
+      "next_action": "All targets met. Session completed."
     }
   ],
-  "best_iteration": null,
-  "best_pnl": null,
-  "best_sharpe": null
+  "best_iteration": 3,
+  "best_pnl": 4.175,
+  "best_sharpe": 0.0281
 }
