@@ -91,9 +91,54 @@
       },
       "analysis": "Breakthrough: PnL +4.175, pct_positive_buckets=1.0. The 300s time-weighted EWMA correctly computes z-scores against a 5-minute scale baseline, making z=2.5 correspond to genuine spread anomalies. Locked entry reference ensures we close only when the spread truly reverts below the pre-entry mean, not when the EWMA drifts up. 1716 round trips at +0.00243 each. Security 1 profits (sell>buy by 6.21) are partially offset by Security 28 losses (buy>sell by 3.74), but net is positive. Latency insensitive: 2x and 0.5x latency produce identical results, as expected for a medium-term strategy. Queue model already risk_averse (skip test).",
       "next_action": "Targets met but continuing to maximize PnL (user requested up to iteration 20). Current PnL=4.175 with 1716 round trips. Try sweeping halflife_seconds and entry_z to find the optimal trade-off between trade frequency and per-trade edge. Also explore lowering close_z below 0.0 (e.g. -0.5) to hold trades longer and capture more of the spread reversion. Consider increasing size to amplify PnL."
+    },
+    {
+      "iteration": 4,
+      "timestamp": "2026-05-16T11:35:00Z",
+      "type": "sweep",
+      "hypothesis": "Lower close_z captures more reversion; shorter halflife and lower entry_z increase trade frequency. Sweep halflife=[120,300,600,1800] x entry_z=[1.5,2.0,2.5,3.5] x close_z=[-0.5,0.0] to find optimal combination.",
+      "changes": ["Remote sweep: halflife_seconds=[120,300,600,1800], entry_z=[1.5,2.0,2.5,3.5], close_z=[-0.5,0.0]"],
+      "config": "configs/sweep_004.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e31592d34",
+        "best_params": {
+          "size": 1000,
+          "halflife_seconds": 120.0,
+          "entry_z": 1.5,
+          "close_z": -0.5,
+          "max_hold_ns": 600000000000,
+          "min_spread_bps": 0.5
+        },
+        "summary": {
+          "fill_count": 21402,
+          "final_pnl": 18.3771,
+          "sharpe": 0.0830,
+          "sortino": 0.0718,
+          "pct_positive_buckets": 1.0,
+          "total_fees": 0.1974
+        },
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
+        "custom_metrics": {
+          "round_trips": 5350,
+          "pnl_per_round_trip": 0.00344,
+          "sec1_avg_sell": 80205.16,
+          "sec1_avg_buy": 80196.59,
+          "sec28_avg_sell": 80212.58,
+          "sec28_avg_buy": 80217.69,
+          "fills_per_day": 7138,
+          "gross_pnl_sec1": 126.09,
+          "gross_pnl_sec28": -107.53
+        }
+      },
+      "analysis": "340% PnL improvement (4.175 -> 18.38). Clear monotonic trends: (1) close_z=-0.5 beats close_z=0.0 in EVERY parameter combination — holding until -0.5σ below the locked mean captures more reversion vs exiting at the mean. (2) Shorter halflife is universally better: halflife=120 (18.38) > 300 (17.27) > 600 (14.88) > 1800 (12.49) at entry_z=1.5, close_z=-0.5. (3) Lower entry_z is better: 1.5 > 2.0 > 2.5 > 3.5. Secular trend in both dimensions suggests optima lie outside the tested grid. Sec1 is the profitable leg (+126 gross), sec28 is the loss leg (-107 gross), net edge ~18.4. Security 28 (USDE) spreads wider on average — we're selling USDE high and buying it back lower but the reversion is partial.",
+      "next_action": "Extend grid toward even shorter halflife (30,60,90,120) and lower entry_z (0.75,1.0,1.25,1.5) with close_z=[-1.0,-0.5]. The monotonic trends strongly suggest optima below the current grid boundaries."
     }
   ],
-  "best_iteration": 3,
-  "best_pnl": 4.175,
-  "best_sharpe": 0.0281
+  "best_iteration": 4,
+  "best_pnl": 18.3771,
+  "best_sharpe": 0.0830
 }
