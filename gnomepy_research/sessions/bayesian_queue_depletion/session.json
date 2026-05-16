@@ -5,17 +5,78 @@
   "iterations": [
     {
       "iteration": 1,
-      "timestamp": "2026-05-16T00:00:00Z",
+      "timestamp": "2026-05-16T20:48:00Z",
       "type": "local",
       "hypothesis": "Build a market maker with a depletion score combining trade imbalance, level staleness asymmetry, and liquidity delta asymmetry. Positive score (ask vulnerable) skews reservation price up and sizes bids heavier. EWMA aggression gates toxic flow by widening spreads.",
       "changes": ["Initial strategy implementation"],
       "config": "configs/iter_001.yaml",
-      "results": null,
-      "analysis": "Backtest could not run: gnome-backtest JAR is missing from the environment. The engine requires the gnome-backtest Maven project to be built and discoverable via GNOME_JARS, GNOME_ROOT env var, or as a sibling directory of gnomepy. Strategy code and config are ready; this is a pure infrastructure issue.",
-      "next_action": "Set GNOME_JARS or GNOME_ROOT env var pointing to the gnome-backtest uber JAR, then re-run iteration 1 unchanged."
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T10:00:00",
+        "run_id": null,
+        "best_params": {"gamma": 0.01, "delta": 1.0, "depletion_skew_bps": 3.0},
+        "summary": {
+          "fill_count": 165,
+          "final_pnl": -0.003914,
+          "sharpe": -0.024265,
+          "sortino": -0.022804,
+          "pct_positive_buckets": 0.2,
+          "total_fees": 0.001522,
+          "final_position": -2.1e-05
+        },
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": ["sharpe >0 FAILED (-0.024)", "final_pnl >0 FAILED (-0.004)"],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false},
+        "custom_metrics": {
+          "bid_fills": 72,
+          "ask_fills": 93,
+          "bid_intents": 39508,
+          "ask_intents": 17343,
+          "avg_bid_edge_bps": -0.037,
+          "avg_ask_edge_bps": -0.061,
+          "avg_spread_at_fill": 1.018,
+          "cash_pnl_pre_mtm": 1.702,
+          "mtm_loss_open_short": -1.706
+        }
+      },
+      "analysis": "Strategy accumulated a -2.1e-05 short position (93 ask fills vs 72 bid fills) that nearly perfectly offset $1.70 in cash trading gains, resulting in -$0.004 final PnL. Root cause: gamma=0.01 is far too weak to counter-act the depletion signal bias. The depletion score was positive (predicting ask depletion/price up) so the strategy quoted 2.3x more bid intents (39k vs 17k), yet received more ask fills. Both bid and ask fills are slightly adverse vs mid, consistent with risk_averse queue model filling only on large sweeps.",
+      "next_action": "Increase gamma from 0.01 to 0.5 and reduce depletion_skew_bps from 3.0 to 1.5."
+    },
+    {
+      "iteration": 2,
+      "timestamp": "2026-05-16T20:51:00Z",
+      "type": "local",
+      "hypothesis": "Increase gamma from 0.01 to 0.5 for much stronger inventory reversion skew, reduce depletion_skew_bps from 3.0 to 1.5 to dampen one-sided quoting bias that was building the short position.",
+      "changes": ["gamma: 0.01 -> 0.5", "depletion_skew_bps: 3.0 -> 1.5"],
+      "config": "configs/iter_002.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T10:00:00",
+        "run_id": null,
+        "best_params": {"gamma": 0.5, "delta": 1.0, "depletion_skew_bps": 1.5},
+        "summary": {
+          "fill_count": 125,
+          "final_pnl": 0.003408,
+          "sharpe": 0.022676,
+          "sortino": 0.021114,
+          "pct_positive_buckets": 0.6,
+          "total_fees": 0.001153,
+          "final_position": -2.1e-05
+        },
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false},
+        "custom_metrics": {},
+        "sensitivity": {
+          "latency_2x": {"primary_metric": 0.022676, "thresholds_met": true},
+          "latency_0.5x": {"primary_metric": 0.022676, "thresholds_met": true}
+        }
+      },
+      "analysis": "First passing iteration. Stronger gamma (0.5) reduced adverse inventory buildup and flipped PnL positive (+$0.0034). Fill count dropped from 165 to 125 as wider reservation skew pushed quotes further from mid when inventory builds. Final position is still -2.1e-05 (same as iter 1) — the depletion signal bias persists but the inventory skew now compensates with better fill prices. Sharpe is only 0.023: PnL is very small relative to return volatility across 30-min buckets. pct_positive_buckets = exactly 0.6 (3 of 5 buckets). Strategy is completely latency-insensitive (identical results at 2.5ms vs 10ms) — signal windows 500ms+ dominate. Queue model sensitivity skipped (already risk_averse).",
+      "next_action": "Widen min_spread_bps from 1.5 to 4.0 to capture more edge per fill and reduce adverse selection. The current spread may be too tight relative to informed flow costs. Also increase warmup_ticks from 200 to 50 to reduce the gap in early trading, and test gamma=1.0 for stronger inventory control."
     }
   ],
-  "best_iteration": null,
-  "best_pnl": null,
-  "best_sharpe": null
+  "best_iteration": 2,
+  "best_pnl": 0.003408,
+  "best_sharpe": 0.022676
 }
