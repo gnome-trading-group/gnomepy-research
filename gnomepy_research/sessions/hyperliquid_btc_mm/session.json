@@ -13,54 +13,158 @@
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
         "run_id": null,
-        "best_params": {
-          "exchange_id": 1,
-          "usdc_security_id": 1,
-          "usde_security_id": 28,
-          "size": 100000,
-          "max_position": 5,
-          "gamma": 0.1,
-          "delta": 1.0,
-          "min_spread_bps": 3.0,
-          "warmup_ticks": 100,
-          "vol_alpha": 0.99
-        },
-        "summary": {
-          "fill_count": 128,
-          "total_volume": 6.00842,
-          "total_notional": 484387.11,
-          "final_position": -0.194,
-          "total_fees": 0.00118,
-          "final_pnl": -206.92,
-          "sharpe": -0.00496,
-          "sortino": -0.00580,
-          "pct_positive_buckets": 0.4
-        },
-        "custom_metrics": {
-          "bid_fill_edge_bps": -0.003,
-          "ask_fill_edge_bps": -1.687,
-          "fills_day1": 128,
-          "fills_day2": 0,
-          "usde_median_spread_bps": 0.125,
-          "usdc_usde_basis_usd": 20.0,
-          "usde_spread_pct_above_2bps": 1.0
-        },
+        "best_params": {"gamma": 0.1, "delta": 1.0, "min_spread_bps": 3.0, "fv": "usdc"},
+        "summary": {"fill_count": 128, "total_volume": 6.00842, "final_pnl": -206.92, "sharpe": -0.00496, "pct_positive_buckets": 0.4},
         "thresholds_met": false,
-        "threshold_failures": [
-          "sharpe >0 FAILED (-0.00496)",
-          "final_pnl >0 FAILED (-206.92)"
-        ],
-        "targets_met": {
-          "sharpe": false,
-          "sortino": false,
-          "pct_positive_buckets": false
-        }
+        "threshold_failures": ["sharpe >0 FAILED (-0.00496)", "final_pnl >0 FAILED (-206.92)"]
       },
-      "analysis": "BTC/USDE trades $15-27 above BTC/USDC persistently (structural basis). Using USDC microprice as fair value caused our asks to land INSIDE the USDE spread when the basis was large — takers hit us because we were offering BTC/USDE below the USDE market price. Ask fills averaged -1.687 bps edge (selling below mid = adverse selection). All 128 fills occurred on May 13 00:00-12:31; zero on day 2 despite full USDE data. BTC/USDE typically trades at 0.125 bps spread (1 tick wide), so our min_spread_bps=3.0 quotes were normally far outside the market. Fills only happened during brief basis-driven windows where USDC reference put us inside USDE spread. PnL loss driven by: (a) selling below mid on adverse ask fills, (b) residual short position of -0.194 BTC with market rising from $80,459 to $81,043.",
-      "next_action": "Switch to BTC/USDE own MicropriceFairValue (security_id=28) as the fair value reference to eliminate basis-driven adverse selection. Reduce min_spread_bps to 2.5 (covers 1.2 bps maker fee with 0.05 bps buffer per side) and use vol_alpha=0.9 for faster response to USDE spread changes. Keep USDC data available but use only for supplementary flow analysis in later iterations."
+      "analysis": "USDC FV caused structural bias: $20 USDE-USDC premium put our asks below the USDE market mid, generating 128 adversely-selected ask fills at -1.687 bps edge.",
+      "next_action": "Switch to USDE own MicropriceFairValue to eliminate basis-driven adverse selection."
+    },
+    {
+      "iteration": 2,
+      "timestamp": "2026-05-15T00:00:00Z",
+      "type": "local",
+      "hypothesis": "Switch FV to BTC/USDE own microprice. Removes basis bias.",
+      "changes": ["FV switched to USDE microprice", "min_spread_bps 3.0->2.5", "vol_alpha 0.99->0.9"],
+      "config": "configs/iter_002.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
+        "run_id": null,
+        "best_params": {"min_spread_bps": 2.5, "fv": "usde"},
+        "summary": {"fill_count": 483, "total_volume": 28.876, "final_pnl": -152.92, "sharpe": -0.009311, "pct_positive_buckets": 0.4},
+        "custom_metrics": {"bid_fill_edge_bps": -0.504, "ask_fill_edge_bps": -0.622},
+        "thresholds_met": false,
+        "threshold_failures": ["sharpe >0 FAILED", "final_pnl >0 FAILED"]
+      },
+      "analysis": "Both sides adversely selected ~0.55 bps average. USDE spread is 0.125 bps; fills happen during price sweeps. Each fill costs ~1.75 bps (1.2 maker fee + 0.55 adverse selection).",
+      "next_action": "Try flow imbalance skew to detect toxic flow."
+    },
+    {
+      "iteration": 3,
+      "timestamp": "2026-05-15T00:00:00Z",
+      "type": "local",
+      "hypothesis": "Add flow_bps adjustment to reduce adverse selection.",
+      "changes": ["Added TradeImbalance with flow_bps=2.0"],
+      "config": "configs/iter_003.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
+        "run_id": null,
+        "summary": {"fill_count": 1985, "final_pnl": -1520.37, "sharpe": -0.04991, "pct_positive_buckets": 0.4},
+        "thresholds_met": false
+      },
+      "analysis": "Disaster: flow_bps=2.0 > min_half=1.25 bps shifted reservation past mid, turning passive orders into aggressive market orders. 1985 taker fills at 4 bps each.",
+      "next_action": "Remove flow signal. Try spread gate filter."
+    },
+    {
+      "iteration": 4,
+      "timestamp": "2026-05-15T00:00:00Z",
+      "type": "local",
+      "hypothesis": "Wide USDE spreads indicate dislocation opportunity; only quote when spread > 3 bps.",
+      "changes": ["Added spread_gate_bps=3.0", "gamma 1.0->2.0"],
+      "config": "configs/iter_004.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
+        "run_id": null,
+        "summary": {"fill_count": 623, "final_pnl": -786.10, "sharpe": -0.030383, "pct_positive_buckets": 0.2},
+        "custom_metrics": {"bid_fill_edge_bps": -1.861},
+        "thresholds_met": false
+      },
+      "analysis": "Backfired: wide spreads occur during book sweeps = maximum adverse selection. Bid edge worsened from -0.504 to -1.861 bps.",
+      "next_action": "Switch to USDC+basis_ewma FV for stat-arb mean-reversion edge."
+    },
+    {
+      "iteration": 5,
+      "timestamp": "2026-05-15T00:00:00Z",
+      "type": "local",
+      "hypothesis": "FV = USDC + EWMA(basis). Fill when USDE deviates, profit from basis reversion. gamma=1,000,000 for A-S skew.",
+      "changes": ["FV = USDC + basis_ewma", "gamma=1,000,000"],
+      "config": "configs/iter_005.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
+        "run_id": null,
+        "summary": {"fill_count": 6, "final_pnl": -2266399.68, "sharpe": -0.007607, "pct_positive_buckets": 0.4},
+        "thresholds_met": false
+      },
+      "analysis": "Catastrophic: gamma*pos*vol_raw^2/fv explodes when vol_bps=10 during sweeps. Skew=40,000,000 → bid at $11.4M. Root cause: SpreadVolatility squared makes A-S skew explosively sensitive.",
+      "next_action": "Replace A-S with linear skew. Keep USDC+basis FV."
+    },
+    {
+      "iteration": 6,
+      "timestamp": "2026-05-15T00:00:00Z",
+      "type": "local",
+      "hypothesis": "Replace A-S gamma with linear skew (skew_per_btc_bps * pos * fv / 10000). FV = USDC + basis_ewma (alpha=0.9990). This generates profitable fills when USDE deviates from USDC+basis.",
+      "changes": ["Linear skew replaces A-S gamma", "skew_per_btc_bps=2.0", "FV = USDC + basis_ewma"],
+      "config": "configs/iter_006.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
+        "run_id": null,
+        "summary": {"fill_count": 5, "total_volume": 0.230, "final_pnl": 20.30, "sharpe": 0.003012, "sortino": 0.003513, "pct_positive_buckets": 0.6},
+        "thresholds_met": false,
+        "threshold_failures": ["fill_count >50 FAILED (5)"]
+      },
+      "analysis": "First positive PnL (+$20)! But only 29 intents and 5 fills because FV = int(usdc_fv + basis_ewma) rarely changes integer value (basis_ewma changes by 0.001/tick, usdc_fv is integer → same price most ticks → framework only records intent changes). Sticky quotes problem.",
+      "next_action": "Blend USDE (70%) with USDC+basis (30%) so USDE dominates and changes every tick, while USDC+basis provides reversion edge."
+    },
+    {
+      "iteration": 7,
+      "timestamp": "2026-05-15T00:00:00Z",
+      "type": "local",
+      "hypothesis": "Blend fv = 0.7*usde_fv + 0.3*(usdc_fv + basis_ewma). USDE dominates for quote dynamism; USDC+basis provides mean-reversion edge. basis_alpha=0.99 for ~6-min half-life.",
+      "changes": ["usdc_weight=0.3 blended FV", "basis_alpha=0.99 (from 0.9990)", "Added max_position guard"],
+      "config": "configs/iter_007.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
+        "run_id": null,
+        "summary": {"fill_count": 2, "total_volume": 0.131, "final_pnl": -50073.43, "sharpe": -0.007601, "pct_positive_buckets": 0.4},
+        "thresholds_met": false
+      },
+      "analysis": "OMS unit bug: after 0.03115 BTC ask fill, oms.get_effective_quantity() returned -31,150 (micro-BTC units, not BTC). skew = 2.0*(-31150)*80447/10000 = -501,183 → reservation = 581,630 → bid at $581K → filled at market → -$50K. OMS returns position in 1e-6 BTC units (micro-BTC), not BTC. Position guard -31150 <= -5 triggered: ask suppressed. Only 2 fills.",
+      "next_action": "Divide OMS position by 1e6 to convert to BTC before skew and guard calculation."
+    },
+    {
+      "iteration": 8,
+      "timestamp": "2026-05-15T00:00:00Z",
+      "type": "local",
+      "hypothesis": "Clamp position used for skew to [-max_position, max_position] to prevent OMS unit-scale bugs from exploding skew.",
+      "changes": ["Added skew_pos = max(-max_pos, min(max_pos, position)) clamping"],
+      "config": "configs/iter_008.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
+        "run_id": null,
+        "summary": {"fill_count": 7845, "total_volume": 784.3, "final_pnl": -3905.09, "sharpe": -0.089, "pct_positive_buckets": 0.4},
+        "thresholds_met": false
+      },
+      "analysis": "100% taker fills. Clamping position_raw to [-5, 5] always produces maximum skew: ±5 * 2.0 * 80447 / 10000 = ±80, far exceeding half_spread of 12. Quotes always cross the spread. After one ask fill (OMS=-31150 → skew_pos=-5 → bid=80515 >> market_ask=80449 → taker bid), after that bid fill (position+, → ask=80376 << market_bid → taker ask). Oscillates forever.",
+      "next_action": "Divide OMS position by 1e6 to get BTC, set max_position=0.5 BTC, use 'unfavorable price' guard to avoid framework slot crash from size=0."
+    },
+    {
+      "iteration": 9,
+      "timestamp": "2026-05-15T00:00:00Z",
+      "type": "local",
+      "hypothesis": "Fix OMS units: position_btc = oms_position / 1e6. Use max_position=0.5 BTC with unfavorable-price guard (bid_price=fv*0.5 when long, ask_price=fv*2 when short) to avoid framework slot-collision crash from size=0 orders.",
+      "changes": ["position_btc = position_raw / 1_000_000", "max_position=0.5 BTC", "Guard uses unfavorable price instead of size=0", "Removed int() from bid/ask price", "float prices submitted to Intent"],
+      "config": "configs/iter_009.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
+        "run_id": null,
+        "summary": {"fill_count": 85, "total_volume": 2.829, "final_pnl": 55.04, "sharpe": 0.000388, "sortino": 0.000432, "pct_positive_buckets": 0.6},
+        "custom_metrics": {
+          "pct_taker_fills": 97.6,
+          "bid_fill_edge_vs_mid_bps": -0.789,
+          "ask_fill_edge_vs_mid_bps": -0.923,
+          "fills_day1": 85,
+          "fills_day2": 0,
+          "final_position_btc": 0.6705
+        },
+        "thresholds_met": true,
+        "threshold_failures": []
+      },
+      "analysis": "All thresholds met (sharpe=0.000388 > 0, fill_count=85 > 50, pnl=$55 > 0) but targets far from met. 97.6% taker fills — USDC blend introduces FV lag: when USDE moves faster than USDC, blended FV overshoots current USDE price, causing our bid/ask to cross the spread. The $55 PnL is BTC appreciation on accumulated long position (0.67 BTC), not trading edge. Fills only in first 7 hours (00:10-07:22), then guard suppresses after accumulating 0.67 BTC long and market doesn't come back to us. Real per-fill edge is negative.",
+      "next_action": "Remove USDC blend from FV entirely: use fv = usde_fv only (always tracks market, never lags). Use basis deviation as a reservation ADJUSTMENT (signed skew) rather than FV component: when USDE is cheap vs historical basis, skew reservation up to buy more; when expensive, skew down to sell. This preserves the mean-reversion signal without introducing FV lag."
     }
   ],
-  "best_iteration": null,
-  "best_pnl": null,
-  "best_sharpe": null
+  "best_iteration": 9,
+  "best_pnl": 55.04,
+  "best_sharpe": 0.000388
 }

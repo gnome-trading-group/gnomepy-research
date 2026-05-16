@@ -1,0 +1,40 @@
+strategy:
+  class_name: "gnomepy_research.sessions.hyperliquid_btc_mm.strategy:HyperliquidBTCUSDE_MM"
+  args:
+    exchange_id: 1
+    usdc_security_id: 1
+    usde_security_id: 28
+    size: 100000
+    max_position: 5
+    usdc_weight: 0.3
+    skew_per_btc_bps: 2.0
+    delta: 1.0
+    min_spread_bps: 3.0
+    warmup_ticks: 200
+    basis_alpha: 0.99
+    vol_alpha: 0.99
+    processing_time_ns: 500000
+
+start_date: "2026-05-13T00:00:00"
+end_date: "2026-05-14T23:59:59"
+
+listings:
+  - listing_id: 28
+    profile: hyperliquid
+  - listing_id: 1
+    profile: hyperliquid
+
+profiles:
+  hyperliquid:
+    fee_model:
+      type: static
+      taker_fee: 0.0004
+      maker_fee: 0.00012
+    network_latency:
+      type: static
+      latency_nanos: 5000000
+    order_processing_latency:
+      type: static
+      latency_nanos: 500000
+    queue_model:
+      type: risk_averse
