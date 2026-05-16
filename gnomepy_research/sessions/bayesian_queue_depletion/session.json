@@ -7,76 +7,108 @@
       "iteration": 1,
       "timestamp": "2026-05-16T20:48:00Z",
       "type": "local",
-      "hypothesis": "Build a market maker with a depletion score combining trade imbalance, level staleness asymmetry, and liquidity delta asymmetry. Positive score (ask vulnerable) skews reservation price up and sizes bids heavier. EWMA aggression gates toxic flow by widening spreads.",
+      "hypothesis": "Initial: market maker with depletion score (trade imbalance + level staleness asymmetry + liquidity delta). EWMA aggression gates toxic flow.",
       "changes": ["Initial strategy implementation"],
       "config": "configs/iter_001.yaml",
       "results": {
         "date_range": "2026-05-13T07:00:00 to 2026-05-13T10:00:00",
         "run_id": null,
         "best_params": {"gamma": 0.01, "delta": 1.0, "depletion_skew_bps": 3.0},
-        "summary": {
-          "fill_count": 165,
-          "final_pnl": -0.003914,
-          "sharpe": -0.024265,
-          "sortino": -0.022804,
-          "pct_positive_buckets": 0.2,
-          "total_fees": 0.001522,
-          "final_position": -2.1e-05
-        },
+        "summary": {"fill_count": 165, "final_pnl": -0.003914, "sharpe": -0.024265, "sortino": -0.022804, "pct_positive_buckets": 0.2, "total_fees": 0.001522, "final_position": -2.1e-05},
         "mm_stats": null,
         "thresholds_met": false,
         "threshold_failures": ["sharpe >0 FAILED (-0.024)", "final_pnl >0 FAILED (-0.004)"],
-        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false},
-        "custom_metrics": {
-          "bid_fills": 72,
-          "ask_fills": 93,
-          "bid_intents": 39508,
-          "ask_intents": 17343,
-          "avg_bid_edge_bps": -0.037,
-          "avg_ask_edge_bps": -0.061,
-          "avg_spread_at_fill": 1.018,
-          "cash_pnl_pre_mtm": 1.702,
-          "mtm_loss_open_short": -1.706
-        }
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false}
       },
-      "analysis": "Strategy accumulated a -2.1e-05 short position (93 ask fills vs 72 bid fills) that nearly perfectly offset $1.70 in cash trading gains, resulting in -$0.004 final PnL. Root cause: gamma=0.01 is far too weak to counter-act the depletion signal bias. The depletion score was positive (predicting ask depletion/price up) so the strategy quoted 2.3x more bid intents (39k vs 17k), yet received more ask fills. Both bid and ask fills are slightly adverse vs mid, consistent with risk_averse queue model filling only on large sweeps.",
-      "next_action": "Increase gamma from 0.01 to 0.5 and reduce depletion_skew_bps from 3.0 to 1.5."
+      "analysis": "Accumulated -2.1e-05 short (93 ask vs 72 bid fills) offsetting $1.70 cash gains. gamma=0.01 too weak to fight depletion signal bias. 2.3x more bid intents than ask intents yet more ask fills.",
+      "next_action": "Increase gamma to 0.5, reduce depletion_skew_bps to 1.5."
     },
     {
       "iteration": 2,
       "timestamp": "2026-05-16T20:51:00Z",
       "type": "local",
-      "hypothesis": "Increase gamma from 0.01 to 0.5 for much stronger inventory reversion skew, reduce depletion_skew_bps from 3.0 to 1.5 to dampen one-sided quoting bias that was building the short position.",
+      "hypothesis": "Increase gamma to 0.5 for stronger inventory reversion; reduce depletion_skew_bps to 1.5.",
       "changes": ["gamma: 0.01 -> 0.5", "depletion_skew_bps: 3.0 -> 1.5"],
       "config": "configs/iter_002.yaml",
       "results": {
         "date_range": "2026-05-13T07:00:00 to 2026-05-13T10:00:00",
         "run_id": null,
         "best_params": {"gamma": 0.5, "delta": 1.0, "depletion_skew_bps": 1.5},
-        "summary": {
-          "fill_count": 125,
-          "final_pnl": 0.003408,
-          "sharpe": 0.022676,
-          "sortino": 0.021114,
-          "pct_positive_buckets": 0.6,
-          "total_fees": 0.001153,
-          "final_position": -2.1e-05
-        },
+        "summary": {"fill_count": 125, "final_pnl": 0.003408, "sharpe": 0.022676, "sortino": 0.021114, "pct_positive_buckets": 0.6, "total_fees": 0.001153, "final_position": -2.1e-05},
         "mm_stats": null,
         "thresholds_met": true,
         "threshold_failures": [],
         "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false},
-        "custom_metrics": {},
         "sensitivity": {
           "latency_2x": {"primary_metric": 0.022676, "thresholds_met": true},
           "latency_0.5x": {"primary_metric": 0.022676, "thresholds_met": true}
         }
       },
-      "analysis": "First passing iteration. Stronger gamma (0.5) reduced adverse inventory buildup and flipped PnL positive (+$0.0034). Fill count dropped from 165 to 125 as wider reservation skew pushed quotes further from mid when inventory builds. Final position is still -2.1e-05 (same as iter 1) — the depletion signal bias persists but the inventory skew now compensates with better fill prices. Sharpe is only 0.023: PnL is very small relative to return volatility across 30-min buckets. pct_positive_buckets = exactly 0.6 (3 of 5 buckets). Strategy is completely latency-insensitive (identical results at 2.5ms vs 10ms) — signal windows 500ms+ dominate. Queue model sensitivity skipped (already risk_averse).",
-      "next_action": "Widen min_spread_bps from 1.5 to 4.0 to capture more edge per fill and reduce adverse selection. The current spread may be too tight relative to informed flow costs. Also increase warmup_ticks from 200 to 50 to reduce the gap in early trading, and test gamma=1.0 for stronger inventory control."
+      "analysis": "First passing iteration. PnL +$0.0034. Strategy latency-insensitive (identical Sharpe at 2.5ms vs 10ms). Position still -2.1e-05. Sharpe only 0.023.",
+      "next_action": "Test wider spread (4.0 bps) to capture more edge per fill."
+    },
+    {
+      "iteration": 3,
+      "timestamp": "2026-05-16T21:01:00Z",
+      "type": "local",
+      "hypothesis": "Widen min_spread_bps to 4.0 to capture more edge per fill and reduce adverse selection. Reduce warmup_ticks to 50.",
+      "changes": ["min_spread_bps: 1.5 -> 4.0", "warmup_ticks: 200 -> 50"],
+      "config": "configs/iter_003.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T10:00:00",
+        "run_id": null,
+        "best_params": {"gamma": 0.5, "min_spread_bps": 4.0},
+        "summary": {"fill_count": 30, "final_pnl": -0.002291, "sharpe": -0.024348, "sortino": -0.019440, "pct_positive_buckets": 0.6, "total_fees": 0.000277, "final_position": -2.0e-05},
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": ["sharpe >0 FAILED (-0.024)", "final_pnl >0 FAILED (-0.002)"],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false}
+      },
+      "analysis": "4.0 bps spread too wide — only 30 fills. Insufficient volume to overcome open short MTM loss. Fill rate collapsed 5x vs iter 2.",
+      "next_action": "Disable depletion signal to test pure symmetric MM baseline (depletion_skew=0, size_skew=0, spread=2.5)."
+    },
+    {
+      "iteration": 4,
+      "timestamp": "2026-05-16T21:02:00Z",
+      "type": "local",
+      "hypothesis": "Disable depletion signal (skew=0, size_skew=0) and use 2.5 bps spread to isolate whether base MM is profitable and whether the depletion signal adds value.",
+      "changes": ["depletion_skew_bps: 1.5 -> 0.0", "size_skew_factor: 0.5 -> 0.0", "min_spread_bps: 4.0 -> 2.5"],
+      "config": "configs/iter_004.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T10:00:00",
+        "run_id": null,
+        "best_params": {"gamma": 0.5, "depletion_skew_bps": 0.0, "size_skew_factor": 0.0},
+        "summary": {"fill_count": 36, "final_pnl": -0.000841, "sharpe": -0.010155, "sortino": -0.008122, "pct_positive_buckets": 0.6, "total_fees": 0.000332, "final_position": -1.8e-05},
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": ["sharpe >0 FAILED (-0.010)", "final_pnl >0 FAILED (-0.0008)"],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false}
+      },
+      "analysis": "Pure symmetric MM with no depletion signal: still ends short (-1.8e-05) and negative PnL. The short bias is structural (not signal-driven) — likely caused by asymmetric fill rates from the risk_averse queue model in a falling market. The depletion signal in iter 2 was actually helping (125 fills, +$0.0034) vs pure MM (36 fills, -$0.0008).",
+      "next_action": "Return to depletion signal (skew=1.5), use gamma=2.0 for stronger inventory control, spread=1.5, warmup=50."
+    },
+    {
+      "iteration": 5,
+      "timestamp": "2026-05-16T21:03:00Z",
+      "type": "local",
+      "hypothesis": "Return to best config with depletion signal, double gamma to 2.0 for stronger inventory skew, reduce warmup_ticks to 50.",
+      "changes": ["gamma: 0.5 -> 2.0", "min_spread_bps: 2.5 -> 1.5", "depletion_skew_bps: 0.0 -> 1.5", "size_skew_factor: 0.0 -> 0.5", "warmup_ticks: 200 -> 50"],
+      "config": "configs/iter_005.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T10:00:00",
+        "run_id": null,
+        "best_params": {"gamma": 2.0, "depletion_skew_bps": 1.5, "min_spread_bps": 1.5},
+        "summary": {"fill_count": 139, "final_pnl": 0.004812, "sharpe": 0.032418, "sortino": 0.030538, "pct_positive_buckets": 0.6, "total_fees": 0.001282, "final_position": -2.1e-05},
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false}
+      },
+      "analysis": "New best. PnL +$0.0048 (+41% vs iter 2). Sharpe 0.032 (+43% vs iter 2). Position still -2.1e-05 = one unit past max_position=20, causing ask suppression at end. Sharpe gap to target is ~30x.",
+      "next_action": "Increase size from 1 to 2 to double per-fill notional and amplify PnL with similar variance pattern."
     }
   ],
-  "best_iteration": 2,
-  "best_pnl": 0.003408,
-  "best_sharpe": 0.022676
+  "best_iteration": 5,
+  "best_pnl": 0.004812,
+  "best_sharpe": 0.032418
 }
