@@ -101,12 +101,11 @@ Ensure `gnomepy_research/sessions/$ARGUMENTS/__init__.py` exists (create it empt
 
 Rules:
 - Subclass `gnomepy.Strategy`
-- All imports at the top — never inside functions or conditionals
 - No comments unless the WHY is non-obvious
 - Use signals from `gnomepy_research.signals`
 - Follow the pattern in `gnomepy_research/strategies/market_maker.py` (quoting) or `momentum.py` (taking)
-- Prices are scaled integers (1e9). Never pass floats to Intent.
 - Return `[]` from `on_execution_report` unless reactive logic is needed
+- **Not everything needs to live in `strategy.py`.** If you need a signal or reusable component that doesn't exist yet in `gnomepy_research/signals/`, create it there following the existing signal patterns. If you need a reusable non-signal utility, add it to `gnomepy_research/` as a new module. Import it from `strategy.py` as you would any other package code. Stage any new files in the Step 6 commit.
 
 ### 4A.2 — Write the backtest config
 
@@ -162,7 +161,7 @@ poetry run gnomepy backtest run \
 
 After completion, check the output directory for results. Look for `summary.json` first; if present, parse it for metrics. If only `report.html` is present, note the path for the user and extract what metrics you can.
 
-If the run fails (non-zero exit, JVM error, or no output), diagnose the issue, fix it, and rerun before proceeding to evaluation.
+If the run fails (non-zero exit, JVM error, or no output), diagnose the issue. If the root cause is in the strategy code, fix it and rerun. If the root cause appears to be a bug in the backtesting engine itself (unexpected crash, wrong metric values, inconsistent parquet output unrelated to strategy logic), do NOT attempt to work around it — report the bug clearly to the user (engine version, config, error/symptom, steps to reproduce) and stop the iteration.
 
 ---
 
@@ -175,40 +174,16 @@ Write a sweep config to:
 gnomepy_research/sessions/$ARGUMENTS/configs/sweep_NNN.yaml
 ```
 
-Use list or range syntax for parameters to sweep. Use the same profile/listing structure as the local config, with `class_name` pointing into the package:
+Use the same structure as the local config (Step 4A.2), but use list or range syntax in `strategy.args` for parameters to sweep:
+
 ```yaml
 strategy:
-  class_name: "gnomepy_research.sessions.$ARGUMENTS.strategy:YourStrategyClassName"
   args:
-    exchange_id: 1
-    security_id: 1
-    gamma: [0.5, 1.0, 2.0, 4.0]           # list sweep
+    gamma: [0.5, 1.0, 2.0, 4.0]            # list sweep
     delta: {min: 0.5, max: 3.0, step: 0.5} # range sweep
-    size: 100000
-    max_position: 10
-
-start_date: "<spec.data.date_ranges[0].start>"
-end_date: "<spec.data.date_ranges[0].end>"
-
-listings:
-  - listing_id: <from spec>
-    profile: <from spec>
-
-profiles:
-  <profile_name>:
-    fee_model:
-      type: static
-      taker_fee: <from spec>
-      maker_fee: <from spec>
-    network_latency:
-      type: static
-      latency_nanos: <from spec>
-    order_processing_latency:
-      type: static
-      latency_nanos: <from spec>
-    queue_model:
-      type: <from spec>
 ```
+
+**Hard cap: the cartesian product of all sweep parameters must not exceed 100 jobs.** Before writing the config, calculate the total job count (product of all list/range lengths). If it exceeds 100, reduce the parameter grid — coarsen the ranges, drop less important parameters, or split into multiple iterations.
 
 ### 4B.2 — Commit and push the session branch
 
@@ -251,11 +226,9 @@ Once the best job is identified, run the same parquet analysis as for local runs
 
 ## Step 5: Evaluate Results
 
-For local runs, parse the JSON from stdout. For sweeps, use the best job's summary.
+**Start with `summary.json`** — it contains all high-level metrics (PnL, Sharpe, fill count, etc.). Read it first to understand overall performance. For sweeps, find the best job by comparing each job's `summary.json` against `spec.goals.primary_metric`.
 
-**Parquet analysis — always do this before forming the next hypothesis.**
-
-The results directory contains `fills.parquet`, `orders.parquet`, `intents.parquet`, and `market.parquet`. Use these to understand *why* the metrics came out as they did — not just *what* they are. Load and query them with:
+**Parquet analysis** — dig into the parquet files to understand *why* the metrics came out as they did before forming your next hypothesis. The results directory contains `fills.parquet`, `orders.parquet`, `intents.parquet`, and `market.parquet`. Load and query them with:
 
 ```bash
 poetry run python3 - <<'EOF'
@@ -270,12 +243,7 @@ print(fills.head())
 EOF
 ```
 
-Key questions to answer from the parquet data:
-- **Fill timing**: When did fills happen? Were there long gaps with no activity? Did the strategy stop trading mid-window?
-- **Fill quality**: What was the average slippage or fill price vs. intent price? Did taker vs. maker split match expectations?
-- **PnL attribution**: Which trades contributed most to PnL (positive and negative)? Is PnL concentrated in a few fills or distributed?
-- **Order lifecycle**: Were orders cancelled before filling? Were there partial fills creating zombie positions?
-- **Market context**: Did the strategy trade during high-spread or low-spread regimes? Did it miss signals due to filters or guards?
+Investigate fill timing, fill quality, PnL attribution, order lifecycle, and market context.
 
 **Custom metrics** — compute and record any derived metrics that illuminate strategy-specific behavior. Examples:
 - For arb strategies: spread at entry, spread at close, per-leg PnL split
@@ -328,21 +296,21 @@ Omit keys for tests that were skipped. These results are informational — they 
 
 ## Step 6: Record
 
-Append to `session.json`. For local runs, after writing session.json, commit the iteration immediately:
+Append to `session.json`. After writing session.json, ALWAYS commit the iteration — regardless of whether it was a local run or a sweep:
 
 ```bash
 git add \
   gnomepy_research/sessions/$ARGUMENTS/strategy.py \
   gnomepy_research/sessions/$ARGUMENTS/__init__.py \
   gnomepy_research/sessions/$ARGUMENTS/spec.yaml \
-  gnomepy_research/sessions/$ARGUMENTS/configs/iter_NNN.yaml \
+  gnomepy_research/sessions/$ARGUMENTS/configs/ \
   gnomepy_research/sessions/$ARGUMENTS/session.json
 git commit -m "research/$ARGUMENTS: iter NNN"
 ```
 
 Do NOT stage `results/` — parquet and HTML artifacts are gitignored, but this also keeps the lightweight JSON files out of history. The config YAML + strategy.py is sufficient to reproduce any iteration.
 
-For remote sweeps, the commit already happens in Step 4B.2 before submission; update session.json after retrieving results but do not commit again. Update `best_iteration`, `best_pnl`, `best_sharpe` if this was the best run. Write `analysis` explaining what happened. Write `next_action` describing what to change next.
+Update `best_iteration`, `best_pnl`, `best_sharpe` if this was the best run. Write `analysis` explaining what happened. Write `next_action` describing what to change next.
 
 ```json
 {
@@ -391,3 +359,5 @@ For remote sweeps, the commit already happens in Step 4B.2 before submission; up
 - If the backtest crashes with a JVM or JPype error, check the strategy for float prices or bad signal initialization
 - Keep `session.json` under 50KB. If it grows large, summarize old iteration `analysis` fields to one sentence each
 - Reference existing strategies and signals by their actual file paths when asked by the user
+- **Always use `poetry run python3`** for any Python commands — never bare `python` or `python3`
+- **Engine bugs**: the backtesting engine is new and may have bugs. If you encounter behavior that looks like an engine bug (not a strategy error), report it clearly and stop the iteration — do not work around it
