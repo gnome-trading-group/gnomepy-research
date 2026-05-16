@@ -13,7 +13,6 @@
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
         "run_id": null,
-        "best_params": {"gamma": 0.1, "delta": 1.0, "min_spread_bps": 3.0, "fv": "usdc"},
         "summary": {"fill_count": 128, "total_volume": 6.00842, "final_pnl": -206.92, "sharpe": -0.00496, "pct_positive_buckets": 0.4},
         "thresholds_met": false,
         "threshold_failures": ["sharpe >0 FAILED (-0.00496)", "final_pnl >0 FAILED (-206.92)"]
@@ -31,7 +30,6 @@
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
         "run_id": null,
-        "best_params": {"min_spread_bps": 2.5, "fv": "usde"},
         "summary": {"fill_count": 483, "total_volume": 28.876, "final_pnl": -152.92, "sharpe": -0.009311, "pct_positive_buckets": 0.4},
         "custom_metrics": {"bid_fill_edge_bps": -0.504, "ask_fill_edge_bps": -0.622},
         "thresholds_met": false,
@@ -103,7 +101,7 @@
         "thresholds_met": false,
         "threshold_failures": ["fill_count >50 FAILED (5)"]
       },
-      "analysis": "First positive PnL (+$20)! But only 29 intents and 5 fills because FV = int(usdc_fv + basis_ewma) rarely changes integer value (basis_ewma changes by 0.001/tick, usdc_fv is integer → same price most ticks → framework only records intent changes). Sticky quotes problem.",
+      "analysis": "First positive PnL (+$20)! But only 29 intents and 5 fills because FV = int(usdc_fv + basis_ewma) rarely changes integer value (basis_ewma changes by 0.001/tick). Sticky quotes problem.",
       "next_action": "Blend USDE (70%) with USDC+basis (30%) so USDE dominates and changes every tick, while USDC+basis provides reversion edge."
     },
     {
@@ -119,7 +117,7 @@
         "summary": {"fill_count": 2, "total_volume": 0.131, "final_pnl": -50073.43, "sharpe": -0.007601, "pct_positive_buckets": 0.4},
         "thresholds_met": false
       },
-      "analysis": "OMS unit bug: after 0.03115 BTC ask fill, oms.get_effective_quantity() returned -31,150 (micro-BTC units, not BTC). skew = 2.0*(-31150)*80447/10000 = -501,183 → reservation = 581,630 → bid at $581K → filled at market → -$50K. OMS returns position in 1e-6 BTC units (micro-BTC), not BTC. Position guard -31150 <= -5 triggered: ask suppressed. Only 2 fills.",
+      "analysis": "OMS unit bug: after 0.03115 BTC ask fill, oms.get_effective_quantity() returned -31,150 (micro-BTC). skew = 2.0*(-31150)*80447/10000 = -501,183 → reservation = 581,630 → bid at $581K → filled at market → -$50K.",
       "next_action": "Divide OMS position by 1e6 to convert to BTC before skew and guard calculation."
     },
     {
@@ -135,8 +133,8 @@
         "summary": {"fill_count": 7845, "total_volume": 784.3, "final_pnl": -3905.09, "sharpe": -0.089, "pct_positive_buckets": 0.4},
         "thresholds_met": false
       },
-      "analysis": "100% taker fills. Clamping position_raw to [-5, 5] always produces maximum skew: ±5 * 2.0 * 80447 / 10000 = ±80, far exceeding half_spread of 12. Quotes always cross the spread. After one ask fill (OMS=-31150 → skew_pos=-5 → bid=80515 >> market_ask=80449 → taker bid), after that bid fill (position+, → ask=80376 << market_bid → taker ask). Oscillates forever.",
-      "next_action": "Divide OMS position by 1e6 to get BTC, set max_position=0.5 BTC, use 'unfavorable price' guard to avoid framework slot crash from size=0."
+      "analysis": "100% taker fills. Clamping position_raw to [-5, 5] always produces maximum skew (±80 >> half_spread=12), causing all quotes to cross the spread.",
+      "next_action": "Divide OMS position by 1e6 to get BTC, set max_position=0.5 BTC, use unfavorable price guard."
     },
     {
       "iteration": 9,
@@ -160,11 +158,89 @@
         "thresholds_met": true,
         "threshold_failures": []
       },
-      "analysis": "All thresholds met (sharpe=0.000388 > 0, fill_count=85 > 50, pnl=$55 > 0) but targets far from met. 97.6% taker fills — USDC blend introduces FV lag: when USDE moves faster than USDC, blended FV overshoots current USDE price, causing our bid/ask to cross the spread. The $55 PnL is BTC appreciation on accumulated long position (0.67 BTC), not trading edge. Fills only in first 7 hours (00:10-07:22), then guard suppresses after accumulating 0.67 BTC long and market doesn't come back to us. Real per-fill edge is negative.",
-      "next_action": "Remove USDC blend from FV entirely: use fv = usde_fv only (always tracks market, never lags). Use basis deviation as a reservation ADJUSTMENT (signed skew) rather than FV component: when USDE is cheap vs historical basis, skew reservation up to buy more; when expensive, skew down to sell. This preserves the mean-reversion signal without introducing FV lag."
+      "analysis": "All thresholds met but targets far from met. 97.6% apparent taker fills (measurement artifact: fill_price vs book_state AFTER market sweep). $55 PnL from BTC appreciation on accumulated 0.67 BTC long, not edge. Only day 1 fills.",
+      "next_action": "Remove USDC blend from FV entirely; use fv = usde_fv only. Use basis deviation as reservation skew adjustment."
+    },
+    {
+      "iteration": 10,
+      "timestamp": "2026-05-15T20:00:00Z",
+      "type": "local",
+      "hypothesis": "Remove USDC blend from FV entirely. fv = USDE microprice only (no lag). Use basis deviation as reservation skew: basis_skew = basis_skew_weight * (current_basis - basis_ewma). When USDE expensive vs history, reservation falls (aggressive selling); when cheap, reservation rises (aggressive buying).",
+      "changes": ["FV = USDE microprice only (no USDC blend)", "Added basis_skew = 0.1 * basis_dev as reservation adjustment", "Removed usdc_weight parameter", "Added basis_skew_weight parameter"],
+      "config": "configs/iter_010.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
+        "run_id": null,
+        "summary": {"fill_count": 73, "total_volume": 2.804, "final_pnl": 106.04, "sharpe": 0.000925, "sortino": 0.001013, "pct_positive_buckets": 0.6},
+        "custom_metrics": {"pct_taker": 95.9, "bid_edge_bps": -0.661, "ask_edge_bps": -1.146, "fills_day1": 73, "fills_day2": 0},
+        "thresholds_met": true,
+        "threshold_failures": []
+      },
+      "analysis": "Bid edge improved dramatically. Still accumulates 0.67 BTC long by 10:50 on day 1, guard triggers, no fills day 2. $106 PnL = BTC appreciation on position, not trading edge.",
+      "next_action": "Increase max_position to 1.0 BTC so strategy continues quoting through both days."
+    },
+    {
+      "iteration": 11,
+      "timestamp": "2026-05-15T20:20:00Z",
+      "type": "local",
+      "hypothesis": "Increase max_position to 1.0 BTC so the guard triggers later, allowing fills throughout both days.",
+      "changes": ["max_position 0.5 -> 1.0 BTC"],
+      "config": "configs/iter_011.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
+        "run_id": null,
+        "summary": {"fill_count": 148, "total_volume": 5.727, "final_pnl": 646.42, "sharpe": 0.002996, "sortino": 0.003288, "pct_positive_buckets": 0.6},
+        "custom_metrics": {"bid_edge_bps": -0.035, "ask_edge_bps": -1.056, "fills_day1": 148, "fills_day2": 0, "max_long_btc": 1.03, "max_short_btc": -1.06},
+        "thresholds_met": true,
+        "threshold_failures": []
+      },
+      "analysis": "Bid edge dramatically improved to -0.035 bps (passive fills at fair value). 148 fills but only day 1, guard triggers at max_position=1.0. $646 = ~$152 realized + ~$494 BTC appreciation on 1.03 BTC long. Sharpe still 300x below target.",
+      "next_action": "Widen spread to 5.0 bps and increase basis_skew_weight to 0.5 for stronger mean-reversion signal."
+    },
+    {
+      "iteration": 12,
+      "timestamp": "2026-05-15T20:30:00Z",
+      "type": "local",
+      "hypothesis": "Widen spread to 5 bps (1.3 bps net per fill) and increase basis_skew_weight to 0.5 for stronger mean-reversion signal.",
+      "changes": ["min_spread_bps 3.0 -> 5.0", "basis_skew_weight 0.1 -> 0.5"],
+      "config": "configs/iter_012.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
+        "run_id": null,
+        "summary": {"fill_count": 129, "total_volume": 5.244, "final_pnl": 1580.94, "sharpe": 0.007743, "sortino": 0.008624, "pct_positive_buckets": 0.6},
+        "thresholds_met": true,
+        "threshold_failures": []
+      },
+      "analysis": "PnL jumped to $1,580 (+2.4x), sharpe 0.0077 (+2.6x vs iter_011). Position flipped to -1.01 BTC SHORT. 129 fills only on day 1; guard triggers at max_position. PnL dominated by BTC directional position (~$1,058), not spread capture (~$522). Sharpe 130x below target.",
+      "next_action": "Tighten max_position to 0.2 BTC and widen spread to 7 bps to reduce BTC directional exposure."
+    },
+    {
+      "iteration": 13,
+      "timestamp": "2026-05-15T20:40:00Z",
+      "type": "local",
+      "hypothesis": "Dramatically tighten max_position to 0.2 BTC and widen spread to 7 bps. Limits BTC beta exposure to ±0.2 BTC; captures 2.3 bps net per fill. Position should oscillate in [-0.2, +0.2], reducing variance from BTC directional beta.",
+      "changes": ["max_position 1.0 -> 0.2 BTC", "min_spread_bps 5.0 -> 7.0"],
+      "config": "configs/iter_013.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-14T23:59:59",
+        "run_id": null,
+        "summary": {"fill_count": 31, "total_volume": 1.150, "final_pnl": 106.92, "sharpe": 0.001976, "sortino": 0.002224, "pct_positive_buckets": 0.4},
+        "custom_metrics": {
+          "all_fills_on_day1": true,
+          "last_fill_time": "2026-05-13T11:03:51",
+          "final_position_btc": 0.25013,
+          "mean_edge_bps": -0.807,
+          "bid_fills": 17,
+          "ask_fills": 14
+        },
+        "thresholds_met": false,
+        "threshold_failures": ["pct_positive_buckets >0.6 FAILED (0.4)"]
+      },
+      "analysis": "Catastrophically fewer fills (31 vs 129). All fills on May 13 01:11-11:03; strategy went dormant for 37 hours after accumulating +0.25 BTC long (above max_position=0.2). Mean edge -0.807 bps (adverse selection). pct_positive_buckets=0.4 fails threshold. Tight max_position creates stuck-long problem: guard prevents more bids, but asks don't get hit in uptrending market. Confirms that tight max_position is not the solution — it just kills activity without improving sharpe. BTC market spread is ~1 bps; at any skew level consistent with passive quotes, position accumulation is driven by BTC trend direction, not solvable purely through skew.",
+      "next_action": "Parameter sweep (batch): strategy logic is stable since iter_010. Sweep max_position=[0.3,0.5,1.0], skew_per_btc_bps=[3,5,8], min_spread_bps=[5,8,12,16] to find combo that maximizes fills throughout both days while reducing position variance. Higher skew + wider spread = faster mean-reversion without taker fills."
     }
   ],
-  "best_iteration": 9,
-  "best_pnl": 55.04,
-  "best_sharpe": 0.000388
+  "best_iteration": 12,
+  "best_pnl": 1580.94,
+  "best_sharpe": 0.007743
 }
