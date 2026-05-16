@@ -1,6 +1,6 @@
 {
   "session_name": "stablecoin_stat_arb",
-  "status": "completed",
+  "status": "running",
   "created_at": "2026-05-16T00:00:00Z",
   "iterations": [
     {
@@ -90,7 +90,7 @@
         }
       },
       "analysis": "Breakthrough: PnL +4.175, pct_positive_buckets=1.0. The 300s time-weighted EWMA correctly computes z-scores against a 5-minute scale baseline, making z=2.5 correspond to genuine spread anomalies. Locked entry reference ensures we close only when the spread truly reverts below the pre-entry mean, not when the EWMA drifts up. 1716 round trips at +0.00243 each. Security 1 profits (sell>buy by 6.21) are partially offset by Security 28 losses (buy>sell by 3.74), but net is positive. Latency insensitive: 2x and 0.5x latency produce identical results, as expected for a medium-term strategy. Queue model already risk_averse (skip test).",
-      "next_action": "All targets met. Session completed."
+      "next_action": "Targets met but continuing to maximize PnL (user requested up to iteration 20). Current PnL=4.175 with 1716 round trips. Try sweeping halflife_seconds and entry_z to find the optimal trade-off between trade frequency and per-trade edge. Also explore lowering close_z below 0.0 (e.g. -0.5) to hold trades longer and capture more of the spread reversion. Consider increasing size to amplify PnL."
     }
   ],
   "best_iteration": 3,
