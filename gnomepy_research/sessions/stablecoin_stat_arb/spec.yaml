@@ -1,0 +1,47 @@
+name: stablecoin_stat_arb
+description: >
+  Stat arb on USDC/USDE basis on Hyperliquid. Uses any applicable stat arb
+  technique to exploit the price relationship between listing 1 (USDC) and
+  listing 28 (USDE).
+
+data:
+  listings:
+    - listing_id: 1
+      profile: default
+    - listing_id: 28
+      profile: default
+  date_ranges:
+    - start: "2026-05-13T00:00:00"
+      end: "2026-05-16T00:00:00"
+
+profiles:
+  default:
+    taker_fee: 0.0004
+    maker_fee: 0.00012
+    queue_model: risk_averse
+    network_latency_ns: 5000000
+    processing_latency_ns: 1000000
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    sharpe: ">0"
+    fill_count: ">50"
+    final_pnl: ">0"
+  targets:
+    sharpe: ">0"
+    sortino: ">0"
+    pct_positive_buckets: ">0.6"
+
+constraints:
+  strategy_type: arb
+  max_iterations: 20
+  avoid: []
+
+meta:
+  execution_mode: auto
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous

@@ -1,0 +1,68 @@
+{
+  "session_name": "stablecoin_stat_arb",
+  "status": "running",
+  "created_at": "2026-05-16T00:00:00Z",
+  "iterations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-05-16T10:35:00Z",
+      "type": "local",
+      "hypothesis": "USDC (listing 1) and USDE (listing 28) are USD-pegged stablecoins on Hyperliquid whose midprices should be tightly correlated. Transient divergences in the spread, measured as EWMA z-scores, are mean-reverting opportunities. Iteration 1 uses the NExchangeArb framework adapted for same-exchange stat-arb with moderate z=1.0 entry and 60s max hold.",
+      "changes": ["Initial strategy: StablecoinStatArb based on NExchangeArb pattern, entry_z=1.0, close_z=0.2, ewma_alpha=0.99, max_hold_ns=60s, size=1000"],
+      "config": "configs/iter_001.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": null,
+        "best_params": {
+          "size": 1000,
+          "entry_z": 1.0,
+          "close_z": 0.2,
+          "ewma_alpha": 0.99,
+          "ewma_warmup": 200,
+          "max_hold_ns": 60000000000,
+          "min_spread_bps": 0.02
+        },
+        "summary": {
+          "fill_count": 90538,
+          "total_volume": 90.538,
+          "total_notional": 7260953.4,
+          "total_fees": 0.835,
+          "final_pnl": -104.05,
+          "sharpe": -0.307,
+          "sortino": -0.265,
+          "pct_positive_buckets": 0.0,
+          "final_position": 0.0
+        },
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": [
+          "sharpe >0 FAILED (-0.307)",
+          "final_pnl >0 FAILED (-104.05)"
+        ],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": false
+        },
+        "custom_metrics": {
+          "spread_mean_bps": 1.68,
+          "spread_std_bps": 2.30,
+          "spread_min_bps": -19.98,
+          "spread_max_bps": 28.06,
+          "spread_autocorr_lag1": 0.9948,
+          "spread_autocorr_lag60": 0.8708,
+          "fills_per_day": 30179,
+          "sec1_avg_buy": 80192.29,
+          "sec1_avg_sell": 80190.39,
+          "sec28_avg_buy": 80201.14,
+          "sec28_avg_sell": 80207.60
+        }
+      },
+      "analysis": "Strategy overtraded severely (90,538 fills over 3 days = 1 trade every ~3s). Root cause: the EWMA z-score with alpha=0.99 adapts to a trending/persistent spread (autocorr=0.9948 at lag-1). When z-score drops below close_z=0.2, it is because the EWMA mean caught up to the spread level, NOT because the spread reverted. This means the strategy systematically exits trades at the current elevated price rather than after a reversion, creating systematic adverse selection. pct_positive_buckets=0.0 confirms this bias is persistent across all time periods. The spread averages 1.68 bps (Security 28 premium) with high persistence — a different regime requires much longer hold periods or more selective entries.",
+      "next_action": "Increase entry_z to 2.5 to enter only on larger deviations less likely to be pure trend. Set close_z=0.0 so we exit only when spread actually crosses back through the EWMA mean (true reversion), not when the mean drifts up to meet the spread. Extend max_hold_ns to 10 minutes to allow time for genuine reversion. Increase min_spread_bps to 0.5 to avoid noise trades. Keep ewma_alpha=0.99 to maintain a stable long-term mean."
+    }
+  ],
+  "best_iteration": null,
+  "best_pnl": null,
+  "best_sharpe": null
+}
