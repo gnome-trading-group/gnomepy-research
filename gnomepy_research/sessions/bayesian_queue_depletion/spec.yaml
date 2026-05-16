@@ -1,0 +1,71 @@
+name: bayesian_queue_depletion
+
+description: |
+  Bayesian L3 LOB crypto HFT strategy. Core thesis: predict queue vulnerability
+  (not just price direction) by estimating P(ask depletes before bid), P(bid depletes
+  before ask), P(fill is good), P(flow is toxic), P(hidden absorption), and P(regime
+  is safe). Only trade when combined posterior implies positive expected PnL net of
+  fees + slippage + adverse selection + missed-fill risk.
+
+  Six components:
+    A. Bayesian Queue Depletion Model — P(side depletes in next 100-500ms) using
+       L3 features: queue sizes, cancel/replenishment rates, trade intensity,
+       imbalance velocity, spread, depth behind top-of-book.
+    B. Fake Liquidity / Spoofing Filter — downweight raw queue size by persistence
+       score (order age, cancel rate, flicker score) → effective_queue_size.
+    C. Hidden Absorption Detector — detect levels where hidden liquidity absorbs
+       aggressive flow without price response; avoid trading in depletion direction.
+    D. Toxic Flow Filter — P(flow is informed/aggressive); pull quotes or widen
+       spread when toxicity is high.
+    E. Fill Probability / Queue Position Model — estimate P(fill is good) vs
+       P(fill is toxic) based on orders ahead, cancel rate, market order intensity.
+    F. Bayesian Regime Model — classify into calm_mean_reverting / toxic_directional
+       / momentum_breakout / low_liquidity and gate trading accordingly.
+
+  Decision rule: trade only when expected_pnl = P_depletion * P_fill_good *
+  expected_markout - fee_cost - adverse_selection_cost - inventory_penalty > threshold.
+
+  Execution: primarily passive (join best bid/ask before expected depletion). Taker
+  only if predicted move clearly exceeds taker fee. Skew quote sizes by directional
+  posterior. Multi-timescale Bayesian updating (100-500ms fast, 10-60s slow regime).
+
+data:
+  listings:
+    - listing_id: 1
+      profile: default
+  date_ranges:
+    - start: "2026-05-13T07:00:00"
+      end: "2026-05-13T10:00:00"
+
+profiles:
+  default:
+    taker_fee: 0.0005
+    maker_fee: 0.00012
+    queue_model: risk_averse
+    network_latency_ns: 5000000
+    processing_latency_ns: 1000000
+
+goals:
+  primary_metric: sharpe
+  direction: maximize
+  thresholds:
+    sharpe: ">0"
+    fill_count: ">10"
+    final_pnl: ">0"
+  targets:
+    sharpe: ">1.0"
+    sortino: ">1.5"
+    pct_positive_buckets: ">0.6"
+
+constraints:
+  strategy_type: custom
+  max_iterations: 10
+  avoid:
+    - max_position must stay under 20
+
+meta:
+  execution_mode: auto
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous

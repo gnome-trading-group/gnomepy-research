@@ -1,0 +1,21 @@
+{
+  "session_name": "bayesian_queue_depletion",
+  "status": "running",
+  "created_at": "2026-05-16T00:00:00Z",
+  "iterations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-05-16T00:00:00Z",
+      "type": "local",
+      "hypothesis": "Build a market maker with a depletion score combining trade imbalance, level staleness asymmetry, and liquidity delta asymmetry. Positive score (ask vulnerable) skews reservation price up and sizes bids heavier. EWMA aggression gates toxic flow by widening spreads.",
+      "changes": ["Initial strategy implementation"],
+      "config": "configs/iter_001.yaml",
+      "results": null,
+      "analysis": "Backtest could not run: gnome-backtest JAR is missing from the environment. The engine requires the gnome-backtest Maven project to be built and discoverable via GNOME_JARS, GNOME_ROOT env var, or as a sibling directory of gnomepy. Strategy code and config are ready; this is a pure infrastructure issue.",
+      "next_action": "Set GNOME_JARS or GNOME_ROOT env var pointing to the gnome-backtest uber JAR, then re-run iteration 1 unchanged."
+    }
+  ],
+  "best_iteration": null,
+  "best_pnl": null,
+  "best_sharpe": null
+}
