@@ -106,9 +106,29 @@
       },
       "analysis": "New best. PnL +$0.0048 (+41% vs iter 2). Sharpe 0.032 (+43% vs iter 2). Position still -2.1e-05 = one unit past max_position=20, causing ask suppression at end. Sharpe gap to target is ~30x.",
       "next_action": "Increase size from 1 to 2 to double per-fill notional and amplify PnL with similar variance pattern."
+    },
+    {
+      "iteration": 6,
+      "timestamp": "2026-05-16T21:14:00Z",
+      "type": "local",
+      "hypothesis": "Increase size from 1 to 2 to double per-fill notional. Extend backtest window from 3h (07:00-10:00) to 9h (07:00-16:00) for better statistical coverage and more time buckets.",
+      "changes": ["size: 1 -> 2", "end_date: 2026-05-13T10:00:00 -> 2026-05-13T16:00:00"],
+      "config": "configs/iter_006.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T16:00:00",
+        "run_id": null,
+        "best_params": {"size": 2, "gamma": 2.0, "depletion_skew_bps": 1.5, "min_spread_bps": 1.5},
+        "summary": {"fill_count": 52, "final_pnl": 0.049796, "sharpe": 0.049833, "sortino": 0.062942, "pct_positive_buckets": 0.8, "total_fees": 0.000480, "final_position": -2.2e-05},
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": true}
+      },
+      "analysis": "PnL jumped 10x to $0.0498 and pct_positive_buckets reached 0.80 (target met). However all 52 fills occurred in hours 7-8 only; zero fills from hour 9 to 16 despite 200k+ intents. size=2 cut fill rate 3x vs size=1 — risk_averse queue model is very conservative with larger size. Short bias persists (-22 units, same as iter 5). The extended window improved pct_positive_buckets because morning fills created positions that appreciated through the afternoon. Sharpe still only 0.050 vs target 1.0 — return variance across buckets remains high.",
+      "next_action": "Return size to 1 (better fill rate), keep 9h window, increase gamma to 8.0 to aggressively fight short bias, and run a remote sweep over gamma=[2,4,8] x depletion_skew_bps=[1.0,1.5,2.0] x min_spread_bps=[1.0,1.5,2.0] to find the best combination."
     }
   ],
-  "best_iteration": 5,
-  "best_pnl": 0.004812,
-  "best_sharpe": 0.032418
+  "best_iteration": 6,
+  "best_pnl": 0.049796,
+  "best_sharpe": 0.049833
 }
