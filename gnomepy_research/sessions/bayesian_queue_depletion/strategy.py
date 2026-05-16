@@ -143,20 +143,25 @@ class BayesianQueueDepletionMM(Strategy):
 
         # --- Reservation price (inventory + depletion skew) ------------------
         vol_raw = fv * (vol_bps / 10_000)
-        if vol_raw > 0:
-            inv_skew = self.gamma * position * vol_raw * vol_raw / fv
-        else:
-            inv_skew = 0.0
+        min_half = fv * (self.min_spread_bps / 10_000) / 2
+        half_spread_base = max(vol_raw * self.delta / 2, min_half)
 
         depletion_skew_raw = fv * (self.depletion_skew_bps / 10_000) * depletion_score
-        reservation = fv - inv_skew + depletion_skew_raw
+        reservation = fv + depletion_skew_raw
 
-        # --- Spread ----------------------------------------------------------
-        min_half = fv * (self.min_spread_bps / 10_000) / 2
-        half_spread = max(vol_raw * self.delta / 2, min_half) * spread_mult
+        # --- Asymmetric spread: widen the side at risk of adverse selection ---
+        # When depletion_score < 0 (market dropping): widen bid, tighten ask
+        # When depletion_score > 0 (market rising): widen ask, tighten bid
+        asym = abs(depletion_score) * self.gamma
+        if depletion_score < 0:
+            bid_half = half_spread_base * (1.0 + asym) * spread_mult
+            ask_half = half_spread_base * max(0.5, 1.0 - asym * 0.5) * spread_mult
+        else:
+            bid_half = half_spread_base * max(0.5, 1.0 - asym * 0.5) * spread_mult
+            ask_half = half_spread_base * (1.0 + asym) * spread_mult
 
-        bid_price = int(reservation - half_spread)
-        ask_price = int(reservation + half_spread)
+        bid_price = int(reservation - bid_half)
+        ask_price = int(reservation + ask_half)
 
         # --- Size skew: lean on the expected-fill side -----------------------
         raw_bid = self.size * (1.0 + self.size_skew_factor * depletion_score)

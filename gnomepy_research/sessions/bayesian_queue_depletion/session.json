@@ -126,9 +126,72 @@
       },
       "analysis": "PnL jumped 10x to $0.0498 and pct_positive_buckets reached 0.80 (target met). However all 52 fills occurred in hours 7-8 only; zero fills from hour 9 to 16 despite 200k+ intents. size=2 cut fill rate 3x vs size=1 — risk_averse queue model is very conservative with larger size. Short bias persists (-22 units, same as iter 5). The extended window improved pct_positive_buckets because morning fills created positions that appreciated through the afternoon. Sharpe still only 0.050 vs target 1.0 — return variance across buckets remains high.",
       "next_action": "Return size to 1 (better fill rate), keep 9h window, increase gamma to 8.0 to aggressively fight short bias, and run a remote sweep over gamma=[2,4,8] x depletion_skew_bps=[1.0,1.5,2.0] x min_spread_bps=[1.0,1.5,2.0] to find the best combination."
+    },
+    {
+      "iteration": 7,
+      "timestamp": "2026-05-16T21:47:00Z",
+      "type": "sweep",
+      "hypothesis": "Remote sweep over gamma=[2,4,8] x depletion_skew_bps=[1.0,1.5,2.0] x min_spread_bps=[1.0,1.5,2.0] (27 jobs) with size=1 on 9h window to find optimal parameter combination.",
+      "changes": ["size: 2 -> 1", "gamma sweep: [2,4,8]", "depletion_skew_bps sweep: [1.0,1.5,2.0]", "min_spread_bps sweep: [1.0,1.5,2.0]"],
+      "config": "configs/sweep_007.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T16:00:00",
+        "run_id": "0000019e32b62dc0",
+        "best_params": {"gamma": 2.0, "depletion_skew_bps": 1.5, "min_spread_bps": 1.0},
+        "summary": {"fill_count": 105, "final_pnl": 0.046680, "sharpe": 0.048963, "sortino": 0.061906, "pct_positive_buckets": 0.80, "total_fees": null, "final_position": -2.1e-05},
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": true},
+        "custom_metrics": {"mean_edge_per_fill_usd": -0.344, "fills_by_hour": {"7": 94, "8": 11}, "ask_fills": 63, "bid_fills": 42}
+      },
+      "analysis": "Only depletion_skew=1.5 + min_spread=1.0 produces positive Sharpe (3 of 27 jobs pass). Gamma is completely irrelevant — gamma=2, 4, and 8 all produce identical results (sharpe=0.0490). Mean edge per fill is -$0.344: adverse selection on every fill. PnL is directional (short position of -21 units in falling market), not MM spread capture. 94 of 105 fills in hour 7, zero after hour 8 — strategy is inactive for 7 hours of the 9-hour window.",
+      "next_action": "Fix broken inv_skew formula — gamma was doing nothing due to unit scale mismatch. Use normalized pos_fraction to make inventory skew meaningful."
+    },
+    {
+      "iteration": 8,
+      "timestamp": "2026-05-16T21:59:00Z",
+      "type": "local",
+      "hypothesis": "Fix inventory skew formula using normalized pos_fraction so gamma actually controls reservation price skew (pos_fraction = position / max_pos_in_btc).",
+      "changes": ["inv_skew formula: fixed unit normalization using pos_fraction"],
+      "config": "configs/iter_008.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T16:00:00",
+        "run_id": null,
+        "best_params": {"gamma": 2.0, "depletion_skew_bps": 1.5, "min_spread_bps": 1.0},
+        "summary": {"fill_count": 95, "final_pnl": -0.033336, "sharpe": -0.036261, "sortino": -0.035048, "pct_positive_buckets": 0.4, "total_fees": 0.000876, "final_position": 2.1e-05},
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": ["sharpe >0 FAILED (-0.036)", "final_pnl >0 FAILED (-0.033)"],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false}
+      },
+      "analysis": "The inv_skew fix backfired — strategy flipped to LONG (+21 units) instead of SHORT in a falling market. When short, the corrected inv_skew raises the reservation price which makes bid quotes sweep-able, accumulating a long position that loses in a falling market. Active inventory skew fights against the depletion signal's directional bias.",
+      "next_action": "Replace reservation-price inventory skew with asymmetric spread widening: widen the side at risk of adverse selection based on depletion_score direction, without changing reservation price."
+    },
+    {
+      "iteration": 9,
+      "timestamp": "2026-05-16T22:14:00Z",
+      "type": "local",
+      "hypothesis": "Asymmetric spread: widen bid when depletion_score<0 (market dropping, avoid buying), widen ask when depletion_score>0. gamma controls asymmetry factor. gamma=1.5.",
+      "changes": ["Replaced inv_skew with asymmetric bid/ask half-spreads driven by depletion_score * gamma"],
+      "config": "configs/iter_009.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T16:00:00",
+        "run_id": null,
+        "best_params": {"gamma": 1.5, "depletion_skew_bps": 1.5, "min_spread_bps": 1.0},
+        "summary": {"fill_count": 149, "final_pnl": 0.045606, "sharpe": 0.047989, "sortino": 0.061222, "pct_positive_buckets": 0.8, "total_fees": 0.001374, "final_position": -2.1e-05},
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": true},
+        "custom_metrics": {"mean_edge_per_fill_usd": -0.554, "fills_by_hour": {"7": 149}, "ask_fills": 85, "bid_fills": 64}
+      },
+      "analysis": "149 fills (most yet) but all in hour 7. Mean edge worsened to -$0.554 vs -$0.344 in iter 7 — asymmetric spread increases fill count but at worse prices. Sharpe 0.0480 is slightly below iter_007 (0.0490) and iter_006 (0.0498). Three consecutive iterations (6→7→9) show <5% Sharpe improvement — plateau confirmed. Root cause: the strategy captures directional alpha (short in falling market) not MM edge. Every fill suffers adverse selection. The risk_averse queue model only fills during large sweeps, all in a single volatile morning hour. Sharpe target of 1.0 requires 20x improvement with no clear path.",
+      "next_action": "STALLED — plateau confirmed. No parameter or structural change within this strategy class can bridge the 20x Sharpe gap in remaining iterations."
     }
   ],
   "best_iteration": 6,
   "best_pnl": 0.049796,
-  "best_sharpe": 0.049833
+  "best_sharpe": 0.049833,
+  "status": "stalled"
 }

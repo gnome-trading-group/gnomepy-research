@@ -1,0 +1,42 @@
+strategy:
+  class_name: "gnomepy_research.sessions.bayesian_queue_depletion.strategy:BayesianQueueDepletionMM"
+  args:
+    exchange_id: 1
+    security_id: 1
+    size: 1
+    max_position: 20
+    gamma: 1.5
+    delta: 1.0
+    min_spread_bps: 1.0
+    warmup_ticks: 50
+    flow_horizon_ns: 500000000
+    liq_horizon_ns: 1000000000
+    w_imbalance: 0.5
+    w_staleness: 0.25
+    w_liq_delta: 0.25
+    depletion_skew_bps: 1.5
+    size_skew_factor: 0.5
+    toxicity_threshold_bps: 8.0
+    toxicity_spread_mult: 3.0
+
+start_date: "2026-05-13T07:00:00"
+end_date: "2026-05-13T16:00:00"
+
+listings:
+  - listing_id: 1
+    profile: default
+
+profiles:
+  default:
+    fee_model:
+      type: static
+      taker_fee: 0.0005
+      maker_fee: 0.00012
+    network_latency:
+      type: static
+      latency_nanos: 5000000
+    order_processing_latency:
+      type: static
+      latency_nanos: 1000000
+    queue_model:
+      type: risk_averse
