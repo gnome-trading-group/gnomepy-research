@@ -1,0 +1,13 @@
+{
+  "backtest_id": "019e330a-a06e-756a-b851-2cf7a75db51b",
+  "created_at": "2026-05-16T23:07:01.263512+00:00",
+  "start_date": "2026-05-13 07:00:00",
+  "end_date": "2026-05-13 16:00:00",
+  "wall_time_seconds": 26.186,
+  "event_count": 585352,
+  "config_path": "/Users/aannestrand/Desktop/gnomepy-research/gnomepy_research/sessions/queue_depletion_taker/configs/iter_002.yaml",
+  "gnomepy_version": "2.2.3",
+  "data_scaled": true,
+  "warnings": [],
+  "extra": {}
+}

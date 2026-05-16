@@ -1,0 +1,111 @@
+{
+  "session_name": "queue_depletion_taker",
+  "status": "running",
+  "created_at": "2026-05-16T22:00:00Z",
+  "iterations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-05-16T22:57:00Z",
+      "type": "local",
+      "hypothesis": "Initial: threshold-crossing taker using depletion score. score>0.3 → BUY, score<-0.3 → SELL. SL/TP + signal-reversion exit at exit_threshold=0.1. Cooldown=50 ticks.",
+      "changes": ["Initial strategy implementation"],
+      "config": "configs/iter_001.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T16:00:00",
+        "run_id": null,
+        "best_params": {"entry_threshold": 0.3, "cooldown_ticks": 50},
+        "summary": {"fill_count": 27060, "final_pnl": -0.398326, "sharpe": -0.804598, "sortino": -0.789987, "pct_positive_buckets": 0.0, "total_fees": 0.249575, "final_position": 4e-06},
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": ["sharpe >0 FAILED (-0.805)", "final_pnl >0 FAILED (-0.398)"],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false}
+      },
+      "analysis": "Massively overtrading: 27,060 fills, 50 fills/minute. Signal-reversion exit fires every few ticks (score bounces 0.1-0.3). No pending-entry guard — during the 5ms+1ms order latency, position=0, so new entries fire every tick. Fees of $0.25 destroyed PnL.",
+      "next_action": "Add _pending_order flag to prevent in-flight duplicates. Remove signal exit, use SL/TP only. EWMA-smooth the score (alpha=0.1). Cooldown=200."
+    },
+    {
+      "iteration": 2,
+      "timestamp": "2026-05-16T23:05:00Z",
+      "type": "local",
+      "hypothesis": "Add EWMA score smoothing (alpha=0.1) and _pending_order guard to prevent in-flight duplicates. Remove signal exit, use SL/TP only. Cooldown=200.",
+      "changes": ["Added _pending_order flag", "EWMA score smoothing alpha=0.1", "Removed signal-reversion exit"],
+      "config": "configs/iter_002.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T16:00:00",
+        "run_id": null,
+        "best_params": {"entry_threshold": 0.15, "cooldown_ticks": 200},
+        "summary": {"fill_count": 47470, "final_pnl": -0.655617, "sharpe": -0.930748, "sortino": -0.938826, "pct_positive_buckets": 0.0, "total_fees": 0.437824, "final_position": -2e-06},
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": ["sharpe >0 FAILED (-0.931)", "final_pnl >0 FAILED (-0.656)"],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false}
+      },
+      "analysis": "Even more fills (47,470). _pending_close was only applied to exits, not entries. During 5ms entry latency, position=0 and cooldown already passed → multiple entries fire simultaneously. Need _pending_order to gate ALL intents.",
+      "next_action": "Unify _pending_close and _pending_entry into single _pending_order flag gating all intents. Reset in on_execution_report."
+    },
+    {
+      "iteration": 3,
+      "timestamp": "2026-05-16T23:11:00Z",
+      "type": "local",
+      "hypothesis": "Unified _pending_order flag gates all intents. Reset on every execution report. EWMA alpha=0.1. SL/TP exit only.",
+      "changes": ["Unified _pending_order flag", "on_execution_report resets _pending_order"],
+      "config": "configs/iter_003.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T16:00:00",
+        "run_id": null,
+        "best_params": {"entry_threshold": 0.15, "cooldown_ticks": 200},
+        "summary": {"fill_count": 61, "final_pnl": -0.000791, "sharpe": -0.016943, "sortino": -0.017825, "pct_positive_buckets": 0.2, "total_fees": 0.000563, "final_position": -1e-06},
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": ["sharpe >0 FAILED (-0.017)", "final_pnl >0 FAILED (-0.0008)"],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false},
+        "custom_metrics": {"avg_buy_price": 80126.93, "avg_sell_price": 80076.77, "fills_per_hour": 6.8}
+      },
+      "analysis": "Trade count now controlled (61 fills, ~6.8/hr, spread across hours 7-15). Still negative: buying at $80,127 avg, selling at $80,077. EWMA alpha=0.1 lags signal by ~10 ticks; by the time threshold is reached, the price move has already happened. Need faster signal.",
+      "next_action": "Increase EWMA alpha to 0.7 (faster signal). Add signal zero-crossing exit (score < 0 for longs). Raise entry_threshold to 0.4 to filter noise."
+    },
+    {
+      "iteration": 4,
+      "timestamp": "2026-05-16T23:26:00Z",
+      "type": "local",
+      "hypothesis": "Faster EWMA (alpha=0.7), zero-crossing exit, entry_threshold=0.4, cooldown=100.",
+      "changes": ["EWMA alpha: 0.1 -> 0.7", "Added zero-crossing exit (score<0 for longs)", "entry_threshold: 0.15 -> 0.4", "cooldown_ticks: 200 -> 100"],
+      "config": "configs/iter_004.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T16:00:00",
+        "run_id": null,
+        "best_params": {"entry_threshold": 0.4, "cooldown_ticks": 100},
+        "summary": {"fill_count": 3884, "final_pnl": -0.046521, "sharpe": -0.870488, "sortino": -0.946523, "pct_positive_buckets": 0.0, "total_fees": 0.035824, "final_position": 0.0},
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": ["sharpe >0 FAILED (-0.871)", "final_pnl >0 FAILED (-0.047)"],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false}
+      },
+      "analysis": "Zero-crossing exit + fast alpha causes 3,884 fills (~1,942 round trips). Score flips rapidly with alpha=0.7 → frequent zero crossings → many exits → cooldown resets → re-entries. Still negative: buying at avg price higher than selling. Signal direction appears contrarian — positive score (buy pressure) → price mean-reverts DOWN. Should sell on positive score, buy on negative.",
+      "next_action": "Flip entry direction: score>threshold → SELL SHORT, score<-threshold → BUY. SL/TP only exit (no zero-crossing), cooldown=1000 ticks."
+    },
+    {
+      "iteration": 5,
+      "timestamp": "2026-05-16T23:29:00Z",
+      "type": "local",
+      "hypothesis": "Contrarian direction: positive score (buy pressure) → SELL (mean reversion). Negative score → BUY. SL/TP only exit. Long cooldown=1000 ticks.",
+      "changes": ["Flipped entry direction: positive score → ASK (sell), negative → BID (buy)", "Removed zero-crossing exit", "cooldown_ticks: 100 -> 1000", "stop_loss_bps: 15 -> 10", "take_profit_bps: 20 -> 15"],
+      "config": "configs/iter_005.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T16:00:00",
+        "run_id": null,
+        "best_params": {"entry_threshold": 0.4, "cooldown_ticks": 1000},
+        "summary": {"fill_count": 101, "final_pnl": 0.000213, "sharpe": 0.005434, "sortino": 0.005933, "pct_positive_buckets": 0.8, "total_fees": 0.000932, "final_position": -1e-06},
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": true}
+      },
+      "analysis": "First profitable iteration. Contrarian direction confirmed: after strong buy sweeps, price mean-reverts. 101 fills (~50 round trips), pct_positive_buckets=0.80. Sharpe=0.005 still far from target 1.0 due to small edge per trade ($0.000213 / 50 trades = $0.0000043/trade). Need to optimize entry_threshold and SL/TP to capture larger moves per trade.",
+      "next_action": "Remote sweep: entry_threshold=[0.3,0.4,0.5], stop_loss_bps=[8,12,15], take_profit_bps=[12,18,25], cooldown_ticks=[500,1000,2000] — 81 jobs to find best param combo."
+    }
+  ],
+  "best_iteration": 5,
+  "best_pnl": 0.000213,
+  "best_sharpe": 0.005434
+}

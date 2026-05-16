@@ -1,0 +1,67 @@
+name: queue_depletion_taker
+
+description: |
+  Taker momentum strategy driven by the queue depletion signal from
+  bayesian_queue_depletion research. Core thesis: the depletion score
+  (trade imbalance + level staleness asymmetry + liquidity delta asymmetry)
+  predicts short-term price direction.
+
+  Signal logic:
+    - depletion_score > +threshold → ask side vulnerable → BUY (market order / IOC)
+    - depletion_score < -threshold → bid side vulnerable → SELL / SHORT (market order / IOC)
+    - |depletion_score| < threshold → flat / hold
+
+  Position management:
+    - Enter when signal crosses threshold
+    - Exit (reverse or flatten) when signal crosses opposite threshold or drops to zero
+    - Toxicity gate: widen entry threshold when EWMA aggression is high
+    - Max position enforced at all times
+
+  Execution: taker-only (aggressive IOC orders). No passive quoting.
+
+data:
+  listings:
+    - listing_id: 1
+      profile: default
+  date_ranges:
+    - start: "2026-05-13T07:00:00"
+      end: "2026-05-13T16:00:00"
+
+profiles:
+  default:
+    taker_fee: 0.0005
+    maker_fee: 0.00012
+    queue_model: risk_averse
+    network_latency_ns: 5000000
+    processing_latency_ns: 1000000
+
+goals:
+  primary_metric: sharpe
+  direction: maximize
+  thresholds:
+    sharpe: ">0"
+    fill_count: ">10"
+    final_pnl: ">0"
+  targets:
+    sharpe: ">1.0"
+    sortino: ">1.5"
+    pct_positive_buckets: ">0.6"
+
+constraints:
+  strategy_type: momentum
+  max_iterations: 10
+  signals_to_explore:
+    - TradeImbalance
+    - LevelStaleness
+    - LevelLiquidityDelta
+    - EWMA(Aggression)
+    - MicropriceFairValue
+  avoid:
+    - max_position must stay under 20
+
+meta:
+  execution_mode: auto
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous
