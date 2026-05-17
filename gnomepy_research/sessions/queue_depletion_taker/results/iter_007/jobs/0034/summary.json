@@ -1,0 +1,23 @@
+{
+  "backtest_id": "019e33b1-89c1-7d55-9fb0-1c5e0a254115",
+  "duration_seconds": 32399.284,
+  "market_record_count": 245206,
+  "intent_record_count": 187,
+  "fill_count": 187,
+  "total_volume": 0.000187,
+  "total_notional": 14.966546999999998,
+  "final_position": 1e-06,
+  "final_positions": {
+    "(1, 1)": 1e-06
+  },
+  "total_fees": 0.0017247705708918432,
+  "final_pnl": -0.00025927057089068783,
+  "final_pnl_by_symbol": {
+    "(1, 1)": -0.00025927057089068783
+  },
+  "sharpe": -0.006431118318697442,
+  "sortino": -0.007005803012868499,
+  "sharpe_std": 0.03824722847971037,
+  "pct_positive_buckets": 0.2,
+  "warnings": []
+}

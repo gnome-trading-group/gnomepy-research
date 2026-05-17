@@ -1,0 +1,15 @@
+{
+  "backtest_id": "019e33e8-d58c-7d5b-8254-67d54b0d7200",
+  "created_at": "2026-05-17T03:12:22.515767+00:00",
+  "start_date": "2026-05-13 07:00:00",
+  "end_date": "2026-05-15 16:00:00",
+  "wall_time_seconds": 184.771,
+  "event_count": 2928300,
+  "config_path": "/work/config.yaml",
+  "gnomepy_version": "2.2.3",
+  "gnomepy_research_version": "0.1.0",
+  "gnomepy_research_commit": "4440a4239c3e159d3b903c3be551ac25aed8a42f",
+  "data_scaled": true,
+  "warnings": [],
+  "extra": {}
+}

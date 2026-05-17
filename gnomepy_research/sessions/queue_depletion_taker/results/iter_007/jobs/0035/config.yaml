@@ -1,0 +1,38 @@
+end_date: '2026-05-13T16:00:00'
+listings:
+- listing_id: 1
+  profile: default
+profiles:
+  default:
+    fee_model:
+      maker_fee: 0.00012
+      taker_fee: 0.0005
+      type: static
+    network_latency:
+      latency_nanos: 5000000
+      type: static
+    order_processing_latency:
+      latency_nanos: 1000000
+      type: static
+    queue_model:
+      type: risk_averse
+start_date: '2026-05-13T07:00:00'
+strategy:
+  args:
+    cooldown_ticks: 750
+    entry_threshold: 0.3
+    exchange_id: 1
+    exit_threshold: 0.05
+    flow_horizon_ns: 500000000
+    liq_horizon_ns: 1000000000
+    max_position: 10
+    security_id: 1
+    size: 1
+    stop_loss_bps: 5.0
+    take_profit_bps: 12.0
+    toxicity_threshold_bps: 8.0
+    w_imbalance: 0.5
+    w_liq_delta: 0.25
+    w_staleness: 0.25
+    warmup_ticks: 50
+  class_name: gnomepy_research.sessions.queue_depletion_taker.strategy:QueueDepletionTaker

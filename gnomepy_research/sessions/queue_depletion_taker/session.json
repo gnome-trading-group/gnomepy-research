@@ -430,9 +430,48 @@
       },
       "analysis": "Edge is real and consistent across all 3 days: win rates 50-58%, 2/3 days profitable, total closed-trade PnL=/bin/zsh.28 before fees. Sharpe dropped to 0.0077 (from 0.038 on 1 day) because the 30-bucket time series has more zero-trade hours and inter-hour variance. May 14 (+222 bps uptrend) had the most trades (215 round trips) but still 51% win rate \u2014 the contrarian signal works in both trending and ranging markets, just captures different legs. Key: params optimized on 1 day may not be optimal for 3-day window.",
       "next_action": "Remote sweep on 3-day window to find params optimal for longer horizon: entry=[0.20,0.25,0.30] x sl=[6,8,10] x tp=[10,12,15] x cd=[300,500,750] = 81 jobs."
+    },
+    {
+      "iteration": 11,
+      "timestamp": "2026-05-17T03:48:28Z",
+      "type": "sweep",
+      "hypothesis": "Sweep entry=[0.20,0.25,0.30] x sl=[6,8,10] x tp=[10,12,15] x cd=[300,500,750] (81 jobs) on 3-day window (May 13-15) to find optimal params for longer horizon.",
+      "changes": [
+        "Remote sweep 81 jobs (sweep_011) on 3-day window"
+      ],
+      "config": "configs/sweep_011.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-15T16:00:00",
+        "run_id": "0000019e33d5c641",
+        "best_params": {
+          "entry_threshold": 0.25,
+          "stop_loss_bps": 8.0,
+          "take_profit_bps": 12.0,
+          "cooldown_ticks": 300
+        },
+        "summary": {
+          "fill_count": 1033,
+          "final_pnl": 0.8103,
+          "sharpe": 0.0298,
+          "sortino": null,
+          "pct_positive_buckets": 1.0,
+          "total_fees": null,
+          "final_position": null
+        },
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": true
+        }
+      },
+      "analysis": "75/81 jobs profitable \u2014 very robust on 3-day window. Best: entry=0.25, sl=8, tp=12, cd=300 \u2192 sharpe=0.030, pct_pos=1.00. cd=300 now BEST (reversed from 1-day result) because shorter cooldown drives more consistent intra-hour coverage. tp=12 dominates. sl=6 and sl=8 similar. Sharpe 4x better than iter_010 (0.0077\u21920.030). pct_positive_buckets target already met. Gap to sharpe=1.0 remains: 33x. Main issue is PnL lumpiness across 30 time buckets.",
+      "next_action": "Fine-grid sweep around winner: entry=[0.22,0.25,0.28] x sl=[7,8,9] x tp=[11,12,13] x cd=[200,250,300] = 81 jobs."
     }
   ],
-  "best_iteration": 10,
-  "best_pnl": 0.199,
-  "best_sharpe": 0.0383
+  "best_iteration": 11,
+  "best_pnl": 0.8103,
+  "best_sharpe": 0.0298
 }
