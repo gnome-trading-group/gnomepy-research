@@ -253,9 +253,133 @@
       },
       "analysis": "22/81 jobs profitable. Best: entry=0.3, sl=8, tp=12, cd=500 \u2192 sharpe=0.032, pct_pos=0.80, 145 fills. Tight SL/TP dominates \u2014 confirms mean-reversion: moves are small and quick. entry=0.3 > 0.4 > 0.5. cooldown=500 > 1000 > 2000 (more trades = better). Sharpe improved 6x from iter 5 (0.005 \u2192 0.032) but still 31x from target 1.0. Notable: entry=0.3,sl=15,tp=25,cd=500 gets pct_pos=1.00 with 49 fills.",
       "next_action": "Fine sweep around winner: entry=[0.25,0.3,0.35] x sl=[5,6,8] x tp=[8,10,12] x cd=[300,500,750] (81 jobs)."
+    },
+    {
+      "iteration": 7,
+      "timestamp": "2026-05-17T02:02:51Z",
+      "type": "sweep",
+      "hypothesis": "Fine-grid sweep around iter_006 winner: entry=[0.25,0.3,0.35] x sl=[5,6,8] x tp=[8,10,12] x cd=[300,500,750] (81 jobs) to find optimal params in tighter neighborhood.",
+      "changes": [
+        "Remote sweep 81 jobs (sweep_007)"
+      ],
+      "config": "configs/sweep_007.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T16:00:00",
+        "run_id": "0000019e33ac0492",
+        "best_params": {
+          "entry_threshold": 0.25,
+          "stop_loss_bps": 8.0,
+          "take_profit_bps": 12.0,
+          "cooldown_ticks": 500
+        },
+        "summary": {
+          "fill_count": 139,
+          "final_pnl": 0.001588,
+          "sharpe": 0.0383,
+          "sortino": 0.0445,
+          "pct_positive_buckets": 0.8,
+          "total_fees": 0.001282,
+          "final_position": 1e-06
+        },
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": true
+        }
+      },
+      "analysis": "5/81 jobs profitable. All winning jobs share sl=8 and cd=500 — tight SL and moderate cooldown are non-negotiable. sl=5/6 and cd=300/750 uniformly harmful. entry=0.25 slightly better than 0.30 and 0.35. tp=12 best (tp=10 worse, tp=8 much worse). Only 19% improvement from iter_006 (0.032→0.038). Signal is narrow: one profitable pocket. Sharpe plateau at ~0.04, target 1.0 is 26x away.",
+      "next_action": "Try structural change: add time-of-day session filter (skip early morning hours where signal may be noisier). Best params: entry=0.25, sl=8, tp=12, cd=500."
+    },
+    {
+      "iteration": 8,
+      "timestamp": "2026-05-17T02:28:00Z",
+      "type": "local",
+      "hypothesis": "Add session_start_hour=9 filter (skip hours 07-09) to remove noisy low-volume morning entries, keeping only active-session signals. Best params from iter_007 otherwise.",
+      "changes": [
+        "Added session_start_hour parameter to strategy",
+        "session_start_hour=9 — skip entries before 09:00 UTC"
+      ],
+      "config": "configs/iter_008.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T16:00:00",
+        "run_id": null,
+        "best_params": {
+          "entry_threshold": 0.25,
+          "stop_loss_bps": 8.0,
+          "take_profit_bps": 12.0,
+          "cooldown_ticks": 500,
+          "session_start_hour": 9
+        },
+        "summary": {
+          "fill_count": 121,
+          "final_pnl": 0.001364,
+          "sharpe": 0.0339,
+          "sortino": 0.0366,
+          "pct_positive_buckets": 0.6,
+          "total_fees": 0.001116,
+          "final_position": 1e-06
+        },
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": false
+        }
+      },
+      "analysis": "Session filter hurt: sharpe 0.038→0.034, pct_positive_buckets 0.80→0.60. 18 fewer fills (139→121). Morning hours 07-09 contributed 25 fills that were net profitable — skipping them removed good trades. Hypothesis was wrong: losing time buckets are NOT in the morning. Session filter approach rejected.",
+      "next_action": "Revert session filter. Try pure TradeImbalance signal (w_imbalance=1.0, others=0) to test whether staleness/liq_delta components add signal or noise. Lower entry threshold to 0.20."
+    },
+    {
+      "iteration": 9,
+      "timestamp": "2026-05-17T02:30:00Z",
+      "type": "local",
+      "hypothesis": "Pure TradeImbalance signal (w_imbalance=1.0, w_staleness=0.0, w_liq_delta=0.0) with lower entry threshold 0.20 to test if composite signal components add noise. Best SL/TP/cooldown from iter_007.",
+      "changes": [
+        "w_imbalance: 0.5 -> 1.0",
+        "w_staleness: 0.25 -> 0.0",
+        "w_liq_delta: 0.25 -> 0.0",
+        "entry_threshold: 0.25 -> 0.20"
+      ],
+      "config": "configs/iter_009.yaml",
+      "results": {
+        "date_range": "2026-05-13T07:00:00 to 2026-05-13T16:00:00",
+        "run_id": null,
+        "best_params": {
+          "entry_threshold": 0.20,
+          "stop_loss_bps": 8.0,
+          "take_profit_bps": 12.0,
+          "cooldown_ticks": 500,
+          "w_imbalance": 1.0
+        },
+        "summary": {
+          "fill_count": 147,
+          "final_pnl": 0.000898,
+          "sharpe": 0.0217,
+          "sortino": 0.0242,
+          "pct_positive_buckets": 0.6,
+          "total_fees": 0.001356,
+          "final_position": 1e-06
+        },
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": false
+        }
+      },
+      "analysis": "Pure TradeImbalance worse than composite: sharpe 0.038→0.022. Staleness and LiquidityDelta components DO contribute positively to signal quality. More fills (147) due to lower threshold but PnL per trade lower. Composite signal with original weights (0.5/0.25/0.25) remains best. 3 consecutive iterations with sharpe declining (0.038→0.034→0.022), plateau confirmed. 26x gap to target sharpe=1.0 with no clear structural path — marking stalled.",
+      "next_action": "Session stalled. Best config: entry=0.25, sl=8, tp=12, cd=500, composite weights 0.5/0.25/0.25 (iter_007 winner). Signal has real but small edge on this single trading day. To reach sharpe>1.0 would require multi-day data to reduce sampling noise, or a fundamentally stronger signal."
     }
   ],
-  "best_iteration": 6,
-  "best_pnl": 0.00133,
-  "best_sharpe": 0.0321
+  "best_iteration": 7,
+  "best_pnl": 0.001588,
+  "best_sharpe": 0.0383,
+  "status": "stalled"
 }

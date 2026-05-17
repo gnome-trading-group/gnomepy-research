@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime
+
 from gnomepy import ExecutionReport, Intent, OrderType, Side, Strategy
 from gnomepy.java.schemas import Schema
 
@@ -32,6 +34,7 @@ class QueueDepletionTaker(Strategy):
         w_staleness: float = 0.25,
         w_liq_delta: float = 0.25,
         toxicity_threshold_bps: float = 8.0,
+        session_start_hour: int = 9,
         processing_time_ns: int = 0,
     ):
         self.exchange_id = exchange_id
@@ -48,6 +51,7 @@ class QueueDepletionTaker(Strategy):
         self.w_staleness = w_staleness
         self.w_liq_delta = w_liq_delta
         self.toxicity_threshold_bps = toxicity_threshold_bps
+        self.session_start_hour = session_start_hour
         self._processing_time_ns = processing_time_ns
 
         self._fv = MicropriceFairValue()
