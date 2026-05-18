@@ -1,0 +1,35 @@
+end_date: '2026-05-16T00:00:00'
+listings:
+- listing_id: 1
+  profile: default
+- listing_id: 28
+  profile: default
+profiles:
+  default:
+    fee_model:
+      maker_fee: 0.00012
+      taker_fee: 0.0004
+      type: static
+    network_latency:
+      latency_nanos: 5000000
+      type: static
+    order_processing_latency:
+      latency_nanos: 1000000
+      type: static
+    queue_model:
+      type: risk_averse
+start_date: '2026-05-13T00:00:00'
+strategy:
+  args:
+    close_z: -0.5
+    entry_z: 2.0
+    halflife_seconds: 1800.0
+    max_hold_ns: 600000000000
+    max_imbalance_ticks: 20
+    max_position: 5
+    max_staleness_ns: 60000000000
+    min_spread_bps: 0.5
+    processing_time_ns: 0
+    size: 1000
+    warmup_ticks: 50
+  class_name: gnomepy_research.sessions.stablecoin_stat_arb.strategy:StablecoinStatArb
