@@ -55,6 +55,7 @@ class StablecoinStatArb(Strategy):
         warmup_ticks: int = 50,
         entry_z: float = 2.5,
         close_z: float = 0.0,
+        stop_z: float = 0.0,
         max_hold_ns: int = 600_000_000_000,
         max_imbalance_ticks: int = 20,
         max_staleness_ns: int = 60_000_000_000,
@@ -68,6 +69,7 @@ class StablecoinStatArb(Strategy):
         self.warmup_ticks = warmup_ticks
         self.entry_z = entry_z
         self.close_z = close_z
+        self.stop_z = stop_z
         self.max_hold_ns = max_hold_ns
         self.max_imbalance_ticks = max_imbalance_ticks
         self.max_staleness_ns = max_staleness_ns
@@ -201,12 +203,12 @@ class StablecoinStatArb(Strategy):
                 if ewma is None:
                     continue
                 spread = self._signed_spread(lst_a, lst_b)
-                ewma.update(spread, timestamp)
                 if self.reversion_ticks > 0 and ewma.is_ready and ewma.std > 0:
-                    z = abs((spread - ewma.mean) / ewma.std)
+                    z_before = abs((spread - ewma.mean) / ewma.std)
                     hist = self._z_history.get(key)
                     if hist is not None:
-                        hist.append(z)
+                        hist.append(z_before)
+                ewma.update(spread, timestamp)
 
     def _manage_open_pair(self, timestamp: int, stale: set[Listing]) -> list[Intent]:
         long_lst, short_lst = self._open_pair
@@ -265,6 +267,10 @@ class StablecoinStatArb(Strategy):
             if long_lst not in stale and short_lst not in stale:
                 directed_z = locked_z * self._open_direction
                 if directed_z < self.close_z:
+                    self._closing = True
+                    self._last_close_ts = timestamp
+                    return self._close(long_lst, short_lst, pos_long, pos_short)
+                if self.stop_z > 0 and directed_z > self.stop_z:
                     self._closing = True
                     self._last_close_ts = timestamp
                     return self._close(long_lst, short_lst, pos_long, pos_short)

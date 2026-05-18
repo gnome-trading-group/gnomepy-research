@@ -319,7 +319,54 @@
       "next_action": "Fine-tune: sweep reversion_ticks=[1,2,3,4,5] x entry_z=[0.875,1.0,1.125] to find if reversion_ticks=1 or 2 might be better, and whether entry_z changes optimally with the filter. 15 jobs."
     }
   ],
-  "best_iteration": 9,
-  "best_pnl": 27.6411,
-  "best_sharpe": 0.1091
+    {
+      "iteration": 10,
+      "timestamp": "2026-05-17T21:30:00Z",
+      "type": "sweep",
+      "hypothesis": "Fine-tune reversion_ticks=[1-5] x entry_z=[0.875,1.0,1.125] to find the best peak-confirmation window.",
+      "changes": ["Remote sweep: entry_z=[0.875,1.0,1.125], reversion_ticks=[1,2,3,4,5]"],
+      "config": "configs/sweep_010.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e38a529e2",
+        "best_params": {
+          "size": 1000,
+          "halflife_seconds": 90.0,
+          "entry_z": 1.0,
+          "close_z": -1.0,
+          "max_position": 5,
+          "max_hold_ns": 600000000000,
+          "min_spread_bps": 0.25,
+          "reversion_ticks": 2
+        },
+        "summary": {
+          "fill_count": 21086,
+          "final_pnl": 27.8060,
+          "sharpe": 0.1115,
+          "sortino": 0.1218,
+          "pct_positive_buckets": 1.0,
+          "total_fees": 0.1945
+        },
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
+        "custom_metrics": {
+          "rev_ticks_sweep_at_entry_z_10": [
+            {"reversion_ticks": 1, "pnl": 0.0,    "fills": 0,     "note": "deque maxlen=1, always skips (current z == peak)"},
+            {"reversion_ticks": 2, "pnl": 27.806, "fills": 21086},
+            {"reversion_ticks": 3, "pnl": 27.641, "fills": 21450},
+            {"reversion_ticks": 4, "pnl": 27.605, "fills": 21510},
+            {"reversion_ticks": 5, "pnl": 27.443, "fills": 21522}
+          ],
+          "catastrophic_flag": "entry_z=1.125 + reversion_ticks in [3,4,5] yields PnL=-628 — false peak selection at higher threshold + longer window enters trades where spread continues widening"
+        }
+      },
+      "analysis": "Only +0.6% improvement (27.64->27.81). reversion_ticks=1 gives 0 fills — the deque (maxlen=1) holds the current tick's z, so current always equals peak, filter always skips. reversion_ticks=2 beats 3,4,5: confirming peak over 2 ticks is sufficient. Critical bug discovered: entry_z=1.125 + reversion_ticks≥3 causes -628 PnL — the combination selects entries where a higher-threshold peak (1.125σ) appears to have peaked 3+ ticks ago, but is actually at a transient dip within a still-widening move. entry_z=1.0 + reversion_ticks=2 is the stable optimum. PnL improvement rate has flattened to <1% — parameter space exhausted. Structural changes needed.",
+      "next_action": "Add stop_z (stop loss): exit early if the directed locked_z exceeds stop_z (spread widening beyond stop threshold post-entry). Sweep stop_z=[1.5,2.0,3.0] to cut adverse entries that would otherwise hit max_hold. Also test reverting the reversion_ticks=1 bug fix properly by only checking z BEFORE current tick."
+    }
+  ],
+  "best_iteration": 10,
+  "best_pnl": 27.8060,
+  "best_sharpe": 0.1115
 }
