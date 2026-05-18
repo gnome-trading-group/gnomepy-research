@@ -203,12 +203,12 @@ class StablecoinStatArb(Strategy):
                 if ewma is None:
                     continue
                 spread = self._signed_spread(lst_a, lst_b)
+                ewma.update(spread, timestamp)
                 if self.reversion_ticks > 0 and ewma.is_ready and ewma.std > 0:
-                    z_before = abs((spread - ewma.mean) / ewma.std)
+                    z = abs((spread - ewma.mean) / ewma.std)
                     hist = self._z_history.get(key)
                     if hist is not None:
-                        hist.append(z_before)
-                ewma.update(spread, timestamp)
+                        hist.append(z)
 
     def _manage_open_pair(self, timestamp: int, stale: set[Listing]) -> list[Intent]:
         long_lst, short_lst = self._open_pair
