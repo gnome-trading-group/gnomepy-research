@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 
 from gnomepy import ExecutionReport, Intent, OrderType, Side, Strategy
 from gnomepy.java.schemas import Schema
@@ -9,13 +10,6 @@ Listing = tuple[int, int]
 
 
 class _TimedSpreadEWMA:
-    """EWMA that decays by wall-clock time rather than tick count.
-
-    Prevents the effective half-life from collapsing to seconds when tick
-    rate is high. halflife_seconds controls how quickly the mean tracks the
-    spread; the resulting std reflects genuine medium-term spread volatility.
-    """
-
     def __init__(self, halflife_seconds: float = 300.0, warmup_ticks: int = 50):
         self.halflife_seconds = halflife_seconds
         self.warmup_ticks = warmup_ticks
@@ -65,6 +59,7 @@ class StablecoinStatArb(Strategy):
         max_imbalance_ticks: int = 20,
         max_staleness_ns: int = 60_000_000_000,
         min_spread_bps: float = 0.5,
+        reversion_ticks: int = 0,
         processing_time_ns: int = 0,
     ):
         self.size = size
@@ -77,6 +72,7 @@ class StablecoinStatArb(Strategy):
         self.max_imbalance_ticks = max_imbalance_ticks
         self.max_staleness_ns = max_staleness_ns
         self.min_spread_bps = min_spread_bps
+        self.reversion_ticks = reversion_ticks
         self._processing_time_ns = processing_time_ns
 
         self._listings: list[Listing] = []
@@ -84,6 +80,7 @@ class StablecoinStatArb(Strategy):
         self._best_ask: dict[Listing, int] = {}
         self._last_update_ts: dict[Listing, int] = {}
         self._ewma: dict[tuple[Listing, Listing], _TimedSpreadEWMA] = {}
+        self._z_history: dict[tuple[Listing, Listing], deque] = {}
 
         self._open_pair: tuple[Listing, Listing] | None = None
         self._open_direction: int = 0
@@ -92,8 +89,6 @@ class StablecoinStatArb(Strategy):
         self._last_close_ts: int = 0
         self._imbalance_ticks = 0
 
-        # Locked at entry — prevents close being triggered by EWMA drifting up
-        # to meet a persistent spread rather than the spread actually reverting.
         self._locked_mean: float = 0.0
         self._locked_std: float = 0.0
 
@@ -146,12 +141,15 @@ class StablecoinStatArb(Strategy):
         if listing not in self._best_bid:
             self._listings.append(listing)
             for other in self._listings[:-1]:
+                key = listing if listing > other else other
                 key = (listing, other) if listing > other else (other, listing)
                 if key not in self._ewma:
                     self._ewma[key] = _TimedSpreadEWMA(
                         halflife_seconds=self.halflife_seconds,
                         warmup_ticks=self.warmup_ticks,
                     )
+                if self.reversion_ticks > 0 and key not in self._z_history:
+                    self._z_history[key] = deque(maxlen=self.reversion_ticks)
 
         self._best_bid[listing] = bid
         self._best_ask[listing] = ask
@@ -199,9 +197,16 @@ class StablecoinStatArb(Strategy):
                 if source not in (lst_a, lst_b):
                     continue
                 key = self._ewma_key(lst_a, lst_b)
-                if key in self._ewma:
-                    spread = self._signed_spread(lst_a, lst_b)
-                    self._ewma[key].update(spread, timestamp)
+                ewma = self._ewma.get(key)
+                if ewma is None:
+                    continue
+                spread = self._signed_spread(lst_a, lst_b)
+                ewma.update(spread, timestamp)
+                if self.reversion_ticks > 0 and ewma.is_ready and ewma.std > 0:
+                    z = abs((spread - ewma.mean) / ewma.std)
+                    hist = self._z_history.get(key)
+                    if hist is not None:
+                        hist.append(z)
 
     def _manage_open_pair(self, timestamp: int, stale: set[Listing]) -> list[Intent]:
         long_lst, short_lst = self._open_pair
@@ -284,8 +289,20 @@ class StablecoinStatArb(Strategy):
 
                 spread = self._signed_spread(lst_a, lst_b)
                 z = (spread - ewma.mean) / ewma.std
+                abs_z = abs(z)
 
                 self._log(timestamp, z, spread, 0, 0, 0)
+
+                if abs_z <= self.entry_z:
+                    continue
+
+                if self.reversion_ticks > 0:
+                    hist = self._z_history.get(key)
+                    if hist is None or len(hist) < self.reversion_ticks:
+                        continue
+                    peak_z = max(hist)
+                    if abs_z >= peak_z:
+                        continue
 
                 eff_a = self.oms.get_effective_quantity(*lst_a) or 0
                 eff_b = self.oms.get_effective_quantity(*lst_b) or 0
@@ -297,25 +314,26 @@ class StablecoinStatArb(Strategy):
                 ):
                     continue
 
+                if abs(spread) < self.min_spread_bps:
+                    continue
+
                 larger = lst_a if lst_a > lst_b else lst_b
                 smaller = lst_b if lst_a > lst_b else lst_a
 
-                if z > self.entry_z and z > best_z:
-                    if abs(spread) >= self.min_spread_bps:
-                        best_z = z
-                        best_long = larger
-                        best_short = smaller
-                        best_direction = 1
-                        best_locked_mean = ewma.mean
-                        best_locked_std = ewma.std
-                elif -z > self.entry_z and -z > best_z:
-                    if abs(spread) >= self.min_spread_bps:
-                        best_z = -z
-                        best_long = smaller
-                        best_short = larger
-                        best_direction = -1
-                        best_locked_mean = ewma.mean
-                        best_locked_std = ewma.std
+                if z > self.entry_z and abs_z > best_z:
+                    best_z = abs_z
+                    best_long = larger
+                    best_short = smaller
+                    best_direction = 1
+                    best_locked_mean = ewma.mean
+                    best_locked_std = ewma.std
+                elif -z > self.entry_z and abs_z > best_z:
+                    best_z = abs_z
+                    best_long = smaller
+                    best_short = larger
+                    best_direction = -1
+                    best_locked_mean = ewma.mean
+                    best_locked_std = ewma.std
 
         if best_z > self.entry_z and best_long is not None:
             self._open_pair = (best_long, best_short)

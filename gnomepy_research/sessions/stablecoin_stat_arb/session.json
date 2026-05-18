@@ -228,9 +228,53 @@
       },
       "analysis": "Two decisive findings: (1) max_position is completely irrelevant — identical results at 5/10/20. The strategy only opens one position at a time (both legs must be flat before entry), so position stacking never occurs. (2) close_z=-1.0 is the total-PnL optimum. Deeper thresholds reduce fill count faster than they improve per-trade edge: close_z=-1.5 halves fills but only reduces PnL by 19%. Hold time analysis confirms max_hold_ns is not binding: 97.4% of trades close in <300s, only 1.1% hit the 10-min cap. Spread reverts fast (median 17.9s), consistent with halflife=90s EWMA. No further gains from close_z or max_position dimensions.",
       "next_action": "Parameters now converged on: halflife=90, entry_z=1.0, close_z=-1.0, size=1000. Fine-tune entry side: sweep entry_z=[0.75,0.875,1.0,1.125,1.25] x min_spread_bps=[0.25,0.5,0.75] to see if lower spread filter or slightly different entry threshold can squeeze more trades or better edge."
+    },
+    {
+      "iteration": 8,
+      "timestamp": "2026-05-17T21:05:00Z",
+      "type": "sweep",
+      "hypothesis": "Lower min_spread_bps filter allows more entry signals; finer entry_z grid may reveal better threshold than 1.0.",
+      "changes": ["Remote sweep: entry_z=[0.75,0.875,1.0,1.125,1.25], min_spread_bps=[0.25,0.5,0.75], all other params fixed at best"],
+      "config": "configs/sweep_008.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e3886e0ac",
+        "best_params": {
+          "size": 1000,
+          "halflife_seconds": 90.0,
+          "entry_z": 1.0,
+          "close_z": -1.0,
+          "max_position": 5,
+          "max_hold_ns": 600000000000,
+          "min_spread_bps": 0.25
+        },
+        "summary": {
+          "fill_count": 21970,
+          "final_pnl": 25.9291,
+          "sharpe": 0.1009,
+          "sortino": 0.1082,
+          "pct_positive_buckets": 1.0,
+          "total_fees": 0.2025
+        },
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
+        "custom_metrics": {
+          "entry_z_sweep_at_min_spr025": [
+            {"entry_z": 0.75,  "pnl": 25.3046, "fills": 22774, "sharpe": 0.0972},
+            {"entry_z": 0.875, "pnl": 25.7787, "fills": 22426, "sharpe": 0.1004},
+            {"entry_z": 1.0,   "pnl": 25.9291, "fills": 21970, "sharpe": 0.1009},
+            {"entry_z": 1.125, "pnl": 25.2458, "fills": 21230, "sharpe": 0.0990},
+            {"entry_z": 1.25,  "pnl": 24.9963, "fills": 20102, "sharpe": 0.1002}
+          ]
+        }
+      },
+      "analysis": "Marginal gains only (+3.7% PnL). min_spread_bps=0.25 beats 0.5 and 0.75 consistently — lower filter admits slightly more trades. entry_z=1.0 remains optimal even at finer resolution. Total PnL range across all 15 jobs is only 22.99–25.93 (<13%), confirming parameter convergence. Three consecutive iterations (6,7,8) show <5% PnL improvement — plateau reached on parameter space. Next step requires a structural code change: add an entry momentum/confirmation filter to reduce false entries where spread is still widening at entry.",
+      "next_action": "Structural change: add entry confirmation filter. When z-score crosses entry_z, only enter if the z-score has peaked (current z < max z over last N ticks), confirming spread has started reverting. This should reduce adverse entries where spread continues widening post-entry. Try N=[3,5,10] ticks as sweep parameter."
     }
   ],
-  "best_iteration": 5,
-  "best_pnl": 25.0077,
-  "best_sharpe": 0.0980
+  "best_iteration": 8,
+  "best_pnl": 25.9291,
+  "best_sharpe": 0.1009
 }
