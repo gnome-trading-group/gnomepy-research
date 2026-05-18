@@ -180,6 +180,54 @@
       },
       "analysis": "Strategy is capacity-constrained, not slippage-constrained. Fill count collapses with size: 21430 at size=1000 → 72 at size=10000 (99.7% drop). The risk_averse queue model places us last in queue; larger orders rarely fill at the taker prices we target. Per-RT PnL artificially rises with size (only the most extreme spreads trigger fills) but total PnL degrades sharply. size=1000 maximizes total PnL (25.01). size=50000 goes negative (6 fills, adverse selection on the rare fills that do happen). Confirmed: size=1000 is the capacity ceiling for this strategy.",
       "next_action": "Size confirmed at 1000. Continue optimizing close_z (trend still monotonic: 0.0 > -0.5 > -1.0) — try close_z=[-1.5,-2.0,-2.5] at best params. Also test max_position=[5,10,20] to allow more concurrent positions and increase frequency."
+    },
+    {
+      "iteration": 7,
+      "timestamp": "2026-05-17T20:36:00Z",
+      "type": "sweep",
+      "hypothesis": "Deeper close_z may capture more reversion per trade; higher max_position may allow more concurrent positions for higher frequency.",
+      "changes": ["Remote sweep: close_z=[-1.0,-1.5,-2.0,-2.5], max_position=[5,10,20], all other params fixed at best"],
+      "config": "configs/sweep_007.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e38795949",
+        "best_params": {
+          "size": 1000,
+          "halflife_seconds": 90.0,
+          "entry_z": 1.0,
+          "close_z": -1.0,
+          "max_position": 5,
+          "max_hold_ns": 600000000000,
+          "min_spread_bps": 0.5
+        },
+        "summary": {
+          "fill_count": 21430,
+          "final_pnl": 25.0077,
+          "sharpe": 0.0980,
+          "sortino": 0.1035,
+          "pct_positive_buckets": 1.0,
+          "total_fees": 0.1977
+        },
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
+        "custom_metrics": {
+          "max_hold_binding_pct": 1.1,
+          "median_hold_s": 17.9,
+          "mean_hold_s": 45.1,
+          "p90_hold_s": 103.5,
+          "pct_close_under_60s": 81.3,
+          "close_z_sweep": [
+            {"close_z": -1.0, "max_pos": 5, "pnl": 25.0077, "fills": 21430, "sharpe": 0.0980},
+            {"close_z": -1.5, "max_pos": 5, "pnl": 20.1483, "fills": 11786, "sharpe": 0.0844},
+            {"close_z": -2.0, "max_pos": 5, "pnl": 11.6502, "fills": 6810,  "sharpe": 0.0508},
+            {"close_z": -2.5, "max_pos": 5, "pnl": 8.2576,  "fills": 4530,  "sharpe": 0.0374}
+          ]
+        }
+      },
+      "analysis": "Two decisive findings: (1) max_position is completely irrelevant — identical results at 5/10/20. The strategy only opens one position at a time (both legs must be flat before entry), so position stacking never occurs. (2) close_z=-1.0 is the total-PnL optimum. Deeper thresholds reduce fill count faster than they improve per-trade edge: close_z=-1.5 halves fills but only reduces PnL by 19%. Hold time analysis confirms max_hold_ns is not binding: 97.4% of trades close in <300s, only 1.1% hit the 10-min cap. Spread reverts fast (median 17.9s), consistent with halflife=90s EWMA. No further gains from close_z or max_position dimensions.",
+      "next_action": "Parameters now converged on: halflife=90, entry_z=1.0, close_z=-1.0, size=1000. Fine-tune entry side: sweep entry_z=[0.75,0.875,1.0,1.125,1.25] x min_spread_bps=[0.25,0.5,0.75] to see if lower spread filter or slightly different entry threshold can squeeze more trades or better edge."
     }
   ],
   "best_iteration": 5,
