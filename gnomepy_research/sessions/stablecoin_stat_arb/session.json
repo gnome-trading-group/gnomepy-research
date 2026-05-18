@@ -366,7 +366,65 @@
       "next_action": "Add stop_z (stop loss): exit early if the directed locked_z exceeds stop_z (spread widening beyond stop threshold post-entry). Sweep stop_z=[1.5,2.0,3.0] to cut adverse entries that would otherwise hit max_hold. Also test reverting the reversion_ticks=1 bug fix properly by only checking z BEFORE current tick."
     }
   ],
+    {
+      "iteration": 11,
+      "timestamp": "2026-05-18T08:33:00Z",
+      "type": "sweep",
+      "hypothesis": "stop_z parameter should cut adverse trades early; also tested with z_history timing fix (compute z before EWMA update).",
+      "changes": ["Added stop_z parameter", "INCORRECT: changed z_history update order to pre-EWMA (caused all results to be invalid)"],
+      "config": "configs/sweep_011.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e38c73d26",
+        "best_params": null,
+        "summary": null,
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": ["ALL RESULTS INVALID due to z_history timing bug — comparing pre-update z in history vs post-update z in scan corrupts the reversion filter"],
+        "targets_met": {}
+      },
+      "analysis": "Invalid run. The z_history timing change (computing z before EWMA update then comparing to post-update z in _scan_entry) caused apples-vs-oranges comparison, making the reversion filter fire at wrong times. All jobs produced strongly negative PnL. Reverted timing to original (update EWMA first, then compute and append z to history).",
+      "next_action": "Re-run stop_z sweep with corrected code."
+    },
+    {
+      "iteration": 12,
+      "timestamp": "2026-05-18T08:44:00Z",
+      "type": "sweep",
+      "hypothesis": "stop_z sweep retry with corrected z_history timing. Also first iteration using correct fee model (previous iters 1-11 had fee model bug: fees were ~3500x undercharged).",
+      "changes": ["Reverted z_history timing fix", "Correct fee model now active"],
+      "config": "configs/sweep_012.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e3b15d242",
+        "best_params": {"stop_z": 0.0},
+        "summary": {"fill_count": 21086, "final_pnl": -648.45, "sharpe": -0.4260, "total_fees": 676.45},
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": ["sharpe >0 FAILED (-0.426)", "final_pnl >0 FAILED (-648.45)"],
+        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false},
+        "custom_metrics": {
+          "fee_impact": "CRITICAL: correct fees = $676.45 vs old buggy fees = $0.19 (3500x difference)",
+          "gross_pnl": 28.0,
+          "correct_fee_total": 676.45,
+          "net_pnl": -648.45,
+          "taker_fee_per_fill": 0.0321,
+          "gross_pnl_per_fill": 0.00133,
+          "gross_edge_bps": 0.167,
+          "taker_roundtrip_cost_bps": 16.0,
+          "stop_z_sweep": [
+            {"stop_z": 0.0, "pnl": -648.45, "fills": 21086, "fees": 676.45},
+            {"stop_z": 1.5, "pnl": -5894.83, "fills": 174430, "fees": 5594.79},
+            {"stop_z": 2.0, "pnl": -3134.13, "fills": 92818, "fees": 2977.01},
+            {"stop_z": 3.0, "pnl": -1218.30, "fills": 37142, "fees": 1191.43}
+          ]
+        }
+      },
+      "analysis": "FUNDAMENTAL PROBLEM: strategy is not viable at correct fee levels. Correct taker fee = 4 bps × $80 notional/fill = $0.032/fill. With 21k fills, fees = $676 vs gross PnL = $28 (0.167 bps/RT). The 16 bps round-trip taker cost overwhelms the sub-1-bps spread edge. Stop_z with positive value actually INCREASES losses by generating more fills (stop-outs re-enter immediately). All previous iterations 1-10 were optimized against a zero-fee environment. USDC/USDE spreads are too tight for taker stat-arb at 4 bps. Must switch to maker (limit) orders to reduce fees from 4 bps to 1.2 bps per fill, or find a fundamentally different approach.",
+      "next_action": "Switch to LIMIT (maker) orders for both entry and exit. Maker fees = 0.12 bps → round-trip cost = 4.8 bps vs 16 bps taker. With gross edge of 0.167 bps/RT, even maker fees are ~29x too high. Fundamental edge is too small. Try MUCH higher entry_z (5.0-10.0) to only trade the widest spread events — accept fewer but higher-quality trades. At extreme z-scores the spread reversion could be much larger."
+    }
+  ],
   "best_iteration": 10,
   "best_pnl": 27.8060,
-  "best_sharpe": 0.1115
+  "best_sharpe": 0.1115,
+  "note": "WARNING: best_pnl/best_sharpe from iters 1-10 are invalid — computed with severely undercharged fees (~3500x). True best PnL at correct fees: negative."
 }
