@@ -8,18 +8,46 @@
       "timestamp": "2026-05-16T10:35:00Z",
       "type": "local",
       "hypothesis": "USDC (listing 1) and USDE (listing 28) spread is mean-reverting; tick-based EWMA z-score with alpha=0.99, entry_z=1.0, close_z=0.2, max_hold=60s.",
-      "changes": ["Initial strategy: StablecoinStatArb based on NExchangeArb, entry_z=1.0, close_z=0.2, ewma_alpha=0.99, max_hold=60s"],
+      "changes": [
+        "Initial strategy: StablecoinStatArb based on NExchangeArb, entry_z=1.0, close_z=0.2, ewma_alpha=0.99, max_hold=60s"
+      ],
       "config": "configs/iter_001.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
         "run_id": null,
-        "best_params": {"size": 1000, "entry_z": 1.0, "close_z": 0.2, "ewma_alpha": 0.99, "max_hold_ns": 60000000000},
-        "summary": {"fill_count": 90538, "final_pnl": -104.05, "sharpe": -0.307, "sortino": -0.265, "pct_positive_buckets": 0.0, "total_fees": 0.835},
+        "best_params": {
+          "size": 1000,
+          "entry_z": 1.0,
+          "close_z": 0.2,
+          "ewma_alpha": 0.99,
+          "max_hold_ns": 60000000000
+        },
+        "summary": {
+          "fill_count": 90538,
+          "final_pnl": -104.05,
+          "sharpe": -0.307,
+          "sortino": -0.265,
+          "pct_positive_buckets": 0.0,
+          "total_fees": 0.835
+        },
         "mm_stats": null,
         "thresholds_met": false,
-        "threshold_failures": ["sharpe >0 FAILED (-0.307)", "final_pnl >0 FAILED (-104.05)"],
-        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false},
-        "custom_metrics": {"spread_mean_bps": 1.68, "spread_std_bps": 2.30, "spread_autocorr_lag1": 0.9948, "ewma_halflife_seconds": 21.8, "fills_per_day": 30179}
+        "threshold_failures": [
+          "sharpe >0 FAILED (-0.307)",
+          "final_pnl >0 FAILED (-104.05)"
+        ],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": false
+        },
+        "custom_metrics": {
+          "spread_mean_bps": 1.68,
+          "spread_std_bps": 2.3,
+          "spread_autocorr_lag1": 0.9948,
+          "ewma_halflife_seconds": 21.8,
+          "fills_per_day": 30179
+        }
       },
       "analysis": "90k+ fills in 3 days. Tick-based EWMA alpha=0.99 has half-life of only 22s at 3.16 ticks/sec. Fires constantly on noise. Systematic losses.",
       "next_action": "Increase entry_z to 2.5, set close_z=0.0 to exit only when spread crosses mean."
@@ -29,18 +57,47 @@
       "timestamp": "2026-05-16T10:50:00Z",
       "type": "local",
       "hypothesis": "Higher entry_z=2.5 filters noise; close_z=0.0 ensures exit only on true mean crossing; max_hold 10min.",
-      "changes": ["entry_z 1.0->2.5", "close_z 0.2->0.0", "max_hold_ns 60s->600s", "min_spread_bps 0.02->0.5"],
+      "changes": [
+        "entry_z 1.0->2.5",
+        "close_z 0.2->0.0",
+        "max_hold_ns 60s->600s",
+        "min_spread_bps 0.02->0.5"
+      ],
       "config": "configs/iter_002.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
         "run_id": null,
-        "best_params": {"size": 1000, "entry_z": 2.5, "close_z": 0.0, "ewma_alpha": 0.99, "max_hold_ns": 600000000000, "min_spread_bps": 0.5},
-        "summary": {"fill_count": 22964, "final_pnl": -22.45, "sharpe": -0.120, "sortino": -0.071, "pct_positive_buckets": 0.0, "total_fees": 0.212},
+        "best_params": {
+          "size": 1000,
+          "entry_z": 2.5,
+          "close_z": 0.0,
+          "ewma_alpha": 0.99,
+          "max_hold_ns": 600000000000,
+          "min_spread_bps": 0.5
+        },
+        "summary": {
+          "fill_count": 22964,
+          "final_pnl": -22.45,
+          "sharpe": -0.12,
+          "sortino": -0.071,
+          "pct_positive_buckets": 0.0,
+          "total_fees": 0.212
+        },
         "mm_stats": null,
         "thresholds_met": false,
-        "threshold_failures": ["sharpe >0 FAILED (-0.120)", "final_pnl >0 FAILED (-22.45)"],
-        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false},
-        "custom_metrics": {"ewma_halflife_seconds": 21.8, "ticks_per_sec": 3.16}
+        "threshold_failures": [
+          "sharpe >0 FAILED (-0.120)",
+          "final_pnl >0 FAILED (-22.45)"
+        ],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": false
+        },
+        "custom_metrics": {
+          "ewma_halflife_seconds": 21.8,
+          "ticks_per_sec": 3.16
+        }
       },
       "analysis": "79% improvement but still losing. Tick-based EWMA std too small (~0.22 bps) so z=2.5 fires at only 0.55 bps above mean. EWMA adapts in 22s, close fires on mean drift not spread reversion.",
       "next_action": "Replace tick-based EWMA with time-weighted EWMA (halflife=300s). Lock entry reference."
@@ -50,21 +107,57 @@
       "timestamp": "2026-05-16T11:05:00Z",
       "type": "local",
       "hypothesis": "Time-weighted EWMA (halflife=300s) gives a meaningful z-score. Locked entry reference prevents false closes.",
-      "changes": ["Replaced tick-based _SpreadEWMA with time-weighted _TimedSpreadEWMA (halflife_seconds=300)", "Added _locked_mean/_locked_std at entry", "max_staleness_ns 30s->60s"],
+      "changes": [
+        "Replaced tick-based _SpreadEWMA with time-weighted _TimedSpreadEWMA (halflife_seconds=300)",
+        "Added _locked_mean/_locked_std at entry",
+        "max_staleness_ns 30s->60s"
+      ],
       "config": "configs/iter_003.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
         "run_id": null,
-        "best_params": {"size": 1000, "halflife_seconds": 300.0, "entry_z": 2.5, "close_z": 0.0, "max_hold_ns": 600000000000, "min_spread_bps": 0.5},
-        "summary": {"fill_count": 6864, "final_pnl": 4.175, "sharpe": 0.0281, "sortino": 0.0127, "pct_positive_buckets": 1.0, "total_fees": 0.0633},
+        "best_params": {
+          "size": 1000,
+          "halflife_seconds": 300.0,
+          "entry_z": 2.5,
+          "close_z": 0.0,
+          "max_hold_ns": 600000000000,
+          "min_spread_bps": 0.5
+        },
+        "summary": {
+          "fill_count": 6864,
+          "final_pnl": 4.175,
+          "sharpe": 0.0281,
+          "sortino": 0.0127,
+          "pct_positive_buckets": 1.0,
+          "total_fees": 0.0633
+        },
         "mm_stats": null,
         "thresholds_met": true,
         "threshold_failures": [],
-        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
-        "custom_metrics": {"round_trips": 1716, "pnl_per_round_trip": 0.00243, "fills_per_day": 2288},
+        "targets_met": {
+          "sharpe": true,
+          "sortino": true,
+          "pct_positive_buckets": true
+        },
+        "custom_metrics": {
+          "round_trips": 1716,
+          "pnl_per_round_trip": 0.00243,
+          "fills_per_day": 2288
+        },
         "sensitivity": {
-          "latency_2x": {"primary_metric": 4.1636, "sharpe": 0.0280, "pct_positive_buckets": 1.0, "thresholds_met": true},
-          "latency_0.5x": {"primary_metric": 4.1746, "sharpe": 0.0281, "pct_positive_buckets": 1.0, "thresholds_met": true}
+          "latency_2x": {
+            "primary_metric": 4.1636,
+            "sharpe": 0.028,
+            "pct_positive_buckets": 1.0,
+            "thresholds_met": true
+          },
+          "latency_0.5x": {
+            "primary_metric": 4.1746,
+            "sharpe": 0.0281,
+            "pct_positive_buckets": 1.0,
+            "thresholds_met": true
+          }
         }
       },
       "analysis": "Breakthrough: PnL +4.175, pct_positive_buckets=1.0. 1716 round trips at +0.00243 each. Latency insensitive.",
@@ -75,18 +168,44 @@
       "timestamp": "2026-05-16T11:35:00Z",
       "type": "sweep",
       "hypothesis": "Lower close_z captures more reversion; shorter halflife and lower entry_z increase trade frequency.",
-      "changes": ["Remote sweep: halflife_seconds=[120,300,600,1800], entry_z=[1.5,2.0,2.5,3.5], close_z=[-0.5,0.0]"],
+      "changes": [
+        "Remote sweep: halflife_seconds=[120,300,600,1800], entry_z=[1.5,2.0,2.5,3.5], close_z=[-0.5,0.0]"
+      ],
       "config": "configs/sweep_004.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
         "run_id": "0000019e31592d34",
-        "best_params": {"size": 1000, "halflife_seconds": 120.0, "entry_z": 1.5, "close_z": -0.5, "max_hold_ns": 600000000000, "min_spread_bps": 0.5},
-        "summary": {"fill_count": 21402, "final_pnl": 18.3771, "sharpe": 0.0830, "sortino": 0.0718, "pct_positive_buckets": 1.0, "total_fees": 0.1974},
+        "best_params": {
+          "size": 1000,
+          "halflife_seconds": 120.0,
+          "entry_z": 1.5,
+          "close_z": -0.5,
+          "max_hold_ns": 600000000000,
+          "min_spread_bps": 0.5
+        },
+        "summary": {
+          "fill_count": 21402,
+          "final_pnl": 18.3771,
+          "sharpe": 0.083,
+          "sortino": 0.0718,
+          "pct_positive_buckets": 1.0,
+          "total_fees": 0.1974
+        },
         "mm_stats": null,
         "thresholds_met": true,
         "threshold_failures": [],
-        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
-        "custom_metrics": {"round_trips": 5350, "pnl_per_round_trip": 0.00344, "fills_per_day": 7138, "gross_pnl_sec1": 126.09, "gross_pnl_sec28": -107.53}
+        "targets_met": {
+          "sharpe": true,
+          "sortino": true,
+          "pct_positive_buckets": true
+        },
+        "custom_metrics": {
+          "round_trips": 5350,
+          "pnl_per_round_trip": 0.00344,
+          "fills_per_day": 7138,
+          "gross_pnl_sec1": 126.09,
+          "gross_pnl_sec28": -107.53
+        }
       },
       "analysis": "340% PnL improvement (4.175->18.38). Monotonic trends: close_z=-0.5 beats 0.0 everywhere; shorter halflife better; lower entry_z better. Optima suggest lying outside tested grid.",
       "next_action": "Extend grid: halflife=[30,60,90,120], entry_z=[0.75,1.0,1.25,1.5], close_z=[-1.0,-0.5]."
@@ -96,7 +215,9 @@
       "timestamp": "2026-05-16T13:20:00Z",
       "type": "sweep",
       "hypothesis": "Continuing trend: even shorter halflife and lower entry_z; close_z=-1.0 may hold trades to deeper reversion for more edge per round trip.",
-      "changes": ["Remote sweep: halflife_seconds=[30,60,90,120], entry_z=[0.75,1.0,1.25,1.5], close_z=[-1.0,-0.5]"],
+      "changes": [
+        "Remote sweep: halflife_seconds=[30,60,90,120], entry_z=[0.75,1.0,1.25,1.5], close_z=[-1.0,-0.5]"
+      ],
       "config": "configs/sweep_005.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
@@ -112,7 +233,7 @@
         "summary": {
           "fill_count": 21430,
           "final_pnl": 25.0077,
-          "sharpe": 0.0980,
+          "sharpe": 0.098,
           "sortino": 0.1035,
           "pct_positive_buckets": 1.0,
           "total_fees": 0.1977
@@ -120,29 +241,34 @@
         "mm_stats": null,
         "thresholds_met": true,
         "threshold_failures": [],
-        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
+        "targets_met": {
+          "sharpe": true,
+          "sortino": true,
+          "pct_positive_buckets": true
+        },
         "custom_metrics": {
           "round_trips": 5357,
           "pnl_per_round_trip": 0.00466,
           "sec1_avg_sell": 80197.75,
           "sec1_avg_buy": 80188.34,
-          "sec28_avg_sell": 80204.80,
+          "sec28_avg_sell": 80204.8,
           "sec28_avg_buy": 80209.51,
           "fills_per_day": 7144,
           "gross_pnl_sec1": 130.63,
           "gross_pnl_sec28": -105.44
         }
       },
-      "analysis": "36% PnL improvement (18.38->25.01). close_z=-1.0 dominates close_z=-0.5 in EVERY parameter combination by ~5 PnL units — holding to deeper reversion consistently captures more spread. PnL/round-trip improved 35% (0.00344->0.00466) with same trade frequency. Halflife trend less clear: optimal at 90s with 60s and 120s close behind; halflife=30s is not better despite earlier trend — suggests diminishing returns below ~60s. entry_z=1.0 is optimal: 0.75 generates too many marginal trades (more fills, lower PnL/RT), 1.25+ too selective. close_z trend still monotonically decreasing — optima may lie further below -1.0. User hint: sweep size to find slippage breakeven.",
+      "analysis": "36% PnL improvement (18.38->25.01). close_z=-1.0 dominates close_z=-0.5 in EVERY parameter combination by ~5 PnL units \u2014 holding to deeper reversion consistently captures more spread. PnL/round-trip improved 35% (0.00344->0.00466) with same trade frequency. Halflife trend less clear: optimal at 90s with 60s and 120s close behind; halflife=30s is not better despite earlier trend \u2014 suggests diminishing returns below ~60s. entry_z=1.0 is optimal: 0.75 generates too many marginal trades (more fills, lower PnL/RT), 1.25+ too selective. close_z trend still monotonically decreasing \u2014 optima may lie further below -1.0. User hint: sweep size to find slippage breakeven.",
       "next_action": "Per user hint: sweep size=[1000,2000,5000,10000,20000,50000] at best params (halflife=90, entry_z=1.0, close_z=-1.0) to find where slippage starts degrading PnL/round-trip."
-    }
-  ],
+    },
     {
       "iteration": 6,
       "timestamp": "2026-05-17T20:22:00Z",
       "type": "sweep",
       "hypothesis": "Per user request: sweep size=[1000,2000,5000,10000,20000,50000] at best params (halflife=90, entry_z=1.0, close_z=-1.0) to find where slippage starts degrading PnL/round-trip.",
-      "changes": ["Remote sweep: size=[1000,2000,5000,10000,20000,50000], all other params fixed at iter 5 best"],
+      "changes": [
+        "Remote sweep: size=[1000,2000,5000,10000,20000,50000], all other params fixed at iter 5 best"
+      ],
       "config": "configs/sweep_006.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
@@ -158,7 +284,7 @@
         "summary": {
           "fill_count": 21430,
           "final_pnl": 25.0077,
-          "sharpe": 0.0980,
+          "sharpe": 0.098,
           "sortino": 0.1035,
           "pct_positive_buckets": 1.0,
           "total_fees": 0.1977
@@ -166,27 +292,75 @@
         "mm_stats": null,
         "thresholds_met": true,
         "threshold_failures": [],
-        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
+        "targets_met": {
+          "sharpe": true,
+          "sortino": true,
+          "pct_positive_buckets": true
+        },
         "custom_metrics": {
           "size_sweep": [
-            {"size": 1000,  "fill_count": 21430, "round_trips": 5357, "final_pnl": 25.0077, "pnl_per_rt": 0.004668, "sharpe": 0.0980},
-            {"size": 2000,  "fill_count": 7820,  "round_trips": 1955, "final_pnl": 16.6256, "pnl_per_rt": 0.008504, "sharpe": 0.0552},
-            {"size": 5000,  "fill_count": 1068,  "round_trips": 267,  "final_pnl": 8.1732,  "pnl_per_rt": 0.030611, "sharpe": 0.0107},
-            {"size": 10000, "fill_count": 72,    "round_trips": 18,   "final_pnl": 4.2162,  "pnl_per_rt": 0.234235, "sharpe": 0.0060},
-            {"size": 20000, "fill_count": 72,    "round_trips": 18,   "final_pnl": 19.1496, "pnl_per_rt": 1.063864, "sharpe": 0.0046},
-            {"size": 50000, "fill_count": 24,    "round_trips": 6,    "final_pnl": -15.3615,"pnl_per_rt": -2.56025, "sharpe": -0.0040}
+            {
+              "size": 1000,
+              "fill_count": 21430,
+              "round_trips": 5357,
+              "final_pnl": 25.0077,
+              "pnl_per_rt": 0.004668,
+              "sharpe": 0.098
+            },
+            {
+              "size": 2000,
+              "fill_count": 7820,
+              "round_trips": 1955,
+              "final_pnl": 16.6256,
+              "pnl_per_rt": 0.008504,
+              "sharpe": 0.0552
+            },
+            {
+              "size": 5000,
+              "fill_count": 1068,
+              "round_trips": 267,
+              "final_pnl": 8.1732,
+              "pnl_per_rt": 0.030611,
+              "sharpe": 0.0107
+            },
+            {
+              "size": 10000,
+              "fill_count": 72,
+              "round_trips": 18,
+              "final_pnl": 4.2162,
+              "pnl_per_rt": 0.234235,
+              "sharpe": 0.006
+            },
+            {
+              "size": 20000,
+              "fill_count": 72,
+              "round_trips": 18,
+              "final_pnl": 19.1496,
+              "pnl_per_rt": 1.063864,
+              "sharpe": 0.0046
+            },
+            {
+              "size": 50000,
+              "fill_count": 24,
+              "round_trips": 6,
+              "final_pnl": -15.3615,
+              "pnl_per_rt": -2.56025,
+              "sharpe": -0.004
+            }
           ]
         }
       },
-      "analysis": "Strategy is capacity-constrained, not slippage-constrained. Fill count collapses with size: 21430 at size=1000 → 72 at size=10000 (99.7% drop). The risk_averse queue model places us last in queue; larger orders rarely fill at the taker prices we target. Per-RT PnL artificially rises with size (only the most extreme spreads trigger fills) but total PnL degrades sharply. size=1000 maximizes total PnL (25.01). size=50000 goes negative (6 fills, adverse selection on the rare fills that do happen). Confirmed: size=1000 is the capacity ceiling for this strategy.",
-      "next_action": "Size confirmed at 1000. Continue optimizing close_z (trend still monotonic: 0.0 > -0.5 > -1.0) — try close_z=[-1.5,-2.0,-2.5] at best params. Also test max_position=[5,10,20] to allow more concurrent positions and increase frequency."
+      "analysis": "Strategy is capacity-constrained, not slippage-constrained. Fill count collapses with size: 21430 at size=1000 \u2192 72 at size=10000 (99.7% drop). The risk_averse queue model places us last in queue; larger orders rarely fill at the taker prices we target. Per-RT PnL artificially rises with size (only the most extreme spreads trigger fills) but total PnL degrades sharply. size=1000 maximizes total PnL (25.01). size=50000 goes negative (6 fills, adverse selection on the rare fills that do happen). Confirmed: size=1000 is the capacity ceiling for this strategy.",
+      "next_action": "Size confirmed at 1000. Continue optimizing close_z (trend still monotonic: 0.0 > -0.5 > -1.0) \u2014 try close_z=[-1.5,-2.0,-2.5] at best params. Also test max_position=[5,10,20] to allow more concurrent positions and increase frequency."
     },
     {
       "iteration": 7,
       "timestamp": "2026-05-17T20:36:00Z",
       "type": "sweep",
       "hypothesis": "Deeper close_z may capture more reversion per trade; higher max_position may allow more concurrent positions for higher frequency.",
-      "changes": ["Remote sweep: close_z=[-1.0,-1.5,-2.0,-2.5], max_position=[5,10,20], all other params fixed at best"],
+      "changes": [
+        "Remote sweep: close_z=[-1.0,-1.5,-2.0,-2.5], max_position=[5,10,20], all other params fixed at best"
+      ],
       "config": "configs/sweep_007.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
@@ -203,7 +377,7 @@
         "summary": {
           "fill_count": 21430,
           "final_pnl": 25.0077,
-          "sharpe": 0.0980,
+          "sharpe": 0.098,
           "sortino": 0.1035,
           "pct_positive_buckets": 1.0,
           "total_fees": 0.1977
@@ -211,7 +385,11 @@
         "mm_stats": null,
         "thresholds_met": true,
         "threshold_failures": [],
-        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
+        "targets_met": {
+          "sharpe": true,
+          "sortino": true,
+          "pct_positive_buckets": true
+        },
         "custom_metrics": {
           "max_hold_binding_pct": 1.1,
           "median_hold_s": 17.9,
@@ -219,14 +397,38 @@
           "p90_hold_s": 103.5,
           "pct_close_under_60s": 81.3,
           "close_z_sweep": [
-            {"close_z": -1.0, "max_pos": 5, "pnl": 25.0077, "fills": 21430, "sharpe": 0.0980},
-            {"close_z": -1.5, "max_pos": 5, "pnl": 20.1483, "fills": 11786, "sharpe": 0.0844},
-            {"close_z": -2.0, "max_pos": 5, "pnl": 11.6502, "fills": 6810,  "sharpe": 0.0508},
-            {"close_z": -2.5, "max_pos": 5, "pnl": 8.2576,  "fills": 4530,  "sharpe": 0.0374}
+            {
+              "close_z": -1.0,
+              "max_pos": 5,
+              "pnl": 25.0077,
+              "fills": 21430,
+              "sharpe": 0.098
+            },
+            {
+              "close_z": -1.5,
+              "max_pos": 5,
+              "pnl": 20.1483,
+              "fills": 11786,
+              "sharpe": 0.0844
+            },
+            {
+              "close_z": -2.0,
+              "max_pos": 5,
+              "pnl": 11.6502,
+              "fills": 6810,
+              "sharpe": 0.0508
+            },
+            {
+              "close_z": -2.5,
+              "max_pos": 5,
+              "pnl": 8.2576,
+              "fills": 4530,
+              "sharpe": 0.0374
+            }
           ]
         }
       },
-      "analysis": "Two decisive findings: (1) max_position is completely irrelevant — identical results at 5/10/20. The strategy only opens one position at a time (both legs must be flat before entry), so position stacking never occurs. (2) close_z=-1.0 is the total-PnL optimum. Deeper thresholds reduce fill count faster than they improve per-trade edge: close_z=-1.5 halves fills but only reduces PnL by 19%. Hold time analysis confirms max_hold_ns is not binding: 97.4% of trades close in <300s, only 1.1% hit the 10-min cap. Spread reverts fast (median 17.9s), consistent with halflife=90s EWMA. No further gains from close_z or max_position dimensions.",
+      "analysis": "Two decisive findings: (1) max_position is completely irrelevant \u2014 identical results at 5/10/20. The strategy only opens one position at a time (both legs must be flat before entry), so position stacking never occurs. (2) close_z=-1.0 is the total-PnL optimum. Deeper thresholds reduce fill count faster than they improve per-trade edge: close_z=-1.5 halves fills but only reduces PnL by 19%. Hold time analysis confirms max_hold_ns is not binding: 97.4% of trades close in <300s, only 1.1% hit the 10-min cap. Spread reverts fast (median 17.9s), consistent with halflife=90s EWMA. No further gains from close_z or max_position dimensions.",
       "next_action": "Parameters now converged on: halflife=90, entry_z=1.0, close_z=-1.0, size=1000. Fine-tune entry side: sweep entry_z=[0.75,0.875,1.0,1.125,1.25] x min_spread_bps=[0.25,0.5,0.75] to see if lower spread filter or slightly different entry threshold can squeeze more trades or better edge."
     },
     {
@@ -234,7 +436,9 @@
       "timestamp": "2026-05-17T21:05:00Z",
       "type": "sweep",
       "hypothesis": "Lower min_spread_bps filter allows more entry signals; finer entry_z grid may reveal better threshold than 1.0.",
-      "changes": ["Remote sweep: entry_z=[0.75,0.875,1.0,1.125,1.25], min_spread_bps=[0.25,0.5,0.75], all other params fixed at best"],
+      "changes": [
+        "Remote sweep: entry_z=[0.75,0.875,1.0,1.125,1.25], min_spread_bps=[0.25,0.5,0.75], all other params fixed at best"
+      ],
       "config": "configs/sweep_008.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
@@ -259,27 +463,58 @@
         "mm_stats": null,
         "thresholds_met": true,
         "threshold_failures": [],
-        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
+        "targets_met": {
+          "sharpe": true,
+          "sortino": true,
+          "pct_positive_buckets": true
+        },
         "custom_metrics": {
           "entry_z_sweep_at_min_spr025": [
-            {"entry_z": 0.75,  "pnl": 25.3046, "fills": 22774, "sharpe": 0.0972},
-            {"entry_z": 0.875, "pnl": 25.7787, "fills": 22426, "sharpe": 0.1004},
-            {"entry_z": 1.0,   "pnl": 25.9291, "fills": 21970, "sharpe": 0.1009},
-            {"entry_z": 1.125, "pnl": 25.2458, "fills": 21230, "sharpe": 0.0990},
-            {"entry_z": 1.25,  "pnl": 24.9963, "fills": 20102, "sharpe": 0.1002}
+            {
+              "entry_z": 0.75,
+              "pnl": 25.3046,
+              "fills": 22774,
+              "sharpe": 0.0972
+            },
+            {
+              "entry_z": 0.875,
+              "pnl": 25.7787,
+              "fills": 22426,
+              "sharpe": 0.1004
+            },
+            {
+              "entry_z": 1.0,
+              "pnl": 25.9291,
+              "fills": 21970,
+              "sharpe": 0.1009
+            },
+            {
+              "entry_z": 1.125,
+              "pnl": 25.2458,
+              "fills": 21230,
+              "sharpe": 0.099
+            },
+            {
+              "entry_z": 1.25,
+              "pnl": 24.9963,
+              "fills": 20102,
+              "sharpe": 0.1002
+            }
           ]
         }
       },
-      "analysis": "Marginal gains only (+3.7% PnL). min_spread_bps=0.25 beats 0.5 and 0.75 consistently — lower filter admits slightly more trades. entry_z=1.0 remains optimal even at finer resolution. Total PnL range across all 15 jobs is only 22.99–25.93 (<13%), confirming parameter convergence. Three consecutive iterations (6,7,8) show <5% PnL improvement — plateau reached on parameter space. Next step requires a structural code change: add an entry momentum/confirmation filter to reduce false entries where spread is still widening at entry.",
+      "analysis": "Marginal gains only (+3.7% PnL). min_spread_bps=0.25 beats 0.5 and 0.75 consistently \u2014 lower filter admits slightly more trades. entry_z=1.0 remains optimal even at finer resolution. Total PnL range across all 15 jobs is only 22.99\u201325.93 (<13%), confirming parameter convergence. Three consecutive iterations (6,7,8) show <5% PnL improvement \u2014 plateau reached on parameter space. Next step requires a structural code change: add an entry momentum/confirmation filter to reduce false entries where spread is still widening at entry.",
       "next_action": "Structural change: add entry confirmation filter. When z-score crosses entry_z, only enter if the z-score has peaked (current z < max z over last N ticks), confirming spread has started reverting. This should reduce adverse entries where spread continues widening post-entry. Try N=[3,5,10] ticks as sweep parameter."
-    }
-  ],
+    },
     {
       "iteration": 9,
       "timestamp": "2026-05-17T21:09:00Z",
       "type": "sweep",
       "hypothesis": "Entry confirmation filter: only enter when z-score has peaked (current abs_z < max abs_z over last N ticks), ensuring spread has started reverting before entry. Should improve PnL/RT by avoiding entries at the top of widening moves.",
-      "changes": ["Added reversion_ticks parameter to strategy.py", "Remote sweep: reversion_ticks=[0,3,5,10], all other params at iter 8 best (min_spread_bps=0.25)"],
+      "changes": [
+        "Added reversion_ticks parameter to strategy.py",
+        "Remote sweep: reversion_ticks=[0,3,5,10], all other params at iter 8 best (min_spread_bps=0.25)"
+      ],
       "config": "configs/sweep_009.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
@@ -305,26 +540,55 @@
         "mm_stats": null,
         "thresholds_met": true,
         "threshold_failures": [],
-        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
+        "targets_met": {
+          "sharpe": true,
+          "sortino": true,
+          "pct_positive_buckets": true
+        },
         "custom_metrics": {
           "reversion_sweep": [
-            {"reversion_ticks": 0,  "pnl": 25.9291, "fills": 21970, "pnl_per_rt": 0.004721, "sharpe": 0.1009},
-            {"reversion_ticks": 3,  "pnl": 27.6411, "fills": 21450, "pnl_per_rt": 0.005155, "sharpe": 0.1091},
-            {"reversion_ticks": 5,  "pnl": 27.4429, "fills": 21522, "pnl_per_rt": 0.005101, "sharpe": 0.1081},
-            {"reversion_ticks": 10, "pnl": 27.4335, "fills": 21526, "pnl_per_rt": 0.005098, "sharpe": 0.1086}
+            {
+              "reversion_ticks": 0,
+              "pnl": 25.9291,
+              "fills": 21970,
+              "pnl_per_rt": 0.004721,
+              "sharpe": 0.1009
+            },
+            {
+              "reversion_ticks": 3,
+              "pnl": 27.6411,
+              "fills": 21450,
+              "pnl_per_rt": 0.005155,
+              "sharpe": 0.1091
+            },
+            {
+              "reversion_ticks": 5,
+              "pnl": 27.4429,
+              "fills": 21522,
+              "pnl_per_rt": 0.005101,
+              "sharpe": 0.1081
+            },
+            {
+              "reversion_ticks": 10,
+              "pnl": 27.4335,
+              "fills": 21526,
+              "pnl_per_rt": 0.005098,
+              "sharpe": 0.1086
+            }
           ]
         }
       },
       "analysis": "Entry reversion filter works: +6.6% PnL (25.93->27.64). Confirming that z-score has peaked before entry improves PnL/RT 9.2% (0.00472->0.00516) with minimal fill count reduction (21970->21450). The filter eliminates entries where the spread is still widening, ensuring we enter closer to the true peak. reversion_ticks=3 is optimal: 5 and 10 are nearly identical (27.44/27.43) suggesting the peak confirmation only needs 3 ticks of evidence. First >5% improvement since iter 5, breaking the plateau.",
       "next_action": "Fine-tune: sweep reversion_ticks=[1,2,3,4,5] x entry_z=[0.875,1.0,1.125] to find if reversion_ticks=1 or 2 might be better, and whether entry_z changes optimally with the filter. 15 jobs."
-    }
-  ],
+    },
     {
       "iteration": 10,
       "timestamp": "2026-05-17T21:30:00Z",
       "type": "sweep",
       "hypothesis": "Fine-tune reversion_ticks=[1-5] x entry_z=[0.875,1.0,1.125] to find the best peak-confirmation window.",
-      "changes": ["Remote sweep: entry_z=[0.875,1.0,1.125], reversion_ticks=[1,2,3,4,5]"],
+      "changes": [
+        "Remote sweep: entry_z=[0.875,1.0,1.125], reversion_ticks=[1,2,3,4,5]"
+      ],
       "config": "configs/sweep_010.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
@@ -341,7 +605,7 @@
         },
         "summary": {
           "fill_count": 21086,
-          "final_pnl": 27.8060,
+          "final_pnl": 27.806,
           "sharpe": 0.1115,
           "sortino": 0.1218,
           "pct_positive_buckets": 1.0,
@@ -350,28 +614,55 @@
         "mm_stats": null,
         "thresholds_met": true,
         "threshold_failures": [],
-        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
+        "targets_met": {
+          "sharpe": true,
+          "sortino": true,
+          "pct_positive_buckets": true
+        },
         "custom_metrics": {
           "rev_ticks_sweep_at_entry_z_10": [
-            {"reversion_ticks": 1, "pnl": 0.0,    "fills": 0,     "note": "deque maxlen=1, always skips (current z == peak)"},
-            {"reversion_ticks": 2, "pnl": 27.806, "fills": 21086},
-            {"reversion_ticks": 3, "pnl": 27.641, "fills": 21450},
-            {"reversion_ticks": 4, "pnl": 27.605, "fills": 21510},
-            {"reversion_ticks": 5, "pnl": 27.443, "fills": 21522}
+            {
+              "reversion_ticks": 1,
+              "pnl": 0.0,
+              "fills": 0,
+              "note": "deque maxlen=1, always skips (current z == peak)"
+            },
+            {
+              "reversion_ticks": 2,
+              "pnl": 27.806,
+              "fills": 21086
+            },
+            {
+              "reversion_ticks": 3,
+              "pnl": 27.641,
+              "fills": 21450
+            },
+            {
+              "reversion_ticks": 4,
+              "pnl": 27.605,
+              "fills": 21510
+            },
+            {
+              "reversion_ticks": 5,
+              "pnl": 27.443,
+              "fills": 21522
+            }
           ],
-          "catastrophic_flag": "entry_z=1.125 + reversion_ticks in [3,4,5] yields PnL=-628 — false peak selection at higher threshold + longer window enters trades where spread continues widening"
+          "catastrophic_flag": "entry_z=1.125 + reversion_ticks in [3,4,5] yields PnL=-628 \u2014 false peak selection at higher threshold + longer window enters trades where spread continues widening"
         }
       },
-      "analysis": "Only +0.6% improvement (27.64->27.81). reversion_ticks=1 gives 0 fills — the deque (maxlen=1) holds the current tick's z, so current always equals peak, filter always skips. reversion_ticks=2 beats 3,4,5: confirming peak over 2 ticks is sufficient. Critical bug discovered: entry_z=1.125 + reversion_ticks≥3 causes -628 PnL — the combination selects entries where a higher-threshold peak (1.125σ) appears to have peaked 3+ ticks ago, but is actually at a transient dip within a still-widening move. entry_z=1.0 + reversion_ticks=2 is the stable optimum. PnL improvement rate has flattened to <1% — parameter space exhausted. Structural changes needed.",
+      "analysis": "Only +0.6% improvement (27.64->27.81). reversion_ticks=1 gives 0 fills \u2014 the deque (maxlen=1) holds the current tick's z, so current always equals peak, filter always skips. reversion_ticks=2 beats 3,4,5: confirming peak over 2 ticks is sufficient. Critical bug discovered: entry_z=1.125 + reversion_ticks\u22653 causes -628 PnL \u2014 the combination selects entries where a higher-threshold peak (1.125\u03c3) appears to have peaked 3+ ticks ago, but is actually at a transient dip within a still-widening move. entry_z=1.0 + reversion_ticks=2 is the stable optimum. PnL improvement rate has flattened to <1% \u2014 parameter space exhausted. Structural changes needed.",
       "next_action": "Add stop_z (stop loss): exit early if the directed locked_z exceeds stop_z (spread widening beyond stop threshold post-entry). Sweep stop_z=[1.5,2.0,3.0] to cut adverse entries that would otherwise hit max_hold. Also test reverting the reversion_ticks=1 bug fix properly by only checking z BEFORE current tick."
-    }
-  ],
+    },
     {
       "iteration": 11,
       "timestamp": "2026-05-18T08:33:00Z",
       "type": "sweep",
       "hypothesis": "stop_z parameter should cut adverse trades early; also tested with z_history timing fix (compute z before EWMA update).",
-      "changes": ["Added stop_z parameter", "INCORRECT: changed z_history update order to pre-EWMA (caused all results to be invalid)"],
+      "changes": [
+        "Added stop_z parameter",
+        "INCORRECT: changed z_history update order to pre-EWMA (caused all results to be invalid)"
+      ],
       "config": "configs/sweep_011.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
@@ -380,7 +671,9 @@
         "summary": null,
         "mm_stats": null,
         "thresholds_met": false,
-        "threshold_failures": ["ALL RESULTS INVALID due to z_history timing bug — comparing pre-update z in history vs post-update z in scan corrupts the reversion filter"],
+        "threshold_failures": [
+          "ALL RESULTS INVALID due to z_history timing bug \u2014 comparing pre-update z in history vs post-update z in scan corrupts the reversion filter"
+        ],
         "targets_met": {}
       },
       "analysis": "Invalid run. The z_history timing change (computing z before EWMA update then comparing to post-update z in _scan_entry) caused apples-vs-oranges comparison, making the reversion filter fire at wrong times. All jobs produced strongly negative PnL. Reverted timing to original (update EWMA first, then compute and append z to history).",
@@ -391,17 +684,34 @@
       "timestamp": "2026-05-18T08:44:00Z",
       "type": "sweep",
       "hypothesis": "stop_z sweep retry with corrected z_history timing. Also first iteration using correct fee model (previous iters 1-11 had fee model bug: fees were ~3500x undercharged).",
-      "changes": ["Reverted z_history timing fix", "Correct fee model now active"],
+      "changes": [
+        "Reverted z_history timing fix",
+        "Correct fee model now active"
+      ],
       "config": "configs/sweep_012.yaml",
       "results": {
         "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
         "run_id": "0000019e3b15d242",
-        "best_params": {"stop_z": 0.0},
-        "summary": {"fill_count": 21086, "final_pnl": -648.45, "sharpe": -0.4260, "total_fees": 676.45},
+        "best_params": {
+          "stop_z": 0.0
+        },
+        "summary": {
+          "fill_count": 21086,
+          "final_pnl": -648.45,
+          "sharpe": -0.426,
+          "total_fees": 676.45
+        },
         "mm_stats": null,
         "thresholds_met": false,
-        "threshold_failures": ["sharpe >0 FAILED (-0.426)", "final_pnl >0 FAILED (-648.45)"],
-        "targets_met": {"sharpe": false, "sortino": false, "pct_positive_buckets": false},
+        "threshold_failures": [
+          "sharpe >0 FAILED (-0.426)",
+          "final_pnl >0 FAILED (-648.45)"
+        ],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": false
+        },
         "custom_metrics": {
           "fee_impact": "CRITICAL: correct fees = $676.45 vs old buggy fees = $0.19 (3500x difference)",
           "gross_pnl": 28.0,
@@ -412,19 +722,153 @@
           "gross_edge_bps": 0.167,
           "taker_roundtrip_cost_bps": 16.0,
           "stop_z_sweep": [
-            {"stop_z": 0.0, "pnl": -648.45, "fills": 21086, "fees": 676.45},
-            {"stop_z": 1.5, "pnl": -5894.83, "fills": 174430, "fees": 5594.79},
-            {"stop_z": 2.0, "pnl": -3134.13, "fills": 92818, "fees": 2977.01},
-            {"stop_z": 3.0, "pnl": -1218.30, "fills": 37142, "fees": 1191.43}
+            {
+              "stop_z": 0.0,
+              "pnl": -648.45,
+              "fills": 21086,
+              "fees": 676.45
+            },
+            {
+              "stop_z": 1.5,
+              "pnl": -5894.83,
+              "fills": 174430,
+              "fees": 5594.79
+            },
+            {
+              "stop_z": 2.0,
+              "pnl": -3134.13,
+              "fills": 92818,
+              "fees": 2977.01
+            },
+            {
+              "stop_z": 3.0,
+              "pnl": -1218.3,
+              "fills": 37142,
+              "fees": 1191.43
+            }
           ]
         }
       },
-      "analysis": "FUNDAMENTAL PROBLEM: strategy is not viable at correct fee levels. Correct taker fee = 4 bps × $80 notional/fill = $0.032/fill. With 21k fills, fees = $676 vs gross PnL = $28 (0.167 bps/RT). The 16 bps round-trip taker cost overwhelms the sub-1-bps spread edge. Stop_z with positive value actually INCREASES losses by generating more fills (stop-outs re-enter immediately). All previous iterations 1-10 were optimized against a zero-fee environment. USDC/USDE spreads are too tight for taker stat-arb at 4 bps. Must switch to maker (limit) orders to reduce fees from 4 bps to 1.2 bps per fill, or find a fundamentally different approach.",
-      "next_action": "Switch to LIMIT (maker) orders for both entry and exit. Maker fees = 0.12 bps → round-trip cost = 4.8 bps vs 16 bps taker. With gross edge of 0.167 bps/RT, even maker fees are ~29x too high. Fundamental edge is too small. Try MUCH higher entry_z (5.0-10.0) to only trade the widest spread events — accept fewer but higher-quality trades. At extreme z-scores the spread reversion could be much larger."
+      "analysis": "FUNDAMENTAL PROBLEM: strategy is not viable at correct fee levels. Correct taker fee = 4 bps \u00d7 $80 notional/fill = $0.032/fill. With 21k fills, fees = $676 vs gross PnL = $28 (0.167 bps/RT). The 16 bps round-trip taker cost overwhelms the sub-1-bps spread edge. Stop_z with positive value actually INCREASES losses by generating more fills (stop-outs re-enter immediately). All previous iterations 1-10 were optimized against a zero-fee environment. USDC/USDE spreads are too tight for taker stat-arb at 4 bps. Must switch to maker (limit) orders to reduce fees from 4 bps to 1.2 bps per fill, or find a fundamentally different approach.",
+      "next_action": "Switch to LIMIT (maker) orders for both entry and exit. Maker fees = 0.12 bps \u2192 round-trip cost = 4.8 bps vs 16 bps taker. With gross edge of 0.167 bps/RT, even maker fees are ~29x too high. Fundamental edge is too small. Try MUCH higher entry_z (5.0-10.0) to only trade the widest spread events \u2014 accept fewer but higher-quality trades. At extreme z-scores the spread reversion could be much larger."
+    },
+    {
+      "iteration": 13,
+      "timestamp": "2026-05-18T09:02:00Z",
+      "type": "sweep",
+      "hypothesis": "With correct fees, the 90s halflife EWMA has zero gross edge at all entry_z levels (PnL/fill = -taker_cost at every threshold). Sweeping entry_z=[3,5,7,10,15] x close_z=[0.0,-0.5] tests if any taker threshold reveals profitable mean-reversion.",
+      "changes": [
+        "Sweep entry_z=[3.0,5.0,7.0,10.0,15.0] x close_z=[0.0,-0.5] at correct fees"
+      ],
+      "config": "configs/sweep_013.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e3b24a1f5",
+        "best_params": {
+          "entry_z": 15.0,
+          "close_z": 0.0
+        },
+        "summary": {
+          "fill_count": 40,
+          "final_pnl": -1.3146,
+          "sharpe": -0.0222,
+          "total_fees": 1.2943
+        },
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": [
+          "sharpe >0 FAILED (all 10 jobs)",
+          "final_pnl >0 FAILED (all 10 jobs)"
+        ],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": false
+        },
+        "custom_metrics": {
+          "entry_z_sweep": [
+            {
+              "entry_z": 3.0,
+              "close_z": 0.0,
+              "pnl": -118.5753,
+              "fills": 3872,
+              "pnl_per_fill": -0.0306
+            },
+            {
+              "entry_z": 3.0,
+              "close_z": -0.5,
+              "pnl": -112.3199,
+              "fills": 3726,
+              "pnl_per_fill": -0.0302
+            },
+            {
+              "entry_z": 5.0,
+              "close_z": 0.0,
+              "pnl": -15.684,
+              "fills": 500,
+              "pnl_per_fill": -0.0314
+            },
+            {
+              "entry_z": 5.0,
+              "close_z": -0.5,
+              "pnl": -14.7232,
+              "fills": 476,
+              "pnl_per_fill": -0.0309
+            },
+            {
+              "entry_z": 7.0,
+              "close_z": 0.0,
+              "pnl": -7.8075,
+              "fills": 236,
+              "pnl_per_fill": -0.0331
+            },
+            {
+              "entry_z": 7.0,
+              "close_z": -0.5,
+              "pnl": -7.0638,
+              "fills": 216,
+              "pnl_per_fill": -0.0327
+            },
+            {
+              "entry_z": 10.0,
+              "close_z": 0.0,
+              "pnl": -5.3071,
+              "fills": 160,
+              "pnl_per_fill": -0.0332
+            },
+            {
+              "entry_z": 10.0,
+              "close_z": -0.5,
+              "pnl": -4.8678,
+              "fills": 148,
+              "pnl_per_fill": -0.0329
+            },
+            {
+              "entry_z": 15.0,
+              "close_z": 0.0,
+              "pnl": -1.3146,
+              "fills": 40,
+              "pnl_per_fill": -0.0329
+            },
+            {
+              "entry_z": 15.0,
+              "close_z": -0.5,
+              "pnl": -1.2876,
+              "fills": 40,
+              "pnl_per_fill": -0.0322
+            }
+          ],
+          "gross_pnl_per_rt_at_entry_z15": 0.001826,
+          "fees_per_rt": 0.12943,
+          "gross_edge_conclusion": "Gross PnL per RT = +$0.0018 (statistically zero) vs fee cost $0.129/RT at entry_z=15. PnL/fill converges to -$0.032 = exact taker cost at ALL entry thresholds. Zero gross edge confirmed."
+        }
+      },
+      "analysis": "DEFINITIVE: zero gross edge at all taker entry thresholds. PnL/fill = -$0.032 (= exact round-trip taker cost) regardless of entry_z. At entry_z=15, gross RT PnL = +$0.0018 vs fee cost $0.129 \u2014 70x smaller. The USDC/USDE BTC perp basis on Hyperliquid contains no detectable mean-reversion signal at the 90s EWMA timescale. All fills are priced exactly at fees \u2014 no gross edge at any z-threshold. Taker stat-arb is structurally impossible. Must either: (1) switch to longer halflife (10min-6hr) to capture the correct timescale of basis mean-reversion, or (2) abandon this pair.",
+      "next_action": "Test longer halflife to find the actual basis reversion timescale. Sweep halflife_seconds=[600,1800,7200,21600] x entry_z=[2.0,5.0,10.0] (12 jobs) \u2014 90s may be measuring tick noise vs the 10min-6hr economic timescale of USDC/USDE basis dynamics."
     }
   ],
   "best_iteration": 10,
-  "best_pnl": 27.8060,
+  "best_pnl": 27.806,
   "best_sharpe": 0.1115,
-  "note": "WARNING: best_pnl/best_sharpe from iters 1-10 are invalid — computed with severely undercharged fees (~3500x). True best PnL at correct fees: negative."
+  "note": "WARNING: best_pnl/best_sharpe from iters 1-10 are invalid \u2014 computed with severely undercharged fees (~3500x). True best PnL at correct fees: negative."
 }
