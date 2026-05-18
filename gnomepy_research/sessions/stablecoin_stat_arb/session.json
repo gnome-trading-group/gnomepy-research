@@ -865,6 +865,186 @@
       },
       "analysis": "DEFINITIVE: zero gross edge at all taker entry thresholds. PnL/fill = -$0.032 (= exact round-trip taker cost) regardless of entry_z. At entry_z=15, gross RT PnL = +$0.0018 vs fee cost $0.129 \u2014 70x smaller. The USDC/USDE BTC perp basis on Hyperliquid contains no detectable mean-reversion signal at the 90s EWMA timescale. All fills are priced exactly at fees \u2014 no gross edge at any z-threshold. Taker stat-arb is structurally impossible. Must either: (1) switch to longer halflife (10min-6hr) to capture the correct timescale of basis mean-reversion, or (2) abandon this pair.",
       "next_action": "Test longer halflife to find the actual basis reversion timescale. Sweep halflife_seconds=[600,1800,7200,21600] x entry_z=[2.0,5.0,10.0] (12 jobs) \u2014 90s may be measuring tick noise vs the 10min-6hr economic timescale of USDC/USDE basis dynamics."
+    },
+    {
+      "iteration": 14,
+      "timestamp": "2026-05-18T09:32:00Z",
+      "type": "sweep",
+      "hypothesis": "90s EWMA halflife is measuring microstructure noise. Longer halflives (10min-6hr) might capture the actual USDC/USDE basis reversion timescale.",
+      "changes": [
+        "Sweep halflife_seconds=[600,1800,7200,21600] x entry_z=[2.0,5.0,10.0]"
+      ],
+      "config": "configs/sweep_014.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e3cc22df5",
+        "best_params": {
+          "halflife_seconds": 21600.0,
+          "entry_z": 2.0
+        },
+        "summary": {
+          "fill_count": 6060,
+          "final_pnl": -190.5869,
+          "sharpe": -0.2345,
+          "total_fees": "estimated ~$194"
+        },
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": [
+          "sharpe >0 FAILED (all 12 jobs)",
+          "final_pnl >0 FAILED (all 12 jobs)"
+        ],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": false
+        },
+        "custom_metrics": {
+          "halflife_sweep": [
+            {
+              "halflife_seconds": 600,
+              "entry_z": 2.0,
+              "pnl": -336.4272,
+              "fills": 10688,
+              "pnl_per_fill": -0.0315
+            },
+            {
+              "halflife_seconds": 600,
+              "entry_z": 5.0,
+              "pnl": -18.5209,
+              "fills": 564,
+              "pnl_per_fill": -0.0328
+            },
+            {
+              "halflife_seconds": 600,
+              "entry_z": 10.0,
+              "pnl": -6.9454,
+              "fills": 208,
+              "pnl_per_fill": -0.0334
+            },
+            {
+              "halflife_seconds": 1800,
+              "entry_z": 2.0,
+              "pnl": -258.1128,
+              "fills": 8204,
+              "pnl_per_fill": -0.0315
+            },
+            {
+              "halflife_seconds": 1800,
+              "entry_z": 5.0,
+              "pnl": -17.5216,
+              "fills": 544,
+              "pnl_per_fill": -0.0322
+            },
+            {
+              "halflife_seconds": 1800,
+              "entry_z": 10.0,
+              "pnl": -7.0269,
+              "fills": 212,
+              "pnl_per_fill": -0.0332
+            },
+            {
+              "halflife_seconds": 7200,
+              "entry_z": 2.0,
+              "pnl": -202.2983,
+              "fills": 6480,
+              "pnl_per_fill": -0.0312
+            },
+            {
+              "halflife_seconds": 7200,
+              "entry_z": 5.0,
+              "pnl": -20.6945,
+              "fills": 640,
+              "pnl_per_fill": -0.0324
+            },
+            {
+              "halflife_seconds": 7200,
+              "entry_z": 10.0,
+              "pnl": -8.3776,
+              "fills": 256,
+              "pnl_per_fill": -0.0327
+            },
+            {
+              "halflife_seconds": 21600,
+              "entry_z": 2.0,
+              "pnl": -190.5869,
+              "fills": 6060,
+              "pnl_per_fill": -0.0315
+            },
+            {
+              "halflife_seconds": 21600,
+              "entry_z": 5.0,
+              "pnl": -32.5649,
+              "fills": 1020,
+              "pnl_per_fill": -0.0319
+            },
+            {
+              "halflife_seconds": 21600,
+              "entry_z": 10.0,
+              "pnl": -11.7182,
+              "fills": 364,
+              "pnl_per_fill": -0.0321
+            }
+          ],
+          "conclusion": "PnL/fill = -taker_cost at ALL halflives. Zero gross edge confirmed across all EWMA timescales from 10min to 6hr."
+        }
+      },
+      "analysis": "Definitive confirmation: zero gross edge at all EWMA timescales. PnL/fill = -$0.032 (= exact taker cost) regardless of halflife from 600s to 21600s. Orderbook imbalance analysis on fills shows conf_imb does predict direction: high-imb quartile improves win rate from 23.66% to 34.69% over 10-tick horizon, and average reversion improves 73% (from -0.166 to -0.289 bps/10 ticks). But even with perfect filtering, gross edge is ~$0.005/RT vs taker fees $0.128/RT \u2014 25x gap. Maker fees ($0.039/RT) still ~8x the gross edge. Taker approach is definitively unviable at correct fees.",
+      "next_action": "Implement maker (limit) orders to reduce fees to $0.039/RT, combined with long-hold deep-reversion (halflife=1hr, entry_z=2.0, close_z=-2.0, max_hold=2hr) to capture larger gross edge per trade (~9 bps = $0.075/RT gross). Must use adequate warmup_ticks proportional to halflife."
+    },
+    {
+      "iteration": 15,
+      "timestamp": "2026-05-18T17:07:00Z",
+      "type": "local",
+      "hypothesis": "Maker orders (limit) + 6hr halflife + 4hr hold + deep close_z=-2.0 should capture 4\u03c3 reversion ($0.075/RT gross) exceeding maker fees ($0.039/RT) = +$0.036/RT net.",
+      "changes": [
+        "Added maker_orders=True, entry_fill_timeout fallback to taker",
+        "_close_maker() for passive exit quotes",
+        "_entering state for limit order re-posting"
+      ],
+      "config": "configs/iter_015.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": null,
+        "best_params": {
+          "halflife_seconds": 21600,
+          "entry_z": 2.0,
+          "close_z": -2.0,
+          "maker_orders": true
+        },
+        "summary": {
+          "fill_count": 21,
+          "final_pnl": -0.3893,
+          "sharpe": -0.0019,
+          "pct_positive_buckets": 0.6,
+          "total_fees": 0.2703
+        },
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": [
+          "sharpe >0 FAILED (-0.0019)",
+          "final_pnl >0 FAILED (-0.39)"
+        ],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": true
+        },
+        "custom_metrics": {
+          "maker_fills": 10,
+          "taker_fills": 11,
+          "maker_fee_per_fill": 0.0097,
+          "taker_fee_per_fill": 0.0322,
+          "total_round_trips": 5,
+          "residual_open_position": {
+            "listing_1": 0.001,
+            "listing_28": -0.001
+          },
+          "bug": "6hr halflife with warmup_ticks=50 means only 16s of data \u2192 near-zero std \u2192 all 21 fills happen in first 4min 43sec. EWMA warmup insufficient for long halflives."
+        }
+      },
+      "analysis": "Failed due to warmup mismatch: 6hr halflife with warmup_ticks=50 (16 seconds) produces near-zero std estimate, making every tick a 10\u03c3 event. All 21 fills occur in the first 4m43s before the EWMA stabilizes. After that, no more entries. Need warmup_ticks proportional to halflife: for 1hr halflife, use ~10000 ticks (54 minutes) to get stable variance estimate. Mix of maker and taker fees confirms entry fallback triggered.",
+      "next_action": "Retry maker orders with halflife=3600s (1hr) and warmup_ticks=10000 (~54 min of data before trading). This gives proper variance estimation. Sweep entry_z=[1.5,2.0,3.0] x close_z=[-1.5,-2.0,-3.0] x max_hold_ns=[3600s,7200s] = 18 jobs."
     }
   ],
   "best_iteration": 10,

@@ -1,0 +1,14 @@
+{
+  "backtest_id": "019e3d6f-692a-73d9-9804-b369e6b8e7ae",
+  "created_at": "2026-05-18T23:35:15.363544+00:00",
+  "start_date": "2026-05-13 00:00:00",
+  "end_date": "2026-05-16 00:00:00",
+  "wall_time_seconds": 143.121,
+  "event_count": 4420937,
+  "config_path": "gnomepy_research/sessions/stablecoin_stat_arb/configs/iter_015.yaml",
+  "gnomepy_version": "2.2.5",
+  "gnomepy_research_version": "0.1.0",
+  "data_scaled": true,
+  "warnings": [],
+  "extra": {}
+}

@@ -62,6 +62,8 @@ class StablecoinStatArb(Strategy):
         min_spread_bps: float = 0.5,
         reversion_ticks: int = 0,
         processing_time_ns: int = 0,
+        maker_orders: bool = False,
+        entry_fill_timeout_ns: int = 60_000_000_000,
     ):
         self.size = size
         self.max_position = max_position
@@ -76,6 +78,8 @@ class StablecoinStatArb(Strategy):
         self.min_spread_bps = min_spread_bps
         self.reversion_ticks = reversion_ticks
         self._processing_time_ns = processing_time_ns
+        self.maker_orders = maker_orders
+        self.entry_fill_timeout_ns = entry_fill_timeout_ns
 
         self._listings: list[Listing] = []
         self._best_bid: dict[Listing, int] = {}
@@ -88,6 +92,7 @@ class StablecoinStatArb(Strategy):
         self._open_direction: int = 0
         self._entry_ts: int = 0
         self._closing: bool = False
+        self._entering: bool = False
         self._last_close_ts: int = 0
         self._imbalance_ticks = 0
 
@@ -220,6 +225,51 @@ class StablecoinStatArb(Strategy):
             (spread - self._locked_mean) / self._locked_std
             if self._locked_std > 0 else 0.0
         )
+
+        # Maker entry phase: keep re-posting limit orders until both legs fill
+        if self._entering:
+            self._log(timestamp, locked_z, spread, pos_long, pos_short, 2)
+            qty_to_sell = max(0, self.size - abs(pos_long)) if pos_long <= 0 else 0
+            qty_to_buy = max(0, self.size - pos_short) if pos_short >= 0 else 0
+
+            if qty_to_sell == 0 and qty_to_buy == 0:
+                self._entering = False
+                return []
+
+            if timestamp - self._entry_ts > self.entry_fill_timeout_ns:
+                # Fall back to taker for any unfilled legs
+                self._entering = False
+                intents = []
+                if qty_to_sell > 0:
+                    intents.append(self._take_qty(*long_lst, Side.ASK, qty_to_sell))
+                if qty_to_buy > 0:
+                    intents.append(self._take_qty(*short_lst, Side.BID, qty_to_buy))
+                return intents
+
+            if long_lst in stale or short_lst in stale:
+                return []
+
+            intents = []
+            if qty_to_sell > 0:
+                intents.append(Intent(
+                    exchange_id=long_lst[0],
+                    security_id=long_lst[1],
+                    bid_price=0,
+                    bid_size=0,
+                    ask_price=self._best_ask[long_lst],
+                    ask_size=qty_to_sell,
+                ))
+            if qty_to_buy > 0:
+                intents.append(Intent(
+                    exchange_id=short_lst[0],
+                    security_id=short_lst[1],
+                    bid_price=self._best_bid[short_lst],
+                    bid_size=qty_to_buy,
+                    ask_price=0,
+                    ask_size=0,
+                ))
+            return intents
+
         self._log(timestamp, locked_z, spread, pos_long, pos_short, 1)
 
         if pos_long == 0 and pos_short == 0:
@@ -236,6 +286,8 @@ class StablecoinStatArb(Strategy):
                 self._open_pair = None
                 self._closing = False
                 return []
+            if self.maker_orders:
+                return self._close_maker(long_lst, short_lst, pos_long, pos_short)
             eff_long = self.oms.get_effective_quantity(*long_lst) or 0
             eff_short = self.oms.get_effective_quantity(*short_lst) or 0
             long_inflight = pos_long != 0 and abs(eff_long) < abs(pos_long) * 0.5
@@ -250,6 +302,8 @@ class StablecoinStatArb(Strategy):
             self._closing = True
             self._last_close_ts = timestamp
             self._imbalance_ticks = 0
+            if self.maker_orders:
+                return self._close_maker(long_lst, short_lst, pos_long, pos_short)
             return self._close(long_lst, short_lst, pos_long, pos_short)
 
         if (pos_long != 0) != (pos_short != 0):
@@ -269,6 +323,8 @@ class StablecoinStatArb(Strategy):
                 if directed_z < self.close_z:
                     self._closing = True
                     self._last_close_ts = timestamp
+                    if self.maker_orders:
+                        return self._close_maker(long_lst, short_lst, pos_long, pos_short)
                     return self._close(long_lst, short_lst, pos_long, pos_short)
                 if self.stop_z > 0 and directed_z > self.stop_z:
                     self._closing = True
@@ -349,6 +405,28 @@ class StablecoinStatArb(Strategy):
             self._imbalance_ticks = 0
             self._closing = False
             self._entry_ts = timestamp
+
+            if self.maker_orders:
+                self._entering = True
+                return [
+                    Intent(
+                        exchange_id=best_long[0],
+                        security_id=best_long[1],
+                        bid_price=0,
+                        bid_size=0,
+                        ask_price=self._best_ask[best_long],
+                        ask_size=self.size,
+                    ),
+                    Intent(
+                        exchange_id=best_short[0],
+                        security_id=best_short[1],
+                        bid_price=self._best_bid[best_short],
+                        bid_size=self.size,
+                        ask_price=0,
+                        ask_size=0,
+                    ),
+                ]
+
             return [
                 self._take(*best_long, Side.ASK),
                 self._take(*best_short, Side.BID),
@@ -386,6 +464,50 @@ class StablecoinStatArb(Strategy):
             intents.append(self._take_qty(*short_lst, Side.BID, abs(pos_short)))
         elif pos_short > 0:
             intents.append(self._take_qty(*short_lst, Side.ASK, abs(pos_short)))
+        return intents
+
+    def _close_maker(
+        self, long_lst: Listing, short_lst: Listing, pos_long: int, pos_short: int
+    ) -> list[Intent]:
+        intents = []
+        if pos_long < 0:
+            # Closing short: post bid to buy back
+            intents.append(Intent(
+                exchange_id=long_lst[0],
+                security_id=long_lst[1],
+                bid_price=self._best_bid[long_lst],
+                bid_size=abs(pos_long),
+                ask_price=0,
+                ask_size=0,
+            ))
+        elif pos_long > 0:
+            # Closing long: post ask to sell
+            intents.append(Intent(
+                exchange_id=long_lst[0],
+                security_id=long_lst[1],
+                bid_price=0,
+                bid_size=0,
+                ask_price=self._best_ask[long_lst],
+                ask_size=pos_long,
+            ))
+        if pos_short < 0:
+            intents.append(Intent(
+                exchange_id=short_lst[0],
+                security_id=short_lst[1],
+                bid_price=self._best_bid[short_lst],
+                bid_size=abs(pos_short),
+                ask_price=0,
+                ask_size=0,
+            ))
+        elif pos_short > 0:
+            intents.append(Intent(
+                exchange_id=short_lst[0],
+                security_id=short_lst[1],
+                bid_price=0,
+                bid_size=0,
+                ask_price=self._best_ask[short_lst],
+                ask_size=pos_short,
+            ))
         return intents
 
     def _unwind(
