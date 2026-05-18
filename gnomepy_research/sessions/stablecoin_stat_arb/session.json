@@ -274,7 +274,52 @@
       "next_action": "Structural change: add entry confirmation filter. When z-score crosses entry_z, only enter if the z-score has peaked (current z < max z over last N ticks), confirming spread has started reverting. This should reduce adverse entries where spread continues widening post-entry. Try N=[3,5,10] ticks as sweep parameter."
     }
   ],
-  "best_iteration": 8,
-  "best_pnl": 25.9291,
-  "best_sharpe": 0.1009
+    {
+      "iteration": 9,
+      "timestamp": "2026-05-17T21:09:00Z",
+      "type": "sweep",
+      "hypothesis": "Entry confirmation filter: only enter when z-score has peaked (current abs_z < max abs_z over last N ticks), ensuring spread has started reverting before entry. Should improve PnL/RT by avoiding entries at the top of widening moves.",
+      "changes": ["Added reversion_ticks parameter to strategy.py", "Remote sweep: reversion_ticks=[0,3,5,10], all other params at iter 8 best (min_spread_bps=0.25)"],
+      "config": "configs/sweep_009.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e389aa53d",
+        "best_params": {
+          "size": 1000,
+          "halflife_seconds": 90.0,
+          "entry_z": 1.0,
+          "close_z": -1.0,
+          "max_position": 5,
+          "max_hold_ns": 600000000000,
+          "min_spread_bps": 0.25,
+          "reversion_ticks": 3
+        },
+        "summary": {
+          "fill_count": 21450,
+          "final_pnl": 27.6411,
+          "sharpe": 0.1091,
+          "sortino": 0.1187,
+          "pct_positive_buckets": 1.0,
+          "total_fees": 0.1978
+        },
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
+        "custom_metrics": {
+          "reversion_sweep": [
+            {"reversion_ticks": 0,  "pnl": 25.9291, "fills": 21970, "pnl_per_rt": 0.004721, "sharpe": 0.1009},
+            {"reversion_ticks": 3,  "pnl": 27.6411, "fills": 21450, "pnl_per_rt": 0.005155, "sharpe": 0.1091},
+            {"reversion_ticks": 5,  "pnl": 27.4429, "fills": 21522, "pnl_per_rt": 0.005101, "sharpe": 0.1081},
+            {"reversion_ticks": 10, "pnl": 27.4335, "fills": 21526, "pnl_per_rt": 0.005098, "sharpe": 0.1086}
+          ]
+        }
+      },
+      "analysis": "Entry reversion filter works: +6.6% PnL (25.93->27.64). Confirming that z-score has peaked before entry improves PnL/RT 9.2% (0.00472->0.00516) with minimal fill count reduction (21970->21450). The filter eliminates entries where the spread is still widening, ensuring we enter closer to the true peak. reversion_ticks=3 is optimal: 5 and 10 are nearly identical (27.44/27.43) suggesting the peak confirmation only needs 3 ticks of evidence. First >5% improvement since iter 5, breaking the plateau.",
+      "next_action": "Fine-tune: sweep reversion_ticks=[1,2,3,4,5] x entry_z=[0.875,1.0,1.125] to find if reversion_ticks=1 or 2 might be better, and whether entry_z changes optimally with the filter. 15 jobs."
+    }
+  ],
+  "best_iteration": 9,
+  "best_pnl": 27.6411,
+  "best_sharpe": 0.1091
 }
