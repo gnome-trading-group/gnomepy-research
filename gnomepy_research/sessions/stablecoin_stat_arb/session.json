@@ -137,6 +137,51 @@
       "next_action": "Per user hint: sweep size=[1000,2000,5000,10000,20000,50000] at best params (halflife=90, entry_z=1.0, close_z=-1.0) to find where slippage starts degrading PnL/round-trip."
     }
   ],
+    {
+      "iteration": 6,
+      "timestamp": "2026-05-17T20:22:00Z",
+      "type": "sweep",
+      "hypothesis": "Per user request: sweep size=[1000,2000,5000,10000,20000,50000] at best params (halflife=90, entry_z=1.0, close_z=-1.0) to find where slippage starts degrading PnL/round-trip.",
+      "changes": ["Remote sweep: size=[1000,2000,5000,10000,20000,50000], all other params fixed at iter 5 best"],
+      "config": "configs/sweep_006.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e31b9389a",
+        "best_params": {
+          "size": 1000,
+          "halflife_seconds": 90.0,
+          "entry_z": 1.0,
+          "close_z": -1.0,
+          "max_hold_ns": 600000000000,
+          "min_spread_bps": 0.5
+        },
+        "summary": {
+          "fill_count": 21430,
+          "final_pnl": 25.0077,
+          "sharpe": 0.0980,
+          "sortino": 0.1035,
+          "pct_positive_buckets": 1.0,
+          "total_fees": 0.1977
+        },
+        "mm_stats": null,
+        "thresholds_met": true,
+        "threshold_failures": [],
+        "targets_met": {"sharpe": true, "sortino": true, "pct_positive_buckets": true},
+        "custom_metrics": {
+          "size_sweep": [
+            {"size": 1000,  "fill_count": 21430, "round_trips": 5357, "final_pnl": 25.0077, "pnl_per_rt": 0.004668, "sharpe": 0.0980},
+            {"size": 2000,  "fill_count": 7820,  "round_trips": 1955, "final_pnl": 16.6256, "pnl_per_rt": 0.008504, "sharpe": 0.0552},
+            {"size": 5000,  "fill_count": 1068,  "round_trips": 267,  "final_pnl": 8.1732,  "pnl_per_rt": 0.030611, "sharpe": 0.0107},
+            {"size": 10000, "fill_count": 72,    "round_trips": 18,   "final_pnl": 4.2162,  "pnl_per_rt": 0.234235, "sharpe": 0.0060},
+            {"size": 20000, "fill_count": 72,    "round_trips": 18,   "final_pnl": 19.1496, "pnl_per_rt": 1.063864, "sharpe": 0.0046},
+            {"size": 50000, "fill_count": 24,    "round_trips": 6,    "final_pnl": -15.3615,"pnl_per_rt": -2.56025, "sharpe": -0.0040}
+          ]
+        }
+      },
+      "analysis": "Strategy is capacity-constrained, not slippage-constrained. Fill count collapses with size: 21430 at size=1000 → 72 at size=10000 (99.7% drop). The risk_averse queue model places us last in queue; larger orders rarely fill at the taker prices we target. Per-RT PnL artificially rises with size (only the most extreme spreads trigger fills) but total PnL degrades sharply. size=1000 maximizes total PnL (25.01). size=50000 goes negative (6 fills, adverse selection on the rare fills that do happen). Confirmed: size=1000 is the capacity ceiling for this strategy.",
+      "next_action": "Size confirmed at 1000. Continue optimizing close_z (trend still monotonic: 0.0 > -0.5 > -1.0) — try close_z=[-1.5,-2.0,-2.5] at best params. Also test max_position=[5,10,20] to allow more concurrent positions and increase frequency."
+    }
+  ],
   "best_iteration": 5,
   "best_pnl": 25.0077,
   "best_sharpe": 0.0980
