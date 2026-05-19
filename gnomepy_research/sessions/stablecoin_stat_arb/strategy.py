@@ -93,6 +93,7 @@ class StablecoinStatArb(Strategy):
         self._entry_ts: int = 0
         self._closing: bool = False
         self._entering: bool = False
+        self._stop_close_issued: bool = False
         self._last_close_ts: int = 0
         self._imbalance_ticks = 0
 
@@ -276,6 +277,7 @@ class StablecoinStatArb(Strategy):
             if self._closing:
                 self._open_pair = None
                 self._closing = False
+                self._stop_close_issued = False
                 return []
             if timestamp - self._entry_ts > 5_000_000_000:
                 self._open_pair = None
@@ -285,8 +287,9 @@ class StablecoinStatArb(Strategy):
             if timestamp - self._last_close_ts >= 30_000_000_000:
                 self._open_pair = None
                 self._closing = False
+                self._stop_close_issued = False
                 return []
-            if self.maker_orders:
+            if self.maker_orders and not self._stop_close_issued:
                 return self._close_maker(long_lst, short_lst, pos_long, pos_short)
             eff_long = self.oms.get_effective_quantity(*long_lst) or 0
             eff_short = self.oms.get_effective_quantity(*short_lst) or 0
@@ -328,6 +331,7 @@ class StablecoinStatArb(Strategy):
                     return self._close(long_lst, short_lst, pos_long, pos_short)
                 if self.stop_z > 0 and directed_z > self.stop_z:
                     self._closing = True
+                    self._stop_close_issued = True
                     self._last_close_ts = timestamp
                     return self._close(long_lst, short_lst, pos_long, pos_short)
 
