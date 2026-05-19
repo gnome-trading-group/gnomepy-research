@@ -1266,10 +1266,68 @@
       },
       "analysis": "Taker-only close worked (no close orphans), but ENTRY orphan bug now exposed. _entering block re-posts ASK/BID Limit on every tick for 60s, accumulating ~250 orders at different price levels. Taker fallback at 60s cancels only the most recent (via same-side taker → cancel), leaving earlier orders live. Those fill later creating unmanaged short/long positions that block the strategy for the rest of the 72-hour window. ALL 52 FILLS ON MAY 13 ONLY. entry_z=2.0 is the only profitable threshold (+$0.50 vs -$0.90 for entry_z=3.0 and -$0.67 for entry_z=4.0) — at higher entry_z, the spread reversion is not fast enough and taker close at max_hold incurs fees that exceed gross edge.",
       "next_action": "Fix entry orphan: remove the re-posting loop from _entering block. Post limit order ONCE at entry (in _scan_entry), then wait — no re-posting. At 60s timeout, taker for unfilled legs cancels the single passive (gnomepy same-side taker = cancel). Sweep entry_z=[1.5,2.0,2.5] x close_z=[-0.5,-1.0] x max_hold=[1hr,2hr] = 12 jobs."
+    },
+    {
+      "iteration": 20,
+      "timestamp": "2026-05-19T18:42:14Z",
+      "type": "sweep",
+      "hypothesis": "Without re-posting in _entering, the single passive limit order per leg should cancel cleanly via same-side taker at timeout, eliminating entry orphans. Sweep entry_z=[1.5,2.0,2.5] x close_z=[-0.5,-1.0] x max_hold=[1hr,2hr] = 12 jobs.",
+      "changes": [
+        "Removed re-posting loop from _entering block — post limit order once at entry, then return [] on all subsequent ticks until fill or timeout"
+      ],
+      "config": "configs/sweep_020.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e418bb17e",
+        "best_params": {
+          "entry_z": 1.5,
+          "close_z": -0.5,
+          "max_hold_ns": 3600000000000
+        },
+        "summary": {
+          "fill_count": 62,
+          "total_fees": null,
+          "final_pnl": -1.5334,
+          "sharpe": -0.00731,
+          "sortino": null,
+          "pct_positive_buckets": 0.6,
+          "final_positions": {"(1, 1)": 0.001, "(1, 28)": -0.001}
+        },
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": [
+          "sharpe >0 FAILED (-0.00731)",
+          "final_pnl >0 FAILED (-1.53)"
+        ],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": false
+        },
+        "custom_metrics": {
+          "all_fills_on_may13_only": true,
+          "entry_z_results": {
+            "1.5": {"pnl": -1.53, "fills": 62},
+            "2.0": {"pnl": -1.41, "fills": 56},
+            "2.5": {"pnl": -0.33, "fills": 12}
+          },
+          "max_hold_distinguishes_results": false,
+          "root_cause": "Without re-posting, both passive limit orders posted once at entry time. One leg fills quickly (~34s maker). Other leg's stale limit order sits until 60s timeout. By T=60s the spread has already reverted past close_z, so close fires immediately after taker entry. Result: enter and exit within 1-2 seconds. Net per RT = gross_edge (near zero at close_z) - fees = negative.",
+          "order_analysis": {
+            "maker_fills": 23,
+            "taker_fills": 33,
+            "cancelled_orders": 11,
+            "cancellation_works": "Same-side taker correctly cancelled the single passive ASK at 00:32:13 (Cancelled status confirmed). No orphans."
+          }
+        }
+      },
+      "analysis": "Removing re-posting eliminated entry orphans (cancellation worked correctly: 11 Cancelled orders confirmed). BUT introduced a timing problem: with no re-posting, when one leg fills (~34s), the other's stale passive sits until 60s timeout. By then the spread has reverted past close_z, causing immediate close right after entry (1-2 second hold time). Net per RT = tiny gross edge - $0.105 fees = strongly negative. The two approaches are in direct tension: re-posting needed for correct entry timing but creates orphan accumulation; no re-posting eliminates orphans but breaks entry economics. max_iterations=20 reached. Best valid PnL at correct fees: +$1.42 (iter 18, but with orphan bug causing only 15 fills in 72h).",
+      "next_action": "SESSION STALLED at max_iterations=20. Recommended path if resuming: implement one-leg-taker entry (one leg taker immediately, other leg maker — immediate taker fallback when first fills). This avoids both accumulation (one passive per session) and timing (second leg enters immediately when first fills, not at 60s stale timeout). Alternatively: use on_execution_report to react to fills in real time and manage passive orders more precisely."
     }
   ],
   "best_iteration": 18,
   "best_pnl": 1.4201711599999922,
   "best_sharpe": 0.00415748434048621,
-  "note": "WARNING: iters 1-10 best_pnl/best_sharpe are invalid — computed with severely undercharged fees (~3500x). True valid results start from iter 12. Best valid PnL: +$1.42 (iter 18)."
+  "note": "WARNING: iters 1-10 best_pnl/best_sharpe are invalid — computed with severely undercharged fees (~3500x). Valid results from iter 12+. Best valid PnL: +$1.42 (iter 18, entry_z=3.0, but trading only first 80min of 72h due to orphan bug). Primary blocker: gnomepy passive order accumulation — re-posting creates multiple exchange-level orders at different prices; taker cancel only removes most recent; older orders fill as orphaned positions blocking future entries.",
+  "status": "stalled"
 }
