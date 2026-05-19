@@ -278,17 +278,21 @@ class StablecoinStatArb(Strategy):
                 self._open_pair = None
                 self._closing = False
                 self._stop_close_issued = False
-                return []
+                return self._cancel_passives(long_lst, short_lst)
             if timestamp - self._entry_ts > 5_000_000_000:
                 self._open_pair = None
+                return self._cancel_passives(long_lst, short_lst)
             return []
 
         if self._closing:
             if timestamp - self._last_close_ts >= 30_000_000_000:
+                # Force-close: cancel passives then taker-close any remaining position
+                intents = list(self._cancel_passives(long_lst, short_lst))
+                intents += self._close(long_lst, short_lst, pos_long, pos_short)
                 self._open_pair = None
                 self._closing = False
                 self._stop_close_issued = False
-                return []
+                return intents
             if self.maker_orders and not self._stop_close_issued:
                 return self._close_maker(long_lst, short_lst, pos_long, pos_short)
             eff_long = self.oms.get_effective_quantity(*long_lst) or 0
@@ -513,6 +517,14 @@ class StablecoinStatArb(Strategy):
                 ask_size=pos_short,
             ))
         return intents
+
+    def _cancel_passives(self, long_lst: Listing, short_lst: Listing) -> list[Intent]:
+        return [
+            Intent(exchange_id=long_lst[0], security_id=long_lst[1],
+                   bid_price=0, bid_size=0, ask_price=0, ask_size=0),
+            Intent(exchange_id=short_lst[0], security_id=short_lst[1],
+                   bid_price=0, bid_size=0, ask_price=0, ask_size=0),
+        ]
 
     def _unwind(
         self, long_lst: Listing, short_lst: Listing, pos_long: int, pos_short: int
