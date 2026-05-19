@@ -1,0 +1,42 @@
+strategy:
+  class_name: "gnomepy_research.sessions.stablecoin_stat_arb.strategy:StablecoinStatArb"
+  args:
+    size: 1000
+    max_position: 5
+    halflife_seconds: 3600.0
+    warmup_ticks: 10000
+    entry_z: [2.0, 3.0, 4.0]
+    close_z: [-0.5, -1.0, -1.5]
+    stop_z: 4.0
+    max_hold_ns: [3600000000000, 7200000000000]
+    max_imbalance_ticks: 20
+    max_staleness_ns: 60000000000
+    min_spread_bps: 0.5
+    reversion_ticks: 0
+    processing_time_ns: 0
+    maker_orders: true
+    entry_fill_timeout_ns: 60000000000
+
+start_date: "2026-05-13T00:00:00"
+end_date: "2026-05-16T00:00:00"
+
+listings:
+  - listing_id: 1
+    profile: default
+  - listing_id: 28
+    profile: default
+
+profiles:
+  default:
+    fee_model:
+      type: static
+      taker_fee: 0.0004
+      maker_fee: 0.00012
+    network_latency:
+      type: static
+      latency_nanos: 5000000
+    order_processing_latency:
+      type: static
+      latency_nanos: 1000000
+    queue_model:
+      type: risk_averse

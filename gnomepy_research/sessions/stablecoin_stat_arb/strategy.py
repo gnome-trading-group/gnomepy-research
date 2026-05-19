@@ -286,15 +286,10 @@ class StablecoinStatArb(Strategy):
 
         if self._closing:
             if timestamp - self._last_close_ts >= 30_000_000_000:
-                # Force-close: cancel passives then taker-close any remaining position
-                intents = list(self._cancel_passives(long_lst, short_lst))
-                intents += self._close(long_lst, short_lst, pos_long, pos_short)
                 self._open_pair = None
                 self._closing = False
                 self._stop_close_issued = False
-                return intents
-            if self.maker_orders and not self._stop_close_issued:
-                return self._close_maker(long_lst, short_lst, pos_long, pos_short)
+                return self._close(long_lst, short_lst, pos_long, pos_short)
             eff_long = self.oms.get_effective_quantity(*long_lst) or 0
             eff_short = self.oms.get_effective_quantity(*short_lst) or 0
             long_inflight = pos_long != 0 and abs(eff_long) < abs(pos_long) * 0.5
@@ -309,8 +304,6 @@ class StablecoinStatArb(Strategy):
             self._closing = True
             self._last_close_ts = timestamp
             self._imbalance_ticks = 0
-            if self.maker_orders:
-                return self._close_maker(long_lst, short_lst, pos_long, pos_short)
             return self._close(long_lst, short_lst, pos_long, pos_short)
 
         if (pos_long != 0) != (pos_short != 0):
@@ -330,8 +323,6 @@ class StablecoinStatArb(Strategy):
                 if directed_z < self.close_z:
                     self._closing = True
                     self._last_close_ts = timestamp
-                    if self.maker_orders:
-                        return self._close_maker(long_lst, short_lst, pos_long, pos_short)
                     return self._close(long_lst, short_lst, pos_long, pos_short)
                 if self.stop_z > 0 and directed_z > self.stop_z:
                     self._closing = True

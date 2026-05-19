@@ -1045,10 +1045,172 @@
       },
       "analysis": "Failed due to warmup mismatch: 6hr halflife with warmup_ticks=50 (16 seconds) produces near-zero std estimate, making every tick a 10\u03c3 event. All 21 fills occur in the first 4m43s before the EWMA stabilizes. After that, no more entries. Need warmup_ticks proportional to halflife: for 1hr halflife, use ~10000 ticks (54 minutes) to get stable variance estimate. Mix of maker and taker fees confirms entry fallback triggered.",
       "next_action": "Retry maker orders with halflife=3600s (1hr) and warmup_ticks=10000 (~54 min of data before trading). This gives proper variance estimation. Sweep entry_z=[1.5,2.0,3.0] x close_z=[-1.5,-2.0,-3.0] x max_hold_ns=[3600s,7200s] = 18 jobs."
+    },
+    {
+      "iteration": 16,
+      "timestamp": "2026-05-18T23:37:48Z",
+      "type": "sweep",
+      "hypothesis": "Maker entry with properly warmed EWMA (warmup_ticks=10000, halflife=3600s) captures passive edge. Sweep entry_z=[1.5,2,3] x close_z=[-1.5,-2,-3] x max_hold=[1hr,2hr] = 18 jobs.",
+      "changes": [
+        "Added maker_orders=True to entry and close paths",
+        "warmup_ticks=10000 (matching halflife=3600s)",
+        "Added _entering state machine for passive entry",
+        "Added _close_maker for passive close"
+      ],
+      "config": "configs/sweep_016.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e3d73ee15",
+        "best_params": {
+          "entry_z": 1.5,
+          "close_z": -3.0,
+          "max_hold_ns": 3600000000000,
+          "halflife_seconds": 3600.0,
+          "warmup_ticks": 10000,
+          "maker_orders": true
+        },
+        "summary": {
+          "fill_count": 11,
+          "total_fees": 0.125867997,
+          "final_pnl": -0.221868,
+          "sharpe": -0.00109,
+          "pct_positive_buckets": 0.6
+        },
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": [
+          "sharpe >0 FAILED (-0.00109)",
+          "final_pnl >0 FAILED (-0.221868)"
+        ],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": false
+        },
+        "custom_metrics": {
+          "spread_std_bps": 2.23,
+          "z_score_std": 1.16,
+          "pct_z_above_1_5": 16.5,
+          "pct_z_above_2_0": 7.9,
+          "gross_edge_at_entry_z1_5_close_z_neg1_5_usd": 0.054,
+          "maker_maker_rt_cost_usd": 0.039,
+          "theoretical_net_per_rt_usd": 0.015,
+          "strategy_ticks_in_holding": 605,
+          "bug": "stop_z=4.0 fires in first tick, emitting taker close (orders 4,5). Same timestamp second on_market_data call sees _closing=True and emits maker close (orders 6,7). Taker fills clear position -> _open_pair=None. Maker orders 6,7 fill later as orphaned positions exceeding max_position=5, blocking all future entries. Strategy executes only 1 RT in 72 hours."
+        }
+      },
+      "analysis": "Critical bug found: concurrent same-timestamp on_market_data calls emit both taker stop (stop_z=4.0 fires within 2min of entry) and maker close orders. Taker fills clear position and reset _open_pair=None. Orphaned maker orders then fill creating ±1000-unit positions that block future entries (max_position=5). Result: only 1 RT executed in entire 72-hour backtest. Spread std=2.23 bps is theoretically sufficient: at entry_z=1.5, close_z=-1.5, gross edge=$0.054 vs maker+maker cost=$0.039 = +$0.015/RT. Signal is real but bug prevents strategy from trading.",
+      "next_action": "Fix stop+maker conflict: add _stop_close_issued flag so that when stop_z fires (taker close), subsequent _closing=True ticks do not also emit maker close orders. Re-sweep entry_z=[1.5,2,3] x close_z=[-0.5,-1.0,-1.5] x max_hold=[1hr,2hr] = 18 jobs."
+    },
+    {
+      "iteration": 17,
+      "timestamp": "2026-05-19T01:23:33Z",
+      "type": "sweep",
+      "hypothesis": "With _stop_close_issued bug fixed, maker entry+close should trade repeatedly. entry_z=3.0 captures large spread deviation with sufficient gross edge ($0.063) to exceed maker+maker cost ($0.039).",
+      "changes": [
+        "Added _stop_close_issued flag to prevent maker close after taker stop fires",
+        "Reset _stop_close_issued when _open_pair is cleared"
+      ],
+      "config": "configs/sweep_017.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e3dd4bff6",
+        "best_params": {
+          "entry_z": 3.0,
+          "close_z": -0.5,
+          "max_hold_ns": 3600000000000,
+          "maker_orders": true
+        },
+        "summary": {
+          "fill_count": 55,
+          "total_fees": 0.365293,
+          "final_pnl": 1.2014,
+          "sharpe": 0.0035,
+          "pct_positive_buckets": 0.8
+        },
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": [
+          "sharpe >0 PASSED (0.0035)",
+          "fill_count >50 PASSED (55)",
+          "final_pnl >0 PASSED (1.2014)"
+        ],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": true
+        },
+        "custom_metrics": {
+          "all_fills_on_may13": true,
+          "final_open_position_listing_28": -0.001,
+          "new_orphan_bug": "30-second force-reset emits [] leaving pending passive close ASK for listing_28 in book. Fills at 01:20:51 creates naked short. Blocks trading for remaining 71 hours.",
+          "per_rt_analysis": {
+            "maker_fills_pct": "53/55 = 96% maker",
+            "avg_fee_per_fill": 0.006641,
+            "estimated_rts": 12,
+            "net_per_rt_usd": 0.10
+          }
+        }
+      },
+      "analysis": "First positive PnL at correct fees: +$1.20 for entry_z=3.0, close_z=-0.5. 96% maker fills confirm passive strategy is working. However, all 55 fills in first 80 minutes of 72-hour backtest — another orphan bug. Root cause: 30-second force-reset returns [] leaving the most recent _close_maker passive order in the book. That order fills later, creating an unmanaged short on listing_28 that blocks future entries. entry_z<3.0 still unprofitable because gross edge at lower thresholds is insufficient vs maker fees.",
+      "next_action": "Fix 30s timeout to emit cancel+taker-close intents for remaining positions. Also sweep entry_z=[2,3,4] to understand optimal threshold. Run sweep_018 with fix applied."
+    },
+    {
+      "iteration": 18,
+      "timestamp": "2026-05-19T01:53:00Z",
+      "type": "sweep",
+      "hypothesis": "Fixing the 30s timeout to emit _cancel_passives + taker close eliminates the orphan from that path. Sweep entry_z=[2,3,4] x close_z=[-0.5,-1.0,-1.5] x max_hold=[1hr,2hr] = 18 jobs to find best threshold with corrected close logic.",
+      "changes": [
+        "Modified 30s timeout to return _cancel_passives + _close() instead of []",
+        "Added _cancel_passives returns to all _open_pair=None reset paths"
+      ],
+      "config": "configs/sweep_018.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": null,
+        "best_params": {
+          "entry_z": 3.0,
+          "close_z": -0.5,
+          "max_hold_ns": 3600000000000,
+          "halflife_seconds": 3600.0,
+          "maker_orders": true
+        },
+        "summary": {
+          "fill_count": 15,
+          "total_fees": 0.13232884,
+          "final_pnl": 1.4201711599999922,
+          "sharpe": 0.00415748434048621,
+          "sortino": 0.004965476664821794,
+          "pct_positive_buckets": 0.8,
+          "final_positions": {"(1, 1)": 0.0, "(1, 28)": -0.001}
+        },
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": [
+          "fill_count >50 FAILED (15)"
+        ],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": true
+        },
+        "custom_metrics": {
+          "all_fills_on_may13_only": true,
+          "final_open_position_listing_28": -0.001,
+          "orphan_bug_confirmed": "listing_28 ASK Limit posted at 00:25:53 survived to fill at 01:05:07 despite _cancel_passives intents. Root cause: bid=0/ask=0 Intent cancels intent-layer state only, not exchange-level order. gnomepy accumulates passive orders at exchange; cancel-replace does not work across different-price ticks.",
+          "sweep_pnl_summary": {
+            "entry_z_2_profitable_jobs": 0,
+            "entry_z_3_profitable_jobs": 4,
+            "entry_z_4_profitable_jobs": 4
+          }
+        }
+      },
+      "analysis": "Fix incomplete. _cancel_passives reduces orphan accumulation from the 30s timeout path but cannot cancel exchange-level passive orders posted in earlier ticks. Best job (entry_z=3.0, close_z=-0.5): 15 fills, PnL=+$1.42, all on May 13. Strategy stops at ~80 min when listing_28 ASK Limit (00:25:53) fills at 01:05:07, creating -0.001 naked short that blocks all future entries. Fewer fills than iter_017 (15 vs 55) because the cancel fix changed order timing without actually preventing the orphan. entry_z=2.0 yields negative PnL (more marginal trades with insufficient gross edge vs maker fees). entry_z=4.0 matches entry_z=3.0 PnL — fewer trades but similar edge per RT.",
+      "next_action": "Remove _close_maker entirely from ALL close trigger paths (max_hold, close_z) and the _closing retry loop. Use pure taker close for all position exit. Maker orders only for entry. No passive close orders ever means no orphaned close orders."
     }
   ],
-  "best_iteration": 10,
-  "best_pnl": 27.806,
-  "best_sharpe": 0.1115,
-  "note": "WARNING: best_pnl/best_sharpe from iters 1-10 are invalid \u2014 computed with severely undercharged fees (~3500x). True best PnL at correct fees: negative."
+  "best_iteration": 18,
+  "best_pnl": 1.4201711599999922,
+  "best_sharpe": 0.00415748434048621,
+  "note": "WARNING: iters 1-10 best_pnl/best_sharpe are invalid — computed with severely undercharged fees (~3500x). True valid results start from iter 12. Best valid PnL: +$1.42 (iter 18)."
 }
