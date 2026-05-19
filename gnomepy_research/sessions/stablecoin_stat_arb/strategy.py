@@ -247,29 +247,7 @@ class StablecoinStatArb(Strategy):
                     intents.append(self._take_qty(*short_lst, Side.BID, qty_to_buy))
                 return intents
 
-            if long_lst in stale or short_lst in stale:
-                return []
-
-            intents = []
-            if qty_to_sell > 0:
-                intents.append(Intent(
-                    exchange_id=long_lst[0],
-                    security_id=long_lst[1],
-                    bid_price=0,
-                    bid_size=0,
-                    ask_price=self._best_ask[long_lst],
-                    ask_size=qty_to_sell,
-                ))
-            if qty_to_buy > 0:
-                intents.append(Intent(
-                    exchange_id=short_lst[0],
-                    security_id=short_lst[1],
-                    bid_price=self._best_bid[short_lst],
-                    bid_size=qty_to_buy,
-                    ask_price=0,
-                    ask_size=0,
-                ))
-            return intents
+            return []
 
         self._log(timestamp, locked_z, spread, pos_long, pos_short, 1)
 

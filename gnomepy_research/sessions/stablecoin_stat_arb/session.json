@@ -1207,6 +1207,65 @@
       },
       "analysis": "Fix incomplete. _cancel_passives reduces orphan accumulation from the 30s timeout path but cannot cancel exchange-level passive orders posted in earlier ticks. Best job (entry_z=3.0, close_z=-0.5): 15 fills, PnL=+$1.42, all on May 13. Strategy stops at ~80 min when listing_28 ASK Limit (00:25:53) fills at 01:05:07, creating -0.001 naked short that blocks all future entries. Fewer fills than iter_017 (15 vs 55) because the cancel fix changed order timing without actually preventing the orphan. entry_z=2.0 yields negative PnL (more marginal trades with insufficient gross edge vs maker fees). entry_z=4.0 matches entry_z=3.0 PnL — fewer trades but similar edge per RT.",
       "next_action": "Remove _close_maker entirely from ALL close trigger paths (max_hold, close_z) and the _closing retry loop. Use pure taker close for all position exit. Maker orders only for entry. No passive close orders ever means no orphaned close orders."
+    },
+    {
+      "iteration": 19,
+      "timestamp": "2026-05-19T13:32:48Z",
+      "type": "sweep",
+      "hypothesis": "Removing maker close from all close trigger paths (taker-only close everywhere) eliminates orphaned passive close orders. Strategy should now trade across full 72 hours. Sweep entry_z=[2,3,4] x close_z=[-0.5,-1.0,-1.5] x max_hold=[1hr,2hr] = 18 jobs.",
+      "changes": [
+        "Removed _close_maker calls from max_hold trigger (now uses _close/taker)",
+        "Removed _close_maker calls from close_z trigger (now uses _close/taker)",
+        "_closing retry loop was already taker-only from iter 018 fix",
+        "Maker used only for ENTRY, never for close"
+      ],
+      "config": "configs/sweep_019.yaml",
+      "results": {
+        "date_range": "2026-05-13T00:00:00 to 2026-05-16T00:00:00",
+        "run_id": "0000019e40706666",
+        "best_params": {
+          "entry_z": 2.0,
+          "close_z": -0.5,
+          "max_hold_ns": 3600000000000,
+          "halflife_seconds": 3600.0,
+          "maker_orders": true
+        },
+        "summary": {
+          "fill_count": 52,
+          "total_fees": 0.8776853689999999,
+          "final_pnl": 0.49555463100003294,
+          "sharpe": 0.001405522729275359,
+          "sortino": 0.0015911165077466486,
+          "pct_positive_buckets": 0.6,
+          "final_positions": {"(1, 1)": -0.001, "(1, 28)": 0.0}
+        },
+        "mm_stats": null,
+        "thresholds_met": false,
+        "threshold_failures": [
+          "fill_count >50 PASSED (52)",
+          "sharpe >0 PASSED (0.00141)",
+          "final_pnl >0 PASSED (0.496)"
+        ],
+        "targets_met": {
+          "sharpe": false,
+          "sortino": false,
+          "pct_positive_buckets": true
+        },
+        "custom_metrics": {
+          "all_fills_on_may13_only": true,
+          "final_open_position_listing_1": -0.001,
+          "entry_z_positive_jobs": {"2.0": true, "3.0": false, "4.0": false},
+          "max_hold_distinguishes_results": false,
+          "new_entry_orphan_bug": "_entering block re-posts ASK/BID limit on EVERY market data tick (~250 re-posts over 60s). At timeout, taker cancels only the most recent passive; ~249 others remain in book at different prices. E.g. listing_1 ASK Limit from 00:31:13 fills orphaned at 00:37:27-28 after position was already closed by taker, creating -0.001 naked short that blocks further entries.",
+          "order_analysis": {
+            "maker_fills": 29,
+            "taker_fills": 23,
+            "one_cancelled_limit_order": "listing_1 ASK at 00:27:51 was correctly cancelled by taker at 00:28:51 (single passive in book at that point)"
+          }
+        }
+      },
+      "analysis": "Taker-only close worked (no close orphans), but ENTRY orphan bug now exposed. _entering block re-posts ASK/BID Limit on every tick for 60s, accumulating ~250 orders at different price levels. Taker fallback at 60s cancels only the most recent (via same-side taker → cancel), leaving earlier orders live. Those fill later creating unmanaged short/long positions that block the strategy for the rest of the 72-hour window. ALL 52 FILLS ON MAY 13 ONLY. entry_z=2.0 is the only profitable threshold (+$0.50 vs -$0.90 for entry_z=3.0 and -$0.67 for entry_z=4.0) — at higher entry_z, the spread reversion is not fast enough and taker close at max_hold incurs fees that exceed gross edge.",
+      "next_action": "Fix entry orphan: remove the re-posting loop from _entering block. Post limit order ONCE at entry (in _scan_entry), then wait — no re-posting. At 60s timeout, taker for unfilled legs cancels the single passive (gnomepy same-side taker = cancel). Sweep entry_z=[1.5,2.0,2.5] x close_z=[-0.5,-1.0] x max_hold=[1hr,2hr] = 12 jobs."
     }
   ],
   "best_iteration": 18,
