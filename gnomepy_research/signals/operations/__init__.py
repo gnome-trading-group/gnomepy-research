@@ -4,6 +4,8 @@ from gnomepy_research.signals.operations.base import (
     FairValueOperationAdapter,
     VolatilityOperationAdapter,
     FlowOperationAdapter,
+    BookOperationAdapter,
+    MarketStateOperationAdapter,
 )
 from gnomepy_research.signals.operations.composite import (
     CompositeSignal,
@@ -30,9 +32,23 @@ from gnomepy_research.signals.operations.weight import (
     WeightedFairValue,
     WeightedVolatility,
     WeightedFlow,
+    WeightedBook,
+    WeightedMarketState,
     Weight,
 )
 from gnomepy_research.signals.operations.per_asset import PerAsset
+from gnomepy_research.signals.operations.lag import LagOperation, Lag
+from gnomepy_research.signals.operations.diff import DiffOperation, Diff
+from gnomepy_research.signals.operations.zscore import ZscoreOperation, Zscore
+from gnomepy_research.signals.operations.rolling_sum import RollingSumOperation, RollingSum
+from gnomepy_research.signals.operations.rolling_extrema import (
+    RollingMaxOperation,
+    RollingMinOperation,
+    RollingMax,
+    RollingMin,
+)
+from gnomepy_research.signals.operations.rank import RankOperation, Rank
+from gnomepy_research.signals.operations.clip import ClipOperation, Clip
 
 __all__ = [
     "Operation",
@@ -40,6 +56,8 @@ __all__ = [
     "FairValueOperationAdapter",
     "VolatilityOperationAdapter",
     "FlowOperationAdapter",
+    "BookOperationAdapter",
+    "MarketStateOperationAdapter",
     "CompositeSignal",
     "ScalarOpSignal",
     "NegateOperation",
@@ -63,6 +81,24 @@ __all__ = [
     "WeightedFairValue",
     "WeightedVolatility",
     "WeightedFlow",
+    "WeightedBook",
+    "WeightedMarketState",
     "Weight",
     "PerAsset",
+    "LagOperation",
+    "Lag",
+    "DiffOperation",
+    "Diff",
+    "ZscoreOperation",
+    "Zscore",
+    "RollingSumOperation",
+    "RollingSum",
+    "RollingMaxOperation",
+    "RollingMinOperation",
+    "RollingMax",
+    "RollingMin",
+    "RankOperation",
+    "Rank",
+    "ClipOperation",
+    "Clip",
 ]

@@ -1,0 +1,14 @@
+{
+  "backtest_id": "019e2ce2-f0c8-7183-9e09-f1ad772ca830",
+  "created_at": "2026-05-15T18:27:21.491290+00:00",
+  "start_date": "2026-05-13 00:00:00",
+  "end_date": "2026-05-14 23:59:59",
+  "wall_time_seconds": 110.558,
+  "event_count": 2987739,
+  "config_path": "gnomepy_research/sessions/hyperliquid_btc_mm/configs/iter_005.yaml",
+  "gnomepy_version": "2.2.1",
+  "gnomepy_research_version": "0.1.0",
+  "data_scaled": true,
+  "warnings": [],
+  "extra": {}
+}

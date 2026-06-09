@@ -5,8 +5,10 @@ from typing import Generic, TypeVar
 
 from gnomepy.java.schemas import Mbp10Schema
 from gnomepy_research.signals.base import Signal
+from gnomepy_research.signals.book.base import BookSignal
 from gnomepy_research.signals.fair_value.base import FairValueSignal
 from gnomepy_research.signals.flow.base import FlowSignal
+from gnomepy_research.signals.market_state.base import MarketStateSignal
 from gnomepy_research.signals.volatility.base import VolatilitySignal
 
 T = TypeVar("T", int, float)
@@ -75,6 +77,16 @@ class FlowOperationAdapter(_OperationAdapter[float], FlowSignal):
         return self.op.value()
 
 
+class BookOperationAdapter(_OperationAdapter[float], BookSignal):
+    def value(self) -> float:
+        return self.op.value()
+
+
+class MarketStateOperationAdapter(_OperationAdapter[float], MarketStateSignal):
+    def value(self) -> float:
+        return self.op.value()
+
+
 def apply(op: Operation, signal: Signal) -> Signal:
     """Wrap a signal with an operation, preserving the signal's type."""
     if isinstance(signal, FairValueSignal):
@@ -83,7 +95,11 @@ def apply(op: Operation, signal: Signal) -> Signal:
         return FlowOperationAdapter(signal, op)
     if isinstance(signal, VolatilitySignal):
         return VolatilityOperationAdapter(signal, op)
+    if isinstance(signal, BookSignal):
+        return BookOperationAdapter(signal, op)
+    if isinstance(signal, MarketStateSignal):
+        return MarketStateOperationAdapter(signal, op)
     raise TypeError(
         f"Cannot apply operation to {type(signal).__name__}. "
-        f"Expected FairValueSignal, VolatilitySignal, or FlowSignal."
+        f"Expected FairValueSignal, VolatilitySignal, FlowSignal, BookSignal, or MarketStateSignal."
     )

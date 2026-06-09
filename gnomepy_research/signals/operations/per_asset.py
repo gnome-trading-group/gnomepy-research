@@ -4,8 +4,10 @@ from typing import Generic, TypeVar
 
 from gnomepy.java.schemas import Mbp10Schema
 from gnomepy_research.signals.base import Signal
+from gnomepy_research.signals.book.base import BookSignal
 from gnomepy_research.signals.fair_value.base import FairValueSignal
 from gnomepy_research.signals.flow.base import FlowSignal
+from gnomepy_research.signals.market_state.base import MarketStateSignal
 from gnomepy_research.signals.volatility.base import VolatilitySignal
 
 T = TypeVar("T", int, float)
@@ -56,6 +58,16 @@ class _PerAssetFlow(_PerAsset[float], FlowSignal):
         return self.signal.value()
 
 
+class _PerAssetBook(_PerAsset[float], BookSignal):
+    def value(self) -> float:
+        return self.signal.value()
+
+
+class _PerAssetMarketState(_PerAsset[float], MarketStateSignal):
+    def value(self) -> float:
+        return self.signal.value()
+
+
 def PerAsset(signal: Signal, security_id: int, exchange_id: int | None = None) -> Signal:
     """Wrap a signal so it only processes ticks matching security_id /
     exchange_id. Preserves the wrapped signal's type.
@@ -66,7 +78,11 @@ def PerAsset(signal: Signal, security_id: int, exchange_id: int | None = None) -
         return _PerAssetVolatility(signal, security_id, exchange_id)
     if isinstance(signal, FlowSignal):
         return _PerAssetFlow(signal, security_id, exchange_id)
+    if isinstance(signal, BookSignal):
+        return _PerAssetBook(signal, security_id, exchange_id)
+    if isinstance(signal, MarketStateSignal):
+        return _PerAssetMarketState(signal, security_id, exchange_id)
     raise TypeError(
         f"Cannot wrap {type(signal).__name__}. "
-        "Expected FairValueSignal, VolatilitySignal, or FlowSignal."
+        "Expected FairValueSignal, VolatilitySignal, FlowSignal, BookSignal, or MarketStateSignal."
     )

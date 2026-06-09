@@ -4,8 +4,10 @@ from typing import Generic, TypeVar
 
 from gnomepy.java.schemas import Mbp10Schema
 from gnomepy_research.signals.base import Signal
+from gnomepy_research.signals.book.base import BookSignal
 from gnomepy_research.signals.fair_value.base import FairValueSignal
 from gnomepy_research.signals.flow.base import FlowSignal
+from gnomepy_research.signals.market_state.base import MarketStateSignal
 from gnomepy_research.signals.volatility.base import VolatilitySignal
 
 T = TypeVar("T", int, float)
@@ -51,6 +53,16 @@ class WeightedFlow(_WeightedSignal[float], FlowSignal):
         return sum(w * s.value() for w, s in zip(self.weights, self.signals))
 
 
+class WeightedBook(_WeightedSignal[float], BookSignal):
+    def value(self) -> float:
+        return sum(w * s.value() for w, s in zip(self.weights, self.signals))
+
+
+class WeightedMarketState(_WeightedSignal[float], MarketStateSignal):
+    def value(self) -> float:
+        return sum(w * s.value() for w, s in zip(self.weights, self.signals))
+
+
 def Weight(signals: list, weights: list[float]):
     """Weighted combination of signals. All signals must be the same type.
 
@@ -62,7 +74,11 @@ def Weight(signals: list, weights: list[float]):
         return WeightedVolatility(signals, weights)
     if all(isinstance(s, FlowSignal) for s in signals):
         return WeightedFlow(signals, weights)
+    if all(isinstance(s, BookSignal) for s in signals):
+        return WeightedBook(signals, weights)
+    if all(isinstance(s, MarketStateSignal) for s in signals):
+        return WeightedMarketState(signals, weights)
     raise TypeError(
         "All signals must be the same type "
-        "(FairValueSignal, VolatilitySignal, or FlowSignal)"
+        "(FairValueSignal, VolatilitySignal, FlowSignal, BookSignal, or MarketStateSignal)"
     )

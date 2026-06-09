@@ -4,10 +4,14 @@ from gnomepy_research.signals.fair_value.microprice import (
     MicropriceFairValue,
     WeightedMicropriceFairValue,
 )
+from gnomepy_research.signals.fair_value.imbalance_adjusted import ImbalanceAdjustedMid
+from gnomepy_research.signals.fair_value.trade_adjusted import TradeAdjustedFairValue
 
 __all__ = [
     "FairValueSignal",
     "MidFairValue",
     "MicropriceFairValue",
     "WeightedMicropriceFairValue",
+    "ImbalanceAdjustedMid",
+    "TradeAdjustedFairValue",
 ]
