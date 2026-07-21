@@ -13,25 +13,56 @@ Read the session spec:
 gnomepy_research/sessions/$ARGUMENTS/spec.yaml
 ```
 
-Read the session log (may not exist yet if this is iteration 1):
-```
-gnomepy_research/sessions/$ARGUMENTS/session.json
-```
-
-If `session.json` doesn't exist, this is iteration 1. Initialize it:
-```json
-{
-  "session_name": "$ARGUMENTS",
-  "status": "running",
-  "created_at": "<now ISO8601>",
-  "iterations": [],
-  "best_iteration": null,
-  "best_pnl": null,
-  "best_sharpe": null
-}
+Fetch session state from the API (creates the session if it doesn't exist yet):
+```bash
+poetry run research sessions get $ARGUMENTS 2>/dev/null \
+  || poetry run research sessions create $ARGUMENTS \
+       --spec gnomepy_research/sessions/$ARGUMENTS/spec.yaml
 ```
 
-Determine the next iteration number: `len(iterations) + 1`.
+Then fetch the full session JSON to read iteration history:
+```bash
+poetry run research sessions get $ARGUMENTS
+```
+
+Parse the JSON output. The next iteration number is `iterationCount + 1`. The last 2-3 iteration records (if any) are in `iterations` sorted by iteration number — use them to understand recent history and inform the hypothesis.
+
+**Migration:** If `session.json` exists locally but the API session was just created (iterationCount=0 and session.json has iterations), migrate the local data:
+```bash
+poetry run python3 - <<'EOF'
+import json
+from gnomepy_research.api import record_iteration
+
+with open('gnomepy_research/sessions/$ARGUMENTS/session.json') as f:
+    data = json.load(f)
+
+for it in data.get('iterations', []):
+    record_iteration(
+        session_name='$ARGUMENTS',
+        iteration=it['iteration'],
+        type=it.get('type', 'local'),
+        title=it.get('hypothesis', '')[:200],
+        description='\n'.join(filter(None, [
+            f"## Hypothesis\n{it.get('hypothesis', '')}",
+            f"## Analysis\n{it.get('analysis', '')}",
+            f"## Next\n{it.get('next_action', '')}",
+        ])),
+        metrics=it.get('results', {}).get('summary', {}),
+        metadata={
+            'config_name': it.get('config'),
+            'run_id': it.get('results', {}).get('run_id'),
+            'best_params': it.get('results', {}).get('best_params', {}),
+            'thresholds_met': it.get('results', {}).get('thresholds_met'),
+            'threshold_failures': it.get('results', {}).get('threshold_failures', []),
+            'changes': it.get('changes', []),
+        },
+        environment={},
+        timestamp=it.get('timestamp'),
+    )
+print(f"Migrated {len(data.get('iterations', []))} iterations")
+EOF
+```
+After migration, the session.json is no longer used — do not write to it in future steps.
 
 **Branch management:**
 - If iteration 1: create and check out a session branch:
@@ -250,9 +281,9 @@ Investigate fill timing, fill quality, PnL attribution, order lifecycle, and mar
 - For market makers: time quoting, adverse selection rate, fill-to-cancel ratio
 - For momentum: signal strength at entry, holding period, win/loss by market regime
 
-Record these under a `"custom_metrics"` key in the iteration's `results` block in `session.json`. This builds a richer history than summary stats alone and lets you track strategy-specific health across iterations.
+Record these as additional keys in the `metrics` dict when calling `research iterations record` in Step 6. This builds a richer history than summary stats alone and lets you track strategy-specific health across iterations.
 
-Use parquet findings and custom metrics to write a specific `analysis` in session.json and to directly motivate the `next_action`. Vague analysis ("strategy underperformed") is not acceptable — point to specific fills, timestamps, or order patterns.
+Use parquet findings and custom metrics to write a specific `analysis` (included in the `--description` field) and to directly motivate the next action. Vague analysis ("strategy underperformed") is not acceptable — point to specific fills, timestamps, or order patterns.
 
 **Threshold check** (from `spec.goals.thresholds`):
 - Parse each threshold expression (e.g., `">0"`, `"<0.5"`)
@@ -266,6 +297,15 @@ Use parquet findings and custom metrics to write a specific `analysis` in sessio
 
 **Plateau check:**
 - If the `primary_metric` has not improved by >5% relative for 3 consecutive iterations, note a plateau
+
+**Significance check** (when all thresholds are met):
+```bash
+poetry run research validate significance $ARGUMENTS \
+  --fills gnomepy_research/sessions/$ARGUMENTS/results/iter_NNN/fills.parquet \
+  --market gnomepy_research/sessions/$ARGUMENTS/results/iter_NNN/market.parquet \
+  --n-trials N
+```
+Note the printed `sharpe_ci_95`, `deflated_sharpe`, and `dsr_significant` values — pass them via `--extra-metrics` in Step 6. If DSR < 0.95 or the CI includes zero, flag this in the analysis — the result may not be statistically significant. **Do not block iteration progress** — significance is informational.
 
 **Validation** (when all thresholds are met on the primary date range):
 - If the spec has additional `date_ranges`, run or submit the strategy on those ranges
@@ -296,44 +336,43 @@ Omit keys for tests that were skipped. These results are informational — they 
 
 ## Step 6: Record
 
-Append to `session.json`. After writing session.json, ALWAYS commit the iteration — regardless of whether it was a local run or a sweep:
+Record the iteration. Metrics and environment are read automatically from the results directory — only provide the human-authored fields and any extras from Step 5:
+
+```bash
+poetry run research iterations record-from-results $ARGUMENTS \
+  --iteration N \
+  --type local \
+  --title "<one-line hypothesis summary>" \
+  --description "## Hypothesis
+<stated hypothesis>
+
+## Changes
+- <what changed from last iteration>
+
+## Analysis
+<what happened and why — specific fills, signals, market behavior>
+
+## Next
+<exactly what to change next and why>" \
+  --results-dir gnomepy_research/sessions/$ARGUMENTS/results/iter_NNN \
+  --extra-metrics '{"sharpe_ci_95": [<lo>, <hi>], "deflated_sharpe": <dsr>}' \
+  --extra-metadata '{"config_name": "gnomepy_research/sessions/$ARGUMENTS/configs/iter_NNN.yaml", "run_id": null, "best_params": {}, "thresholds_met": true, "threshold_failures": [], "changes": ["<change 1>"]}'
+```
+
+Omit `--extra-metrics` if the significance check was skipped (thresholds not met). The Lambda handles updating `iteration_count`, `best_pnl`, `best_sharpe`, and `updated_at` automatically.
+
+ALWAYS commit the iteration after recording — regardless of whether it was a local run or a sweep:
 
 ```bash
 git add \
   gnomepy_research/sessions/$ARGUMENTS/strategy.py \
   gnomepy_research/sessions/$ARGUMENTS/__init__.py \
   gnomepy_research/sessions/$ARGUMENTS/spec.yaml \
-  gnomepy_research/sessions/$ARGUMENTS/configs/ \
-  gnomepy_research/sessions/$ARGUMENTS/session.json
+  gnomepy_research/sessions/$ARGUMENTS/configs/
 git commit -m "research/$ARGUMENTS: iter NNN"
 ```
 
-Do NOT stage `results/` — parquet and HTML artifacts are gitignored, but this also keeps the lightweight JSON files out of history. The config YAML + strategy.py is sufficient to reproduce any iteration.
-
-Update `best_iteration`, `best_pnl`, `best_sharpe` if this was the best run. Write `analysis` explaining what happened. Write `next_action` describing what to change next.
-
-```json
-{
-  "iteration": <N>,
-  "timestamp": "<ISO8601>",
-  "type": "local" | "sweep",
-  "hypothesis": "<stated hypothesis>",
-  "changes": ["<what changed from last iteration>"],
-  "config": "<configs/iter_NNN.yaml or configs/sweep_NNN.yaml>",
-  "results": {
-    "date_range": "<start> to <end>",
-    "run_id": "<AWS Batch run_id if sweep, else null>",
-    "best_params": { "<param>": "<value>" },
-    "summary": { "<full summary() dict>" },
-    "mm_stats": { "<mm_stats() dict or null>" },
-    "thresholds_met": true,
-    "threshold_failures": ["<metric> <op> <value> FAILED (<actual>)"],
-    "targets_met": { "<metric>": true }
-  },
-  "analysis": "<What happened and why — be specific about signals, parameters, market behavior>",
-  "next_action": "<Exactly what to change next and why>"
-}
-```
+Do NOT stage `results/` or `session.json` — session state is now in the API.
 
 ---
 
@@ -346,7 +385,13 @@ Update `best_iteration`, `best_pnl`, `best_sharpe` if this was the best run. Wri
 - `max_iterations` reached
 - Primary metric plateaued (no >5% improvement for 3+ consecutive iterations) with no clear path forward
 
-**Otherwise:** Output a brief summary to the user: what happened this iteration, whether it's better or worse, and what you'll try next. The session continues.
+When stopping, update the session status:
+```bash
+poetry run research sessions update $ARGUMENTS --status completed
+# or: --status stalled
+```
+
+**Otherwise:** Output a brief summary to the user: what happened this iteration, whether it's better or worse, and what you'll try next. The session continues (status remains `"running"`).
 
 ---
 
@@ -357,7 +402,6 @@ Update `best_iteration`, `best_pnl`, `best_sharpe` if this was the best run. Wri
 - **Prices are scaled integers** — divide by 1e9 for display, never pass floats to Intent
 - **`__init__.py` must exist** in `gnomepy_research/sessions/$ARGUMENTS/` for the strategy to be importable
 - If the backtest crashes with a JVM or JPype error, check the strategy for float prices or bad signal initialization
-- Keep `session.json` under 50KB. If it grows large, summarize old iteration `analysis` fields to one sentence each
 - Reference existing strategies and signals by their actual file paths when asked by the user
 - **Always use `poetry run python3`** for any Python commands — never bare `python` or `python3`
 - **Engine bugs**: the backtesting engine is new and may have bugs. If you encounter behavior that looks like an engine bug (not a strategy error), report it clearly and stop the iteration — do not work around it

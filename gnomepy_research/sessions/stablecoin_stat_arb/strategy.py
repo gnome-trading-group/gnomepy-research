@@ -134,7 +134,7 @@ class StablecoinStatArb(Strategy):
         return self._processing_time_ns
 
     def _net_qty(self, listing: Listing) -> int:
-        pos = self.oms.get_position(*listing)
+        pos = self.positions.get_position(*listing)
         return pos.net_quantity if pos is not None else 0
 
     def on_market_data(self, data: Schema) -> list[Intent]:
@@ -295,8 +295,8 @@ class StablecoinStatArb(Strategy):
                 self._closing = False
                 self._stop_close_issued = False
                 return self._close(long_lst, short_lst, pos_long, pos_short)
-            eff_long = self.oms.get_effective_quantity(*long_lst) or 0
-            eff_short = self.oms.get_effective_quantity(*short_lst) or 0
+            eff_long = self.positions.get_effective_quantity(*long_lst) or 0
+            eff_short = self.positions.get_effective_quantity(*short_lst) or 0
             long_inflight = pos_long != 0 and abs(eff_long) < abs(pos_long) * 0.5
             short_inflight = pos_short != 0 and abs(eff_short) < abs(pos_short) * 0.5
             if not long_inflight and not short_inflight:
@@ -370,8 +370,8 @@ class StablecoinStatArb(Strategy):
                     if abs_z >= peak_z:
                         continue
 
-                eff_a = self.oms.get_effective_quantity(*lst_a) or 0
-                eff_b = self.oms.get_effective_quantity(*lst_b) or 0
+                eff_a = self.positions.get_effective_quantity(*lst_a) or 0
+                eff_b = self.positions.get_effective_quantity(*lst_b) or 0
                 net_a = self._net_qty(lst_a)
                 net_b = self._net_qty(lst_b)
                 if (

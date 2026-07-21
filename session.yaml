@@ -1,0 +1,16 @@
+mode: paper
+listings: [1, 28, 36]
+strategy_id: 1
+strategy:
+  class_name: "gnomepy_research.sessions.n_exchange_arb.strategy:NExchangeArb"
+  args:
+    size: 100000
+    max_position: 5
+    entry_z: 0.8
+    close_z: 0.1
+simulation:
+  taker_fee: 0.0004
+  maker_fee: 0.00012
+  network_latency_nanos: 20000000
+  order_latency_nanos: 5000000
+  queue_model: risk_averse

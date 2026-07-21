@@ -114,7 +114,7 @@ class NExchangeArb(Strategy):
         return self._processing_time_ns
 
     def _net_qty(self, listing: Listing) -> int:
-        pos = self.oms.get_position(*listing)
+        pos = self.positions.get_position(*listing)
         return pos.net_quantity if pos is not None else 0
 
     def on_market_data(self, data: Schema) -> list[Intent]:
@@ -214,8 +214,8 @@ class NExchangeArb(Strategy):
                 self._closing = False
                 return []
             # Only retry if no inflight close orders (avoids ring buffer overflow)
-            eff_long = self.oms.get_effective_quantity(*long_lst) or 0
-            eff_short = self.oms.get_effective_quantity(*short_lst) or 0
+            eff_long = self.positions.get_effective_quantity(*long_lst) or 0
+            eff_short = self.positions.get_effective_quantity(*short_lst) or 0
             long_inflight = pos_long != 0 and abs(eff_long) < abs(pos_long) * 0.5
             short_inflight = pos_short != 0 and abs(eff_short) < abs(pos_short) * 0.5
             if not long_inflight and not short_inflight:
@@ -278,8 +278,8 @@ class NExchangeArb(Strategy):
                 # Zombie close: large net, near-zero effective (pending sell absorbs net).
                 # Zombie open: zero net (unfilled), large effective (pending buy).
                 # max() catches either: at least one of net/effective is large for any zombie.
-                eff_a = self.oms.get_effective_quantity(*lst_a) or 0
-                eff_b = self.oms.get_effective_quantity(*lst_b) or 0
+                eff_a = self.positions.get_effective_quantity(*lst_a) or 0
+                eff_b = self.positions.get_effective_quantity(*lst_b) or 0
                 net_a = self._net_qty(lst_a)
                 net_b = self._net_qty(lst_b)
                 if (

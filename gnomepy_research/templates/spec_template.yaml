@@ -107,7 +107,27 @@ meta:
     latency: true      # re-run at 2x and 0.5x latency; flag if thresholds fail
     queue_model: true  # re-run with risk_averse queue; flag if thresholds fail
 
+  # Monte Carlo robustness — sweep latency and queue params to get a
+  # distribution of outcomes rather than a single point estimate.
+  # Triggered once after the strategy first meets all thresholds.
+  # monte_carlo: true
+
   # Controls whether the loop pauses for user input at the hypothesis stage.
   # autonomous — runs hands-off; picks up hints.md if present, then proceeds
   # interactive — pauses each iteration with AskUserQuestion to check in
   interaction_mode: autonomous
+
+# Statistical validation — enforces out-of-sample discipline.
+# Walk-forward and holdout are only tested after all targets are met;
+# Claude is forbidden from running backtests on the holdout range during iterations.
+#
+# validation:
+#   walk_forward:
+#     total_range:
+#       start: "2026-01-15T00:00:00"
+#       end: "2026-02-15T00:00:00"
+#     n_folds: 5
+#     step_mode: expanding   # "expanding" or "rolling"
+#   holdout:
+#     start: "2026-03-01T00:00:00"
+#     end: "2026-03-15T00:00:00"

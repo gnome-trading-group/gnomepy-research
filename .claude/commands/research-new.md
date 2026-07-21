@@ -265,5 +265,19 @@ Do NOT create strategy.py, session.json, or run any backtests.
 
 ---
 
-### 12. Confirm
-Tell the user the session is ready at `gnomepy_research/sessions/<name>/` and that they can run `/research <name>` to start iterating. Mention that the first iteration will automatically create a git branch `research/<name>`. Remind them they can edit `spec.yaml` directly if anything needs adjustment.
+### 12. Register the session in the API
+
+After writing spec.yaml, register the session so it's immediately visible in the web UI:
+
+```bash
+poetry run research sessions create <name> \
+  --spec gnomepy_research/sessions/<name>/spec.yaml \
+  --branch research/<name>
+```
+
+If the session already exists, the command will print a message and exit cleanly.
+
+---
+
+### 13. Confirm
+Tell the user the session is ready at `gnomepy_research/sessions/<name>/` and is now visible in the web UI under Research. They can run `/research <name>` to start iterating. Mention that the first iteration will automatically create a git branch `research/<name>`. Remind them they can edit `spec.yaml` directly if anything needs adjustment.

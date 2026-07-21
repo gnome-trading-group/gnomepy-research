@@ -18,11 +18,13 @@ Each session runs on its own git branch `research/<name>`, created automatically
 gnomepy_research/sessions/<name>/
   __init__.py       # empty — makes the session importable as a Python module
   spec.yaml         # user-authored goals and constraints — DO NOT MODIFY
-  session.json      # iteration history, Claude-managed
   strategy.py       # single strategy file, modified in place each iteration
   configs/          # per-iteration backtest YAML configs and sweep configs
   results/          # backtest outputs (per-iteration subdirectories)
+  notes/            # local note files synced from API (for Obsidian)
 ```
+
+Session state (iterations, notes, status) is stored in the API — viewable at the Research page in the web UI. `session.json` is no longer used.
 
 ### Iteration modes
 - **Local run**: for logic changes — writes a config YAML, runs via `poetry run gnomepy backtest run --config <path>`

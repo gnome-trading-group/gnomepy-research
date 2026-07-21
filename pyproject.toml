@@ -1,26 +1,24 @@
-[project]
+[tool.poetry]
 name = "gnomepy-research"
 version = "0.1.0"
 description = "Signal research, replay, metrics, and strategy modules for gnomepy"
-authors = [
-    {name = "mprey", email = "masonprey7@gmail.com"}
-]
+authors = ["mprey <masonprey7@gmail.com>"]
 readme = "README.md"
-requires-python = ">=3.13,<3.14"
-dependencies = [
-    "pandas-stubs (>=2.3.3,<2.4.0)",
-    "plotly (~=6.6.0)",
-    "gnomepy @ file:///Users/mprey/Programming/gnome-trading-group/gnomepy",
-]
 
-
-[build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+[tool.poetry.dependencies]
+python = ">=3.13,<3.14"
+pandas-stubs = ">=2.3.3,<2.4.0"
+plotly = "~6.6.0"
+click = ">=8.0,<9.0"
+gnomepy = {path = "/Users/mprey/Programming/gnome-trading-group/gnomepy", extras = ["backtest"], develop = true}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"
 notebook = "^7.5.5"
 
+[tool.poetry.scripts]
+research = "gnomepy_research.cli:main"
 
-[tool.poetry.dependencies]
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

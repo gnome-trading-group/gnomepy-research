@@ -1,5 +1,13 @@
 from gnomepy_research.reporting.backtest.adverse_selection import adverse_selection_section
 from gnomepy_research.reporting.backtest.market_making import market_making_section
+from gnomepy_research.reporting.backtest.rolling_performance import (
+    compute_alpha_decay,
+    compute_rolling_sharpe,
+    detect_regimes,
+    plot_rolling_performance,
+    pnl_by_regime,
+    rolling_performance_section,
+)
 from gnomepy.reporting.metrics import Curves, build_curves, compute_sharpe
 from gnomepy.reporting.plots import (
     DEFAULT_SECTIONS,
@@ -28,4 +36,10 @@ __all__ = [
     "resolve_sections",
     "adverse_selection_section",
     "market_making_section",
+    "rolling_performance_section",
+    "compute_rolling_sharpe",
+    "compute_alpha_decay",
+    "detect_regimes",
+    "pnl_by_regime",
+    "plot_rolling_performance",
 ]
