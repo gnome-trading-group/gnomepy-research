@@ -1,0 +1,58 @@
+name: implication_boundary_arb
+description: >
+  Implication boundary arbitrage on prediction market contracts. When A IMPLIES B,
+  price(A) <= price(B) must hold. When violated, buying B_YES + A_NO constructs a
+  portfolio that always pays at least $1.00 (if A resolves YES then B must too, so
+  B_YES pays $1; if A resolves NO, A_NO pays $1). Profit is locked at entry when
+  ask(B_YES) + ask(A_NO) + fees < $1.00.
+
+data:
+  listings:
+    - listing_id: 501
+      profile: polymarket
+    - listing_id: 502
+      profile: polymarket
+    - listing_id: 503
+      profile: polymarket
+  date_ranges:
+    - start: "2026-08-01T00:00:00"
+      end: "2026-08-02T00:00:00"
+
+profiles:
+  polymarket:
+    fee_model:
+      type: polymarket
+      fee_rate: 0.07
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">0"
+  targets:
+    sharpe: ">1.0"
+
+constraints:
+  strategy_type: arb
+  max_iterations: 20
+  avoid:
+    - maker orders — taker only for speed
+    - entering while any position is open
+
+meta:
+  execution_mode: auto
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous

@@ -1,0 +1,57 @@
+strategy:
+  class_name: "gnomepy_research.strategies.equivalent_event_arb:EquivalentEventArb"
+  args:
+    event_ids: [[25644, 25549]]
+    max_position: 1000
+    taker_fee_rate: 0.07
+    min_pure_arb_bps: 5.0
+    max_staleness_ns: 5000000000
+    processing_time_ns: 5000000
+    allow_scaling: true
+
+record_depth: 10
+
+start_date: "2026-08-19T14:29:00"
+end_date: "2026-08-19T14:49:00"
+
+listings:
+  - listing_id: 130435
+    profile: polymarket
+  - listing_id: 130436
+    profile: polymarket
+  - listing_id: 129651
+    profile: kalshi
+  - listing_id: 129652
+    profile: kalshi
+
+profiles:
+  polymarket:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 0
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+  kalshi:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0175
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 0
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse

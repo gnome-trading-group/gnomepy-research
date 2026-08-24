@@ -1,0 +1,30 @@
+name: informed_pmm
+description: >
+  Multi-venue informed market making on binary prediction market contracts.
+  Uses a reference venue (Polymarket, deeper liquidity) as a Kalman-smoothed
+  microprice signal and quotes HJB-optimal spreads on a quoting venue (Kalshi).
+  Reduces adverse selection by anchoring to the cross-venue fair value rather
+  than the quoting venue's local book mid.
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">0"
+  targets:
+    sharpe: ">1.0"
+
+constraints:
+  strategy_type: market_maker
+  max_iterations: 20
+  avoid:
+    - quoting when reference data is stale
+    - letting quotes cross after fee adjustment
+
+meta:
+  execution_mode: auto
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous

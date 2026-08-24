@@ -1,0 +1,38 @@
+strategy:
+  class_name: "gnomepy_research.sessions.implication_boundary_arb.strategy:ImplicationBoundaryArb"
+  args:
+    event_ids: [101, 102]
+    size: 1000000
+    fee_rate: 0.07
+    min_edge_bps: 10.0
+    min_implies_confidence: 0.95
+    stale_threshold_ns: 2000000000
+    imbalance_timeout_ns: 30000000000
+    cooldown_ns: 500000000
+    max_open_pairs: 1
+
+start_date: "2026-08-01T00:00:00"
+end_date: "2026-08-02T00:00:00"
+
+listings:
+  # Seed listing — used for profile/region detection only.
+  # All listings for the configured events are fetched from the registry at init.
+  - listing_id: 501
+    profile: polymarket
+
+profiles:
+  polymarket:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse

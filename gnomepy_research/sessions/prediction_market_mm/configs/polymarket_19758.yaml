@@ -1,0 +1,35 @@
+strategy:
+  class_name: "gnomepy_research.strategies.prediction_market_maker:PredictionMarketMaker"
+  args:
+    listing_id: 19758
+    value_function_path: "gnomepy_research/solvers/value_function_Q10.npz"
+    size: 1000000
+    max_position: 10
+    warmup_ticks: 50
+    processing_time_ns: 5000000
+
+record_depth: 10
+
+start_date: "2026-08-17T20:11:00"
+end_date: "2026-08-19T12:55:00"
+
+listings:
+  - listing_id: 19758
+    profile: polymarket
+
+profiles:
+  polymarket:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse

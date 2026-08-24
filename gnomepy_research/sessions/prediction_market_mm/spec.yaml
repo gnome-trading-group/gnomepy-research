@@ -1,0 +1,70 @@
+name: prediction_market_mm
+description: >
+  Prediction market maker based on Feil & Nendel (2026) "Optimal Market Making
+  in Prediction Markets". Solves the HJB PDE for the reduced value function
+  V(t,p,q) and quotes optimally given current price p, time-to-resolution t,
+  and inventory q. Compared to the existing Avellaneda-Stoikov MarketMaker,
+  this model accounts for binary settlement risk, bounded price space, and
+  time-to-resolution effects.
+
+  Primary goal: demonstrate that the Feil-Nendel model improves risk-adjusted
+  returns on Polymarket binary contracts, specifically lower terminal inventory
+  and lower VaR vs the A-S baseline with comparable expected PnL.
+
+  Prerequisite: run the HJB solver first to produce the value function table.
+    poetry run python -m gnomepy_research.solvers.prediction_market_hjb
+
+data:
+  listings:
+    - listing_id: 501   # replace with actual Polymarket binary contract listing_id
+      profile: polymarket
+  date_ranges:
+    - start: "2026-08-01T00:00:00"
+      end: "2026-08-07T00:00:00"
+
+profiles:
+  polymarket:
+    fee_model:
+      type: polymarket
+      fee_rate: 0.07
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+
+goals:
+  primary_metric: sharpe
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+  targets:
+    sharpe: ">0.5"
+    terminal_inventory_abs: "<5"
+    var_5pct: "<10"
+
+constraints:
+  strategy_type: market_maker
+  max_iterations: 20
+  avoid:
+    - adding external fair value signals (price IS the probability)
+    - hard position cutoffs that override the HJB solution
+    - re-solving the HJB on each tick (precompute offline)
+
+  parameter_sweep:
+    - gamma: [0.001, 0.004, 0.01]
+    - gamma_T: [0.001, 0.005]
+    - max_position: [5, 10, 20]
+
+meta:
+  execution_mode: auto
+  sensitivity_tests:
+    queue_model: true
+    latency: true
+  interaction_mode: autonomous
+  baseline_comparison: gnomepy_research.strategies.market_maker:MarketMaker

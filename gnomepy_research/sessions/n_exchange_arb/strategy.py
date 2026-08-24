@@ -320,11 +320,14 @@ class NExchangeArb(Strategy):
         return []
 
     def _take(self, exchange_id: int, security_id: int, side: Side) -> Intent:
+        listing: Listing = (exchange_id, security_id)
+        price = self._best_ask[listing] if side == Side.ASK else self._best_bid[listing]
+        size = self.positions.compliant_size(exchange_id, security_id, self.size, price)
         return Intent(
             exchange_id=exchange_id,
             security_id=security_id,
             take_side=side,
-            take_size=self.size,
+            take_size=size,
             take_order_type=OrderType.MARKET,
         )
 

@@ -1,0 +1,31 @@
+name: equivalent_event_arb
+description: >
+  Arbitrage equivalent prediction market contracts across exchanges (Polymarket, Kalshi)
+  and within the same exchange. A complete set of N mutually exclusive outcomes always
+  pays $1 at resolution. Buying each outcome from its cheapest venue constructs a
+  guaranteed-profit set when total cost + fees < $1 (pure arb). When no pure arb exists,
+  trade cross-venue price discrepancies that tend to mean-revert (stat arb via EWMA z-score).
+  Auto-discovers contract groups from event_ids via EQUIVALENT relationships in the registry.
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">0"
+  targets:
+    sharpe: ">1.0"
+
+constraints:
+  strategy_type: arb
+  max_iterations: 20
+  avoid:
+    - entering while position limit is reached on any leg
+    - holding positions past max_hold_ns without closing
+
+meta:
+  execution_mode: auto
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous

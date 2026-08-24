@@ -1,13 +1,11 @@
 mode: paper
-listings: [1, 28, 36]
+listings: [1]
 strategy_id: 1
 strategy:
-  class_name: "gnomepy_research.sessions.n_exchange_arb.strategy:NExchangeArb"
+  class_name: "gnomepy_research.sessions.simple_test.strategy:SimpleTest"
   args:
-    size: 100000
-    max_position: 5
-    entry_z: 0.8
-    close_z: 0.1
+    size: 1000000
+    hold_ticks: 20
 simulation:
   taker_fee: 0.0004
   maker_fee: 0.00012

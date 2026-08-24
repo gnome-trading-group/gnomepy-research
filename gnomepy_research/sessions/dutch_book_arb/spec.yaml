@@ -1,0 +1,60 @@
+name: dutch_book_arb
+description: >
+  Dutch Book arbitrage on Polymarket neg-risk multi-outcome events. Buys all N
+  mutually exclusive outcomes when the sum of best ask prices is less than $1.00
+  minus Polymarket taker fees. A complete set of YES tokens is always worth
+  exactly $1.00 (redeemable via NegRiskAdapter merge, or at resolution when one
+  outcome pays $1 and the rest pay $0). The strategy is pure arbitrage: if all
+  legs fill, profit is locked regardless of which outcome resolves.
+
+data:
+  listings:
+    - listing_id: 501
+      profile: polymarket
+    - listing_id: 502
+      profile: polymarket
+    - listing_id: 503
+      profile: polymarket
+  date_ranges:
+    - start: "2026-08-01T00:00:00"
+      end: "2026-08-02T00:00:00"
+
+profiles:
+  polymarket:
+    fee_model:
+      type: polymarket
+      fee_rate: 0.07
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">0"
+  targets:
+    sharpe: ">1.0"
+    sortino: ">1.5"
+
+constraints:
+  strategy_type: arb
+  max_iterations: 20
+  avoid:
+    - maker orders — taker only for speed
+    - entering while any position is open
+
+meta:
+  execution_mode: auto
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous

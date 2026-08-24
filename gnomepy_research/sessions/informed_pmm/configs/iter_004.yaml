@@ -1,0 +1,57 @@
+strategy:
+  class_name: "gnomepy_research.strategies.informed_prediction_market_maker:InformedPredictionMarketMaker"
+  args:
+    ref_listing_id: 117905
+    quote_listing_id: 115763
+    value_function_path: "gnomepy_research/solvers/value_function_Q10.npz"
+    size: 1000000
+    max_position: 50
+    warmup_ticks: 50
+    max_ref_staleness_ns: 5000000000
+    kalman_Q: 0.0001
+    kalman_R: 0.01
+    maker_fee_rate: 0.0
+    processing_time_ns: 5000000
+
+record_depth: 1
+
+start_date: "2026-08-19T21:24:00"
+end_date: "2026-08-19T22:10:00"
+
+listings:
+  - listing_id: 117905
+    profile: kalshi
+  - listing_id: 115763
+    profile: polymarket
+
+profiles:
+  polymarket:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+  kalshi:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0175
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse

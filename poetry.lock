@@ -1300,7 +1300,7 @@ files = [
 
 [[package]]
 name = "gnomepy"
-version = "2.5.0"
+version = "2.7.0"
 description = ""
 optional = false
 python-versions = ">=3.13,<3.14"
@@ -1328,7 +1328,7 @@ zstandard = ">=0.23.0,<0.24.0"
 
 [package.extras]
 backtest = ["anthropic (>=0.40.0,<1.0.0)", "boto3-stubs (>=1.42.73,<1.43.0)", "dash (>=2.18.0,<3.0.0)", "dash-bootstrap-components (>=1.6.0,<2.0.0)", "jpype1 (>=1.5.0,<2.0.0)", "numpy (>=2.2.4,<3.0.0)", "pandas (>=2.2.3,<3.0.0)", "pandas-stubs (>=2.3.3,<2.4.0)", "plotly (>=6.6.0,<6.7.0)", "pyarrow (>=23.0.1,<24.0.0)"]
-tardis = ["tardis-dev (>=1.0.0,<2.0.0)"]
+tardis = ["tardis-dev (>=4.0.0,<5.0.0)"]
 
 [package.source]
 type = "directory"
