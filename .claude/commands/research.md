@@ -78,8 +78,14 @@ After migration, the session.json is no longer used — do not write to it in fu
 
 ## Step 2: Hypothesize
 
+**Read cross-session learnings:**
+Read `gnomepy_research/research_learnings.md` if it exists. Scan for entries that match this session's `strategy_type` and listing IDs. Before forming your hypothesis, note:
+- Approaches that worked in similar sessions (start here rather than re-discovering)
+- Approaches that definitively failed (skip these to avoid re-running dead ends)
+- Market-specific insights for the same listing IDs (e.g., latency constraints, fee structures that make certain approaches unviable)
+
 **Check for user hints:**
-Read `gnomepy_research/sessions/$ARGUMENTS/hints.md` if it exists. If it has content (one or more timestamped hints written by `/research-hint`), treat them as user directives that take priority over the session history's `next_action`. After reading, clear the file by writing an empty string to it.
+Read `gnomepy_research/sessions/$ARGUMENTS/hints.md` if it exists. If it has content (one or more timestamped hints written by `/research-hint`), treat them as user directives that take priority over the session history's `next_action`. **Do NOT clear this file yet** — it will be cleared in Step 7 after the iteration is successfully recorded.
 
 **Interaction mode** (from `spec.meta.interaction_mode`, defaults to `autonomous`):
 
@@ -283,7 +289,40 @@ Investigate fill timing, fill quality, PnL attribution, order lifecycle, and mar
 
 Record these as additional keys in the `metrics` dict when calling `research iterations record` in Step 6. This builds a richer history than summary stats alone and lets you track strategy-specific health across iterations.
 
-Use parquet findings and custom metrics to write a specific `analysis` (included in the `--description` field) and to directly motivate the next action. Vague analysis ("strategy underperformed") is not acceptable — point to specific fills, timestamps, or order patterns.
+**Mandatory diagnostic checks** — MUST run every iteration. Results inform the next hypothesis directly. Compute from fills/orders/intents/market parquet files.
+
+*Arb strategies (`strategy_type: arb`):*
+
+| Check | How to Compute | Symptom → Action |
+|-------|---------------|-----------------|
+| Fill rate | fills / intents total | <20% → loosen entry threshold |
+| Leg imbalance | entries where only 1 leg filled / total entries | >30% → add imbalance timeout, try passive orders |
+| Adverse selection | mean price move 1s post-fill (from market.parquet mid) | Consistently negative → entry is stale or too slow |
+| Hold time | mean time from entry fill to full unwind | >60s for pure arb → closing logic too conservative |
+| Fee drag | total_fees / abs(gross_pnl) | >50% → edge doesn't cover costs; widen threshold or switch venue |
+| PnL concentration | % of PnL from top 3 trades | >80% → outlier-dependent, not a consistent edge |
+
+*Market-maker strategies (`strategy_type: mm`):*
+
+| Check | How to Compute | Symptom → Action |
+|-------|---------------|-----------------|
+| Quote presence | time quoting both sides / total time | <70% → too cautious; widen reentry |
+| Edge per fill | mean fill price vs mid at fill time | <0 → adverse selection dominates; add flow signal |
+| Inventory duration | mean time at non-zero position | Growing across iterations → risk management broken |
+| Fill symmetry | buy_fills / sell_fills | >2:1 or <1:2 → quotes skewed; check fair-value signal |
+| Spread vs market | quoted_spread / market_spread | >2.0 → spread too wide to fill; <1.0 → crossing the book |
+| Cancel rate | (total_orders - fill_count) / total_orders | >99% → too many phantom quotes |
+
+*All strategy types:*
+
+| Check | How | Action |
+|-------|-----|--------|
+| Zero fills | fill_count == 0 | Fix entry logic before any parameter tuning |
+| Flat PnL | abs(final_pnl) < $0.01 | Not trading or every trade offsets → check position/close logic |
+
+Include each diagnostic result explicitly in the `analysis` field of the iteration record.
+
+Use parquet findings, diagnostics, and custom metrics to write a specific `analysis` (included in the `--description` field) and to directly motivate the next action. Vague analysis ("strategy underperformed") is not acceptable — point to specific fills, timestamps, or order patterns.
 
 **Threshold check** (from `spec.goals.thresholds`):
 - Parse each threshold expression (e.g., `">0"`, `"<0.5"`)
@@ -334,6 +373,34 @@ Omit keys for tests that were skipped. These results are informational — they 
 
 ---
 
+## Step 5.5: Accept or Reject
+
+Compare this iteration's `primary_metric` value against the best accepted baseline.
+
+The last accepted iteration number is in `bestIteration` from the session JSON fetched in Step 1. If `bestIteration` is null or this is iteration 1, there is no prior baseline.
+
+**ACCEPT** if:
+- This is iteration 1 (always accept — establishes the baseline), OR
+- The current `primary_metric` strictly improved vs. the best accepted value (`bestPnl` or `bestSharpe`, whichever is the `primary_metric`)
+
+**REJECT** if:
+- The current `primary_metric` is equal to or worse than the best accepted value
+
+**On ACCEPT:**
+1. `cp gnomepy_research/sessions/$ARGUMENTS/strategy.py gnomepy_research/sessions/$ARGUMENTS/strategy_best.py`
+2. In Step 6: set `"accepted": true` in `--extra-metadata`
+3. After Step 6 git commit: `poetry run research sessions update $ARGUMENTS --best-iteration N`
+4. Use commit message: `research/$ARGUMENTS: iter NNN (accepted)`
+
+**On REJECT:**
+1. Note `M` = the last accepted iteration number (from `bestIteration`)
+2. In Step 6: set `"accepted": false, "returned_to": M` in `--extra-metadata`
+3. After Step 6 git commit: `cp gnomepy_research/sessions/$ARGUMENTS/strategy_best.py gnomepy_research/sessions/$ARGUMENTS/strategy.py`
+4. Use commit message: `research/$ARGUMENTS: iter NNN (rejected, returned to iter M)`
+5. The next hypothesis starts from `strategy_best.py` — the rejected strategy is discarded
+
+---
+
 ## Step 6: Record
 
 Record the iteration. Metrics and environment are read automatically from the results directory — only provide the human-authored fields and any extras from Step 5:
@@ -356,27 +423,36 @@ poetry run research iterations record-from-results $ARGUMENTS \
 <exactly what to change next and why>" \
   --results-dir gnomepy_research/sessions/$ARGUMENTS/results/iter_NNN \
   --extra-metrics '{"sharpe_ci_95": [<lo>, <hi>], "deflated_sharpe": <dsr>}' \
-  --extra-metadata '{"config_name": "gnomepy_research/sessions/$ARGUMENTS/configs/iter_NNN.yaml", "run_id": null, "best_params": {}, "thresholds_met": true, "threshold_failures": [], "changes": ["<change 1>"]}'
+  --extra-metadata '{"config_name": "gnomepy_research/sessions/$ARGUMENTS/configs/iter_NNN.yaml", "run_id": null, "best_params": {}, "thresholds_met": true, "threshold_failures": [], "changes": ["<change 1>"], "accepted": true}'
 ```
 
-Omit `--extra-metrics` if the significance check was skipped (thresholds not met). The Lambda handles updating `iteration_count`, `best_pnl`, `best_sharpe`, and `updated_at` automatically.
+Include `"accepted": true` or `"accepted": false` (from Step 5.5). On reject, also include `"returned_to": M`. Omit `--extra-metrics` if the significance check was skipped (thresholds not met). The Lambda handles updating `iteration_count`, `best_pnl`, `best_sharpe`, and `updated_at` automatically.
 
 ALWAYS commit the iteration after recording — regardless of whether it was a local run or a sweep:
 
 ```bash
 git add \
   gnomepy_research/sessions/$ARGUMENTS/strategy.py \
+  gnomepy_research/sessions/$ARGUMENTS/strategy_best.py \
   gnomepy_research/sessions/$ARGUMENTS/__init__.py \
   gnomepy_research/sessions/$ARGUMENTS/spec.yaml \
   gnomepy_research/sessions/$ARGUMENTS/configs/
-git commit -m "research/$ARGUMENTS: iter NNN"
+git commit -m "research/$ARGUMENTS: iter NNN (accepted)"
+# or on reject: git commit -m "research/$ARGUMENTS: iter NNN (rejected, returned to iter M)"
 ```
 
 Do NOT stage `results/` or `session.json` — session state is now in the API.
 
+After committing, complete the accept/reject actions from Step 5.5:
+- **On ACCEPT:** `poetry run research sessions update $ARGUMENTS --best-iteration N`
+- **On REJECT:** `cp gnomepy_research/sessions/$ARGUMENTS/strategy_best.py gnomepy_research/sessions/$ARGUMENTS/strategy.py` (restore baseline so the next iteration starts from solid ground)
+
 ---
 
 ## Step 7: Continue or Stop
+
+**Clear hints** (always, after successful record + commit in Step 6):
+Write an empty string to `gnomepy_research/sessions/$ARGUMENTS/hints.md` if it exists and had content. Only clear after the commit succeeds — if the iteration failed before reaching this point, hints are preserved for the next retry.
 
 **Stop and set status to `"completed"`** if:
 - All targets in `spec.goals.targets` are met on all date ranges
@@ -389,6 +465,28 @@ When stopping, update the session status:
 ```bash
 poetry run research sessions update $ARGUMENTS --status completed
 # or: --status stalled
+```
+
+**Write cross-session learnings** (only when stopping as `completed` or `stalled`, OR when a new best is accepted and all thresholds are met for the first time):
+
+Append an entry to `gnomepy_research/research_learnings.md`:
+```markdown
+### [YYYY-MM-DD] $ARGUMENTS (<strategy_type>, <exchange profiles>)
+- STATUS: completed | stalled
+- WORKED: <what approaches produced the best accepted iteration>
+- FAILED: <what approaches definitively regressed and were rejected>
+- INSIGHT: <market-specific constraints, fee structure observations, latency findings>
+```
+
+Then push the same learning as a session note (for API/web UI visibility):
+```bash
+poetry run research notes add $ARGUMENTS "LEARNING: <one-paragraph summary of WORKED/FAILED/INSIGHT>"
+```
+
+Then commit the learnings file:
+```bash
+git add gnomepy_research/research_learnings.md
+git commit -m "research/$ARGUMENTS: learnings (iter NNN)"
 ```
 
 **Otherwise:** Output a brief summary to the user: what happened this iteration, whether it's better or worse, and what you'll try next. The session continues (status remains `"running"`).

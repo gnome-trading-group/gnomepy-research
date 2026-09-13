@@ -42,6 +42,12 @@ gnomepy_research/sessions/<name>/
 
 Session state (iterations, notes, status) is stored in the API — viewable at the Research page in the web UI.
 
+**Accept/reject gate:** After each evaluation, `/research` compares the current iteration's primary metric against the best accepted baseline (`strategy_best.py`). On accept: `strategy_best.py` is updated and the API `bestIteration` is set. On reject: `strategy.py` is reverted to `strategy_best.py` and the next hypothesis starts from the accepted baseline. Both outcomes are recorded in iteration metadata (`accepted: true/false`, `returned_to: N`).
+
+**Cross-session memory:** `gnomepy_research/research_learnings.md` is appended when a session completes or stalls. `/research` Step 2 reads this file before forming each hypothesis — avoids re-running dead ends and bootstraps from known-good approaches. Learnings are also pushed as session notes (`poetry run research notes add`) for web UI visibility.
+
+**Diagnostics:** `/research` Step 5 runs mandatory per-strategy-type diagnostic checks (fill rate, leg imbalance, fee drag, etc.) every iteration. Results are included in the iteration analysis and directly inform the next hypothesis.
+
 ### Exchange profiles
 Saved exchange profiles live in `gnomepy_research/profiles/`. Current profiles: `hyperliquid`, `lighter`, `polymarket`, `kalshi`. The `/research-new` wizard picks these up automatically so you don't re-specify fees and latency each time. New profiles created during `/research-new` are saved here for future reuse.
 
