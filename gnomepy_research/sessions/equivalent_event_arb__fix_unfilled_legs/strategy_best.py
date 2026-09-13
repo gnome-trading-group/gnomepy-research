@@ -1,15 +1,12 @@
 from __future__ import annotations
 
+from gnomepy import Scales
+
 from gnomepy_research.strategies.equivalent_event_arb import EquivalentEventArb
+from gnomepy_research.strategies.target_portfolio import Target
 
 
 class EquivalentEventArbFillFix(EquivalentEventArb):
-    """
-    Branch of EquivalentEventArb focused on improving fill rate.
-    Uses taker-first order mode to guarantee fills against existing ask-side liquidity
-    instead of waiting as a maker at the back of the risk_averse queue.
-    """
-
     def __init__(
         self,
         event_ids: list[int],
@@ -30,15 +27,17 @@ class EquivalentEventArbFillFix(EquivalentEventArb):
         unwind_spread_mult: float = 2.0,
         depth_coverage_mult: float = 0.0,
         price_window_cents: int = 2,
-        price_model: str = "aggressive",
+        price_model: str = "join_best_bid",
         price_improve_bps: float = 50.0,
         price_edge_share: float = 0.5,
         target_fill_prob: float = 0.7,
         optimal_ev_lambda: float = 30.0,
         maker_reprice_cooldown_ns: int = 0,
         cancel_grace_ns: int = 0,
+        min_contract_price: float = 0.0,
         debug: bool = False,
     ):
+        self._min_contract_price = min_contract_price
         super().__init__(
             event_ids=event_ids,
             max_position=max_position,
@@ -67,3 +66,25 @@ class EquivalentEventArbFillFix(EquivalentEventArb):
             cancel_grace_ns=cancel_grace_ns,
             debug=debug,
         )
+
+    def compute_target(self, timestamp: int) -> Target:
+        if self._min_contract_price > 0.0 and self._portfolio is None and self._group is not None:
+            any_feasible = False
+            for pairing in self._group.pairings:
+                feasible = True
+                for _, lst in pairing.legs:
+                    bid_book = self._bid_book.get(lst, [])
+                    if not bid_book:
+                        feasible = False
+                        break
+                    bid_price = bid_book[0][0] / Scales.PRICE
+                    if bid_price < self._min_contract_price:
+                        feasible = False
+                        break
+                if feasible:
+                    any_feasible = True
+                    break
+            if not any_feasible:
+                return {}
+
+        return super().compute_target(timestamp)
