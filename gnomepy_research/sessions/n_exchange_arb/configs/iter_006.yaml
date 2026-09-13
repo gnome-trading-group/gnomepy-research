@@ -8,7 +8,6 @@ strategy:
     entry_z: 1.5
     close_z: 0.3
     max_imbalance_ticks: 300
-    max_staleness_ns: 60000000000
     min_spread_bps: 1.0
     processing_time_ns: 0
 

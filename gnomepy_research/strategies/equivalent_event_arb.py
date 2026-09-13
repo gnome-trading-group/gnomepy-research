@@ -1,11 +1,34 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from itertools import product
-from typing import Callable
+from collections.abc import Callable
+from math import exp
 
-from gnomepy.registry import RegistryClient, RelationshipGraph
+from gnomepy import Scales, Side
+from gnomepy.java.backtest.orders import ExecutionReport
+from gnomepy.java.enums import OrderType
+from gnomepy.registry import RegistryClient
 
+from gnomepy_research.arb import (
+    AggressivePriceModel,
+    ArbBudgetConstraint,
+    ArbContext,
+    ArbLeg,
+    ArbPhase,
+    ArbPortfolio,
+    CompositeCostModel,
+    CostModel,
+    DepthCoverageCost,
+    FeeCost,
+    FillProbTargetModel,
+    FillRiskCost,
+    JoinBestBidModel,
+    OptimalEVModel,
+    OrderMode,
+    PriceModel,
+    VenuePairing,
+    discover_group,
+    walk_books,
+)
 from gnomepy_research.strategies.target_portfolio import (
     Listing,
     Target,
@@ -13,348 +36,352 @@ from gnomepy_research.strategies.target_portfolio import (
     TargetPortfolioStrategy,
 )
 
-PRICE_SCALE = 1_000_000_000
-
-
-def walk_books(
-    books: list[list[tuple[int, float]]],
-    fee_fns: list[Callable[[float], float]],
-    max_qty: float = float("inf"),
-    buy: bool = True,
-) -> tuple[float, float, list[float]]:
-    """Walk order books for multiple legs simultaneously.
-
-    For buy: walks ask books, accumulates until sum(prices) + sum(fees) >= 1.0.
-    For sell: walks bid books, accumulates until sum(prices) - sum(fees) <= 1.0.
-
-    Returns (total_qty_contracts, edge_bps, vwap_per_leg).
-    """
-    num_legs = len(books)
-    level_idx = [0] * num_legs
-    remaining = [books[i][0][1] for i in range(num_legs)]
-
-    total_qty = 0.0
-    total_value = [0.0] * num_legs
-    total_fees = [0.0] * num_legs
-
-    while total_qty < max_qty:
-        prices_f = [books[i][level_idx[i]][0] / PRICE_SCALE for i in range(num_legs)]
-        fees_f = [fee_fns[i](prices_f[i]) for i in range(num_legs)]
-        if buy and sum(prices_f) + sum(fees_f) >= 1.0:
-            break
-        if not buy and sum(prices_f) - sum(fees_f) <= 1.0:
-            break
-
-        chunk = min(remaining)
-        if chunk <= 0:
-            break
-        chunk = min(chunk, max_qty - total_qty)
-
-        total_qty += chunk
-        for i in range(num_legs):
-            total_value[i] += prices_f[i] * chunk
-            total_fees[i] += fees_f[i] * chunk
-            remaining[i] -= chunk
-            if remaining[i] <= 0:
-                level_idx[i] += 1
-                if level_idx[i] < len(books[i]):
-                    remaining[i] = books[i][level_idx[i]][1]
-                else:
-                    remaining[i] = 0
-
-        if any(remaining[i] <= 0 and level_idx[i] >= len(books[i]) for i in range(num_legs)):
-            break
-
-    if total_qty <= 0:
-        return 0.0, float("-inf"), []
-
-    if buy:
-        edge_bps = (total_qty - sum(total_value) - sum(total_fees)) / total_qty * 10_000
-    else:
-        edge_bps = (sum(total_value) - total_qty - sum(total_fees)) / total_qty * 10_000
-    vwap = [total_value[i] / total_qty for i in range(num_legs)]
-    return total_qty, edge_bps, vwap
-
-
-@dataclass
-class OutcomeLeg:
-    outcome_label: str
-    listings: list[Listing]
-
-
-@dataclass
-class VenuePairing:
-    index: int
-    legs: list[tuple[int, Listing]]  # [(outcome_idx, listing), ...] one per outcome
-
-
-def _enumerate_pairings(outcomes: list[OutcomeLeg]) -> list[VenuePairing]:
-    outcome_listings = [[(i, lst) for lst in o.listings] for i, o in enumerate(outcomes)]
-    pairings = []
-    for combo in product(*outcome_listings):
-        pairings.append(VenuePairing(index=len(pairings), legs=list(combo)))
-    return pairings
-
-
-@dataclass
-class ContractGroup:
-    label: str
-    index: int
-    outcomes: list[OutcomeLeg]
-    all_listings: set[Listing] = field(default_factory=set)
-    pairings: list[VenuePairing] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        self.all_listings = {lst for o in self.outcomes for lst in o.listings}
-        self.pairings = _enumerate_pairings(self.outcomes)
-
-
-def _discover_groups(event_ids: list[int], registry: RegistryClient) -> list[ContractGroup]:
-    rels = registry.get_contract_relationships(relationship_type="EQUIVALENT")
-    graph = RelationshipGraph(rels)
-
-    groups: list[ContractGroup] = []
-    seen_listing_sets: set[frozenset] = set()
-
-    for event_id in event_ids:
-        contracts = registry.get_event_contracts(event_id=event_id)
-        events = registry.get_event(event_id=event_id)
-        if not events:
-            continue
-        event = events[0]
-
-        outcomes: list[OutcomeLeg] = []
-        for contract in contracts:
-            sid = contract.security_id
-            source_listings = registry.get_listing(security_id=sid)
-            equivalent_sids = set(graph.get_equivalents(sid)) - {sid}
-            equiv_listings = [
-                lst
-                for eq_sid in equivalent_sids
-                for lst in registry.get_listing(security_id=eq_sid)
-            ]
-            all_listings = list(
-                {(lst.exchange_id, lst.security_id) for lst in source_listings + equiv_listings}
-            )
-            if len(all_listings) >= 2:
-                outcomes.append(OutcomeLeg(contract.outcome_label, all_listings))
-
-        if len(outcomes) < 2:
-            continue
-
-        key = frozenset(lst for o in outcomes for lst in o.listings)
-        if key in seen_listing_sets:
-            continue
-        seen_listing_sets.add(key)
-
-        groups.append(ContractGroup(event.title, len(groups), outcomes))
-
-    return groups
-
 
 class EquivalentEventArb(TargetPortfolioStrategy):
     def __init__(
         self,
         event_ids: list[int],
         max_position: int = 0,
-        taker_fee_rate: float = 0.07,
+        exchange_fees: dict[str, dict[str, float]] | None = None,
         min_pure_arb_bps: float = 5.0,
-        max_staleness_ns: int = 5_000_000_000,
+        taker_edge_threshold_bps: float = 20.0,
+        use_taker_orders: bool = True,
+        exit_edge_threshold_bps: float = 5.0,
+        taker_order_type: str = "LIMIT",
+        max_staleness_ns: int = 60_000_000_000,
         processing_time_ns: int = 5_000_000,
         allow_scaling: bool = False,
+        allow_early_exit: bool = True,
         imbalance_timeout_ns: int = 30_000_000_000,
         max_unhedged_qty: int = 0,
+        fill_risk_lambda: float = 0.0,
+        unwind_spread_mult: float = 2.0,
+        depth_coverage_mult: float = 0.0,
+        price_window_cents: int = 2,
+        price_model: str = "aggressive",
+        price_improve_bps: float = 50.0,
+        price_edge_share: float = 0.5,
+        target_fill_prob: float = 0.7,
+        optimal_ev_lambda: float = 30.0,
+        maker_reprice_cooldown_ns: int = 0,
+        cancel_grace_ns: int = 0,
+        debug: bool = False,
     ):
-        self.max_position = max_position
+        self.max_position = max_position * Scales.SIZE
         self.min_pure_arb_bps = min_pure_arb_bps
+        self._taker_edge_threshold_bps = taker_edge_threshold_bps
+        self._use_taker_orders = use_taker_orders
+        self._exit_edge_threshold_bps = exit_edge_threshold_bps
         self._allow_scaling = allow_scaling
+        self._allow_early_exit = allow_early_exit
 
         registry = RegistryClient()
-        self._groups = _discover_groups(event_ids, registry)
+        self._group = discover_group(event_ids, registry)
 
         all_exchanges = registry.get_exchange()
         exchange_by_name = {e.exchange_name.lower(): e for e in all_exchanges}
 
-        poly = exchange_by_name.get("polymarket")
-        kalshi = exchange_by_name.get("kalshi")
-        if poly is None:
-            raise ValueError("Exchange 'Polymarket' not found in registry")
-        if kalshi is None:
-            raise ValueError("Exchange 'Kalshi' not found in registry")
+        if exchange_fees is None:
+            exchange_fees = {
+                "polymarket": {"taker": 0.07, "maker": 0.0},
+                "kalshi": {"taker": 0.07, "maker": 0.0175},
+            }
 
-        self._eid_taker_fee_rate: dict[int, float] = {
-            poly.exchange_id: taker_fee_rate,
-            kalshi.exchange_id: taker_fee_rate,
-        }
+        fee_rates: dict[int, tuple[float, float]] = {}
+        for name, rates in exchange_fees.items():
+            exchange = exchange_by_name.get(name.lower())
+            if exchange is None:
+                raise ValueError(f"Exchange '{name}' not found in registry")
+            fee_rates[exchange.exchange_id] = (rates["taker"], rates["maker"])
 
-        all_eids = {lst[0] for g in self._groups for lst in g.all_listings}
-        unknown = all_eids - set(self._eid_taker_fee_rate)
+        all_eids = {lst[0] for lst in self._group.all_listings}
+        unknown = all_eids - set(fee_rates)
         if unknown:
             raise ValueError(f"No fee model implemented for exchange_id(s): {unknown}")
 
-        all_listings = {lst for g in self._groups for lst in g.all_listings}
-        self._init_target_portfolio(
-            tracked_listings=all_listings,
-            maker_orders=False,
-            max_staleness_ns=max_staleness_ns,
-            processing_time_ns=processing_time_ns,
-            size=1_000_000,
-            imbalance_timeout_ns=imbalance_timeout_ns,
-            max_unhedged_qty=max_unhedged_qty,
+        maker_rates = {eid: rates[1] for eid, rates in fee_rates.items()}
+        taker_rates = {eid: rates[0] for eid, rates in fee_rates.items()}
+        self._maker_fee_rates = maker_rates
+        self._taker_fee_rates = taker_rates
+        maker_components = [FeeCost(maker_rates)]
+        self._fill_risk: FillRiskCost | None = None
+        if fill_risk_lambda > 0:
+            self._fill_risk = FillRiskCost(fill_risk_lambda, unwind_spread_mult)
+            maker_components.append(self._fill_risk)
+
+        taker_components = [FeeCost(taker_rates)]
+        self._depth_coverage: DepthCoverageCost | None = None
+        if depth_coverage_mult > 0:
+            self._depth_coverage = DepthCoverageCost(depth_coverage_mult, price_window_cents)
+            taker_components.append(self._depth_coverage)
+
+        self._unwind_spread_mult = unwind_spread_mult
+        self._cost_model: CostModel = CompositeCostModel(
+            maker=maker_components,
+            taker=taker_components,
         )
 
-        self._group_target: dict[int, dict[Listing, int]] = {}
+        self._stuck_cost_lambda: float | None = None
+        if price_model == "join_best_bid":
+            self._price_model: PriceModel = JoinBestBidModel(
+                fill_risk_lambda=fill_risk_lambda if fill_risk_lambda > 0 else 10.0,
+            )
+        elif price_model == "fill_prob_target":
+            self._price_model = FillProbTargetModel(
+                target_fill_prob=target_fill_prob,
+                fill_risk_lambda=fill_risk_lambda if fill_risk_lambda > 0 else 10.0,
+            )
+        elif price_model == "optimal_ev":
+            if optimal_ev_lambda <= 0:
+                raise ValueError("optimal_ev price model requires optimal_ev_lambda > 0")
+            self._price_model = OptimalEVModel(
+                fill_risk_lambda=optimal_ev_lambda,
+            )
+            self._stuck_cost_lambda = optimal_ev_lambda
+        else:
+            self._price_model = AggressivePriceModel(
+                base_improve_bps=price_improve_bps,
+                edge_share=price_edge_share,
+                fill_risk_lambda=fill_risk_lambda if fill_risk_lambda > 0 else 10.0,
+            )
+
+        self._init_target_portfolio(
+            tracked_listings=self._group.all_listings,
+            taker_order_type=OrderType(taker_order_type),
+            max_staleness_ns=max_staleness_ns,
+            processing_time_ns=processing_time_ns,
+            imbalance_timeout_ns=imbalance_timeout_ns,
+            max_unhedged_qty=max_unhedged_qty,
+            debug=debug,
+        )
+
+        self._maker_reprice_cooldown_ns = maker_reprice_cooldown_ns
+        self._cancel_grace_ns = cancel_grace_ns
+        self._portfolio: ArbPortfolio | None = None
+        self._constraint: ArbBudgetConstraint | None = None
         self._logged_at_target: dict[Listing, bool] = {}
-        self._group_entry_edge: dict[int, float] = {}
-        self._group_entry_pairing: dict[int, int] = {}
-        self._group_max_edge: dict[int, float] = {}
+        self._last_maker_price: dict[Listing, int] = {}
+        self._last_reprice_ts: dict[Listing, int] = {}
+
+    def _on_book_updated(
+        self, listing: Listing,
+        bids: list[tuple[int, int]], asks: list[tuple[int, int]],
+        timestamp: int,
+    ) -> None:
+        self._cost_model.on_book_update(listing, bids, asks, timestamp)
+        self._price_model.on_book_update(listing, bids, asks, timestamp)
+        if bids and self._constraint is not None and self._portfolio is not None and listing in self._portfolio:
+            self._constraint.update_bid(listing, bids[0][0])
+
+    def _on_fill(self, listing: Listing, report: ExecutionReport) -> None:
+        if self._portfolio is not None and self._portfolio.target_qty(listing) > 0:
+            order_mode = self._portfolio.order_mode
+        else:
+            order_mode = OrderMode.TAKER
+        self._cost_model.on_fill(listing, report, order_mode)
+
+        if self._portfolio is None:
+            return
+        if self._constraint is not None and listing in self._portfolio:
+            self._constraint.record_fill(listing, report.fill_price, report.filled_qty)
+        if listing not in self._portfolio:
+            self._debug(
+                report.timestamp_recv, "FILL",
+                eid=listing[0], sid=listing[1],
+                price=round(report.fill_price / Scales.PRICE, 4),
+                qty=round(report.filled_qty / Scales.SIZE, 4),
+                phase=self._portfolio.phase.name,
+                note="orphan_fill",
+            )
+            return
+
+        was_entering = self._portfolio.phase == ArbPhase.ENTERING
+        self._portfolio.record_fill(listing, report.fill_price, report.filled_qty)
+
+        cum_qty = 0
+        for leg in self._portfolio.legs:
+            if leg.listing == listing:
+                cum_qty = leg.filled_qty
+                break
+        self._debug(
+            report.timestamp_recv, "FILL",
+            eid=listing[0], sid=listing[1],
+            price=round(report.fill_price / Scales.PRICE, 4),
+            qty=round(report.filled_qty / Scales.SIZE, 4),
+            cum_qty=round(cum_qty / Scales.SIZE, 4),
+            leaves=round(report.leaves_qty / Scales.SIZE, 4),
+            fee=round(report.fee, 6),
+            phase=self._portfolio.phase.name,
+            target_qty=round(self._portfolio.target_qty(listing) / Scales.SIZE, 4),
+        )
+
+        if was_entering and self._portfolio.phase == ArbPhase.FILLED:
+            self._debug(report.timestamp_recv, "PHASE_CHANGE", old="ENTERING", new="FILLED")
 
     def compute_target(self, timestamp: int) -> Target:
         target: Target = {}
-        for group in self._groups:
-            group_target = self._compute_group_target(group, timestamp)
-            all_at_zero = all(qty == 0 for qty in group_target.values())
-            all_flat = all(self._net_qty(lst) == 0 for lst in group_target)
-            if all_at_zero and all_flat and group_target:
-                self._clear_group_state(group.index)
-                for lst in group.all_listings:
-                    self._logged_at_target.pop(lst, None)
-                print(f"[{timestamp}] FLAT group={group.index} '{group.label}'")
-                continue
-            for lst, qty in group_target.items():
-                actual = self._net_qty(lst)
-                at_target = (qty == 0 and actual == 0) or (qty > 0 and actual >= qty)
-                if at_target and not self._logged_at_target.get(lst, False):
-                    print(f"[{timestamp}] AT_TARGET {lst}: pos={actual} target={qty}")
-                    self._logged_at_target[lst] = True
-                target[lst] = TargetEntry(qty=qty, use_taker=not at_target, group_id=str(group.index))
+        group_target = self._compute_group_target(timestamp)
+
+        all_at_zero = all(qty == 0 for qty in group_target.values())
+        all_flat = all(self._net_qty(lst) == 0 for lst in group_target)
+        if all_at_zero and all_flat and group_target:
+            self._clear_state()
+            print(f"[{timestamp}] FLAT '{self._group.label}'")
+            return target
+
+        order_mode = self._portfolio.order_mode if self._portfolio is not None else OrderMode.TAKER
+        phase = self._portfolio.phase if self._portfolio is not None else ArbPhase.IDLE
+
+        for lst, qty in group_target.items():
+            actual = self._net_qty(lst)
+            delta = qty - actual
+            at_target = (qty == 0 and actual == 0) or (qty > 0 and actual >= qty)
+            if at_target and not self._logged_at_target.get(lst, False):
+                print(f"[{timestamp}] AT_TARGET {lst}: pos={actual} target={qty}")
+                self._logged_at_target[lst] = True
+
+            if at_target or delta == 0 or qty == 0 or order_mode == OrderMode.TAKER:
+                price = 0
+            elif delta > 0:
+                bid_book = self._bid_book.get(lst, [])
+                ask_book = self._ask_book.get(lst, [])
+                best_bid = bid_book[0][0] if bid_book else 0
+                best_ask = ask_book[0][0] if ask_book else 0
+                if best_bid <= 0 or best_ask <= 0:
+                    price = 0
+                else:
+                    max_price = self._constraint.max_price(lst) if self._constraint is not None and phase == ArbPhase.ENTERING else None
+                    context = ArbContext(stuck_cost=self._compute_stuck_cost(lst)) if self._portfolio is not None and self._stuck_cost_lambda is not None else None
+                    result = self._price_model.compute_price(lst, best_bid, best_ask, max_price, context)
+                    price = result.price
+                    if price > 0 and self._maker_reprice_cooldown_ns > 0:
+                        prev = self._last_maker_price.get(lst)
+                        if prev is not None and prev > 0 and price != prev:
+                            elapsed = timestamp - self._last_reprice_ts.get(lst, 0)
+                            if elapsed < self._maker_reprice_cooldown_ns:
+                                price = prev
+                    if self._constraint is not None:
+                        self._constraint.update_order_price(lst, price, is_crossing=price >= best_ask and best_ask > 0)
+                    if price != self._last_maker_price.get(lst, 0):
+                        self._last_maker_price[lst] = price
+                        self._last_reprice_ts[lst] = timestamp
+                    self._debug(
+                        timestamp, "PRICE_MODEL",
+                        eid=lst[0], sid=lst[1],
+                        best_bid=round(best_bid / Scales.PRICE, 4),
+                        best_ask=round(best_ask / Scales.PRICE, 4),
+                        price=round(price / Scales.PRICE, 4),
+                        max_price=round(max_price / Scales.PRICE, 4) if max_price is not None else None,
+                        fill_prob=round(result.fill_prob, 3),
+                        spread=round(result.spread, 4),
+                        stuck_cost=round(context.stuck_cost, 4) if context is not None else None,
+                    )
+            else:
+                ask_book = self._ask_book.get(lst, [])
+                price = ask_book[0][0] if ask_book else 0
+
+            self._debug(
+                timestamp, "TARGET_SET",
+                eid=lst[0], sid=lst[1],
+                qty=qty // Scales.SIZE,
+                price=round(price / Scales.PRICE, 4) if price else 0,
+                mode=order_mode.name,
+                phase=phase.name,
+            )
+            target[lst] = TargetEntry(qty=qty, price=price)
         return target
 
-    def on_imbalance_timeout(self, group_id: str, timestamp: int) -> Target | None:
-        self._clear_group_state(int(group_id))
+    def on_imbalance_timeout(self, timestamp: int) -> Target | None:
+        self._clear_state()
         return None
 
-    def _compute_group_target(self, group: ContractGroup, timestamp: int) -> dict[Listing, int]:
-        if self._is_unwinding(str(group.index)):
-            return {lst: 0 for lst in group.all_listings if self._net_qty(lst) != 0}
+    def _compute_group_target(self, timestamp: int) -> dict[Listing, int]:
+        if self._is_unwinding():
+            return {lst: 0 for lst in self._group.all_listings if self._net_qty(lst) != 0}
 
-        existing = self._group_target.get(group.index, {})
-
-        if not existing:
-            result = self._try_enter(group, timestamp, {})
+        if self._portfolio is None:
+            result = self._try_enter(timestamp)
             if result is None:
-                return existing
-            new_target, best_pairing, arb_qty, arb_edge, arb_legs = result
-            prices = {str(lst): round(p / PRICE_SCALE, 4) for _, lst, p in arb_legs}
+                return {}
+            new_target, arb_edge = result
             print(
-                f"[{timestamp}] ENTRY group={group.index} '{group.label}' "
-                f"pairing={best_pairing.index} edge={arb_edge:.1f}bps "
-                f"qty={arb_qty // self._size} prices={prices}"
+                f"[{timestamp}] ENTRY '{self._group.label}' "
+                f"pairing={self._portfolio.pairing_index} edge={arb_edge:.1f}bps "
+                f"mode={self._portfolio.order_mode.name} "
+                f"qty={next(iter(new_target.values())) // Scales.SIZE}"
             )
             return new_target
 
-        if all(qty == 0 for qty in existing.values()):
-            exiting_pairing_idx = self._group_entry_pairing.get(group.index, -1)
-            result = self._try_enter(group, timestamp, dict(existing), exclude_pairing_idx=exiting_pairing_idx)
-            if result is not None:
-                new_target, best_pairing, arb_qty, arb_edge, arb_legs = result
-                entry_prices = {str(lst): round(p / PRICE_SCALE, 4) for _, lst, p in arb_legs}
-                print(
-                    f"[{timestamp}] ENTER_WHILE_EXITING group={group.index} '{group.label}' "
-                    f"pairing={best_pairing.index} edge={arb_edge:.1f}bps "
-                    f"qty={arb_qty // self._size} prices={entry_prices}"
-                )
-                return new_target
-            return existing
+        if all(leg.target_qty == 0 for leg in self._portfolio.legs):
+            return self._portfolio.as_target_dict()
 
-        entry_pairing_idx = self._group_entry_pairing.get(group.index, -1)
         entry_pairing = next(
-            (p for p in group.pairings if p.index == entry_pairing_idx), None
+            (p for p in self._group.pairings if p.index == self._portfolio.pairing_index), None
         )
 
-        if entry_pairing is not None:
-            exit_qty, _, exit_edge, exit_legs = self._compute_exit_edge(group, timestamp, entry_pairing)
+        if self._portfolio.phase == ArbPhase.ENTERING and self._constraint is not None and self._portfolio.should_cancel_entry(self._constraint, timestamp):
+            edge = self._constraint.edge_bps()
+            edge_str = f"{edge:.1f}" if edge is not None else "?"
+            has_position = entry_pairing is not None and any(
+                self._net_qty(lst) > 0 for _, lst in entry_pairing.legs
+            )
+            if has_position:
+                self._portfolio.begin_exit()
+                print(f"[{timestamp}] ENTRY_CANCEL '{self._group.label}' maker_edge={edge_str}bps (unwinding)")
+                return self._portfolio.as_target_dict()
+            else:
+                print(f"[{timestamp}] ENTRY_CANCEL '{self._group.label}' maker_edge={edge_str}bps")
+                self._clear_state()
+                return {}
+
+        if self._allow_early_exit and entry_pairing is not None and self._portfolio.phase == ArbPhase.FILLED:
             current_qty = max(
                 (abs(self._net_qty(lst)) for _, lst in entry_pairing.legs), default=0
             )
-            if exit_edge > self.min_pure_arb_bps and exit_qty >= current_qty:
-                exit_prices = {str(lst): round(p / PRICE_SCALE, 4) for _, lst, p in exit_legs}
-                zero_target = {lst: 0 for lst in existing}
-                result = self._try_enter(group, timestamp, zero_target, exclude_pairing_idx=entry_pairing_idx)
-                if result is not None:
-                    new_target, best_pairing, arb_qty, arb_edge, arb_legs = result
-                    entry_prices = {str(lst): round(p / PRICE_SCALE, 4) for _, lst, p in arb_legs}
-                    print(
-                        f"[{timestamp}] EXIT_ENTER group={group.index} '{group.label}' "
-                        f"exit_edge={exit_edge:.1f}bps entry_edge={arb_edge:.1f}bps "
-                        f"qty={arb_qty // self._size} "
-                        f"exit_prices={exit_prices} entry_prices={entry_prices}"
-                    )
-                    return new_target
-                self._group_target[group.index] = zero_target
-                for lst in zero_target:
+            exit_qty, exit_edge, _ = self._walk_pairing(
+                entry_pairing, timestamp, buy=False, max_qty=current_qty,
+                order_mode=OrderMode.TAKER,
+            )
+            if exit_edge > self._exit_edge_threshold_bps and exit_qty >= current_qty:
+                self._portfolio.begin_exit()
+                self._logged_at_target.clear()
+                print(
+                    f"[{timestamp}] EXIT '{self._group.label}' "
+                    f"exit_edge={exit_edge:.1f}bps"
+                )
+                return self._portfolio.as_target_dict()
+
+        if self._allow_scaling and entry_pairing is not None and self._portfolio.phase == ArbPhase.FILLED:
+            current_qty = next((leg.target_qty for leg in self._portfolio.legs if leg.target_qty > 0), 0)
+            remaining_qty = self.max_position - current_qty if self.max_position > 0 else 0
+            if self.max_position > 0 and remaining_qty <= 0:
+                return self._portfolio.as_target_dict()
+            arb_qty, arb_edge, arb_legs = self._walk_pairing(
+                entry_pairing, timestamp, buy=True, max_qty=remaining_qty,
+                order_mode=OrderMode.MAKER,
+            )
+            if arb_qty > 0 and arb_edge > self.min_pure_arb_bps:
+                for _, lst in arb_legs:
+                    self._portfolio.add_target_qty(lst, arb_qty)
+                self._portfolio.phase = ArbPhase.ENTERING
+                for _, lst in arb_legs:
                     self._logged_at_target.pop(lst, None)
                 print(
-                    f"[{timestamp}] EXIT group={group.index} '{group.label}' "
-                    f"exit_edge={exit_edge:.1f}bps prices={exit_prices}"
+                    f"[{timestamp}] SCALE_UP '{self._group.label}' "
+                    f"edge={arb_edge:.1f}bps qty={arb_qty // Scales.SIZE} "
+                    f"new_total={self._portfolio.target_qty(arb_legs[0][1]) // Scales.SIZE}"
                 )
-                return zero_target
+                return self._portfolio.as_target_dict()
 
-        if self._allow_scaling and entry_pairing is not None:
-            all_filled = all(
-                self._net_qty(lst) >= qty
-                for lst, qty in existing.items() if qty > 0
-            )
-            if all_filled:
-                current_qty = next((qty for qty in existing.values() if qty > 0), 0)
-                remaining_qty = self.max_position * self._size - current_qty if self.max_position > 0 else 0
-                if self.max_position > 0 and remaining_qty <= 0:
-                    return existing
-                arb_qty, arb_edge, arb_legs = self._walk_pairing(entry_pairing, timestamp, buy=True, max_qty=remaining_qty)
-                if arb_qty > 0 and arb_edge > self.min_pure_arb_bps:
-                    new_target = dict(existing)
-                    for _, lst, _ in arb_legs:
-                        new_target[lst] = existing.get(lst, 0) + arb_qty
-                    self._group_target[group.index] = new_target
-                    for lst in new_target:
-                        self._logged_at_target.pop(lst, None)
-                    prices = {str(lst): round(p / PRICE_SCALE, 4) for _, lst, p in arb_legs}
-                    print(
-                        f"[{timestamp}] SCALE_UP group={group.index} '{group.label}' "
-                        f"edge={arb_edge:.1f}bps qty={arb_qty // self._size} prices={prices} "
-                        f"new_total={new_target.get(arb_legs[0][1], 0) // self._size}"
-                    )
-                    return new_target
-
-        best_edge = self.min_pure_arb_bps
-        for pairing in group.pairings:
-            _, edge, _ = self._walk_pairing(pairing, timestamp, buy=True, max_qty=0)
-            if edge > best_edge:
-                best_edge = edge
-
-        if best_edge > self._group_max_edge.get(group.index, 0.0):
-            self._group_max_edge[group.index] = best_edge
-            print(
-                f"[{timestamp}] EDGE_WIDENED group={group.index} '{group.label}' "
-                f"entry={self._group_entry_edge[group.index]:.1f}bps "
-                f"now={best_edge:.1f}bps"
-            )
-
-        return existing
-
-    def _compute_fee(self, listing: Listing, price_f: float) -> float:
-        rate = self._eid_taker_fee_rate.get(listing[0])
-        if rate is None:
-            raise ValueError(f"No fee model for exchange_id: {listing[0]}")
-        if rate == 0.0:
-            return 0.0
-        return rate * price_f * (1.0 - price_f)
+        return self._portfolio.as_target_dict()
 
     def _prepare_books(
-        self, pairing: VenuePairing, timestamp: int, buy: bool = True
-    ) -> tuple[list[list[tuple[int, float]]], list[Callable[[float], float]]] | tuple[None, None]:
-        books: list[list[tuple[int, float]]] = []
-        fee_fns: list[Callable[[float], float]] = []
+        self, pairing: VenuePairing, timestamp: int, buy: bool = True,
+        order_mode: OrderMode = OrderMode.TAKER,
+    ) -> tuple[list[list[tuple[int, int]]], list[Callable[[int, int], float]]] | tuple[None, None]:
+        books: list[list[tuple[int, int]]] = []
+        cost_fns: list[Callable[[int, int], float]] = []
+        side = Side.BID if buy else Side.ASK
         for _, lst in pairing.legs:
             if self._is_stale(lst, timestamp):
                 return None, None
@@ -362,75 +389,129 @@ class EquivalentEventArb(TargetPortfolioStrategy):
             if not levels or levels[0][0] <= 0:
                 return None, None
             books.append(levels)
-            fee_fns.append(lambda p, l=lst: self._compute_fee(l, p))
-        return books, fee_fns
+            cost_fns.append(
+                lambda p, q, l=lst, s=side, m=order_mode: self._cost_model.expected_cost(l, p, s, m, q)
+            )
+        return books, cost_fns
 
     def _walk_pairing(
-        self, pairing: VenuePairing, timestamp: int, buy: bool, max_qty: int = 0
-    ) -> tuple[int, float, list[tuple[int, Listing, int]]]:
-        books, fee_fns = self._prepare_books(pairing, timestamp, buy=buy)
+        self, pairing: VenuePairing, timestamp: int, buy: bool, max_qty: int = 0,
+        order_mode: OrderMode = OrderMode.TAKER,
+    ) -> tuple[int, float, list[tuple[int, Listing]]]:
+        books, cost_fns = self._prepare_books(pairing, timestamp, buy=buy, order_mode=order_mode)
         if books is None:
             return 0, float("-inf"), []
-        max_q = max_qty / self._size if max_qty > 0 else float("inf")
-        total_qty, edge_bps, vwap = walk_books(books, fee_fns, max_qty=max_q, buy=buy)
-        if total_qty <= 0:
+        qty_raw, edge_bps = walk_books(books, cost_fns, max_qty=max_qty, buy=buy)
+        if qty_raw <= 0:
             return 0, float("-inf"), []
-        legs = [
-            (pairing.legs[i][0], pairing.legs[i][1], int(vwap[i] * PRICE_SCALE))
-            for i in range(len(pairing.legs))
-        ]
-        qty_scaled = int(total_qty * self._size)
         if max_qty > 0:
-            qty_scaled = min(qty_scaled, max_qty)
-        return qty_scaled, edge_bps, legs
+            qty_raw = min(qty_raw, max_qty)
+        return qty_raw, edge_bps, pairing.legs
 
-    def _try_enter(
-        self,
-        group: ContractGroup,
-        timestamp: int,
-        base_target: dict[Listing, int],
-        exclude_pairing_idx: int = -1,
-    ) -> tuple[dict[Listing, int], VenuePairing, int, float, list[tuple[int, Listing, int]]] | None:
+    def _select_order_mode(
+        self, pairing: VenuePairing, timestamp: int, max_qty: int,
+    ) -> tuple[OrderMode, int, float, list[tuple[int, Listing]]] | None:
+        if self._use_taker_orders:
+            qty, edge, legs = self._walk_pairing(
+                pairing, timestamp, buy=True, max_qty=max_qty, order_mode=OrderMode.TAKER,
+            )
+            self._debug(timestamp, "EDGE_CHECK", pairing=pairing.index,
+                        taker_edge=round(edge, 2), threshold=self._taker_edge_threshold_bps)
+            if qty > 0 and edge >= self._taker_edge_threshold_bps:
+                self._log_fill_risk(timestamp, pairing, "TAKER_ENTRY")
+                self._log_slippage(timestamp, pairing, "TAKER_ENTRY")
+                return OrderMode.TAKER, qty, edge, legs
+
+        qty, edge, legs = self._walk_pairing(
+            pairing, timestamp, buy=True, max_qty=max_qty, order_mode=OrderMode.MAKER,
+        )
+        self._debug(timestamp, "EDGE_CHECK", pairing=pairing.index,
+                    maker_edge=round(edge, 2), min_bps=self.min_pure_arb_bps)
+        if qty > 0 and edge >= self.min_pure_arb_bps:
+            self._log_fill_risk(timestamp, pairing, "MAKER_ENTRY")
+            return OrderMode.MAKER, qty, edge, legs
+
+        if self._fill_risk is not None and edge > float("-inf"):
+            self._log_fill_risk(timestamp, pairing, "FILL_RISK_REJECT")
+        return None
+
+    def _try_enter(self, timestamp: int) -> tuple[dict[Listing, int], float] | None:
         best_edge = self.min_pure_arb_bps
         best_pairing: VenuePairing | None = None
-        for pairing in group.pairings:
-            if pairing.index == exclude_pairing_idx:
-                continue
-            _, edge, _ = self._walk_pairing(pairing, timestamp, buy=True, max_qty=0)
+        for pairing in self._group.pairings:
+            _, edge, _ = self._walk_pairing(pairing, timestamp, buy=True, max_qty=0, order_mode=OrderMode.MAKER)
             if edge > best_edge:
                 best_edge = edge
                 best_pairing = pairing
         if best_pairing is None:
             return None
-        entry_max = self.max_position * self._size if self.max_position > 0 else 0
-        arb_qty, arb_edge, arb_legs = self._walk_pairing(best_pairing, timestamp, buy=True, max_qty=entry_max)
-        if arb_qty <= 0:
+
+        entry_max = self.max_position if self.max_position > 0 else 0
+        result = self._select_order_mode(best_pairing, timestamp, entry_max)
+        if result is None:
             return None
-        new_target = dict(base_target)
-        for _, lst, _ in arb_legs:
-            new_target[lst] = arb_qty
-        self._group_target[group.index] = new_target
-        self._group_entry_edge[group.index] = arb_edge
-        self._group_entry_pairing[group.index] = best_pairing.index
-        self._group_max_edge[group.index] = arb_edge
-        for lst in new_target:
-            self._logged_at_target.pop(lst, None)
-        return new_target, best_pairing, arb_qty, arb_edge, arb_legs
 
-    def _clear_group_state(self, group_index: int) -> None:
-        self._group_target.pop(group_index, None)
-        self._group_entry_edge.pop(group_index, None)
-        self._group_entry_pairing.pop(group_index, None)
-        self._group_max_edge.pop(group_index, None)
-
-    def _compute_exit_edge(
-        self, group: ContractGroup, timestamp: int, pairing: VenuePairing
-    ) -> tuple[int, float, float, list[tuple[int, Listing, int]]]:
-        current_qty = max(
-            (abs(self._net_qty(lst)) for _, lst in pairing.legs), default=0
+        mode, arb_qty, arb_edge, arb_legs = result
+        legs = [ArbLeg(listing=lst, target_qty=arb_qty) for _, lst in arb_legs]
+        self._portfolio = ArbPortfolio(
+            legs, pairing_index=best_pairing.index, order_mode=mode, cancel_grace_ns=self._cancel_grace_ns,
         )
-        qty, exit_edge, legs = self._walk_pairing(pairing, timestamp, buy=False, max_qty=current_qty)
-        if qty <= 0:
-            return 0, 0.0, float("-inf"), []
-        total = sum(p / PRICE_SCALE for _, _, p in legs)
-        return qty, total, exit_edge, legs
+        self._constraint = ArbBudgetConstraint(legs, self.min_pure_arb_bps, self._maker_fee_rates, self._taker_fee_rates)
+        for _, lst in arb_legs:
+            self._logged_at_target.pop(lst, None)
+        self._debug(timestamp, "PHASE_CHANGE", old="IDLE", new="ENTERING", mode=mode.name)
+        return self._portfolio.as_target_dict(), arb_edge
+
+    def _clear_state(self) -> None:
+        self._portfolio = None
+        self._constraint = None
+        self._logged_at_target.clear()
+        self._last_maker_price.clear()
+        self._last_reprice_ts.clear()
+
+    def _compute_stuck_cost(self, listing: Listing) -> float:
+        other_legs = [leg for leg in self._portfolio.legs if leg.listing != listing]
+        if not other_legs or all(leg.is_filled for leg in other_legs):
+            return 0.0
+        lam = self._stuck_cost_lambda
+        if lam is None or lam <= 0:
+            return 0.0
+        bid_book = self._bid_book.get(listing, [])
+        ask_book = self._ask_book.get(listing, [])
+        if not bid_book or not ask_book or bid_book[0][0] <= 0 or ask_book[0][0] <= 0:
+            return 0.0
+        spread = (ask_book[0][0] - bid_book[0][0]) / Scales.PRICE
+        unwind_cost = spread * self._unwind_spread_mult
+        p_other = 1.0
+        for leg in other_legs:
+            if not leg.is_filled:
+                ob = self._bid_book.get(leg.listing, [])
+                oa = self._ask_book.get(leg.listing, [])
+                if ob and oa and ob[0][0] > 0 and oa[0][0] > 0:
+                    s = (oa[0][0] - ob[0][0]) / Scales.PRICE
+                else:
+                    s = 0.0
+                p_other *= exp(-lam * s)
+        return (1.0 - p_other) * unwind_cost
+
+    def _log_slippage(self, timestamp: int, pairing: VenuePairing, event: str) -> None:
+        if self._depth_coverage is None:
+            return
+        parts = []
+        for _, lst in pairing.legs:
+            depth = self._depth_coverage.get_ask_depth(lst)
+            parts.append(f"({lst[0]},{lst[1]}):cheap_depth={depth:.2f}")
+        print(f"[{timestamp}] {event}_COVERAGE pairing={pairing.index} {' | '.join(parts)}")
+
+    def _log_fill_risk(self, timestamp: int, pairing: VenuePairing, event: str) -> None:
+        if self._fill_risk is None:
+            return
+        parts = []
+        for _, lst in pairing.legs:
+            spread = self._fill_risk.get_spread(lst)
+            p_fill = self._fill_risk.get_fill_prob(lst)
+            penalty = self._fill_risk.cost(lst, 0, Side.BID, 0)
+            parts.append(
+                f"({lst[0]},{lst[1]}):spread={spread:.4f},p_fill={p_fill:.3f},penalty={penalty:.4f}"
+            )
+        print(f"[{timestamp}] {event} pairing={pairing.index} {' | '.join(parts)}")

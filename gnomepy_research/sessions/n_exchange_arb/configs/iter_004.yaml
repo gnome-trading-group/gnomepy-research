@@ -6,7 +6,6 @@ strategy:
     entry_threshold_bps: 2.0
     close_threshold_bps: 0.5
     max_imbalance_ticks: 150
-    max_staleness_ns: 60000000000
     warmup_ticks: 50
     processing_time_ns: 0
 

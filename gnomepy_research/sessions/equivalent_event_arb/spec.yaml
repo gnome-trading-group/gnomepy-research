@@ -7,6 +7,52 @@ description: >
   trade cross-venue price discrepancies that tend to mean-revert (stat arb via EWMA z-score).
   Auto-discovers contract groups from event_ids via EQUIVALENT relationships in the registry.
 
+data:
+  listings:
+    - listing_id: 253844
+      profile: polymarket
+    - listing_id: 253845
+      profile: polymarket
+    - listing_id: 246127
+      profile: kalshi
+    - listing_id: 246126
+      profile: kalshi
+  date_ranges:
+    - start: "2026-08-24T16:54:00"
+      end: "2026-08-24T17:06:40"  
+
+profiles:
+  polymarket:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 0
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+  kalshi:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0175
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 0
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+
 goals:
   primary_metric: final_pnl
   direction: maximize

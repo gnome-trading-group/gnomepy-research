@@ -1,0 +1,14 @@
+fee_model:
+  type: parametric
+  taker_fee_rate: 0.07
+  maker_fee_rate: 0.0
+network_latency:
+  type: static
+  latency_nanos: 50000000
+order_processing_latency:
+  type: maker_taker
+  base_nanos: 5000000
+  taker_delay_nanos: 250000000
+  maker_delay_nanos: 0
+queue_model:
+  type: risk_averse

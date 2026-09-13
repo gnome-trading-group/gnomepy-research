@@ -10,7 +10,6 @@ strategy:
     stop_z: 4.0
     max_hold_ns: 3600000000000
     max_imbalance_ticks: 20
-    max_staleness_ns: 60000000000
     min_spread_bps: 0.5
     reversion_ticks: 0
     processing_time_ns: 0

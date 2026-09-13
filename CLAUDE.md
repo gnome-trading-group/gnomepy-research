@@ -9,9 +9,25 @@ poetry run pytest       # run all tests
 
 ## Strategy Research Sessions
 
-Research sessions live in `gnomepy_research/sessions/<name>/`. Start a new session with `/research-new <name>`, fill in `spec.yaml`, then run `/research <name>` (or `/loop /research <name>` for continuous iteration).
+Research sessions live in `gnomepy_research/sessions/<name>/`. Start a new session with `/research-new <name>`, then run `/research <name>` (or `/loop /research <name>` for continuous iteration).
 
 Each session runs on its own git branch `research/<name>`, created automatically on the first iteration.
+
+**Commands:**
+- `/research-new <name>` — Create a new session (5-round wizard)
+- `/research <name>` — Run one iteration
+- `/loop /research <name>` — Run continuously until targets are met or max iterations reached
+- `/research-branch <parent> <suffix>` — Fork an existing session to explore a different approach in parallel. Creates session `<parent>__<suffix>` with its own git worktree for parallel execution.
+- `/research-status` — Dashboard showing all sessions grouped by parent/branch, with current metrics
+- `/research-validate <name>` — Walk-forward out-of-sample validation
+- `/research-hint <name>` — Queue a directive for the next autonomous iteration
+
+**Parallel exploration workflow:**
+1. Create a base session: `/research-new my_arb`
+2. Run a few iterations to establish a working strategy: `/research my_arb`
+3. Branch into parallel explorations: `/research-branch my_arb approach_a`, `/research-branch my_arb approach_b`
+4. Each branch gets its own worktree — open separate terminals, cd to each worktree, run `poetry install`, then `/loop /research my_arb__approach_a` and `/loop /research my_arb__approach_b`
+5. Monitor all branches: `/research-status`
 
 ### Session structure
 ```
@@ -21,10 +37,13 @@ gnomepy_research/sessions/<name>/
   strategy.py       # single strategy file, modified in place each iteration
   configs/          # per-iteration backtest YAML configs and sweep configs
   results/          # backtest outputs (per-iteration subdirectories)
-  notes/            # local note files synced from API (for Obsidian)
+  notes/            # local note files synced from API (poetry run research notes pull <name>)
 ```
 
-Session state (iterations, notes, status) is stored in the API — viewable at the Research page in the web UI. `session.json` is no longer used.
+Session state (iterations, notes, status) is stored in the API — viewable at the Research page in the web UI.
+
+### Exchange profiles
+Saved exchange profiles live in `gnomepy_research/profiles/`. Current profiles: `hyperliquid`, `lighter`, `polymarket`, `kalshi`. The `/research-new` wizard picks these up automatically so you don't re-specify fees and latency each time. New profiles created during `/research-new` are saved here for future reuse.
 
 ### Iteration modes
 - **Local run**: for logic changes — writes a config YAML, runs via `poetry run gnomepy backtest run --config <path>`

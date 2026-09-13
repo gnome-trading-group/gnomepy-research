@@ -1,0 +1,12 @@
+fee_model:
+  type: static
+  taker_fee: 0.0004
+  maker_fee: 0.00012
+network_latency:
+  type: static
+  latency_nanos: 20000000
+order_processing_latency:
+  type: static
+  latency_nanos: 5000000
+queue_model:
+  type: risk_averse

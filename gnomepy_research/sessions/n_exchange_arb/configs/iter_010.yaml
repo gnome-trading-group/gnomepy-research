@@ -9,7 +9,6 @@ strategy:
     close_z: 0.1
     max_hold_ns: 10000000000
     max_imbalance_ticks: 20
-    max_staleness_ns: 60000000000
     min_spread_bps: 0.05
     processing_time_ns: 0
 
