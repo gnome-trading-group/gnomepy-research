@@ -5,7 +5,7 @@ from gnomepy_research.strategies.informed_prediction_market_maker import Informe
 strategy = InformedPredictionMarketMaker(
     ref_listing_id=129651,
     quote_listing_id=130435,
-    value_function_path="gnomepy_research/solvers/value_function_g20.npz",
+    value_function_path="gnomepy_research/solvers/value_function_Q10.npz",
     size=1_000_000,
     max_position=50,
     warmup_ticks=50,
