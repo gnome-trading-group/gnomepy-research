@@ -1,11 +1,11 @@
 strategy:
   class_name: "gnomepy_research.strategies.informed_prediction_market_maker:InformedPredictionMarketMaker"
   args:
-    ref_listing_id: 129651
-    quote_listing_id: 130435
-    value_function_path: "gnomepy_research/solvers/value_function_g50.npz"
+    ref_listing_id: 117905
+    quote_listing_id: 115763
+    value_function_path: "gnomepy_research/solvers/value_function_Q10.npz"
     size: 1000000
-    max_position: 50
+    max_position: 10
     warmup_ticks: 50
     max_ref_staleness_ns: 5000000000
     kalman_Q: 0.0001
@@ -15,13 +15,13 @@ strategy:
 
 record_depth: 1
 
-start_date: "2026-08-19T14:30:00"
-end_date: "2026-08-19T14:48:00"
+start_date: "2026-08-19T21:24:00"
+end_date: "2026-08-19T22:10:00"
 
 listings:
-  - listing_id: 129651
+  - listing_id: 117905
     profile: kalshi
-  - listing_id: 130435
+  - listing_id: 115763
     profile: polymarket
 
 profiles:
