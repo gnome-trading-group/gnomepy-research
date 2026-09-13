@@ -1,0 +1,21 @@
+{
+  "sweep_id": "01a09bb0-81f9-71b6-9a66-8a723cb4c828",
+  "job_count": 1,
+  "completed_count": 1,
+  "sweep_params": {
+    "event_ids": [
+      "[55038, 53146]"
+    ]
+  },
+  "jobs": [
+    {
+      "job_index": 0,
+      "job_id": "01a09bb0-81f9-71b6-9a66-8a723cb4c828-0000",
+      "config_params": {
+        "event_ids": "[55038, 53146]"
+      },
+      "status": "COMPLETED",
+      "output": "gnomepy_research/sessions/equivalent_event_arb__low_vol_changes/results/iter_007/jobs/0000"
+    }
+  ]
+}
