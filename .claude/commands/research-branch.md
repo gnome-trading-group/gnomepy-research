@@ -66,10 +66,14 @@ touch gnomepy_research/sessions/<parent>__<suffix>/__init__.py
 
 Write the modified spec.yaml to `gnomepy_research/sessions/<parent>__<suffix>/spec.yaml`.
 
-If "Yes — copy parent strategy" was selected, copy the strategy file:
+If "Yes — copy parent strategy" was selected, copy all session `.py` files (except `__init__.py`) and the `best/` directory if it exists:
 ```bash
-cp gnomepy_research/sessions/<parent>/strategy.py \
-   gnomepy_research/sessions/<parent>__<suffix>/strategy.py
+for f in gnomepy_research/sessions/<parent>/*.py; do
+  [ "$(basename "$f")" != "__init__.py" ] && cp "$f" gnomepy_research/sessions/<parent>__<suffix>/
+done
+if [ -d gnomepy_research/sessions/<parent>/best ]; then
+  cp -r gnomepy_research/sessions/<parent>/best gnomepy_research/sessions/<parent>__<suffix>/best
+fi
 ```
 
 ---
