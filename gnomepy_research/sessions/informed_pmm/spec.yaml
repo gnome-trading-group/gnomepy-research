@@ -8,15 +8,17 @@ description: >
 
 data:
   listings:
-    - listing_id: 129651
+    - listing_id: 97203    # Kalshi — Seahawks (ref)
       profile: kalshi
-    - listing_id: 130435
+    - listing_id: 97202    # Kalshi - Titans
+      profile: kalshi
+    - listing_id: 222852   # Polymarket — Seahawks YES (quote)
       profile: polymarket
-    - listing_id: 130436
+    - listing_id: 222853   # Polymarket — Titans (NO complement)
       profile: polymarket
   date_ranges:
-    - start: "2026-08-19T14:30:00"
-      end: "2026-08-19T14:48:00"
+    - start: "2026-08-24T00:25:00"
+      end: "2026-08-24T03:11:00"
 
 profiles:
   polymarket:
@@ -51,20 +53,26 @@ profiles:
       type: risk_averse
 
 goals:
-  primary_metric: final_pnl
+  primary_metric: sharpe
   direction: maximize
   thresholds:
     final_pnl: ">0"
-    fill_count: ">0"
+    fill_count: ">10"
+    final_position: "<2"     # near-flat — no accumulation
   targets:
-    sharpe: ">1.0"
+    sharpe: ">0.5"
 
 constraints:
   strategy_type: market_maker
-  max_iterations: 20
+  max_iterations: 40
   avoid:
-    - quoting when reference data is stale
-    - letting quotes cross after fee adjustment
+    - holding net position to resolution (all PnL must be realized through fills, not mark-to-market)
+    - one-sided quoting based on signal direction
+    - accumulating YES-only or NO-only positions beyond a small inventory buffer
+    - using the cross-venue discrepancy as a directional entry signal
+  notes:
+    - the discrepancy signal should widen/narrow the bid-ask spread, not gate quoting to one side
+    - PnL must be achievable on both a YES-resolving and NO-resolving game
 
 meta:
   execution_mode: local

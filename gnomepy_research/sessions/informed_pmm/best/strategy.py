@@ -3,8 +3,8 @@ from __future__ import annotations
 from gnomepy_research.sessions.informed_pmm.informed_prediction_market_maker import InformedPredictionMarketMaker
 
 strategy = InformedPredictionMarketMaker(
-    ref_listing_id=129651,
-    quote_listing_id=130435,
+    ref_listing_id=97203,
+    quote_listing_id=222852,
     value_function_path="gnomepy_research/solvers/value_function_kalshi_cal.npz",
     size=3_000_000,
     max_position=100,
