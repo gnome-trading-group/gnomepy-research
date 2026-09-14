@@ -34,15 +34,19 @@ Each session runs on its own git branch `research/<name>`, created automatically
 gnomepy_research/sessions/<name>/
   __init__.py       # empty — makes the session importable as a Python module
   spec.yaml         # user-authored goals and constraints — DO NOT MODIFY
-  strategy.py       # single strategy file, modified in place each iteration
+  strategy.py       # current working strategy (modified each iteration)
+  *.py              # session-local signals or utilities, if needed
+  best/             # snapshot of all .py files from the last accepted iteration
   configs/          # per-iteration backtest YAML configs and sweep configs
   results/          # backtest outputs (per-iteration subdirectories)
   notes/            # local note files synced from API (poetry run research notes pull <name>)
 ```
 
+**Code scope:** All code changes during a session stay under `sessions/<name>/`. Never modify files in `gnomepy_research/signals/`, `gnomepy_research/strategies/`, or elsewhere in the shared package — those are stable. If a session needs a modified signal or utility, copy it into the session directory and import from there. Promote session-local code to shared locations only after the session completes.
+
 Session state (iterations, notes, status) is stored in the API — viewable at the Research page in the web UI.
 
-**Accept/reject gate:** After each evaluation, `/research` compares the current iteration's primary metric against the best accepted baseline (`strategy_best.py`). On accept: `strategy_best.py` is updated and the API `bestIteration` is set. On reject: `strategy.py` is reverted to `strategy_best.py` and the next hypothesis starts from the accepted baseline. Both outcomes are recorded in iteration metadata (`accepted: true/false`, `returned_to: N`).
+**Accept/reject gate:** After each evaluation, `/research` compares the current iteration's primary metric against the best accepted baseline (`best/` directory). On accept: all session `.py` files (except `__init__.py`) are snapshotted to `best/` and `bestIteration` is set in the API. On reject: session `.py` files are restored from `best/` (new files added in the rejected iteration are removed). Both outcomes are recorded in iteration metadata (`accepted: true/false`, `returned_to: N`).
 
 **Cross-session memory:** `gnomepy_research/research_learnings.md` is appended when a session completes or stalls. `/research` Step 2 reads this file before forming each hypothesis — avoids re-running dead ends and bootstraps from known-good approaches. Learnings are also pushed as session notes (`poetry run research notes add`) for web UI visibility.
 

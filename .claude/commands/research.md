@@ -142,7 +142,7 @@ Rules:
 - Use signals from `gnomepy_research.signals`
 - Follow the pattern in `gnomepy_research/strategies/market_maker.py` (quoting) or `momentum.py` (taking)
 - Return `[]` from `on_execution_report` unless reactive logic is needed
-- **Not everything needs to live in `strategy.py`.** If you need a signal or reusable component that doesn't exist yet in `gnomepy_research/signals/`, create it there following the existing signal patterns. If you need a reusable non-signal utility, add it to `gnomepy_research/` as a new module. Import it from `strategy.py` as you would any other package code. Stage any new files in the Step 6 commit.
+- **All code changes stay under the session directory.** Never modify files outside `gnomepy_research/sessions/$ARGUMENTS/` during research. If you need a signal or component that doesn't exist yet or needs modification, copy it into the session directory and import from there (e.g., `from gnomepy_research.sessions.$ARGUMENTS.signals import MySignal`). Shared code in `gnomepy_research/signals/`, `gnomepy_research/strategies/`, etc. is stable — promote session-local code to shared locations only after the session completes and the approach is proven.
 
 ### 4A.2 — Write the backtest config
 
@@ -387,17 +387,40 @@ The last accepted iteration number is in `bestIteration` from the session JSON f
 - The current `primary_metric` is equal to or worse than the best accepted value
 
 **On ACCEPT:**
-1. `cp gnomepy_research/sessions/$ARGUMENTS/strategy.py gnomepy_research/sessions/$ARGUMENTS/strategy_best.py`
+1. Snapshot all session `.py` files (except `__init__.py`) into `best/`:
+   ```bash
+   mkdir -p gnomepy_research/sessions/$ARGUMENTS/best
+   for f in gnomepy_research/sessions/$ARGUMENTS/*.py; do
+     [ "$(basename "$f")" != "__init__.py" ] && cp "$f" gnomepy_research/sessions/$ARGUMENTS/best/
+   done
+   ```
 2. In Step 6: set `"accepted": true` in `--extra-metadata`
-3. After Step 6 git commit: `poetry run research sessions update $ARGUMENTS --best-iteration N`
+3. After Step 6 git commit, update the session with the new best values (substitute actual metric values from `summary.json`):
+   ```bash
+   poetry run research sessions update $ARGUMENTS \
+     --best-iteration N \
+     --best-pnl <final_pnl> \
+     --best-sharpe <sharpe>
+   ```
 4. Use commit message: `research/$ARGUMENTS: iter NNN (accepted)`
 
 **On REJECT:**
 1. Note `M` = the last accepted iteration number (from `bestIteration`)
 2. In Step 6: set `"accepted": false, "returned_to": M` in `--extra-metadata`
-3. After Step 6 git commit: `cp gnomepy_research/sessions/$ARGUMENTS/strategy_best.py gnomepy_research/sessions/$ARGUMENTS/strategy.py`
+3. After Step 6 git commit, restore from `best/` — restoring files that existed at accept time and removing any new files added in the rejected iteration:
+   ```bash
+   for f in gnomepy_research/sessions/$ARGUMENTS/*.py; do
+     base=$(basename "$f")
+     [ "$base" = "__init__.py" ] && continue
+     if [ -f "gnomepy_research/sessions/$ARGUMENTS/best/$base" ]; then
+       cp "gnomepy_research/sessions/$ARGUMENTS/best/$base" "$f"
+     else
+       rm "$f"
+     fi
+   done
+   ```
 4. Use commit message: `research/$ARGUMENTS: iter NNN (rejected, returned to iter M)`
-5. The next hypothesis starts from `strategy_best.py` — the rejected strategy is discarded
+5. The next hypothesis starts from the `best/` snapshot — the rejected strategy is discarded
 
 ---
 
@@ -426,14 +449,14 @@ poetry run research iterations record-from-results $ARGUMENTS \
   --extra-metadata '{"config_name": "gnomepy_research/sessions/$ARGUMENTS/configs/iter_NNN.yaml", "run_id": null, "best_params": {}, "thresholds_met": true, "threshold_failures": [], "changes": ["<change 1>"], "accepted": true}'
 ```
 
-Include `"accepted": true` or `"accepted": false` (from Step 5.5). On reject, also include `"returned_to": M`. Omit `--extra-metrics` if the significance check was skipped (thresholds not met). The Lambda handles updating `iteration_count`, `best_pnl`, `best_sharpe`, and `updated_at` automatically.
+Include `"accepted": true` or `"accepted": false` (from Step 5.5). On reject, also include `"returned_to": M`. Omit `--extra-metrics` if the significance check was skipped (thresholds not met).
 
 ALWAYS commit the iteration after recording — regardless of whether it was a local run or a sweep:
 
 ```bash
 git add \
-  gnomepy_research/sessions/$ARGUMENTS/strategy.py \
-  gnomepy_research/sessions/$ARGUMENTS/strategy_best.py \
+  gnomepy_research/sessions/$ARGUMENTS/*.py \
+  gnomepy_research/sessions/$ARGUMENTS/best/ \
   gnomepy_research/sessions/$ARGUMENTS/__init__.py \
   gnomepy_research/sessions/$ARGUMENTS/spec.yaml \
   gnomepy_research/sessions/$ARGUMENTS/configs/
@@ -444,8 +467,8 @@ git commit -m "research/$ARGUMENTS: iter NNN (accepted)"
 Do NOT stage `results/` or `session.json` — session state is now in the API.
 
 After committing, complete the accept/reject actions from Step 5.5:
-- **On ACCEPT:** `poetry run research sessions update $ARGUMENTS --best-iteration N`
-- **On REJECT:** `cp gnomepy_research/sessions/$ARGUMENTS/strategy_best.py gnomepy_research/sessions/$ARGUMENTS/strategy.py` (restore baseline so the next iteration starts from solid ground)
+- **On ACCEPT:** run the `sessions update` command from Step 5.5 (`--best-iteration`, `--best-pnl`, `--best-sharpe`)
+- **On REJECT:** run the `best/` restore script from Step 5.5 to reset all session `.py` files to the accepted baseline
 
 ---
 
