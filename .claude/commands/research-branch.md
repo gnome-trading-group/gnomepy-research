@@ -23,7 +23,7 @@ If any validation fails, report the specific error and stop.
 ---
 
 ### 2. One round of questions
-Use `AskUserQuestion` with exactly these 3 questions in a single call:
+Use `AskUserQuestion` with exactly these 2 questions in a single call:
 
 1. **header: "Branch focus"** — What approach will this branch explore differently? Free-text via Other is expected. Include placeholder examples as options:
    - "Use EWMA z-score spread entry instead of raw bps threshold"
@@ -33,10 +33,6 @@ Use `AskUserQuestion` with exactly these 3 questions in a single call:
 2. **header: "Copy strategy?"** — Start from the parent's current strategy.py?
    - `Yes — copy parent strategy as starting point` *(Recommended if parent has run at least one iteration)*
    - `No — start blank (iteration 1 writes from scratch)`
-
-3. **header: "Override spec?"** — Any spec values need changing?
-   - `No — use parent spec as-is` *(Recommended)*
-   - `Yes — I'll edit spec.yaml after creation`
 
 ---
 
@@ -55,34 +51,14 @@ description: >
 
 All other fields (data, profiles, goals, thresholds, targets, constraints, meta) are copied verbatim.
 
----
-
-### 4. Create session directory structure
-```bash
-mkdir -p gnomepy_research/sessions/<parent>__<suffix>/configs
-mkdir -p gnomepy_research/sessions/<parent>__<suffix>/results
-touch gnomepy_research/sessions/<parent>__<suffix>/__init__.py
-```
-
-Write the modified spec.yaml to `gnomepy_research/sessions/<parent>__<suffix>/spec.yaml`.
-
-If "Yes — copy parent strategy" was selected, copy all session `.py` files (except `__init__.py`) and the `best/` directory if it exists:
-```bash
-for f in gnomepy_research/sessions/<parent>/*.py; do
-  [ "$(basename "$f")" != "__init__.py" ] && cp "$f" gnomepy_research/sessions/<parent>__<suffix>/
-done
-if [ -d gnomepy_research/sessions/<parent>/best ]; then
-  cp -r gnomepy_research/sessions/<parent>/best gnomepy_research/sessions/<parent>__<suffix>/best
-fi
-```
+Hold this modified spec in memory — do not write it yet.
 
 ---
 
-### 5. Create git branch
+### 4. Create git branch
 Create a new branch from the parent's research branch:
 
 ```bash
-# Check if parent branch exists
 git show-ref --verify --quiet refs/heads/research/<parent> && \
   git branch research/<parent>__<suffix> research/<parent> || \
   git branch research/<parent>__<suffix> HEAD
@@ -92,24 +68,63 @@ This branches from the parent's current code (including any committed strategy w
 
 ---
 
-### 6. Create git worktree
+### 5. Create git worktree
 Create a separate working directory for this branch so it can run in parallel with the parent and other branches:
 
 ```bash
 WORKTREE_PATH="../gnomepy-research--<parent>__<suffix>"
 git worktree add "$WORKTREE_PATH" research/<parent>__<suffix>
+WORKTREE_OK=$?
 ```
 
-The worktree path uses double-dash before the session name so it's visually distinct from the main repo.
+Record whether the worktree was created successfully (`WORKTREE_OK=0`) or failed (`WORKTREE_OK!=0`). If it failed, report the error and continue — the session will be created in the main repo instead (fallback path below).
 
-If the worktree add fails (e.g., worktree already exists), report the error and continue — the session can still be used, just not in parallel with others on the same branch.
+---
+
+### 6. Create session directory structure
+
+**If worktree was created successfully** (`WORKTREE_OK=0`), create files inside the worktree:
+
+```bash
+SESSION_DIR="$WORKTREE_PATH/gnomepy_research/sessions/<parent>__<suffix>"
+mkdir -p "$SESSION_DIR/configs"
+mkdir -p "$SESSION_DIR/results"
+touch "$SESSION_DIR/__init__.py"
+```
+
+Write the modified spec.yaml to `$SESSION_DIR/spec.yaml`.
+
+If "Yes — copy parent strategy" was selected, copy `.py` files from the parent session that the worktree already has (it branched from the parent branch):
+
+```bash
+for f in "$WORKTREE_PATH/gnomepy_research/sessions/<parent>"/*.py; do
+  [ "$(basename "$f")" != "__init__.py" ] && cp "$f" "$SESSION_DIR/"
+done
+if [ -d "$WORKTREE_PATH/gnomepy_research/sessions/<parent>/best" ]; then
+  cp -r "$WORKTREE_PATH/gnomepy_research/sessions/<parent>/best" "$SESSION_DIR/best"
+fi
+```
+
+**If worktree creation failed** (fallback), create files in the main repo instead:
+
+```bash
+SESSION_DIR="gnomepy_research/sessions/<parent>__<suffix>"
+mkdir -p "$SESSION_DIR/configs"
+mkdir -p "$SESSION_DIR/results"
+touch "$SESSION_DIR/__init__.py"
+```
+
+Write spec.yaml to `$SESSION_DIR/spec.yaml`. If "copy strategy" was selected, copy from the main repo's parent session directory.
 
 ---
 
 ### 7. Register in the API
+
+Run from the main repo (the worktree has no venv yet — `poetry install` is in the user's instructions). Use an absolute `--spec` path so it resolves correctly regardless of whether `SESSION_DIR` points into the worktree or the main repo:
+
 ```bash
 poetry run research sessions create <parent>__<suffix> \
-  --spec gnomepy_research/sessions/<parent>__<suffix>/spec.yaml \
+  --spec "$(pwd)/$SESSION_DIR/spec.yaml" \
   --branch research/<parent>__<suffix> \
   --tags "branch,parent:<parent>"
 ```
@@ -121,9 +136,9 @@ If the session already exists in the API, the command exits cleanly.
 ### 8. Output instructions
 Tell the user:
 
-- Session `<parent>__<suffix>` is ready at `gnomepy_research/sessions/<parent>__<suffix>/`
+- Session `<parent>__<suffix>` is ready
 - Git branch `research/<parent>__<suffix>` created from `research/<parent>`
-- Worktree created at `<WORKTREE_PATH>`
+- Worktree created at `<WORKTREE_PATH>` (or note that worktree creation failed and the session lives in the main repo)
 
 Provide the exact commands to start iterating in the new worktree:
 ```
@@ -133,8 +148,6 @@ claude
 # then inside claude:
 /loop /research <parent>__<suffix>
 ```
-
-If "Yes — I'll edit spec.yaml" was selected, remind them to edit `gnomepy_research/sessions/<parent>__<suffix>/spec.yaml` in the worktree before starting.
 
 ---
 
