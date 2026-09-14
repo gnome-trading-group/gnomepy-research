@@ -95,6 +95,18 @@ class InformedPredictionMarketMaker(Strategy):
             expiry_dt = expiry_dt.replace(tzinfo=timezone.utc)
         self.resolution_time_ns: int = int(expiry_dt.timestamp() * 1e9)
 
+        all_event_contracts = registry.get_event_contracts(event_id=contracts[0].event_id)
+        no_contracts = [c for c in all_event_contracts if c.security_id != self._quote_sid]
+        if not no_contracts:
+            raise ValueError(f"No complementary contract for event_id={contracts[0].event_id}")
+        no_sid = no_contracts[0].security_id
+        no_listings = registry.get_listing(exchange_id=self._quote_eid, security_id=no_sid)
+        if not no_listings:
+            raise ValueError(
+                f"No listing for NO contract sid={no_sid} on eid={self._quote_eid}"
+            )
+        self._no_sid: int = no_sid
+
         self._ref_fv = MicropriceFairValue()
         self._kalman = KalmanOperation(Q=kalman_Q, R=kalman_R)
         self._ref_fair_value: float = 0.5
@@ -165,7 +177,9 @@ class InformedPredictionMarketMaker(Strategy):
         remaining_ns = max(self.resolution_time_ns - ts, 0)
         tau_norm = float(np.clip(remaining_ns / self._total_time_ns, 0.0, 1.0))
 
-        raw_position = self.positions.get_effective_quantity(self._quote_eid, self._quote_sid) // self._lot_size
+        yes_qty = max(self.positions.get_effective_quantity(self._quote_eid, self._quote_sid), 0) // self._lot_size
+        no_qty = max(self.positions.get_effective_quantity(self._quote_eid, self._no_sid), 0) // self._lot_size
+        raw_position = yes_qty - no_qty
         position = int(np.clip(raw_position, -self.max_position, self.max_position))
 
         qi = self._nearest_q_idx(position)
@@ -230,14 +244,59 @@ class InformedPredictionMarketMaker(Strategy):
         bid_size_scaled = max(int(self.size * scale), 0) if raw_position > 0 else self.size
         ask_size_scaled = max(int(self.size * scale), 0) if raw_position < 0 else self.size
 
-        return [Intent(
-            exchange_id=self._quote_eid,
-            security_id=self._quote_sid,
-            bid_price=bid_price_int,
-            bid_size=bid_size_scaled if bid_price_int > 0 else 0,
-            ask_price=ask_price_int,
-            ask_size=ask_size_scaled if ask_price_int > 0 else 0,
-        )]
+        yes_bid_price = 0
+        yes_bid_size = 0
+        yes_ask_price = 0
+        yes_ask_size = 0
+        no_bid_price = 0
+        no_bid_size = 0
+        no_ask_price = 0
+        no_ask_size = 0
+
+        if bid_price_int > 0 and bid_size_scaled > 0:
+            if no_qty > 0:
+                close_no = min(bid_size_scaled, no_qty * self._lot_size)
+                no_ask_price = PRICE_SCALE - bid_price_int
+                no_ask_size = close_no
+                leftover = bid_size_scaled - close_no
+                if leftover > 0:
+                    yes_bid_price = bid_price_int
+                    yes_bid_size = leftover
+            else:
+                yes_bid_price = bid_price_int
+                yes_bid_size = bid_size_scaled
+
+        if ask_price_int > 0 and ask_size_scaled > 0:
+            if yes_qty > 0:
+                close_yes = min(ask_size_scaled, yes_qty * self._lot_size)
+                yes_ask_price = ask_price_int
+                yes_ask_size = close_yes
+                leftover = ask_size_scaled - close_yes
+                if leftover > 0:
+                    no_bid_price = PRICE_SCALE - ask_price_int
+                    no_bid_size = leftover
+            else:
+                no_bid_price = PRICE_SCALE - ask_price_int
+                no_bid_size = ask_size_scaled
+
+        return [
+            Intent(
+                exchange_id=self._quote_eid,
+                security_id=self._quote_sid,
+                bid_price=yes_bid_price,
+                bid_size=yes_bid_size,
+                ask_price=yes_ask_price,
+                ask_size=yes_ask_size,
+            ),
+            Intent(
+                exchange_id=self._quote_eid,
+                security_id=self._no_sid,
+                bid_price=no_bid_price,
+                bid_size=no_bid_size,
+                ask_price=no_ask_price,
+                ask_size=no_ask_size,
+            ),
+        ]
 
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
         return []

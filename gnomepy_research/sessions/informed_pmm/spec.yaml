@@ -12,6 +12,8 @@ data:
       profile: kalshi
     - listing_id: 130435
       profile: polymarket
+    - listing_id: 130436
+      profile: polymarket
   date_ranges:
     - start: "2026-08-19T14:30:00"
       end: "2026-08-19T14:48:00"
