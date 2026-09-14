@@ -1,0 +1,68 @@
+strategy:
+  class_name: "gnomepy_research.sessions.equivalent_event_arb__low_vol_changes.strategy:LowVolEquivalentEventArb"
+  args:
+    event_ids: [[55038, 53146]]
+    max_position: 50
+    exchange_fees:
+      polymarket:
+        taker: 0.07
+        maker: 0.0
+      kalshi:
+        taker: 0.07
+        maker: 0.0175
+    min_pure_arb_bps: 2.0
+    taker_edge_threshold_bps: 99999.0
+    use_taker_orders: false
+    exit_edge_threshold_bps: 2.0
+    processing_time_ns: 5000000
+    allow_scaling: true
+    allow_early_exit: true
+    imbalance_timeout_ns: 120000000000
+    vol_regime_alpha: 0.999
+    vol_regime_warmup: 50
+    vol_regime_threshold: 1.5
+
+start_date: "2026-08-24T16:54:00"
+end_date: "2026-08-24T17:06:40"
+
+listings:
+  - listing_id: 253844
+    profile: polymarket
+  - listing_id: 253845
+    profile: polymarket
+  - listing_id: 246127
+    profile: kalshi
+  - listing_id: 246126
+    profile: kalshi
+
+profiles:
+  polymarket:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 0
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+  kalshi:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0175
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 0
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
