@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gnomepy_research.strategies.informed_prediction_market_maker import InformedPredictionMarketMaker
+from gnomepy_research.sessions.informed_pmm.informed_prediction_market_maker import InformedPredictionMarketMaker
 
 strategy = InformedPredictionMarketMaker(
     ref_listing_id=129651,
