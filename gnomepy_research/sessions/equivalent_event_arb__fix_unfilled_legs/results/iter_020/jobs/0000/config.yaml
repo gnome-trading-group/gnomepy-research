@@ -1,0 +1,66 @@
+end_date: '2026-08-19T22:10:00'
+listings:
+- listing_id: 117905
+  profile: polymarket
+- listing_id: 117906
+  profile: polymarket
+- listing_id: 115763
+  profile: kalshi
+- listing_id: 115764
+  profile: kalshi
+profiles:
+  kalshi:
+    fee_model:
+      maker_fee_rate: 0.0175
+      taker_fee_rate: 0.07
+      type: parametric
+    network_latency:
+      latency_nanos: 50000000
+      type: static
+    order_processing_latency:
+      base_nanos: 5000000
+      maker_delay_nanos: 0
+      taker_delay_nanos: 0
+      type: maker_taker
+    queue_model:
+      type: risk_averse
+  polymarket:
+    fee_model:
+      maker_fee_rate: 0.0
+      taker_fee_rate: 0.07
+      type: parametric
+    network_latency:
+      latency_nanos: 50000000
+      type: static
+    order_processing_latency:
+      base_nanos: 5000000
+      maker_delay_nanos: 0
+      taker_delay_nanos: 0
+      type: maker_taker
+    queue_model:
+      type: risk_averse
+record_depth: 10
+start_date: '2026-08-19T21:24:00'
+strategy:
+  args:
+    allow_scaling: false
+    debug: true
+    event_ids:
+    - 22765
+    - 22167
+    exchange_fees:
+      kalshi:
+        maker: 0.0175
+        taker: 0.07
+      polymarket:
+        maker: 0.0
+        taker: 0.07
+    imbalance_timeout_ns: 120000000000
+    max_position: 100
+    min_contract_price: 0.3
+    min_pure_arb_bps: 5.0
+    price_model: join_best_bid
+    processing_time_ns: 5000000
+    taker_edge_threshold_bps: 99999
+    use_taker_orders: false
+  class_name: gnomepy_research.sessions.equivalent_event_arb__fix_unfilled_legs.strategy:EquivalentEventArbFillFix

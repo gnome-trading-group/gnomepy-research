@@ -1,0 +1,8 @@
+{
+  "config": "config.yaml",
+  "job_index": 0,
+  "sweep_id": "01a09c1b-9cee-7aff-b74e-d5edbfdeebcf",
+  "config_params": {
+    "event_ids": "[55038, 53146]"
+  }
+}

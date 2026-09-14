@@ -1,0 +1,21 @@
+{
+  "sweep_id": "01a09c97-471c-744c-b4fd-3ca3bd996441",
+  "job_count": 1,
+  "completed_count": 1,
+  "sweep_params": {
+    "event_ids": [
+      "[22765, 22167]"
+    ]
+  },
+  "jobs": [
+    {
+      "job_index": 0,
+      "job_id": "01a09c97-471c-744c-b4fd-3ca3bd996441-0000",
+      "config_params": {
+        "event_ids": "[22765, 22167]"
+      },
+      "status": "COMPLETED",
+      "output": "gnomepy_research/sessions/equivalent_event_arb__fix_unfilled_legs/results/iter_020/jobs/0000"
+    }
+  ]
+}
