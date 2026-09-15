@@ -1,0 +1,89 @@
+name: informed_pmm__bid_ask_spread_pnl_only
+description: >
+  [BRANCH: bid_ask_spread_pnl_only] Pure spread-capture market maker on Polymarket
+  football prediction contracts (Seahawks vs Titans, Aug 23 2026) using Kalshi as
+  the reference signal. Must earn exclusively from the bid-ask spread — quotes
+  two-sided and actively closes positions throughout the game. PnL should be roughly
+  symmetric regardless of game outcome. Uses all 4 listings (YES/NO on both Kalshi
+  and Polymarket). Quotes both YES and NO sides on Polymarket independently.
+
+  Original: Multi-venue informed market making on binary prediction market contracts.
+  Uses a reference venue (Kalshi, deeper liquidity) as a Kalman-smoothed microprice
+  signal and quotes HJB-optimal spreads on a quoting venue (Polymarket). Reduces
+  adverse selection by anchoring to the cross-venue fair value rather than the
+  quoting venue's local book mid.
+
+data:
+  listings:
+    - listing_id: 97203   # Kalshi — Seahawks YES (ref)
+      profile: kalshi
+    - listing_id: 97202   # Kalshi — Titans NO (ref complement)
+      profile: kalshi
+    - listing_id: 222852  # Polymarket — Seahawks YES (quote)
+      profile: polymarket
+    - listing_id: 222853  # Polymarket — Titans NO (quote complement)
+      profile: polymarket
+  date_ranges:
+    - start: "2026-08-24T00:25:00"
+      end:   "2026-08-24T03:11:00"
+
+profiles:
+  polymarket:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+  kalshi:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0175
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+
+goals:
+  primary_metric: sharpe
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">10"
+    final_position: "<2"     # near-flat — no accumulation
+  targets:
+    sharpe: ">0.5"
+
+constraints:
+  strategy_type: market_maker
+  max_iterations: 40
+  avoid:
+    - holding net position to resolution (all PnL must be realized through fills, not mark-to-market)
+    - one-sided quoting based on signal direction
+    - accumulating YES-only or NO-only positions beyond a small inventory buffer
+    - using the cross-venue discrepancy as a directional entry signal
+  notes:
+    - the discrepancy signal should widen/narrow the bid-ask spread, not gate quoting to one side
+    - PnL must be achievable on both a YES-resolving and NO-resolving game
+
+meta:
+  execution_mode: local
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous
