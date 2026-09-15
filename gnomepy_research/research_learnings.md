@@ -9,6 +9,31 @@ Read by `/research` Step 2 before forming each hypothesis — check for matching
 
 <!-- Entries appended here by /research Step 7 -->
 
+### informed_pmm__bid_ask_spread_pnl_only — 2026-09-15 — stalled at iter_018 (best=iter_012)
+
+**Session**: informed_pmm__bid_ask_spread_pnl_only | **Strategy type**: mm | **Listing IDs**: ref=97203/97202 (Kalshi Seahawks YES/NO), quote=222852/222853 (Polymarket Seahawks YES/NO)
+**Best result**: iter_012 — PnL $2.50, 18 fills, Sharpe 0.00883 | **Date range**: 2026-08-24 00:25–03:11 (Seahawks vs Titans football game)
+
+**What worked:**
+- `size=5_000_000` (5 contracts per quote), `max_position=20`: both necessary for correct sizing. Larger size (10M) causes naked short via engine order-update overfill race condition (see below).
+- `yes_bid_tau_threshold=0.20`: CRITICAL safety guard — prevents YES bid quoting in the final ~33 min of game. Setting to 0.10 causes catastrophic +21 naked long ($8.29 loss) when game outcome becomes clear.
+- `kalman_Q=0.01, kalman_R=0.01`: Kalman Q parameter has zero effect on fills (changing to 0.001 produced identical 18 fills, same PnL, same Sharpe). Fills are driven by market participants crossing quotes, not reference signal precision.
+- `close_spread_ticks=1`: Closes at fill_price + 1 tick; effective close price is HJB-optimal (periodic update overrides reactive close within 1s).
+
+**What failed / dead ends:**
+- `size=10_000_000`: Engine order-update behavior causes naked short. When new Intent resets remaining of a partially-filled order, the entire new size can fill, overselling by ~8.59 contracts.
+- `yes_bid_tau_threshold=0.10`: Allows YES bids in final ~16 min → accumulates +21 YES contracts that resolve at $0 when Seahawks lose.
+- `get_effective_quantity` cap for ask size: Two competing close paths (on_execution_report reactive + _on_market_data_impl periodic) reset each other's order sizes even with accurate cap. Both paths must coexist as designed.
+- Removing reactive close from `on_execution_report`: Removes `_last_quote_ts` reset → more frequent bid quoting → more position accumulation → MORE naked short exposure.
+- `kalman_Q=0.001` (and other Kalman Q values): Zero effect. Fills are market-driven.
+
+**Structural insights:**
+- **Engine order-update behavior**: When a new Intent arrives for the same (eid, sid, side) slot, it RESETS the remaining size of the existing order. A 1.078433M remaining order updated to 5M allows 5M MORE fills. Hard cap on ask_size using `_filled_qty` (not `get_effective_quantity`) avoids this only with size=5M where timing races are rare.
+- **Fill pattern**: ALL profitable fills are on NO contract (223653, Titans NO ≈ "Seahawks lose"). NO contracts bought at 0.41-0.48 in first 4 minutes, sold at 0.51-0.61 in last ~3 minutes of game. Holds 2+ hours as maker asks waiting for market to rally.
+- **Sharpe structural limit**: Only 5/8 positive time buckets. Sharpe=0.00883 vs target 0.5 requires 56x improvement impossible with single-game data. Test on multi-game window to achieve statistical significance.
+- **Football market thinness**: Only 18 fills over 2.75 hours despite quoting at 1s intervals. Market participants on Polymarket for this football game are very sparse. More frequent quoting won't help.
+- **Directional element**: PnL comes from NO contracts rallying during final game period. Not pure spread capture — equivalent to 2-hour carry with maker exit at 0.51-0.61 vs maker entry at 0.41-0.48.
+
 ### informed_pmm — 2026-09-14 — completed (iter_021 accepted, $15.43 PnL)
 
 **Session**: informed_pmm | **Strategy type**: mm | **Listing IDs**: ref=129651 (Kalshi), quote=130435/130436 (Polymarket YES/NO)

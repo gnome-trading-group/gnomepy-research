@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-from gnomepy import ExecutionReport, Intent, Strategy
+from gnomepy import ExecutionReport, Intent, Side, Strategy
+from gnomepy.java.enums import ExecType
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
@@ -40,9 +41,14 @@ class SpreadCapturePMM(Strategy):
         processing_time_ns: int = 5_000_000,
         min_quote_interval_ns: int = 1_000_000_000,
         resolution_time_override_ns: int = 0,
+        close_spread_ticks: int = 1,
+        yes_bid_tau_threshold: float = 0.0,
+        no_bid_tau_threshold: float = 0.0,
     ):
         self.size = size
         self.max_position = max_position
+        self._yes_bid_tau_threshold = yes_bid_tau_threshold
+        self._no_bid_tau_threshold = no_bid_tau_threshold
         self.inventory_fade = inventory_fade
         self.warmup_ticks = warmup_ticks
         self._max_ref_staleness_ns = max_ref_staleness_ns
@@ -86,6 +92,7 @@ class SpreadCapturePMM(Strategy):
         specs = registry.get_listing_spec(listing_id=quote_yes_listing_id)
         self._tick_size: int = int(specs[0].tick_size) if specs else 1
         self._lot_size: int = int(specs[0].lot_size) if specs else 1
+        self._close_spread_int: int = close_spread_ticks * self._tick_size
 
         contracts = registry.get_event_contracts(security_id=self._yes_sid)
         if not contracts:
@@ -116,6 +123,10 @@ class SpreadCapturePMM(Strategy):
         self._yes_book_ask: int = 0
         self._no_book_bid: int = 0
         self._no_book_ask: int = 0
+
+        self._last_posted_bid: dict[int, int] = {}
+        self._last_posted_ask: dict[int, int] = {}
+        self._filled_qty: dict[int, float] = {}
 
         self._start_time_ns: int | None = None
         self._total_time_ns: int | None = None
@@ -278,42 +289,64 @@ class SpreadCapturePMM(Strategy):
         else:
             p_raw = self._ref_yes_value
         p = float(np.clip(p_raw, self._params.p_min, self._params.p_max))
+        p_no = float(np.clip(1.0 - p_raw, self._params.p_min, self._params.p_max))
 
         remaining_ns = max(self.resolution_time_ns - ts, 0)
         tau_norm = float(np.clip(remaining_ns / self._total_time_ns, 0.0, 1.0))
 
-        yes_qty = int(np.clip(
+        yes_qty_eff = int(np.clip(
             max(self.positions.get_effective_quantity(self._quote_eid, self._yes_sid), 0) // self._lot_size,
             0, self.max_position,
         ))
-        no_qty = int(np.clip(
+        no_qty_eff = int(np.clip(
             max(self.positions.get_effective_quantity(self._quote_eid, self._no_twin_sid), 0) // self._lot_size,
             0, self.max_position,
         ))
-
-        p_no = float(np.clip(1.0 - p_raw, self._params.p_min, self._params.p_max))
+        yes_qty_actual = int(np.clip(
+            max(self._filled_qty.get(self._yes_sid, 0.0), 0.0) // self._lot_size,
+            0, self.max_position,
+        ))
+        no_qty_actual = int(np.clip(
+            max(self._filled_qty.get(self._no_twin_sid, 0.0), 0.0) // self._lot_size,
+            0, self.max_position,
+        ))
 
         yes_bid, yes_ask = self._compute_hjb_quotes(
-            tau_norm, p, yes_qty, self._yes_book_bid, self._yes_book_ask,
+            tau_norm, p, yes_qty_actual, self._yes_book_bid, self._yes_book_ask,
         )
         no_bid, no_ask = self._compute_hjb_quotes(
-            tau_norm, p_no, no_qty, self._no_book_bid, self._no_book_ask,
+            tau_norm, p_no, no_qty_actual, self._no_book_bid, self._no_book_ask,
         )
 
-        yes_bid_sz, yes_ask_sz = self._compute_side_sizes(yes_qty)
-        no_bid_sz, no_ask_sz = self._compute_side_sizes(no_qty)
+        yes_bid_sz, yes_ask_sz = self._compute_side_sizes(yes_qty_eff)
+        no_bid_sz, no_ask_sz = self._compute_side_sizes(no_qty_eff)
+        yes_ask_sz = min(yes_ask_sz, int(max(self._filled_qty.get(self._yes_sid, 0.0), 0.0)))
+        no_ask_sz = min(no_ask_sz, int(max(self._filled_qty.get(self._no_twin_sid, 0.0), 0.0)))
+
+        if self._yes_bid_tau_threshold > 0.0 and tau_norm < self._yes_bid_tau_threshold:
+            yes_bid = 0
+            yes_bid_sz = 0
+
+        if self._no_bid_tau_threshold > 0.0 and tau_norm < self._no_bid_tau_threshold:
+            no_bid = 0
+            no_bid_sz = 0
 
         if self._metrics_buf is not None:
             row = self._metrics_buf.appendRow()
             self._metrics_buf.setLong(row, self._m_ts, ts)
             self._metrics_buf.setDouble(row, self._m_ref_fv, p)
             self._metrics_buf.setDouble(row, self._m_tau, tau_norm)
-            self._metrics_buf.setDouble(row, self._m_yes_q, float(yes_qty))
-            self._metrics_buf.setDouble(row, self._m_no_q, float(no_qty))
+            self._metrics_buf.setDouble(row, self._m_yes_q, float(yes_qty_actual))
+            self._metrics_buf.setDouble(row, self._m_no_q, float(no_qty_actual))
             self._metrics_buf.setDouble(row, self._m_yes_bid, yes_bid / PRICE_SCALE if yes_bid else 0.0)
             self._metrics_buf.setDouble(row, self._m_yes_ask, yes_ask / PRICE_SCALE if yes_ask else 0.0)
             self._metrics_buf.setDouble(row, self._m_no_bid, no_bid / PRICE_SCALE if no_bid else 0.0)
             self._metrics_buf.setDouble(row, self._m_no_ask, no_ask / PRICE_SCALE if no_ask else 0.0)
+
+        self._last_posted_bid[self._yes_sid] = yes_bid
+        self._last_posted_ask[self._yes_sid] = yes_ask
+        self._last_posted_bid[self._no_twin_sid] = no_bid
+        self._last_posted_ask[self._no_twin_sid] = no_ask
 
         return [
             Intent(
@@ -335,4 +368,50 @@ class SpreadCapturePMM(Strategy):
         ]
 
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
-        return []
+        if report.exec_type not in (ExecType.FILL, ExecType.PARTIAL_FILL):
+            return []
+
+        eid = report.exchange_id
+        sid = report.security_id
+        if eid != self._quote_eid or sid not in (self._yes_sid, self._no_twin_sid):
+            return []
+
+        fill_price = report.fill_price
+        fill_qty = report.filled_qty
+        last_bid = self._last_posted_bid.get(sid, 0)
+        last_ask = self._last_posted_ask.get(sid, 0)
+
+        if last_bid > 0 and last_ask > 0:
+            is_bid = abs(fill_price - last_bid) <= abs(fill_price - last_ask)
+        elif last_bid > 0:
+            is_bid = True
+        elif last_ask > 0:
+            is_bid = False
+        else:
+            return []
+
+        if is_bid:
+            self._filled_qty[sid] = self._filled_qty.get(sid, 0.0) + fill_qty
+        else:
+            self._filled_qty[sid] = self._filled_qty.get(sid, 0.0) - fill_qty
+
+        if not is_bid:
+            return []
+
+        self._last_quote_ts = report.timestamp_recv
+        tick = self._tick_size
+        book_bid = self._yes_book_bid if sid == self._yes_sid else self._no_book_bid
+        close_ask = int(np.clip(
+            fill_price + self._close_spread_int,
+            (book_bid + tick) if book_bid > 0 else fill_price + tick,
+            PRICE_SCALE - tick,
+        ))
+        other_sid = self._no_twin_sid if sid == self._yes_sid else self._yes_sid
+
+        return [
+            Intent(exchange_id=eid, security_id=sid,
+                   bid_price=0, bid_size=0, ask_price=close_ask,
+                   ask_size=fill_qty),
+            Intent(exchange_id=eid, security_id=other_sid,
+                   bid_price=0, bid_size=0, ask_price=0, ask_size=0),
+        ]

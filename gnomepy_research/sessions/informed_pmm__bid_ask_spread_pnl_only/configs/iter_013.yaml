@@ -1,0 +1,69 @@
+strategy:
+  class_name: "gnomepy_research.sessions.informed_pmm__bid_ask_spread_pnl_only.strategy:SpreadCapturePMM"
+  args:
+    ref_yes_listing_id: 97203
+    ref_no_listing_id: 97202
+    quote_yes_listing_id: 222852
+    quote_no_listing_id: 222853
+    value_function_path: "gnomepy_research/solvers/value_function_kalshi_cal.npz"
+    size: 3000000
+    max_position: 20
+    inventory_fade: 0.5
+    warmup_ticks: 50
+    max_ref_staleness_ns: 5000000000
+    kalman_Q: 0.001
+    kalman_R: 0.01
+    maker_fee_rate: 0.0
+    processing_time_ns: 5000000
+    min_quote_interval_ns: 1000000000
+    resolution_time_override_ns: 1787541060000000000
+    close_spread_ticks: 1
+    yes_bid_tau_threshold: 0.20
+    no_bid_tau_threshold: 0.05
+
+record_depth: 1
+
+start_date: "2026-08-24T00:25:00"
+end_date: "2026-08-24T03:11:00"
+
+listings:
+  - listing_id: 97203
+    profile: kalshi
+  - listing_id: 97202
+    profile: kalshi
+  - listing_id: 222852
+    profile: polymarket
+  - listing_id: 222853
+    profile: polymarket
+
+profiles:
+  polymarket:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+  kalshi:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0175
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
