@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from gnomepy_research.sessions.oracle_spread_maker.oracle_spread_maker import OracleSpreadMaker
 
 strategy = OracleSpreadMaker(
@@ -7,20 +5,20 @@ strategy = OracleSpreadMaker(
     quote_listing_id=222852,
     size=3_000_000,
     max_position=20,
-    gamma=0.1,
-    base_spread=0.02,
+    gamma=0.02,
+    base_spread=0.025,
     vol_spread_coeff=1.0,
-    divergence_spread_coeff=0.0,
+    divergence_spread_coeff=1.0,
     kalman_Q=1e-4,
     kalman_R=1e-2,
     vol_horizon=100,
     divergence_ewma_alpha=0.95,
     warmup_ticks=50,
     max_ref_staleness_ns=5_000_000_000,
-    min_quote_interval_ns=1_000_000_000,
+    min_quote_interval_ns=500_000_000,
     tau_pull_threshold=0.05,
     tau_widen_threshold=0.15,
-    inventory_fade=0.5,
+    inventory_fade=0.3,
     resolution_time_override_ns=1_787_541_060_000_000_000,
     processing_time_ns=5_000_000,
 )

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import traceback
 from collections import deque
 from datetime import datetime, timezone
 
@@ -123,7 +122,13 @@ class OracleSpreadMaker(Strategy):
         self._last_no_ask_price: int = -1
         self._last_yes_bid_size: int = -1
         self._last_no_bid_size: int = -1
+        self._last_yes_ask_size: int = -1
+        self._last_no_ask_size: int = -1
         self._quotes_active: bool = False
+        # Counts quoting events; every 5th event force-cancels ALL sides so the OMS ring-buffer
+        # slot never stays occupied for 256+ order-creations (modify is in-place, only an
+        # explicit cancel frees the slot). N=5 (2.5s at 500ms interval) handles burst fills.
+        self._bid_refresh_seq: int = 0
 
     def register_metrics(self) -> None:
         buf = self.metrics.create_buffer("osm_signals")
@@ -144,13 +149,6 @@ class OracleSpreadMaker(Strategy):
         return self._processing_time_ns
 
     def on_market_data(self, data: Schema) -> list[Intent]:
-        try:
-            return self._on_market_data_impl(data)
-        except Exception:
-            traceback.print_exc()
-            raise
-
-    def _on_market_data_impl(self, data: Schema) -> list[Intent]:
         ts = data.event_timestamp
 
         if data.exchange_id == self._ref_eid and data.security_id == self._ref_sid:
@@ -187,6 +185,7 @@ class OracleSpreadMaker(Strategy):
         if ts - self._last_quote_ts < self._min_quote_interval_ns:
             return []
         self._last_quote_ts = ts
+        self._bid_refresh_seq += 1
 
         remaining_ns = max(self.resolution_time_ns - ts, 0)
         tau_norm = max(min(float(remaining_ns / self._total_time_ns), 1.0), 0.0)
@@ -213,8 +212,9 @@ class OracleSpreadMaker(Strategy):
         p = max(min(self._ref_fair_value, 0.99), 0.01)
         sigma = self._compute_vol()
 
-        # A-S reservation price adapted for binary [0,1]: terminal risk = q^2 * p*(1-p)
-        r = p - net_position * self.gamma * sigma * sigma * tau_norm * p * (1.0 - p)
+        # A-S reservation price: drop sigma^2 (≈1e-4 in prediction markets, making skew
+        # negligible) so inventory impact is proportional to q*gamma*tau*p*(1-p) only.
+        r = p - net_position * self.gamma * tau_norm * p * (1.0 - p)
         r = max(min(r, 0.99), 0.01)
 
         # Adaptive spread: base + realized vol component + cross-venue divergence component
@@ -276,25 +276,62 @@ class OracleSpreadMaker(Strategy):
                 no_ask_price = 0
                 no_ask_size = 0
 
-        # Only emit new Intents when something actually changed — prevents ring buffer exhaustion
-        prices_unchanged = (
-            yes_bid_price == self._last_yes_bid_price
-            and no_bid_price == self._last_no_bid_price
-            and yes_ask_price == self._last_yes_ask_price
-            and no_ask_price == self._last_no_ask_price
-            and yes_bid_size == self._last_yes_bid_size
-            and no_bid_size == self._last_no_bid_size
+        # Every 5 quoting events force-cancel ALL sides (bid+ask for both securities).
+        # OMS MODIFY is in-place (same slot/counter forever); only explicit CANCEL frees a
+        # slot. Without this, long-lived bid AND ask orders exhaust the 256-slot ring buffer.
+        if self._bid_refresh_seq % 5 == 0:
+            yes_bid_size = 0
+            no_bid_size = 0
+            yes_ask_price = 0
+            yes_ask_size = 0
+            no_ask_price = 0
+            no_ask_size = 0
+
+        yes_changed = (
+            yes_bid_price != self._last_yes_bid_price
+            or yes_ask_price != self._last_yes_ask_price
+            or yes_bid_size != self._last_yes_bid_size
+            or yes_ask_size != self._last_yes_ask_size
         )
-        if prices_unchanged:
+        no_changed = (
+            no_bid_price != self._last_no_bid_price
+            or no_ask_price != self._last_no_ask_price
+            or no_bid_size != self._last_no_bid_size
+            or no_ask_size != self._last_no_ask_size
+        )
+        if not yes_changed and not no_changed:
             return []
 
-        self._last_yes_bid_price = yes_bid_price
-        self._last_no_bid_price = no_bid_price
-        self._last_yes_ask_price = yes_ask_price
-        self._last_no_ask_price = no_ask_price
-        self._last_yes_bid_size = yes_bid_size
-        self._last_no_bid_size = no_bid_size
         self._quotes_active = True
+        intents = []
+
+        if yes_changed:
+            self._last_yes_bid_price = yes_bid_price
+            self._last_yes_ask_price = yes_ask_price
+            self._last_yes_bid_size = yes_bid_size
+            self._last_yes_ask_size = yes_ask_size
+            intents.append(Intent(
+                exchange_id=self._quote_eid,
+                security_id=self._yes_sid,
+                bid_price=yes_bid_price if yes_bid_size > 0 else 0,
+                bid_size=yes_bid_size,
+                ask_price=yes_ask_price,
+                ask_size=yes_ask_size,
+            ))
+
+        if no_changed:
+            self._last_no_bid_price = no_bid_price
+            self._last_no_ask_price = no_ask_price
+            self._last_no_bid_size = no_bid_size
+            self._last_no_ask_size = no_ask_size
+            intents.append(Intent(
+                exchange_id=self._quote_eid,
+                security_id=self._no_sid,
+                bid_price=no_bid_price if no_bid_size > 0 else 0,
+                bid_size=no_bid_size,
+                ask_price=no_ask_price,
+                ask_size=no_ask_size,
+            ))
 
         if self._metrics_buf is not None:
             row = self._metrics_buf.appendRow()
@@ -309,24 +346,7 @@ class OracleSpreadMaker(Strategy):
             self._metrics_buf.setDouble(row, self._m_yb, yes_bid_price / PRICE_SCALE)
             self._metrics_buf.setDouble(row, self._m_nb, no_bid_price / PRICE_SCALE)
 
-        return [
-            Intent(
-                exchange_id=self._quote_eid,
-                security_id=self._yes_sid,
-                bid_price=yes_bid_price if yes_bid_size > 0 else 0,
-                bid_size=yes_bid_size,
-                ask_price=yes_ask_price,
-                ask_size=yes_ask_size,
-            ),
-            Intent(
-                exchange_id=self._quote_eid,
-                security_id=self._no_sid,
-                bid_price=no_bid_price if no_bid_size > 0 else 0,
-                bid_size=no_bid_size,
-                ask_price=no_ask_price,
-                ask_size=no_ask_size,
-            ),
-        ]
+        return intents
 
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
         return []
