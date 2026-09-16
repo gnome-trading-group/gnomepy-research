@@ -1,11 +1,11 @@
 from gnomepy_research.sessions.oracle_spread_maker.oracle_spread_maker import OracleSpreadMaker
 
 strategy = OracleSpreadMaker(
-    ref_listing_id=97203,
-    quote_listing_id=222852,
+    ref_listing_id=222852,
+    quote_listing_id=97203,
     size=3_000_000,
     max_position=30,
-    base_spread=0.01,
+    base_spread=0.02,
     vol_gate=0.005,
     vol_horizon=20,
     kalman_Q=1e-4,
