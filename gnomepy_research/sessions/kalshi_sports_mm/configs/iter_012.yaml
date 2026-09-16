@@ -1,0 +1,70 @@
+strategy:
+  class_name: "gnomepy_research.sessions.kalshi_sports_mm.strategy:KalshiSportsMM"
+  args:
+    ref_listing_id: 222852
+    team_a_listing_id: 97203
+    team_b_listing_id: 97202
+    size: 3000000
+    max_exposure: 30
+    base_spread: 0.03
+    inventory_skew: 0.002
+    divergence_gate: 0.020
+    overround_gate: 0.05
+    vol_gate: 0.005
+    vol_horizon: 20
+    kalman_Q: 0.0001
+    kalman_R: 0.01
+    warmup_ticks: 50
+    max_ref_staleness_ns: 5000000000
+    min_quote_interval_ns: 100000000
+    tau_pull_threshold: 0.05
+    tau_widen_threshold: 0.15
+    resolution_time_override_ns: 1787541060000000000
+    processing_time_ns: 5000000
+
+record_depth: 1
+
+start_date: "2026-08-24T00:25:00"
+end_date: "2026-08-24T03:11:00"
+
+listings:
+  - listing_id: 222852
+    profile: polymarket
+  - listing_id: 222853
+    profile: polymarket
+  - listing_id: 97203
+    profile: kalshi
+  - listing_id: 97202
+    profile: kalshi
+
+profiles:
+  polymarket:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+  kalshi:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0175
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
