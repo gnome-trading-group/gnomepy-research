@@ -9,7 +9,6 @@ from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
 from gnomepy_research.signals.fair_value.microprice import MicropriceFairValue
-from gnomepy_research.signals.operations.ewma import EWMAOperation
 from gnomepy_research.signals.operations.kalman import KalmanOperation
 
 PRICE_SCALE = 1_000_000_000
@@ -21,31 +20,26 @@ class OracleSpreadMaker(Strategy):
         ref_listing_id: int,
         quote_listing_id: int,
         size: int = 3_000_000,
-        max_position: int = 20,
-        gamma: float = 0.1,
-        base_spread: float = 0.02,
-        vol_spread_coeff: float = 1.0,
-        divergence_spread_coeff: float = 2.0,
+        max_position: int = 30,
+        base_spread: float = 0.01,
+        vol_gate: float = 0.005,
+        vol_horizon: int = 20,
         kalman_Q: float = 1e-4,
         kalman_R: float = 1e-2,
-        vol_horizon: int = 100,
-        divergence_ewma_alpha: float = 0.95,
+        divergence_gate: float = 0.025,
         warmup_ticks: int = 50,
         max_ref_staleness_ns: int = 5_000_000_000,
-        min_quote_interval_ns: int = 1_000_000_000,
+        min_quote_interval_ns: int = 250_000_000,
         tau_pull_threshold: float = 0.05,
         tau_widen_threshold: float = 0.15,
-        inventory_fade: float = 0.5,
         resolution_time_override_ns: int = 0,
         processing_time_ns: int = 5_000_000,
     ):
         self.size = size
         self.max_position = max_position
-        self.gamma = gamma
         self.base_spread = base_spread
-        self.vol_spread_coeff = vol_spread_coeff
-        self.divergence_spread_coeff = divergence_spread_coeff
-        self.inventory_fade = inventory_fade
+        self._vol_gate = vol_gate
+        self._divergence_gate = divergence_gate
         self.warmup_ticks = warmup_ticks
         self._max_ref_staleness_ns = max_ref_staleness_ns
         self._min_quote_interval_ns = min_quote_interval_ns
@@ -100,13 +94,15 @@ class OracleSpreadMaker(Strategy):
 
         self._ref_fv = MicropriceFairValue()
         self._kalman = KalmanOperation(Q=kalman_Q, R=kalman_R)
-        self._divergence_ewma = EWMAOperation(alpha=divergence_ewma_alpha)
 
         self._ref_fair_value: float = 0.5
         self._poly_mid: float = 0.5
         self._ref_last_ts: int = 0
         self._prev_ref_value: float = 0.0
-        self._ref_returns: deque = deque(maxlen=vol_horizon)
+        self._ref_returns: deque = deque(maxlen=100)
+
+        self._prev_poly_mid: float = 0.0
+        self._poly_returns: deque = deque(maxlen=vol_horizon)
 
         self._start_time_ns: int | None = None
         self._total_time_ns: int | None = None
@@ -114,39 +110,39 @@ class OracleSpreadMaker(Strategy):
         self._last_quote_ts: int = 0
         self._metrics_buf = None
 
-        # Track last-emitted prices to avoid redundant order operations that exhaust
-        # the OMS ring buffer (capacity 256 slots) on long backtest windows.
         self._last_yes_bid_price: int = -1
         self._last_no_bid_price: int = -1
-        self._last_yes_ask_price: int = -1
-        self._last_no_ask_price: int = -1
         self._last_yes_bid_size: int = -1
         self._last_no_bid_size: int = -1
-        self._last_yes_ask_size: int = -1
-        self._last_no_ask_size: int = -1
         self._quotes_active: bool = False
-        # Counts quoting events; every 5th event force-cancels ALL sides so the OMS ring-buffer
-        # slot never stays occupied for 256+ order-creations (modify is in-place, only an
-        # explicit cancel frees the slot). N=5 (2.5s at 500ms interval) handles burst fills.
         self._bid_refresh_seq: int = 0
 
     def register_metrics(self) -> None:
         buf = self.metrics.create_buffer("osm_signals")
         self._m_ts = buf.addLongColumn("timestamp")
-        self._m_ref_fv = buf.addDoubleColumn("ref_fair_value")
-        self._m_res = buf.addDoubleColumn("reservation_price")
-        self._m_hs = buf.addDoubleColumn("half_spread")
-        self._m_sigma = buf.addDoubleColumn("sigma")
-        self._m_div = buf.addDoubleColumn("divergence")
-        self._m_tau = buf.addDoubleColumn("tau_norm")
-        self._m_q = buf.addDoubleColumn("net_position")
+        self._m_poly_mid = buf.addDoubleColumn("poly_mid")
+        self._m_vol = buf.addDoubleColumn("poly_vol")
+        self._m_yq = buf.addDoubleColumn("yes_qty")
+        self._m_nq = buf.addDoubleColumn("no_qty")
         self._m_yb = buf.addDoubleColumn("yes_bid")
         self._m_nb = buf.addDoubleColumn("no_bid")
+        self._m_matched = buf.addDoubleColumn("matched_pairs")
         buf.freeze()
         self._metrics_buf = buf
 
     def simulate_processing_time(self) -> int:
         return self._processing_time_ns
+
+    def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
+        return []
+
+    def _poly_vol(self) -> float:
+        n = len(self._poly_returns)
+        if n < 2:
+            return 0.0
+        mean = sum(self._poly_returns) / n
+        variance = sum((r - mean) ** 2 for r in self._poly_returns) / n
+        return math.sqrt(max(variance, 0.0))
 
     def on_market_data(self, data: Schema) -> list[Intent]:
         ts = data.event_timestamp
@@ -184,6 +180,27 @@ class OracleSpreadMaker(Strategy):
 
         if ts - self._last_quote_ts < self._min_quote_interval_ns:
             return []
+
+        # Update vol at quoting cadence (250ms), not per market-event
+        p_now = max(min(self._poly_mid, 0.99), 0.01)
+        if self._prev_poly_mid > 0.0:
+            self._poly_returns.append(math.log(p_now / self._prev_poly_mid))
+        self._prev_poly_mid = p_now
+
+        current_vol = self._poly_vol()
+        if current_vol > self._vol_gate:
+            if self._quotes_active:
+                self._quotes_active = False
+                self._last_yes_bid_price = -1
+                self._last_no_bid_price = -1
+                self._last_yes_bid_size = -1
+                self._last_no_bid_size = -1
+                return [
+                    Intent(exchange_id=self._quote_eid, security_id=self._yes_sid),
+                    Intent(exchange_id=self._quote_eid, security_id=self._no_sid),
+                ]
+            return []
+
         self._last_quote_ts = ts
         self._bid_refresh_seq += 1
 
@@ -195,8 +212,6 @@ class OracleSpreadMaker(Strategy):
                 self._quotes_active = False
                 self._last_yes_bid_price = -1
                 self._last_no_bid_price = -1
-                self._last_yes_ask_price = -1
-                self._last_no_ask_price = -1
                 self._last_yes_bid_size = -1
                 self._last_no_bid_size = -1
                 return [
@@ -205,99 +220,42 @@ class OracleSpreadMaker(Strategy):
                 ]
             return []
 
+        inst_divergence = abs(self._ref_fair_value - self._poly_mid)
+        if inst_divergence > self._divergence_gate:
+            return []
+
         yes_qty = max(self.positions.get_effective_quantity(self._quote_eid, self._yes_sid), 0) // self._lot_size
         no_qty = max(self.positions.get_effective_quantity(self._quote_eid, self._no_sid), 0) // self._lot_size
-        net_position = yes_qty - no_qty
 
-        p = max(min(self._ref_fair_value, 0.99), 0.01)
-        sigma = self._compute_vol()
+        p = max(min(self._poly_mid, 0.99), 0.01)
 
-        # A-S reservation price: drop sigma^2 (≈1e-4 in prediction markets, making skew
-        # negligible) so inventory impact is proportional to q*gamma*tau*p*(1-p) only.
-        r = p - net_position * self.gamma * tau_norm * p * (1.0 - p)
-        r = max(min(r, 0.99), 0.01)
-
-        # Adaptive spread: base + realized vol component + cross-venue divergence component
-        vol_component = self.vol_spread_coeff * sigma
-        self._divergence_ewma.update(abs(self._ref_fair_value - self._poly_mid))
-        divergence = self._divergence_ewma.value() if self._divergence_ewma.is_ready() else 0.0
-        div_component = self.divergence_spread_coeff * divergence
         tau_multiplier = 2.0 if tau_norm < self._tau_widen_threshold else 1.0
-        half_spread = max(self.base_spread, self.base_spread + vol_component + div_component) * tau_multiplier
-
+        spread = self.base_spread * tau_multiplier
         tick = self._tick_size
 
-        # Two-sided bids: simultaneously quote both YES and NO
-        yes_bid_price = (int((r - half_spread) * PRICE_SCALE) // tick) * tick
+        yes_bid_price = (int((p - spread) * PRICE_SCALE) // tick) * tick
         yes_bid_price = max(min(yes_bid_price, PRICE_SCALE - tick), tick)
 
-        no_bid_price = (int(((1.0 - r) - half_spread) * PRICE_SCALE) // tick) * tick
+        no_bid_price = (int(((1.0 - p) - spread) * PRICE_SCALE) // tick) * tick
         no_bid_price = max(min(no_bid_price, PRICE_SCALE - tick), tick)
 
-        # Inventory fade: reduce same-direction bids as position grows
-        abs_pos = abs(net_position)
-        fade_start = self.max_position * self.inventory_fade
-        if abs_pos <= fade_start:
-            scale = 1.0
-        else:
-            scale = max((self.max_position - abs_pos) / (self.max_position - fade_start), 0.0)
+        yes_scale = max(0.0, 1.0 - yes_qty / self.max_position)
+        no_scale = max(0.0, 1.0 - no_qty / self.max_position)
 
-        if net_position > 0:
-            yes_bid_size = max(int(self.size * scale), 0)
-            no_bid_size = self.size
-        elif net_position < 0:
-            yes_bid_size = self.size
-            no_bid_size = max(int(self.size * scale), 0)
-        else:
-            yes_bid_size = self.size
-            no_bid_size = self.size
+        yes_bid_size = max(int(self.size * yes_scale), 0)
+        no_bid_size = max(int(self.size * no_scale), 0)
 
-        # Offer held tokens at reservation + half_spread (tighter exit than waiting for opposite bid)
-        yes_ask_price = 0
-        yes_ask_size = 0
-        no_ask_price = 0
-        no_ask_size = 0
-
-        if yes_qty > 0:
-            yes_ask_raw = int((r + half_spread) * PRICE_SCALE)
-            yes_ask_price = -(-yes_ask_raw // tick) * tick  # ceiling division
-            yes_ask_price = max(min(yes_ask_price, PRICE_SCALE - tick), tick)
-            yes_ask_size = min(self.size, yes_qty * self._lot_size)
-            if yes_ask_price <= yes_bid_price:
-                yes_ask_price = 0
-                yes_ask_size = 0
-
-        if no_qty > 0:
-            no_ask_raw = int(((1.0 - r) + half_spread) * PRICE_SCALE)
-            no_ask_price = -(-no_ask_raw // tick) * tick  # ceiling division
-            no_ask_price = max(min(no_ask_price, PRICE_SCALE - tick), tick)
-            no_ask_size = min(self.size, no_qty * self._lot_size)
-            if no_ask_price <= no_bid_price:
-                no_ask_price = 0
-                no_ask_size = 0
-
-        # Every 5 quoting events force-cancel ALL sides (bid+ask for both securities).
-        # OMS MODIFY is in-place (same slot/counter forever); only explicit CANCEL frees a
-        # slot. Without this, long-lived bid AND ask orders exhaust the 256-slot ring buffer.
         if self._bid_refresh_seq % 5 == 0:
             yes_bid_size = 0
             no_bid_size = 0
-            yes_ask_price = 0
-            yes_ask_size = 0
-            no_ask_price = 0
-            no_ask_size = 0
 
         yes_changed = (
             yes_bid_price != self._last_yes_bid_price
-            or yes_ask_price != self._last_yes_ask_price
             or yes_bid_size != self._last_yes_bid_size
-            or yes_ask_size != self._last_yes_ask_size
         )
         no_changed = (
             no_bid_price != self._last_no_bid_price
-            or no_ask_price != self._last_no_ask_price
             or no_bid_size != self._last_no_bid_size
-            or no_ask_size != self._last_no_ask_size
         )
         if not yes_changed and not no_changed:
             return []
@@ -307,54 +265,34 @@ class OracleSpreadMaker(Strategy):
 
         if yes_changed:
             self._last_yes_bid_price = yes_bid_price
-            self._last_yes_ask_price = yes_ask_price
             self._last_yes_bid_size = yes_bid_size
-            self._last_yes_ask_size = yes_ask_size
             intents.append(Intent(
                 exchange_id=self._quote_eid,
                 security_id=self._yes_sid,
                 bid_price=yes_bid_price if yes_bid_size > 0 else 0,
                 bid_size=yes_bid_size,
-                ask_price=yes_ask_price,
-                ask_size=yes_ask_size,
             ))
 
         if no_changed:
             self._last_no_bid_price = no_bid_price
-            self._last_no_ask_price = no_ask_price
             self._last_no_bid_size = no_bid_size
-            self._last_no_ask_size = no_ask_size
             intents.append(Intent(
                 exchange_id=self._quote_eid,
                 security_id=self._no_sid,
                 bid_price=no_bid_price if no_bid_size > 0 else 0,
                 bid_size=no_bid_size,
-                ask_price=no_ask_price,
-                ask_size=no_ask_size,
             ))
 
         if self._metrics_buf is not None:
+            matched_pairs = float(min(yes_qty, no_qty))
             row = self._metrics_buf.appendRow()
             self._metrics_buf.setLong(row, self._m_ts, ts)
-            self._metrics_buf.setDouble(row, self._m_ref_fv, p)
-            self._metrics_buf.setDouble(row, self._m_res, r)
-            self._metrics_buf.setDouble(row, self._m_hs, half_spread)
-            self._metrics_buf.setDouble(row, self._m_sigma, sigma)
-            self._metrics_buf.setDouble(row, self._m_div, divergence)
-            self._metrics_buf.setDouble(row, self._m_tau, tau_norm)
-            self._metrics_buf.setDouble(row, self._m_q, float(net_position))
+            self._metrics_buf.setDouble(row, self._m_poly_mid, self._poly_mid)
+            self._metrics_buf.setDouble(row, self._m_vol, current_vol)
+            self._metrics_buf.setDouble(row, self._m_yq, float(yes_qty))
+            self._metrics_buf.setDouble(row, self._m_nq, float(no_qty))
             self._metrics_buf.setDouble(row, self._m_yb, yes_bid_price / PRICE_SCALE)
             self._metrics_buf.setDouble(row, self._m_nb, no_bid_price / PRICE_SCALE)
+            self._metrics_buf.setDouble(row, self._m_matched, matched_pairs)
 
         return intents
-
-    def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
-        return []
-
-    def _compute_vol(self) -> float:
-        n = len(self._ref_returns)
-        if n < 2:
-            return 0.01
-        mean = sum(self._ref_returns) / n
-        variance = sum((r - mean) ** 2 for r in self._ref_returns) / n
-        return math.sqrt(max(variance, 0.0))
