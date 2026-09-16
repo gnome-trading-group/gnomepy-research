@@ -23,6 +23,7 @@ class KalshiSportsMM(Strategy):
         size: int = 3_000_000,
         max_exposure: int = 30,
         base_spread: float = 0.02,
+        inventory_skew: float = 0.001,
         divergence_gate: float = 0.025,
         overround_gate: float = 0.05,
         vol_gate: float = 0.005,
@@ -40,6 +41,7 @@ class KalshiSportsMM(Strategy):
         self.size = size
         self.max_exposure = max_exposure
         self.base_spread = base_spread
+        self._inventory_skew = inventory_skew
         self._divergence_gate = divergence_gate
         self._overround_gate = overround_gate
         self._vol_gate = vol_gate
@@ -190,9 +192,6 @@ class KalshiSportsMM(Strategy):
         if ts - self._last_quote_ts < self._min_quote_interval_ns:
             return []
 
-        p_now = max(min(self._ref_fair_value, 0.99), 0.01)
-        if self._prev_ref_value > 0.0:
-            pass
         current_vol = self._poly_vol()
         if current_vol > self._vol_gate:
             return self._cancel_all()
@@ -219,15 +218,21 @@ class KalshiSportsMM(Strategy):
         spread = self.base_spread * tau_multiplier
         tick = self._tick_size
 
-        a_bid = (int((p - spread) * PRICE_SCALE) // tick) * tick
+        q_a = self.positions.get_effective_quantity(self._kalshi_eid, self._sid_a) // self._lot_size
+        q_b = self.positions.get_effective_quantity(self._kalshi_eid, self._sid_b) // self._lot_size
+        D = q_a - q_b
+
+        r_a = max(min(p - q_a * self._inventory_skew, 0.99), 0.01)
+        r_b = max(min((1.0 - p) - q_b * self._inventory_skew, 0.99), 0.01)
+
+        a_bid = (int((r_a - spread) * PRICE_SCALE) // tick) * tick
         a_bid = max(min(a_bid, PRICE_SCALE - tick), tick)
-        a_ask = (int((p + spread) * PRICE_SCALE) + tick - 1) // tick * tick
+        a_ask = (int((r_a + spread) * PRICE_SCALE) + tick - 1) // tick * tick
         a_ask = max(min(a_ask, PRICE_SCALE - tick), tick)
 
-        b_p = 1.0 - p
-        b_bid = (int((b_p - spread) * PRICE_SCALE) // tick) * tick
+        b_bid = (int((r_b - spread) * PRICE_SCALE) // tick) * tick
         b_bid = max(min(b_bid, PRICE_SCALE - tick), tick)
-        b_ask = (int((b_p + spread) * PRICE_SCALE) + tick - 1) // tick * tick
+        b_ask = (int((r_b + spread) * PRICE_SCALE) + tick - 1) // tick * tick
         b_ask = max(min(b_ask, PRICE_SCALE - tick), tick)
 
         if a_bid >= a_ask:
@@ -235,24 +240,25 @@ class KalshiSportsMM(Strategy):
         if b_bid >= b_ask:
             b_bid, b_ask = 0, 0
 
-        q_a = self.positions.get_effective_quantity(self._kalshi_eid, self._sid_a) // self._lot_size
-        q_b = self.positions.get_effective_quantity(self._kalshi_eid, self._sid_b) // self._lot_size
-        D = q_a - q_b
+        a_bid_scale = max(0.0, 1.0 - max(q_a, 0) / self.max_exposure)
+        a_ask_scale = max(0.0, 1.0 - max(-q_a, 0) / self.max_exposure)
+        b_bid_scale = max(0.0, 1.0 - max(q_b, 0) / self.max_exposure)
+        b_ask_scale = max(0.0, 1.0 - max(-q_b, 0) / self.max_exposure)
 
         if D > 0:
-            increase_D_scale = max(0.0, 1.0 - D / self.max_exposure)
-            decrease_D_scale = 1.0
+            d_increase_scale = max(0.0, 1.0 - D / self.max_exposure)
+            d_decrease_scale = 1.0
         elif D < 0:
-            increase_D_scale = 1.0
-            decrease_D_scale = max(0.0, 1.0 - abs(D) / self.max_exposure)
+            d_increase_scale = 1.0
+            d_decrease_scale = max(0.0, 1.0 - abs(D) / self.max_exposure)
         else:
-            increase_D_scale = 1.0
-            decrease_D_scale = 1.0
+            d_increase_scale = 1.0
+            d_decrease_scale = 1.0
 
-        a_bid_sz = int(self.size * increase_D_scale)
-        a_ask_sz = int(self.size * decrease_D_scale)
-        b_bid_sz = int(self.size * decrease_D_scale)
-        b_ask_sz = int(self.size * increase_D_scale)
+        a_bid_sz = int(self.size * a_bid_scale * d_increase_scale)
+        a_ask_sz = int(self.size * a_ask_scale * d_decrease_scale)
+        b_bid_sz = int(self.size * b_bid_scale * d_decrease_scale)
+        b_ask_sz = int(self.size * b_ask_scale * d_increase_scale)
 
         if self._quote_seq % 5 == 0:
             a_bid_sz = 0
