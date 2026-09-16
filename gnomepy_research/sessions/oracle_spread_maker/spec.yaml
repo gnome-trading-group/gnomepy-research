@@ -1,0 +1,88 @@
+name: oracle_spread_maker
+description: >
+  Cross-venue prediction market maker using Kalshi microprice as oracle and
+  quoting two-sided on Polymarket. Replaces HJB-based quoting with a direct
+  Avellaneda-Stoikov formulation adapted for binary [0,1] probability space.
+  Simultaneously bids both YES and NO — when both sides fill, YES+NO redeems
+  for $1.00 at zero risk. Spread = 1.00 - yes_bid - no_bid. Reservation price
+  incorporates inventory skew with binary terminal penalty q^2*p*(1-p), which
+  naturally vanishes near resolution. Adaptive half-spread widens with realized
+  vol of the oracle and with cross-venue price divergence as an adverse-selection
+  indicator.
+
+data:
+  listings:
+    - listing_id: 97203    # Kalshi — Seahawks YES (reference oracle)
+      profile: kalshi
+    - listing_id: 97202    # Kalshi — Titans (complement, for book context)
+      profile: kalshi
+    - listing_id: 222852   # Polymarket — Seahawks YES (quote)
+      profile: polymarket
+    - listing_id: 222853   # Polymarket — Titans NO (quote complement)
+      profile: polymarket
+  date_ranges:
+    - start: "2026-08-24T00:25:00"
+      end: "2026-08-24T03:11:00"
+
+profiles:
+  polymarket:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+  kalshi:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0175
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+
+goals:
+  primary_metric: sharpe
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">5"
+    final_position: "<5"
+  targets:
+    sharpe: ">0.3"
+
+constraints:
+  strategy_type: market_maker
+  max_iterations: 30
+  avoid:
+    - holding net position to resolution
+    - one-sided quoting based on signal direction
+    - using the cross-venue discrepancy as a directional entry signal
+    - accumulating YES-only or NO-only positions beyond the inventory fade zone
+  notes:
+    - PnL must be achievable on both a YES-resolving and NO-resolving game
+    - primary tuning knobs are gamma and base_spread
+    - vol_spread_coeff and divergence_spread_coeff are secondary spread adjustments
+    - tau_pull_threshold is a safety parameter — do not lower below 0.03
+
+meta:
+  execution_mode: local
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous
