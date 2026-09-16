@@ -1,0 +1,87 @@
+name: kalshi_sports_mm
+description: >
+  Two-sided market maker on Kalshi sports prediction markets. Kalshi has 2
+  independent contracts per game (Seahawks, Titans) with separate order books —
+  the complement relationship (sum≈1) is maintained by arbitrage, not
+  mechanically enforced (observed overround ranges 0.90-1.18, std 0.024). Quotes
+  bid+ask on both contracts (4 channels). Uses Polymarket microprice as an
+  adverse selection gate only. Net directional exposure (D = q_a - q_b) is the
+  single inventory/risk metric. Kalshi has 84× more trade volume than Polymarket
+  for NFL games (44k vs 528 trades). Spread must cover Kalshi's 1.75% maker fee
+  (fee = rate × p × (1-p)).
+
+data:
+  listings:
+    - listing_id: 222852   # Polymarket — Seahawks YES (reference oracle)
+      profile: polymarket
+    - listing_id: 222853   # Polymarket — complement
+      profile: polymarket
+    - listing_id: 97203    # Kalshi — Seahawks (quote)
+      profile: kalshi
+    - listing_id: 97202    # Kalshi — Titans (quote)
+      profile: kalshi
+  date_ranges:
+    - start: "2026-08-24T00:25:00"
+      end: "2026-08-24T03:11:00"
+
+profiles:
+  polymarket:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+  kalshi:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0175
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+
+goals:
+  primary_metric: sharpe
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">20"
+  targets:
+    sharpe: ">0.1"
+
+constraints:
+  strategy_type: mm
+  max_iterations: 30
+  avoid:
+    - holding large net directional exposure to resolution
+    - using cross-venue divergence as a directional entry signal
+    - treating Kalshi contracts as mechanically complementary (they are not)
+  notes:
+    - PnL must be achievable on both game outcomes (Seahawks win or Titans win)
+    - Kalshi maker fee is 1.75% x p x (1-p) — set base_spread to cover fees
+    - The two Kalshi contracts are independent markets with overround != 1.0
+    - Polymarket is reference ONLY — no trading on Polymarket
+    - D = q_a - q_b is the single net directional exposure metric
+
+meta:
+  execution_mode: local
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous
