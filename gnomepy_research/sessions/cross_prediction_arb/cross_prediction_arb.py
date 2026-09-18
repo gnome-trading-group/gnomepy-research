@@ -316,6 +316,7 @@ class CrossPredictionArb(Strategy):
         k_sea_listing_id: int = 97203,
         k_tit_listing_id: int = 97202,
         max_position: int = 100,
+        max_entry_size: int = 0,
         min_edge_cents: float = 2.0,
         min_contract_price: float = 0.25,
         max_price_divergence_cents: float = 0.0,
@@ -361,6 +362,7 @@ class CrossPredictionArb(Strategy):
         self._taker_fee_rates = taker_fee_rates
 
         self._max_position = max_position * SIZE_SCALE
+        self._max_entry_size = (max_entry_size * SIZE_SCALE) if max_entry_size > 0 else self._max_position
         self._min_edge = min_edge_cents / 100.0
         self._min_contract_price_scaled = int(min_contract_price * PRICE_SCALE)
         self._max_price_divergence = max_price_divergence_cents / 100.0
@@ -751,7 +753,7 @@ class CrossPredictionArb(Strategy):
             remaining = self._max_position - current_pos
             if remaining <= 0:
                 return []
-            target_qty = min(qty, remaining)
+            target_qty = min(qty, remaining, self._max_entry_size)
         else:
             target_qty = SIZE_SCALE
 
