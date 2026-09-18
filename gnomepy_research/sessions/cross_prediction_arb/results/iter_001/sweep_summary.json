@@ -1,0 +1,41 @@
+{
+  "sweep_id": "01a0b008-3d0a-707e-8ec6-ec28fc56a343",
+  "job_count": 3,
+  "completed_count": 0,
+  "sweep_params": {
+    "pairings": [
+      "{'legs': [222852, 97202], 'label': 'PM_SEA_YES + K_TITANS'}",
+      "{'legs': [222853, 97203], 'label': 'PM_SEA_NO + K_SEAHAWKS'}",
+      "{'legs': [97203, 97202], 'label': 'K_DUTCH_BOOK'}"
+    ]
+  },
+  "jobs": [
+    {
+      "job_index": 0,
+      "job_id": "01a0b008-3d0a-707e-8ec6-ec28fc56a343-0000",
+      "config_params": {
+        "pairings": "{\"label\": \"PM_SEA_YES + K_TITANS\", \"legs\": [222852, 97202]}"
+      },
+      "status": "FAILED",
+      "error": "string indices must be integers, not 'str'"
+    },
+    {
+      "job_index": 1,
+      "job_id": "01a0b008-3d0a-707e-8ec6-ec28fc56a343-0001",
+      "config_params": {
+        "pairings": "{\"label\": \"PM_SEA_NO + K_SEAHAWKS\", \"legs\": [222853, 97203]}"
+      },
+      "status": "FAILED",
+      "error": "string indices must be integers, not 'str'"
+    },
+    {
+      "job_index": 2,
+      "job_id": "01a0b008-3d0a-707e-8ec6-ec28fc56a343-0002",
+      "config_params": {
+        "pairings": "{\"label\": \"K_DUTCH_BOOK\", \"legs\": [97203, 97202]}"
+      },
+      "status": "FAILED",
+      "error": "string indices must be integers, not 'str'"
+    }
+  ]
+}

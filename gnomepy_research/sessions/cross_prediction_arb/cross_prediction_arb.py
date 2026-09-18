@@ -65,14 +65,16 @@ class LegState:
     target_qty: int = 0
     filled_qty: int = 0
     fill_cost: int = 0  # sum of price * qty (scaled)
+    entry_fees: float = 0.0  # cumulative dollar fees paid on entry fills
 
     @property
     def is_filled(self) -> bool:
         return self.target_qty > 0 and self.filled_qty >= self.target_qty
 
-    def record_fill(self, price: int, qty: int) -> None:
+    def record_fill(self, price: int, qty: int, fee: float = 0.0) -> None:
         self.filled_qty += qty
         self.fill_cost += price * qty
+        self.entry_fees += fee
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +299,7 @@ class CrossPredictionArb(Strategy):
         max_staleness_ns: int = 60_000_000_000,
         allow_early_exit: bool = True,
         exit_edge_cents: float = 1.0,
+        min_exit_price_threshold: float = 0.0,
         allow_scaling: bool = False,
         processing_time_ns: int = 5_000_000,
         # Fee rates keyed by exchange_id
@@ -316,6 +319,8 @@ class CrossPredictionArb(Strategy):
         optimal_ev_lambda: float = 30.0,
         # PM taker mode — PM legs cross the ask for immediate fills
         pm_taker_mode: bool = False,
+        # K_DUTCH_BOOK (P2) triggers EXEC_REPORT_FOR_UNKNOWN_ORDER OMS/engine mismatch — disable to avoid
+        allow_dutch_book: bool = True,
         # Settlement risk (disabled by default — sports resolve before official expiry)
         gamma_T: float = 0.0,
         resolution_time_ns: int = 0,
@@ -341,6 +346,7 @@ class CrossPredictionArb(Strategy):
         self._max_staleness_ns = max_staleness_ns
         self._allow_early_exit = allow_early_exit
         self._exit_edge_threshold = exit_edge_cents / 100.0
+        self._min_exit_price = min_exit_price_threshold
         self._allow_scaling = allow_scaling
         self._processing_time_ns = processing_time_ns
         self._gamma_T = gamma_T
@@ -360,12 +366,12 @@ class CrossPredictionArb(Strategy):
         k_sea = resolve(k_sea_listing_id)
         k_tit = resolve(k_tit_listing_id)
 
-        # Three arb pairings (always enabled)
         raw_pairings = [
             (0, "PM_YES + K_TIT", [pm_yes, k_tit]),
             (1, "PM_NO + K_SEA", [pm_no, k_sea]),
-            (2, "K_DUTCH_BOOK", [k_sea, k_tit]),
         ]
+        if allow_dutch_book:
+            raw_pairings.append((2, "K_DUTCH_BOOK", [k_sea, k_tit]))
         self._pairings: list[Pairing] = []
         self._tracked_listings: set[tuple[int, int]] = set()
         for idx, label, legs in raw_pairings:
@@ -398,6 +404,7 @@ class CrossPredictionArb(Strategy):
 
         # State machine
         self._phase = Phase.SCANNING
+        self._last_close_ts: int = 0
         self._active_pairing: Pairing | None = None
         self._legs: list[LegState] = []
         self._partial_fill_since: int | None = None
@@ -458,7 +465,22 @@ class CrossPredictionArb(Strategy):
         listing = (report.exchange_id, report.security_id)
         for leg in self._legs:
             if leg.listing == listing:
-                leg.record_fill(report.fill_price, report.filled_qty)
+                # Validate fee matches expected rate for this leg's order type.
+                # EXEC_REPORT_FOR_UNKNOWN_ORDER can deliver fills from old taker
+                # orders (e.g. a close that fired during a prior UNWINDING cycle)
+                # with a mismatched fee rate — skip those to avoid inflating filled_qty.
+                is_pm_taker = self._pm_taker_mode and listing[0] == 4
+                expected_rate = (
+                    self._taker_fee_rates.get(listing[0], 0.0) if is_pm_taker
+                    else self._maker_fee_rates.get(listing[0], 0.0)
+                )
+                p = report.fill_price / PRICE_SCALE
+                qty_contracts = report.filled_qty / SIZE_SCALE
+                expected_fee = expected_rate * p * (1.0 - p) * qty_contracts
+                tolerance = max(expected_fee * 0.5, 0.0005)
+                if abs(report.fee - expected_fee) > tolerance:
+                    break  # fee mismatch — unknown/wrong-direction fill, skip
+                leg.record_fill(report.fill_price, report.filled_qty, report.fee)
                 break
 
         if self._track_markouts:
@@ -778,7 +800,6 @@ class CrossPredictionArb(Strategy):
         return []
 
     def _on_closing(self, ts: int) -> list[Intent]:
-        # Check if all positions are flat
         all_flat = all(
             self.positions.get_effective_quantity(lg.listing[0], lg.listing[1]) == 0
             for lg in self._legs
@@ -786,6 +807,32 @@ class CrossPredictionArb(Strategy):
         if all_flat:
             self._phase = Phase.SCANNING
             self._reset()
+            return []
+        # Retry every 2s to clean up orphaned positions (e.g. from EXEC_REPORT_FOR_UNKNOWN_ORDER
+        # fills that arrived while in UNWINDING phase and weren't tracked in leg.filled_qty).
+        if ts - self._last_close_ts > 2_000_000_000:
+            self._last_close_ts = ts
+            intents = []
+            for leg in self._legs:
+                eid, sid = leg.listing
+                qty = self.positions.get_effective_quantity(eid, sid)
+                if qty > 0:
+                    intents.append(Intent(
+                        exchange_id=eid, security_id=sid,
+                        take_side=Side.ASK,
+                        take_size=qty,
+                        take_order_type=OrderType.LIMIT,
+                        take_limit_price=1,
+                    ))
+                elif qty < 0:
+                    intents.append(Intent(
+                        exchange_id=eid, security_id=sid,
+                        take_side=Side.BID,
+                        take_size=-qty,
+                        take_order_type=OrderType.LIMIT,
+                        take_limit_price=PRICE_SCALE - 1,
+                    ))
+            return intents
         return []
 
     # ------------------------------------------------------------------
@@ -793,23 +840,37 @@ class CrossPredictionArb(Strategy):
     # ------------------------------------------------------------------
 
     def _close_all_positions(self, ts: int) -> list[Intent]:
-        """Cancel unfilled maker bids and taker-sell all filled positions."""
+        """Cancel outstanding bids and sell actual net position.
+
+        Uses positions.get_position().net_quantity (not leg.filled_qty) so that
+        engine-side sells from EXEC_REPORT_FOR_UNKNOWN_ORDER are reflected and we
+        do not oversell into a short. _on_closing retries via effective_qty to
+        handle any residual outstanding bids.
+        """
+        self._last_close_ts = ts
         intents = []
         for leg in self._legs:
-            if leg.filled_qty <= 0:
-                intents.append(Intent(exchange_id=leg.listing[0], security_id=leg.listing[1]))
-                continue
-            qty = self.positions.get_effective_quantity(leg.listing[0], leg.listing[1])
-            if qty <= 0:
-                continue
-            intents.append(Intent(
-                exchange_id=leg.listing[0],
-                security_id=leg.listing[1],
-                take_side=Side.ASK,
-                take_size=qty,
-                take_order_type=OrderType.LIMIT,
-                take_limit_price=1,
-            ))
+            eid, sid = leg.listing
+            pos = self.positions.get_position(eid, sid)
+            qty = pos.net_quantity if pos is not None else 0
+            if qty > 0:
+                intents.append(Intent(
+                    exchange_id=eid, security_id=sid,
+                    take_side=Side.ASK,
+                    take_size=qty,
+                    take_order_type=OrderType.LIMIT,
+                    take_limit_price=1,
+                ))
+            elif qty < 0:
+                intents.append(Intent(
+                    exchange_id=eid, security_id=sid,
+                    take_side=Side.BID,
+                    take_size=-qty,
+                    take_order_type=OrderType.LIMIT,
+                    take_limit_price=PRICE_SCALE - 1,
+                ))
+            else:
+                intents.append(Intent(exchange_id=eid, security_id=sid))
         return intents
 
     # ------------------------------------------------------------------
@@ -819,22 +880,34 @@ class CrossPredictionArb(Strategy):
     def _check_early_exit(self, ts: int) -> bool:
         if not self._legs:
             return False
-        total_sell_revenue = 0.0
-        total_buy_cost = 0.0
-        total_sell_fees = 0.0
 
+        # Gate: only allow exit when at least one leg is near resolution (bid < threshold).
+        # Blocks false exits during scoring play transients where prices are mid-range.
+        if self._min_exit_price > 0:
+            bids = [
+                self._books[leg.listing].best_bid() / PRICE_SCALE
+                for leg in self._legs
+                if self._books[leg.listing].best_bid() > 0
+            ]
+            if not bids or min(bids) > self._min_exit_price:
+                return False
+
+        total_net = 0.0
         for leg in self._legs:
+            eff_qty = self.positions.get_effective_quantity(leg.listing[0], leg.listing[1])
+            if eff_qty == 0 and leg.filled_qty > 0:
+                continue
             book = self._books[leg.listing]
             best_bid = book.best_bid()
             if best_bid <= 0:
                 return False
-            total_sell_revenue += best_bid / PRICE_SCALE
-            total_sell_fees += self._taker_fee(leg.listing, best_bid)
-            if leg.filled_qty > 0:
-                total_buy_cost += leg.fill_cost / (leg.filled_qty * PRICE_SCALE)
+            sell_rev = best_bid / PRICE_SCALE
+            sell_fee = self._taker_fee(leg.listing, best_bid)
+            buy_cost = leg.fill_cost / (leg.filled_qty * PRICE_SCALE) if leg.filled_qty > 0 else 0.0
+            entry_fee_per = leg.entry_fees / (leg.filled_qty / SIZE_SCALE) if leg.filled_qty > 0 else 0.0
+            total_net += sell_rev - buy_cost - sell_fee - entry_fee_per
 
-        exit_edge = total_sell_revenue - total_buy_cost - total_sell_fees
-        return exit_edge > self._exit_edge_threshold
+        return total_net > self._exit_edge_threshold
 
     # ------------------------------------------------------------------
     # Imbalance timeout

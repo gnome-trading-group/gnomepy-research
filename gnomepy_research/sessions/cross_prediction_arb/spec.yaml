@@ -1,0 +1,90 @@
+name: cross_prediction_arb
+description: >
+  Cross-exchange and intra-exchange prediction market arbitrage on binary
+  football contracts (Seahawks vs Titans, 2026-08-24). Built from scratch with
+  a custom state machine (SCANNING/ENTERING/PARTIAL_FILL/HEDGED/EXITING/UNWINDING).
+  Three pairing types: (1) PM_YES + Kalshi Titans, (2) PM_NO + Kalshi Seahawks,
+  (3) Kalshi Dutch book (both Kalshi contracts when overround < 1.0).
+  Maker-first execution with budget constraint gating. Pluggable cost model
+  (FeeCost + optional FillRiskCost/DepthCoverageCost) and price model
+  (JoinBestBid / Aggressive / FillProbTarget / OptimalEV).
+
+data:
+  listings:
+    - listing_id: 222852   # Polymarket — Seahawks YES
+      profile: polymarket
+    - listing_id: 222853   # Polymarket — Seahawks NO (= Titans win)
+      profile: polymarket
+    - listing_id: 97203    # Kalshi — Seahawks
+      profile: kalshi
+    - listing_id: 97202    # Kalshi — Titans
+      profile: kalshi
+  date_ranges:
+    - start: "2026-08-24T00:25:00"
+      end: "2026-08-24T03:11:00"
+
+profiles:
+  polymarket:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+  kalshi:
+    fee_model:
+      type: parametric
+      taker_fee_rate: 0.07
+      maker_fee_rate: 0.0175
+    network_latency:
+      type: static
+      latency_nanos: 50000000
+    order_processing_latency:
+      type: maker_taker
+      base_nanos: 5000000
+      taker_delay_nanos: 250000000
+      maker_delay_nanos: 0
+    queue_model:
+      type: risk_averse
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">0"
+  targets:
+    sharpe: ">0.5"
+
+constraints:
+  strategy_type: arb
+  max_iterations: 25
+  avoid:
+    - taker-only entries (14% round-trip fees destroy edge)
+    - entering when any leg contract price is below min_contract_price
+    - holding naked single-leg positions past imbalance timeout
+    - treating Kalshi contracts as mechanically complementary (they are not)
+  notes:
+    - Kalshi has INDEPENDENT contracts — overround varies 0.90 to 1.18
+    - Polymarket YES+NO = $1.00 by construction (ERC-1155 splitting/merging)
+    - Maker fees — PM 0%, Kalshi 1.75% parametric (rate x p x (1-p))
+    - Taker fees — both 7% parametric
+    - NFL scoring plays cause instant 10-15% probability jumps
+    - 30s imbalance timeout is critical from prior session learnings
+    - max_position=100-115 is the historically optimal range
+    - resolution_time_ns disabled by default (sports resolve before official expiry)
+
+meta:
+  execution_mode: local
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous
