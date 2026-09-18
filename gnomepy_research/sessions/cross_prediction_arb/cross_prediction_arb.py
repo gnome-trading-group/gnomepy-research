@@ -13,6 +13,10 @@ from gnomepy.registry import RegistryClient
 PRICE_SCALE = Scales.PRICE   # 1_000_000_000
 SIZE_SCALE = Scales.SIZE      # 1_000_000
 
+# PM taker orders take ~250ms (taker_delay) + 50ms (latency) to settle.
+# Don't make cancel decisions until this window has passed.
+_PM_TAKER_SETTLE_NS = 500_000_000
+
 
 # ---------------------------------------------------------------------------
 # State machine phases
@@ -23,8 +27,7 @@ class Phase(IntEnum):
     ENTERING = 1
     PARTIAL_FILL = 2
     HEDGED = 3
-    EXITING = 4
-    UNWINDING = 5
+    UNWINDING = 4
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +98,11 @@ class PairingState:
     legs: list[LegState] = field(default_factory=list)
     partial_fill_since: int | None = None
     last_close_ts: int = 0
+    entry_ts: int = 0
+    # Quantities at the moment we reset HEDGED→SCANNING for a new scaled entry.
+    # Unwind on partial-fill failure closes only the incremental (current - base),
+    # leaving previously-hedged positions intact to resolve at settlement.
+    base_quantities: dict[tuple[int, int], int] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -307,9 +315,6 @@ class CrossPredictionArb(Strategy):
         max_price_divergence_cents: float = 0.0,
         imbalance_timeout_ns: int = 30_000_000_000,
         max_staleness_ns: int = 60_000_000_000,
-        allow_early_exit: bool = True,
-        exit_edge_cents: float = 1.0,
-        min_exit_price_threshold: float = 0.0,
         allow_scaling: bool = False,
         processing_time_ns: int = 5_000_000,
         # Fee rates keyed by exchange_id
@@ -355,9 +360,6 @@ class CrossPredictionArb(Strategy):
         self._max_price_divergence = max_price_divergence_cents / 100.0
         self._imbalance_timeout_ns = imbalance_timeout_ns
         self._max_staleness_ns = max_staleness_ns
-        self._allow_early_exit = allow_early_exit
-        self._exit_edge_threshold = exit_edge_cents / 100.0
-        self._min_exit_price = min_exit_price_threshold
         self._allow_scaling = allow_scaling
         self._processing_time_ns = processing_time_ns
         self._gamma_T = gamma_T
@@ -464,7 +466,7 @@ class CrossPredictionArb(Strategy):
                 intents.extend(self._on_partial_fill(ps, ts))
             elif ps.phase == Phase.HEDGED:
                 intents.extend(self._on_hedged(ps, ts))
-            elif ps.phase in (Phase.EXITING, Phase.UNWINDING):
+            elif ps.phase == Phase.UNWINDING:
                 intents.extend(self._on_closing(ps, ts))
         return intents
 
@@ -483,17 +485,10 @@ class CrossPredictionArb(Strategy):
             for leg in ps.legs:
                 if leg.listing != listing:
                     continue
-                is_pm_taker = self._pm_taker_mode and listing[0] == 4
-                expected_rate = (
-                    self._taker_fee_rates.get(listing[0], 0.0) if is_pm_taker
-                    else self._maker_fee_rates.get(listing[0], 0.0)
-                )
-                p = report.fill_price / PRICE_SCALE
-                qty_contracts = report.filled_qty / SIZE_SCALE
-                expected_fee = expected_rate * p * (1.0 - p) * qty_contracts
-                tolerance = max(expected_fee * 0.5, 0.0005)
-                if abs(report.fee - expected_fee) > tolerance:
-                    break
+                # Accept fill regardless of which fee rate applies. A Kalshi maker bid
+                # placed at the ask price crosses immediately and is charged taker fees
+                # by the backtest engine — the strict maker-fee check would silently
+                # drop that valid fill, leaving naked PM exposure.
                 leg.record_fill(report.fill_price, report.filled_qty, report.fee)
                 if self._track_markouts:
                     self._record_markout(listing, report.fill_price, Side.BID, report.timestamp_event)
@@ -622,6 +617,10 @@ class CrossPredictionArb(Strategy):
             for i in range(len(legs)):
                 remaining[i] -= chunk
                 if remaining[i] <= 0:
+                    # PM taker orders only fill at level 0 (limit to best ask).
+                    # Don't walk deeper — the walk would return qty > PM's actual fill.
+                    if self._pm_taker_mode and legs[i][0] == 4:
+                        return total_edge / max(qty, 1), qty
                     next_idx = level_indices[i] + 1
                     if next_idx < len(books[i].asks):
                         level_indices[i] = next_idx
@@ -709,8 +708,18 @@ class CrossPredictionArb(Strategy):
         if edge < self._min_edge or qty <= 0:
             return []
 
-        target_qty = min(qty, self._max_position)
-        if not self._allow_scaling:
+        if self._allow_scaling:
+            current_pos = 0
+            for lg in ps.pairing.legs:
+                eid, sid = lg
+                pos = self.positions.get_position(eid, sid)
+                if pos is not None:
+                    current_pos = max(current_pos, pos.net_quantity)
+            remaining = self._max_position - current_pos
+            if remaining <= 0:
+                return []
+            target_qty = min(qty, remaining)
+        else:
             target_qty = SIZE_SCALE
 
         bid_prices = self._compute_maker_bid_prices(ps.pairing, target_qty)
@@ -718,6 +727,7 @@ class CrossPredictionArb(Strategy):
             return []
 
         ps.legs = [LegState(listing=lg, target_qty=target_qty) for lg in ps.pairing.legs]
+        ps.entry_ts = ts
         ps.phase = Phase.ENTERING
 
         if self._metrics_buf is not None:
@@ -773,6 +783,19 @@ class CrossPredictionArb(Strategy):
             if self._check_imbalance_timeout(ps, ts):
                 ps.phase = Phase.UNWINDING
                 return self._close_all_positions(ps, ts)
+            # Don't run a budget check here. The PM leg already filled at its price
+            # (that cost is locked); using the *current* PM ask for the budget would
+            # falsely reject valid arbs whenever PM price jumps post-fill. Wait the
+            # full imbalance_timeout before declaring the K leg missing.
+            return []
+
+        # Guard: PM taker orders take ~300ms to settle. Don't cancel Kalshi makers
+        # or reset state until PM has had a chance to fill or be rejected — otherwise
+        # PM fills after the reset, creating untracked naked directional exposure.
+        if (self._pm_taker_mode
+                and ps.entry_ts > 0
+                and (ts - ps.entry_ts) < _PM_TAKER_SETTLE_NS
+                and any(lg.listing[0] == 4 and not lg.is_filled for lg in ps.legs)):
             return []
 
         unfilled_legs = [lg for lg in ps.legs if not lg.is_filled]
@@ -796,18 +819,31 @@ class CrossPredictionArb(Strategy):
         return self._check_fill_transitions(ps, ts)
 
     def _on_hedged(self, ps: PairingState, ts: int) -> list[Intent]:
-        if not self._allow_early_exit:
-            return []
-        if self._check_early_exit(ps, ts):
-            ps.phase = Phase.EXITING
-            return self._close_all_positions(ps, ts)
+        if self._allow_scaling:
+            # Record current settled quantities as the base before scanning for a new entry.
+            # If the new entry later fails and triggers UNWIND, _close_all_positions will
+            # only close the incremental (new entry's) quantity, leaving this base intact.
+            ps.base_quantities = {}
+            for lg in ps.pairing.legs:
+                eid, sid = lg
+                pos = self.positions.get_position(eid, sid)
+                ps.base_quantities[lg] = pos.net_quantity if pos is not None else 0
+            ps.phase = Phase.SCANNING
+            self._reset(ps)
         return []
 
     def _on_closing(self, ps: PairingState, ts: int) -> list[Intent]:
-        all_flat = all(
-            self.positions.get_effective_quantity(lg.listing[0], lg.listing[1]) == 0
-            for lg in ps.legs
-        )
+        # Check that the INCREMENTAL position (current - base) is flat, not necessarily total.
+        # When scaling, base_quantities tracks previously-hedged positions that should remain open.
+        # Use net_quantity (settled fills) not effective_quantity (pending sells) to avoid
+        # premature re-entry while close orders are still in flight.
+        def _incremental_qty(lg: LegState) -> int:
+            pos = self.positions.get_position(lg.listing[0], lg.listing[1])
+            total = pos.net_quantity if pos is not None else 0
+            base = ps.base_quantities.get(lg.listing, 0)
+            return total - base
+
+        all_flat = all(_incremental_qty(lg) == 0 for lg in ps.legs)
         if all_flat:
             ps.phase = Phase.SCANNING
             self._reset(ps)
@@ -817,7 +853,9 @@ class CrossPredictionArb(Strategy):
             intents = []
             for leg in ps.legs:
                 eid, sid = leg.listing
-                qty = self.positions.get_effective_quantity(eid, sid)
+                eff_qty = self.positions.get_effective_quantity(eid, sid)
+                base = ps.base_quantities.get(leg.listing, 0)
+                qty = eff_qty - base  # only close the incremental portion
                 if qty > 0:
                     intents.append(Intent(
                         exchange_id=eid, security_id=sid,
@@ -847,7 +885,11 @@ class CrossPredictionArb(Strategy):
         for leg in ps.legs:
             eid, sid = leg.listing
             pos = self.positions.get_position(eid, sid)
-            qty = pos.net_quantity if pos is not None else 0
+            total_qty = pos.net_quantity if pos is not None else 0
+            # When scaling, only unwind the incremental quantity from this entry cycle.
+            # Previously-hedged base positions are left open to settle at resolution.
+            base = ps.base_quantities.get(leg.listing, 0)
+            qty = total_qty - base
             if qty > 0:
                 intents.append(Intent(
                     exchange_id=eid, security_id=sid,
@@ -867,40 +909,6 @@ class CrossPredictionArb(Strategy):
             else:
                 intents.append(Intent(exchange_id=eid, security_id=sid))
         return intents
-
-    # ------------------------------------------------------------------
-    # Early exit check (BID book walking for exit revenue)
-    # ------------------------------------------------------------------
-
-    def _check_early_exit(self, ps: PairingState, ts: int) -> bool:
-        if not ps.legs:
-            return False
-
-        if self._min_exit_price > 0:
-            bids = [
-                self._books[leg.listing].best_bid() / PRICE_SCALE
-                for leg in ps.legs
-                if self._books[leg.listing].best_bid() > 0
-            ]
-            if not bids or min(bids) > self._min_exit_price:
-                return False
-
-        total_net = 0.0
-        for leg in ps.legs:
-            eff_qty = self.positions.get_effective_quantity(leg.listing[0], leg.listing[1])
-            if eff_qty == 0 and leg.filled_qty > 0:
-                continue
-            book = self._books[leg.listing]
-            best_bid = book.best_bid()
-            if best_bid <= 0:
-                return False
-            sell_rev = best_bid / PRICE_SCALE
-            sell_fee = self._taker_fee(leg.listing, best_bid)
-            buy_cost = leg.fill_cost / (leg.filled_qty * PRICE_SCALE) if leg.filled_qty > 0 else 0.0
-            entry_fee_per = leg.entry_fees / (leg.filled_qty / SIZE_SCALE) if leg.filled_qty > 0 else 0.0
-            total_net += sell_rev - buy_cost - sell_fee - entry_fee_per
-
-        return total_net > self._exit_edge_threshold
 
     # ------------------------------------------------------------------
     # Imbalance timeout
@@ -931,3 +939,5 @@ class CrossPredictionArb(Strategy):
     def _reset(self, ps: PairingState) -> None:
         ps.legs = []
         ps.partial_fill_since = None
+        ps.entry_ts = 0
+        # base_quantities is set by _on_hedged before calling _reset — do not clear here.
