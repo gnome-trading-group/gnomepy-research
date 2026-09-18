@@ -88,6 +88,15 @@ class Pairing:
     legs: list[tuple[int, int]]
 
 
+@dataclass
+class PairingState:
+    pairing: Pairing
+    phase: Phase = Phase.SCANNING
+    legs: list[LegState] = field(default_factory=list)
+    partial_fill_since: int | None = None
+    last_close_ts: int = 0
+
+
 # ---------------------------------------------------------------------------
 # Cost model (pluggable)
 # ---------------------------------------------------------------------------
@@ -295,6 +304,7 @@ class CrossPredictionArb(Strategy):
         max_position: int = 100,
         min_edge_cents: float = 2.0,
         min_contract_price: float = 0.25,
+        max_price_divergence_cents: float = 0.0,
         imbalance_timeout_ns: int = 30_000_000_000,
         max_staleness_ns: int = 60_000_000_000,
         allow_early_exit: bool = True,
@@ -342,6 +352,7 @@ class CrossPredictionArb(Strategy):
         self._max_position = max_position * SIZE_SCALE
         self._min_edge = min_edge_cents / 100.0
         self._min_contract_price_scaled = int(min_contract_price * PRICE_SCALE)
+        self._max_price_divergence = max_price_divergence_cents / 100.0
         self._imbalance_timeout_ns = imbalance_timeout_ns
         self._max_staleness_ns = max_staleness_ns
         self._allow_early_exit = allow_early_exit
@@ -402,12 +413,15 @@ class CrossPredictionArb(Strategy):
 
         self._pm_taker_mode = pm_taker_mode
 
-        # State machine
-        self._phase = Phase.SCANNING
-        self._last_close_ts: int = 0
-        self._active_pairing: Pairing | None = None
-        self._legs: list[LegState] = []
-        self._partial_fill_since: int | None = None
+        # Per-pairing state machines (concurrent — each pairing is independent)
+        self._pairing_states: list[PairingState] = [
+            PairingState(pairing=p) for p in self._pairings
+        ]
+        # Lookup: listing → pairing states that include it (for fill routing)
+        self._listing_to_ps: dict[tuple[int, int], list[PairingState]] = {}
+        for ps in self._pairing_states:
+            for leg in ps.pairing.legs:
+                self._listing_to_ps.setdefault(leg, []).append(ps)
 
         # Markout tracking
         self._pending_markouts: list[dict] = []
@@ -440,17 +454,19 @@ class CrossPredictionArb(Strategy):
         ts = data.event_timestamp
         self._update_book(listing, data, ts)
 
-        if self._phase == Phase.SCANNING:
-            return self._on_scanning(ts)
-        if self._phase == Phase.ENTERING:
-            return self._on_entering(ts)
-        if self._phase == Phase.PARTIAL_FILL:
-            return self._on_partial_fill(ts)
-        if self._phase == Phase.HEDGED:
-            return self._on_hedged(ts)
-        if self._phase in (Phase.EXITING, Phase.UNWINDING):
-            return self._on_closing(ts)
-        return []
+        intents = []
+        for ps in self._pairing_states:
+            if ps.phase == Phase.SCANNING:
+                intents.extend(self._on_scanning(ps, ts))
+            elif ps.phase == Phase.ENTERING:
+                intents.extend(self._on_entering(ps, ts))
+            elif ps.phase == Phase.PARTIAL_FILL:
+                intents.extend(self._on_partial_fill(ps, ts))
+            elif ps.phase == Phase.HEDGED:
+                intents.extend(self._on_hedged(ps, ts))
+            elif ps.phase in (Phase.EXITING, Phase.UNWINDING):
+                intents.extend(self._on_closing(ps, ts))
+        return intents
 
     # ------------------------------------------------------------------
     # Execution report entry point (fill callback — dual-observer pattern)
@@ -459,16 +475,14 @@ class CrossPredictionArb(Strategy):
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
         if report.exec_type not in (ExecType.FILL, ExecType.PARTIAL_FILL):
             return []
-        if self._phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
-            return []
 
         listing = (report.exchange_id, report.security_id)
-        for leg in self._legs:
-            if leg.listing == listing:
-                # Validate fee matches expected rate for this leg's order type.
-                # EXEC_REPORT_FOR_UNKNOWN_ORDER can deliver fills from old taker
-                # orders (e.g. a close that fired during a prior UNWINDING cycle)
-                # with a mismatched fee rate — skip those to avoid inflating filled_qty.
+        for ps in self._listing_to_ps.get(listing, []):
+            if ps.phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
+                continue
+            for leg in ps.legs:
+                if leg.listing != listing:
+                    continue
                 is_pm_taker = self._pm_taker_mode and listing[0] == 4
                 expected_rate = (
                     self._taker_fee_rates.get(listing[0], 0.0) if is_pm_taker
@@ -479,14 +493,13 @@ class CrossPredictionArb(Strategy):
                 expected_fee = expected_rate * p * (1.0 - p) * qty_contracts
                 tolerance = max(expected_fee * 0.5, 0.0005)
                 if abs(report.fee - expected_fee) > tolerance:
-                    break  # fee mismatch — unknown/wrong-direction fill, skip
+                    break
                 leg.record_fill(report.fill_price, report.filled_qty, report.fee)
-                break
+                if self._track_markouts:
+                    self._record_markout(listing, report.fill_price, Side.BID, report.timestamp_event)
+                return self._check_fill_transitions(ps, report.timestamp_event)
 
-        if self._track_markouts:
-            self._record_markout(listing, report.fill_price, Side.BID, report.timestamp_event)
-
-        return self._check_fill_transitions(report.timestamp_event)
+        return []
 
     # ------------------------------------------------------------------
     # Book management
@@ -534,7 +547,7 @@ class CrossPredictionArb(Strategy):
     # Edge detection (walks ask books — entry uses asks only)
     # ------------------------------------------------------------------
 
-    def _compute_pairing_edge(self, pairing: Pairing) -> tuple[float, int]:
+    def _compute_pairing_edge(self, pairing: Pairing, ts: int = 0) -> tuple[float, int]:
         """Walk ask books to find max profitable qty and avg edge per contract.
 
         Returns (avg_edge_dollars, qty_scaled). qty=0 means no opportunity.
@@ -543,10 +556,31 @@ class CrossPredictionArb(Strategy):
         legs = pairing.legs
         books = [self._books[lg] for lg in legs]
 
+        # Staleness and min contract price gates
+        if ts > 0:
+            if any(self._is_stale(lg, ts) for lg in legs):
+                return 0.0, 0
+            if any(
+                books[i].best_ask() < self._min_contract_price_scaled
+                or books[i].best_ask() > PRICE_SCALE - self._min_contract_price_scaled
+                for i in range(len(legs))
+            ):
+                return 0.0, 0
+
         # Need valid asks on every leg
         for book in books:
             if not book.asks:
                 return 0.0, 0
+
+        # Cross-exchange consistency gate: PM ask should ≈ 1 - Kalshi ask.
+        # Large divergence means PM is stale and will snap back before our taker fills,
+        # causing partial fills that get unwound at a loss.
+        if self._max_price_divergence > 0 and len(legs) == 2:
+            pm_asks = [books[i].best_ask() / PRICE_SCALE for i in range(2) if legs[i][0] == 4]
+            k_asks = [books[i].best_ask() / PRICE_SCALE for i in range(2) if legs[i][0] == 5]
+            if pm_asks and k_asks:
+                if abs(pm_asks[0] - (1.0 - k_asks[0])) > self._max_price_divergence:
+                    return 0.0, 0
 
         qty = 0
         total_edge = 0.0
@@ -597,27 +631,6 @@ class CrossPredictionArb(Strategy):
 
         return (total_edge / max(qty, 1), qty) if qty > 0 else (0.0, 0)
 
-    def _evaluate_pairings(self, ts: int) -> tuple[Pairing, float, int] | None:
-        """Find the best pairing with positive edge. Returns (pairing, edge, qty) or None."""
-        best: tuple[Pairing, float, int] | None = None
-        for pairing in self._pairings:
-            # Staleness check
-            if any(self._is_stale(lg, ts) for lg in pairing.legs):
-                continue
-            # Min contract price check — don't enter near resolution
-            if any(
-                self._books[lg].best_ask() < self._min_contract_price_scaled
-                or self._books[lg].best_ask() > PRICE_SCALE - self._min_contract_price_scaled
-                for lg in pairing.legs
-            ):
-                continue
-            edge, qty = self._compute_pairing_edge(pairing)
-            if edge < self._min_edge or qty <= 0:
-                continue
-            if best is None or edge > best[1]:
-                best = (pairing, edge, qty)
-        return best
-
     # ------------------------------------------------------------------
     # Settlement penalty (Feil-Nendel) — disabled when resolution_time_ns=0
     # ------------------------------------------------------------------
@@ -637,11 +650,12 @@ class CrossPredictionArb(Strategy):
             return float("inf")
         time_decay = 1.0 / max(tau / 3600.0, 0.01)
         total = 0.0
-        for leg in self._legs:
-            q = leg.filled_qty / SIZE_SCALE
-            p = self._books[leg.listing].mid() / PRICE_SCALE
-            p = max(min(p, 0.99), 0.01)
-            total += self._gamma_T * q * q * p * (1.0 - p) * time_decay
+        for ps in self._pairing_states:
+            for leg in ps.legs:
+                q = leg.filled_qty / SIZE_SCALE
+                p = self._books[leg.listing].mid() / PRICE_SCALE
+                p = max(min(p, 0.99), 0.01)
+                total += self._gamma_T * q * q * p * (1.0 - p) * time_decay
         return total
 
     # ------------------------------------------------------------------
@@ -690,35 +704,32 @@ class CrossPredictionArb(Strategy):
     # Phase handlers
     # ------------------------------------------------------------------
 
-    def _on_scanning(self, ts: int) -> list[Intent]:
-        result = self._evaluate_pairings(ts)
-        if result is None:
+    def _on_scanning(self, ps: PairingState, ts: int) -> list[Intent]:
+        edge, qty = self._compute_pairing_edge(ps.pairing, ts)
+        if edge < self._min_edge or qty <= 0:
             return []
-        pairing, edge, qty = result
 
-        # Target quantity: respect max_position; optionally cap at 1 contract for safety
         target_qty = min(qty, self._max_position)
         if not self._allow_scaling:
-            target_qty = SIZE_SCALE  # one contract
+            target_qty = SIZE_SCALE
 
-        bid_prices = self._compute_maker_bid_prices(pairing, target_qty)
+        bid_prices = self._compute_maker_bid_prices(ps.pairing, target_qty)
         if bid_prices is None:
             return []
 
-        self._active_pairing = pairing
-        self._legs = [LegState(listing=lg, target_qty=target_qty) for lg in pairing.legs]
-        self._phase = Phase.ENTERING
+        ps.legs = [LegState(listing=lg, target_qty=target_qty) for lg in ps.pairing.legs]
+        ps.phase = Phase.ENTERING
 
         if self._metrics_buf is not None:
             row = self._metrics_buf.appendRow()
             self._metrics_buf.setLong(row, self._m_ts, ts)
             self._metrics_buf.setInt(row, self._m_phase, int(Phase.ENTERING))
-            self._metrics_buf.setInt(row, self._m_pairing, pairing.index)
+            self._metrics_buf.setInt(row, self._m_pairing, ps.pairing.index)
             self._metrics_buf.setDouble(row, self._m_edge, edge)
             self._metrics_buf.setLong(row, self._m_qty, target_qty)
 
         intents = []
-        for leg in self._legs:
+        for leg in ps.legs:
             eid = leg.listing[0]
             if self._pm_taker_mode and eid == 4:
                 book = self._books[leg.listing]
@@ -741,79 +752,70 @@ class CrossPredictionArb(Strategy):
                 ))
         return intents
 
-    def _on_entering(self, ts: int) -> list[Intent]:
-        # Dual-observer: timer-driven check (fill callback also calls _check_fill_transitions)
-        return self._check_fill_transitions(ts)
+    def _on_entering(self, ps: PairingState, ts: int) -> list[Intent]:
+        return self._check_fill_transitions(ps, ts)
 
-    def _check_fill_transitions(self, ts: int) -> list[Intent]:
-        if self._active_pairing is None:
-            return []
-
-        all_filled = all(lg.is_filled for lg in self._legs)
-        any_filled = any(lg.filled_qty > 0 for lg in self._legs)
+    def _check_fill_transitions(self, ps: PairingState, ts: int) -> list[Intent]:
+        all_filled = all(lg.is_filled for lg in ps.legs)
+        any_filled = any(lg.filled_qty > 0 for lg in ps.legs)
         some_filled = any_filled and not all_filled
 
         if all_filled:
-            self._phase = Phase.HEDGED
+            ps.phase = Phase.HEDGED
             return []
 
-        if some_filled and self._phase == Phase.ENTERING:
-            self._phase = Phase.PARTIAL_FILL
-            self._partial_fill_since = ts
+        if some_filled and ps.phase == Phase.ENTERING:
+            ps.phase = Phase.PARTIAL_FILL
+            ps.partial_fill_since = ts
             return []
 
-        if some_filled and self._phase == Phase.PARTIAL_FILL:
-            if self._check_imbalance_timeout(ts):
-                self._phase = Phase.UNWINDING
-                return self._close_all_positions(ts)
+        if some_filled and ps.phase == Phase.PARTIAL_FILL:
+            if self._check_imbalance_timeout(ps, ts):
+                ps.phase = Phase.UNWINDING
+                return self._close_all_positions(ps, ts)
             return []
 
-        # Check if edge has deteriorated (budget violated for unfilled legs)
-        pairing = self._active_pairing
-        unfilled_legs = [lg for lg in self._legs if not lg.is_filled]
+        unfilled_legs = [lg for lg in ps.legs if not lg.is_filled]
         if unfilled_legs:
-            bid_prices = self._compute_maker_bid_prices(pairing, unfilled_legs[0].target_qty)
+            bid_prices = self._compute_maker_bid_prices(ps.pairing, unfilled_legs[0].target_qty)
             if bid_prices is None:
-                # Budget violated — cancel unfilled, unwind filled
                 intents = []
                 for leg in unfilled_legs:
                     intents.append(Intent(exchange_id=leg.listing[0], security_id=leg.listing[1]))
                 if any_filled:
-                    self._phase = Phase.UNWINDING
-                    intents.extend(self._close_all_positions(ts))
+                    ps.phase = Phase.UNWINDING
+                    intents.extend(self._close_all_positions(ps, ts))
                 else:
-                    self._phase = Phase.SCANNING
-                    self._reset()
+                    ps.phase = Phase.SCANNING
+                    self._reset(ps)
                 return intents
 
         return []
 
-    def _on_partial_fill(self, ts: int) -> list[Intent]:
-        return self._check_fill_transitions(ts)
+    def _on_partial_fill(self, ps: PairingState, ts: int) -> list[Intent]:
+        return self._check_fill_transitions(ps, ts)
 
-    def _on_hedged(self, ts: int) -> list[Intent]:
+    def _on_hedged(self, ps: PairingState, ts: int) -> list[Intent]:
         if not self._allow_early_exit:
             return []
-        if self._check_early_exit(ts):
-            self._phase = Phase.EXITING
-            return self._close_all_positions(ts)
+        if self._check_early_exit(ps, ts):
+            ps.phase = Phase.EXITING
+            return self._close_all_positions(ps, ts)
         return []
 
-    def _on_closing(self, ts: int) -> list[Intent]:
+    def _on_closing(self, ps: PairingState, ts: int) -> list[Intent]:
         all_flat = all(
             self.positions.get_effective_quantity(lg.listing[0], lg.listing[1]) == 0
-            for lg in self._legs
+            for lg in ps.legs
         )
         if all_flat:
-            self._phase = Phase.SCANNING
-            self._reset()
+            ps.phase = Phase.SCANNING
+            self._reset(ps)
             return []
-        # Retry every 2s to clean up orphaned positions (e.g. from EXEC_REPORT_FOR_UNKNOWN_ORDER
-        # fills that arrived while in UNWINDING phase and weren't tracked in leg.filled_qty).
-        if ts - self._last_close_ts > 2_000_000_000:
-            self._last_close_ts = ts
+        if ts - ps.last_close_ts > 2_000_000_000:
+            ps.last_close_ts = ts
             intents = []
-            for leg in self._legs:
+            for leg in ps.legs:
                 eid, sid = leg.listing
                 qty = self.positions.get_effective_quantity(eid, sid)
                 if qty > 0:
@@ -839,17 +841,10 @@ class CrossPredictionArb(Strategy):
     # Closing / unwind helpers
     # ------------------------------------------------------------------
 
-    def _close_all_positions(self, ts: int) -> list[Intent]:
-        """Cancel outstanding bids and sell actual net position.
-
-        Uses positions.get_position().net_quantity (not leg.filled_qty) so that
-        engine-side sells from EXEC_REPORT_FOR_UNKNOWN_ORDER are reflected and we
-        do not oversell into a short. _on_closing retries via effective_qty to
-        handle any residual outstanding bids.
-        """
-        self._last_close_ts = ts
+    def _close_all_positions(self, ps: PairingState, ts: int) -> list[Intent]:
+        ps.last_close_ts = ts
         intents = []
-        for leg in self._legs:
+        for leg in ps.legs:
             eid, sid = leg.listing
             pos = self.positions.get_position(eid, sid)
             qty = pos.net_quantity if pos is not None else 0
@@ -877,23 +872,21 @@ class CrossPredictionArb(Strategy):
     # Early exit check (BID book walking for exit revenue)
     # ------------------------------------------------------------------
 
-    def _check_early_exit(self, ts: int) -> bool:
-        if not self._legs:
+    def _check_early_exit(self, ps: PairingState, ts: int) -> bool:
+        if not ps.legs:
             return False
 
-        # Gate: only allow exit when at least one leg is near resolution (bid < threshold).
-        # Blocks false exits during scoring play transients where prices are mid-range.
         if self._min_exit_price > 0:
             bids = [
                 self._books[leg.listing].best_bid() / PRICE_SCALE
-                for leg in self._legs
+                for leg in ps.legs
                 if self._books[leg.listing].best_bid() > 0
             ]
             if not bids or min(bids) > self._min_exit_price:
                 return False
 
         total_net = 0.0
-        for leg in self._legs:
+        for leg in ps.legs:
             eff_qty = self.positions.get_effective_quantity(leg.listing[0], leg.listing[1])
             if eff_qty == 0 and leg.filled_qty > 0:
                 continue
@@ -913,10 +906,10 @@ class CrossPredictionArb(Strategy):
     # Imbalance timeout
     # ------------------------------------------------------------------
 
-    def _check_imbalance_timeout(self, ts: int) -> bool:
-        if self._partial_fill_since is None:
+    def _check_imbalance_timeout(self, ps: PairingState, ts: int) -> bool:
+        if ps.partial_fill_since is None:
             return False
-        return (ts - self._partial_fill_since) > self._imbalance_timeout_ns
+        return (ts - ps.partial_fill_since) > self._imbalance_timeout_ns
 
     # ------------------------------------------------------------------
     # Adverse selection / markout tracking
@@ -935,7 +928,6 @@ class CrossPredictionArb(Strategy):
     # State reset
     # ------------------------------------------------------------------
 
-    def _reset(self) -> None:
-        self._active_pairing = None
-        self._legs = []
-        self._partial_fill_since = None
+    def _reset(self, ps: PairingState) -> None:
+        ps.legs = []
+        ps.partial_fill_since = None

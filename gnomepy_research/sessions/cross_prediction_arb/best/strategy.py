@@ -8,6 +8,7 @@ strategy = CrossPredictionArb(
     max_position=100,
     min_edge_cents=1.5,
     min_contract_price=0.25,
+    max_price_divergence_cents=5.0,
     imbalance_timeout_ns=60_000_000_000,
     max_staleness_ns=60_000_000_000,
     allow_early_exit=True,
