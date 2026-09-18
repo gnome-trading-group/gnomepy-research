@@ -17,6 +17,11 @@ SIZE_SCALE = Scales.SIZE      # 1_000_000
 # Don't make cancel decisions until this window has passed.
 _PM_TAKER_SETTLE_NS = 500_000_000
 
+# After sending a K maker cancel, wait this long before re-entering.
+# Without this: cancel + new K maker arrive simultaneously; the engine cancels
+# the new order instead of the old one. 200ms >> 2×latency ensures settlement.
+_CANCEL_SETTLE_NS = 200_000_000
+
 
 # ---------------------------------------------------------------------------
 # State machine phases
@@ -99,6 +104,7 @@ class PairingState:
     partial_fill_since: int | None = None
     last_close_ts: int = 0
     entry_ts: int = 0
+    last_cancel_ts: int = 0
     # Quantities at the moment we reset HEDGED→SCANNING for a new scaled entry.
     # Unwind on partial-fill failure closes only the incremental (current - base),
     # leaving previously-hedged positions intact to resolve at settlement.
@@ -475,25 +481,36 @@ class CrossPredictionArb(Strategy):
     # ------------------------------------------------------------------
 
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
-        if report.exec_type not in (ExecType.FILL, ExecType.PARTIAL_FILL):
-            return []
-
         listing = (report.exchange_id, report.security_id)
-        for ps in self._listing_to_ps.get(listing, []):
-            if ps.phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
-                continue
-            for leg in ps.legs:
-                if leg.listing != listing:
+        if report.exec_type in (ExecType.FILL, ExecType.PARTIAL_FILL):
+            for ps in self._listing_to_ps.get(listing, []):
+                if ps.phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
                     continue
-                # Accept fill regardless of which fee rate applies. A Kalshi maker bid
-                # placed at the ask price crosses immediately and is charged taker fees
-                # by the backtest engine — the strict maker-fee check would silently
-                # drop that valid fill, leaving naked PM exposure.
-                leg.record_fill(report.fill_price, report.filled_qty, report.fee)
-                if self._track_markouts:
-                    self._record_markout(listing, report.fill_price, Side.BID, report.timestamp_event)
-                return self._check_fill_transitions(ps, report.timestamp_event)
-
+                for leg in ps.legs:
+                    if leg.listing != listing:
+                        continue
+                    leg.record_fill(report.fill_price, report.filled_qty, report.fee)
+                    if self._track_markouts:
+                        self._record_markout(listing, report.fill_price, Side.BID, report.timestamp_event)
+                    return self._check_fill_transitions(ps, report.timestamp_event)
+        elif (self._pm_taker_mode and listing[0] == 4
+              and report.exec_type in (ExecType.REJECT, ExecType.EXPIRE)):
+            for ps in self._listing_to_ps.get(listing, []):
+                if ps.phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
+                    continue
+                any_k_filled = any(lg.filled_qty > 0 for lg in ps.legs if lg.listing[0] != 4)
+                if any_k_filled:
+                    ps.phase = Phase.UNWINDING
+                    return self._close_all_positions(ps, report.timestamp_event)
+                else:
+                    cancel_intents = [
+                        Intent(exchange_id=lg.listing[0], security_id=lg.listing[1])
+                        for lg in ps.legs if lg.listing[0] != 4
+                    ]
+                    ps.phase = Phase.SCANNING
+                    ps.last_cancel_ts = report.timestamp_event
+                    self._reset(ps)
+                    return cancel_intents
         return []
 
     # ------------------------------------------------------------------
@@ -704,6 +721,22 @@ class CrossPredictionArb(Strategy):
     # ------------------------------------------------------------------
 
     def _on_scanning(self, ps: PairingState, ts: int) -> list[Intent]:
+        for lg in ps.pairing.legs:
+            eid, sid = lg
+            pos = self.positions.get_position(eid, sid)
+            current = pos.net_quantity if pos is not None else 0
+            base = ps.base_quantities.get(lg, 0)
+            if current > base:
+                ps.legs = [LegState(listing=l) for l in ps.pairing.legs]
+                ps.phase = Phase.UNWINDING
+                ps.last_close_ts = 0
+                return self._close_all_positions(ps, ts)
+
+        if ps.last_cancel_ts > 0:
+            if ts - ps.last_cancel_ts < _CANCEL_SETTLE_NS:
+                return []
+            ps.last_cancel_ts = 0
+
         edge, qty = self._compute_pairing_edge(ps.pairing, ts)
         if edge < self._min_edge or qty <= 0:
             return []
@@ -810,6 +843,7 @@ class CrossPredictionArb(Strategy):
                     intents.extend(self._close_all_positions(ps, ts))
                 else:
                     ps.phase = Phase.SCANNING
+                    ps.last_cancel_ts = ts
                     self._reset(ps)
                 return intents
 
@@ -906,7 +940,7 @@ class CrossPredictionArb(Strategy):
                     take_order_type=OrderType.LIMIT,
                     take_limit_price=PRICE_SCALE - 1,
                 ))
-            else:
+            elif not (self._pm_taker_mode and eid == 4):
                 intents.append(Intent(exchange_id=eid, security_id=sid))
         return intents
 
