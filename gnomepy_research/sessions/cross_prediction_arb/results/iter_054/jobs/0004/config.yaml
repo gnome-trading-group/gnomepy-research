@@ -1,0 +1,73 @@
+end_date: '2026-08-19T19:32:00'
+listings:
+- listing_id: 127528
+  profile: polymarket
+- listing_id: 127529
+  profile: polymarket
+- listing_id: 122894
+  profile: kalshi
+- listing_id: 122895
+  profile: kalshi
+profiles:
+  kalshi:
+    fee_model:
+      maker_fee_rate: 0.0175
+      taker_fee_rate: 0.07
+      type: parametric
+    network_latency:
+      latency_nanos: 50000000
+      type: static
+    order_processing_latency:
+      base_nanos: 5000000
+      maker_delay_nanos: 0
+      taker_delay_nanos: 0
+      type: maker_taker
+    queue_model:
+      type: risk_averse
+  polymarket:
+    fee_model:
+      maker_fee_rate: 0.0
+      taker_fee_rate: 0.07
+      type: parametric
+    network_latency:
+      latency_nanos: 50000000
+      type: static
+    order_processing_latency:
+      base_nanos: 5000000
+      maker_delay_nanos: 0
+      taker_delay_nanos: 50000000
+      type: maker_taker
+    queue_model:
+      type: risk_averse
+record_depth: 10
+start_date: '2026-08-19T18:15:00'
+strategy:
+  args:
+    allow_dutch_book: false
+    debug: false
+    depth_coverage_mult: 0.0
+    fill_risk_lambda: 0.0
+    gamma_T: 0.0
+    imbalance_timeout_ns: 60000000000
+    k_sea_listing_id: 122894
+    k_tit_listing_id: 122895
+    max_position: 2000
+    max_price_divergence_cents: 5.0
+    max_staleness_ns: 60000000000
+    min_contract_price: 0.1
+    min_edge_cents: 1.0
+    optimal_ev_lambda: 30.0
+    pm_no_listing_id: 127529
+    pm_taker_mode: true
+    pm_yes_listing_id: 127528
+    price_edge_share: 0.5
+    price_improve_bps: 50.0
+    price_model: join_best_bid
+    price_window_cents: 2
+    processing_time_ns: 5000000
+    resolution_time_ns: 0
+    target_fill_prob: 0.7
+    track_markouts: false
+    unwind_spread_mult: 2.0
+    use_cst_fill_model: false
+  class_name: gnomepy_research.sessions.cross_prediction_arb.cross_prediction_arb:CrossPredictionArb

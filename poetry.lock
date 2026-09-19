@@ -1300,7 +1300,7 @@ files = [
 
 [[package]]
 name = "gnomepy"
-version = "2.9.0"
+version = "2.16.1"
 description = ""
 optional = false
 python-versions = ">=3.13,<3.14"
@@ -1311,11 +1311,11 @@ develop = true
 [package.dependencies]
 anthropic = {version = ">=0.40.0,<1.0.0", optional = true}
 boto3 = ">=1.36.18,<2.0.0"
-boto3-stubs = {version = ">=1.42.73,<1.43.0", optional = true}
+boto3-stubs = {version = ">=1.42.73,<2.0.0", optional = true}
 click = ">=8.1,<9.0"
 dash = {version = ">=2.18.0,<3.0.0", optional = true}
 dash-bootstrap-components = {version = ">=1.6.0,<2.0.0", optional = true}
-jpype1 = {version = ">=1.5.0,<2.0.0", optional = true}
+jpype1 = ">=1.5.0,<2.0.0"
 numpy = {version = ">=2.2.4,<3.0.0", optional = true}
 pandas = {version = ">=2.2.3,<3.0.0", optional = true}
 pandas-stubs = {version = ">=2.3.3,<2.4.0", optional = true}
@@ -1328,7 +1328,8 @@ scipy = {version = ">=1.15.0,<2.0.0", optional = true}
 zstandard = ">=0.23.0,<0.24.0"
 
 [package.extras]
-backtest = ["anthropic (>=0.40.0,<1.0.0)", "boto3-stubs (>=1.42.73,<1.43.0)", "dash (>=2.18.0,<3.0.0)", "dash-bootstrap-components (>=1.6.0,<2.0.0)", "jpype1 (>=1.5.0,<2.0.0)", "numpy (>=2.2.4,<3.0.0)", "pandas (>=2.2.3,<3.0.0)", "pandas-stubs (>=2.3.3,<2.4.0)", "plotly (>=6.6.0,<6.7.0)", "pyarrow (>=23.0.1,<24.0.0)", "scipy (>=1.15.0,<2.0.0)"]
+backtest = ["anthropic (>=0.40.0,<1.0.0)", "boto3-stubs (>=1.42.73,<2.0.0)", "dash (>=2.18.0,<3.0.0)", "dash-bootstrap-components (>=1.6.0,<2.0.0)", "numpy (>=2.2.4,<3.0.0)", "pandas (>=2.2.3,<3.0.0)", "pandas-stubs (>=2.3.3,<2.4.0)", "plotly (>=6.6.0,<6.7.0)", "pyarrow (>=23.0.1,<24.0.0)", "scipy (>=1.15.0,<2.0.0)"]
+strategy = ["numpy (>=2.2.4,<3.0.0)", "scipy (>=1.15.0,<2.0.0)"]
 tardis = ["tardis-dev (>=4.0.0,<5.0.0)"]
 
 [package.source]
@@ -4085,4 +4086,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<3.14"
-content-hash = "3b3c5b6be392ac05a27d1a7fe68628d60c14fca720986bcff35d4872a3f58737"
+content-hash = "fbc44d7f09f348cab3a2acb05d8d8893faea563822844675b5334a969561ae53"
