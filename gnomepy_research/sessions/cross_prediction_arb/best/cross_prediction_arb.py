@@ -307,10 +307,10 @@ class OptimalEVModel(PriceModel):
 class CrossPredictionArb(Strategy):
     def __init__(
         self,
-        pm_yes_listing_id: int = 222852,
-        pm_no_listing_id: int = 222853,
-        k_sea_listing_id: int = 97203,
-        k_tit_listing_id: int = 97202,
+        pm_a_listing_id: int = 222852,
+        pm_b_listing_id: int = 222853,
+        k_a_listing_id: int = 97203,
+        k_b_listing_id: int = 97202,
         max_position: int = 100,
         min_edge_cents: float = 2.0,
         min_contract_price: float = 0.25,
@@ -374,17 +374,17 @@ class CrossPredictionArb(Strategy):
                 raise ValueError(f"No listing for listing_id={listing_id}")
             return (results[0].exchange_id, results[0].security_id)
 
-        pm_yes = resolve(pm_yes_listing_id)
-        pm_no = resolve(pm_no_listing_id)
-        k_sea = resolve(k_sea_listing_id)
-        k_tit = resolve(k_tit_listing_id)
+        pm_a = resolve(pm_a_listing_id)
+        pm_b = resolve(pm_b_listing_id)
+        k_a = resolve(k_a_listing_id)
+        k_b = resolve(k_b_listing_id)
 
         raw_pairings = [
-            (0, "PM_YES + K_TIT", [pm_yes, k_tit]),
-            (1, "PM_NO + K_SEA", [pm_no, k_sea]),
+            (0, "PM_A + K_B", [pm_a, k_b]),
+            (1, "PM_B + K_A", [pm_b, k_a]),
         ]
         if allow_dutch_book:
-            raw_pairings.append((2, "K_DUTCH_BOOK", [k_sea, k_tit]))
+            raw_pairings.append((2, "K_DUTCH_BOOK", [k_a, k_b]))
         self._pairings: list[Pairing] = []
         self._tracked_listings: set[tuple[int, int]] = set()
         for idx, label, legs in raw_pairings:

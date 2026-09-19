@@ -1,10 +1,10 @@
 from gnomepy_research.sessions.cross_prediction_arb.cross_prediction_arb import CrossPredictionArb
 
 strategy = CrossPredictionArb(
-    pm_yes_listing_id=222852,
-    pm_no_listing_id=222853,
-    k_sea_listing_id=97203,
-    k_tit_listing_id=97202,
+    pm_a_listing_id=222852,
+    pm_b_listing_id=222853,
+    k_a_listing_id=97203,
+    k_b_listing_id=97202,
     max_position=2000,
     min_edge_cents=1.0,
     min_contract_price=0.10,

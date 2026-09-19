@@ -1,10 +1,10 @@
 strategy:
   class_name: "gnomepy_research.sessions.cross_prediction_arb.cross_prediction_arb:CrossPredictionArb"
   args:
-    pm_yes_listing_id: 0
-    pm_no_listing_id: 0
-    k_sea_listing_id: 0
-    k_tit_listing_id: 0
+    pm_a_listing_id: 0
+    pm_b_listing_id: 0
+    k_a_listing_id: 0
+    k_b_listing_id: 0
     max_position: 2000
     min_edge_cents: 1.0
     min_contract_price: 0.10
@@ -77,10 +77,10 @@ scenarios:
       - listing_id: 97202
         profile: kalshi
     strategy_args:
-      pm_yes_listing_id: 222852
-      pm_no_listing_id: 222853
-      k_sea_listing_id: 97203
-      k_tit_listing_id: 97202
+      pm_a_listing_id: 222852
+      pm_b_listing_id: 222853
+      k_a_listing_id: 97203
+      k_b_listing_id: 97202
 
   csgo_eternalfire_exruby:
     start_date: "2026-08-24T16:00:00"
@@ -95,10 +95,10 @@ scenarios:
       - listing_id: 246126
         profile: kalshi
     strategy_args:
-      pm_yes_listing_id: 253844
-      pm_no_listing_id: 253845
-      k_sea_listing_id: 246127
-      k_tit_listing_id: 246126
+      pm_a_listing_id: 253844
+      pm_b_listing_id: 253845
+      k_a_listing_id: 246127
+      k_b_listing_id: 246126
 
   tennis_geerts_albot:
     start_date: "2026-08-19T14:29:00"
@@ -113,10 +113,10 @@ scenarios:
       - listing_id: 129651
         profile: kalshi
     strategy_args:
-      pm_yes_listing_id: 130436
-      pm_no_listing_id: 130435
-      k_sea_listing_id: 129652
-      k_tit_listing_id: 129651
+      pm_a_listing_id: 130436
+      pm_b_listing_id: 130435
+      k_a_listing_id: 129652
+      k_b_listing_id: 129651
 
   tennis_zverev_paul:
     start_date: "2026-08-19T21:24:00"
@@ -131,10 +131,10 @@ scenarios:
       - listing_id: 117905
         profile: kalshi
     strategy_args:
-      pm_yes_listing_id: 115764
-      pm_no_listing_id: 115763
-      k_sea_listing_id: 117906
-      k_tit_listing_id: 117905
+      pm_a_listing_id: 115764
+      pm_b_listing_id: 115763
+      k_a_listing_id: 117906
+      k_b_listing_id: 117905
 
   baseball_detroit_pittsburgh:
     start_date: "2026-08-19T18:15:00"
@@ -149,10 +149,10 @@ scenarios:
       - listing_id: 122895
         profile: kalshi
     strategy_args:
-      pm_yes_listing_id: 127528
-      pm_no_listing_id: 127529
-      k_sea_listing_id: 122894
-      k_tit_listing_id: 122895
+      pm_a_listing_id: 127528
+      pm_b_listing_id: 127529
+      k_a_listing_id: 122894
+      k_b_listing_id: 122895
 
   baseball_atlanta_milwaukee:
     start_date: "2026-08-24T00:23:00"
@@ -167,7 +167,7 @@ scenarios:
       - listing_id: 217773
         profile: kalshi
     strategy_args:
-      pm_yes_listing_id: 229125
-      pm_no_listing_id: 229126
-      k_sea_listing_id: 217772
-      k_tit_listing_id: 217773
+      pm_a_listing_id: 229125
+      pm_b_listing_id: 229126
+      k_a_listing_id: 217772
+      k_b_listing_id: 217773
