@@ -3,6 +3,12 @@
 Cross-session knowledge base. Appended automatically by `/research` when a session completes or stalls,
 or when a significant milestone (first threshold-passing iteration) is reached.
 
+### [2026-09-19] cross_prediction_arb (arb, polymarket + kalshi)
+- STATUS: stalled (49 iterations, sharpe target >0.5 unreachable for hold-to-resolution binary arb)
+- WORKED: Custom state machine (SCANNING/ENTERING/PARTIAL_FILL/UNWINDING) with base_qty tracking for persistent base positions across re-entries. Maker-first Kalshi legs + PM taker at best ask. join_best_bid price model. Optimal params: min_contract_price=0.10, imbalance_timeout=60s, max_position=2000, min_edge_cents=1.0, unwind_spread_mult=2.0. Multi-scenario config covers 6 event types. Best aggregate PnL: $158.42 across seahawks/titans ($106.03), tennis geerts/albot ($32.50), baseball atlanta/milwaukee ($7.96), csgo ($9.47), tennis zverev/paul ($2.34), baseball det/pit ($0.14).
+- FAILED: allow_scaling + base_quantities dict (overly complex, replaced by simpler base_qty int). HEDGED phase (unnecessary — go straight SCANNING after all-filled). min_contract_price=0.25 (loses 26% PnL vs 0.10). imbalance_timeout=120s (loses fills vs 60s). max_entry_size parameter (replaced by natural max_position cap).
+- INSIGHT: Cross-prediction arb (PM_YES + K_TIT always = $1, PM_NO + K_SEA always = $1) works across NFL, tennis, baseball, CS:GO. NFL (2.75h game with scoring plays) dominates PnL due to sustained in-game probability swings. Tennis 20-min window gave $32.50. Parametric fees (7% taker × price × (1-price)) hit hardest at low-price contracts — tennis_zverev_paul all fills in [0.15,0.20] price range with 80% fee drag. Data coverage varies significantly by event: CS:GO had 256 S3 missing-data warnings. Kalshi fee (1.75% maker) is negligible vs PM taker (7%); strategy correctly focuses on PM taker entries. Sharpe metric is low (~0.008) for this strategy class because hold-to-resolution means large intraday mark-to-market swings relative to final realized PnL.
+
 Read by `/research` Step 2 before forming each hypothesis — check for matching `strategy_type` and listing IDs.
 
 ## Learnings
