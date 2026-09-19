@@ -1,0 +1,119 @@
+{
+  "backtest_id": "01a0b9da-0f73-7237-94c0-550e0f2e8c06-0002",
+  "created_at": "2026-09-19T13:34:44.559192+00:00",
+  "start_date": "2026-08-19 14:29:00",
+  "end_date": "2026-08-19 14:49:00",
+  "wall_time_seconds": 52.972,
+  "event_count": 684602,
+  "config_path": "gnomepy_research/sessions/cross_prediction_arb/configs/iter_051.yaml",
+  "config": {
+    "end_date": "2026-08-19T14:49:00",
+    "listings": [
+      {
+        "listing_id": 130436,
+        "profile": "polymarket"
+      },
+      {
+        "listing_id": 130435,
+        "profile": "polymarket"
+      },
+      {
+        "listing_id": 129652,
+        "profile": "kalshi"
+      },
+      {
+        "listing_id": 129651,
+        "profile": "kalshi"
+      }
+    ],
+    "profiles": {
+      "kalshi": {
+        "fee_model": {
+          "maker_fee_rate": 0.0175,
+          "taker_fee_rate": 0.07,
+          "type": "parametric"
+        },
+        "network_latency": {
+          "latency_nanos": 50000000,
+          "type": "static"
+        },
+        "order_processing_latency": {
+          "base_nanos": 5000000,
+          "maker_delay_nanos": 0,
+          "taker_delay_nanos": 250000000,
+          "type": "maker_taker"
+        },
+        "queue_model": {
+          "type": "risk_averse"
+        }
+      },
+      "polymarket": {
+        "fee_model": {
+          "maker_fee_rate": 0.0,
+          "taker_fee_rate": 0.07,
+          "type": "parametric"
+        },
+        "network_latency": {
+          "latency_nanos": 50000000,
+          "type": "static"
+        },
+        "order_processing_latency": {
+          "base_nanos": 5000000,
+          "maker_delay_nanos": 0,
+          "taker_delay_nanos": 250000000,
+          "type": "maker_taker"
+        },
+        "queue_model": {
+          "type": "risk_averse"
+        }
+      }
+    },
+    "record_depth": 10,
+    "start_date": "2026-08-19T14:29:00",
+    "strategy": {
+      "args": {
+        "allow_dutch_book": false,
+        "debug": false,
+        "depth_coverage_mult": 0.0,
+        "fill_risk_lambda": 0.0,
+        "gamma_T": 0.0,
+        "imbalance_timeout_ns": 120000000000,
+        "k_sea_listing_id": 129652,
+        "k_tit_listing_id": 129651,
+        "max_position": 2000,
+        "max_price_divergence_cents": 5.0,
+        "max_staleness_ns": 60000000000,
+        "min_contract_price": 0.25,
+        "min_edge_cents": 1.0,
+        "optimal_ev_lambda": 30.0,
+        "pm_no_listing_id": 130435,
+        "pm_taker_mode": true,
+        "pm_yes_listing_id": 130436,
+        "price_edge_share": 0.5,
+        "price_improve_bps": 50.0,
+        "price_model": "join_best_bid",
+        "price_window_cents": 2,
+        "processing_time_ns": 5000000,
+        "resolution_time_ns": 0,
+        "target_fill_prob": 0.7,
+        "track_markouts": false,
+        "unwind_spread_mult": 2.0,
+        "use_cst_fill_model": false
+      },
+      "class_name": "gnomepy_research.sessions.cross_prediction_arb.cross_prediction_arb:CrossPredictionArb"
+    }
+  },
+  "gnomepy_version": "2.9.0",
+  "gnomepy_research_version": "0.1.0",
+  "gnomepy_commit": "a805275",
+  "java_version": "(17, 0, 10)",
+  "python_version": "3.13.11",
+  "os_info": "macOS-14.3-arm64-arm-64bit-Mach-O",
+  "data_scaled": true,
+  "warnings": [
+    "Missing S3 key: 131218/4/2026/8/19/14/29/mbp-10.zst",
+    "Missing S3 key: 131217/4/2026/8/19/14/29/mbp-10.zst",
+    "Missing S3 key: 130434/5/2026/8/19/14/48/mbp-10.zst"
+  ],
+  "extra": {}
+}

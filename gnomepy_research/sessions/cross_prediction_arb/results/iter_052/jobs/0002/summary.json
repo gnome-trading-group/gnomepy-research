@@ -1,0 +1,33 @@
+{
+  "backtest_id": "01a0b9f0-fdc8-7fea-adcf-586e8b55ddf7-0002",
+  "duration_seconds": 1199.343,
+  "market_record_count": 342279,
+  "intent_record_count": 17,
+  "fill_count": 53,
+  "total_volume": 1743.6399999999999,
+  "total_notional": 823.249,
+  "final_position": 1743.6399999999999,
+  "final_positions": {
+    "(5, 130433)": 522.0,
+    "(5, 130434)": 349.82,
+    "(4, 131217)": 349.82,
+    "(4, 131218)": 522.0
+  },
+  "total_fees": 14.521656971999999,
+  "final_pnl": 32.49972302799998,
+  "final_pnl_by_symbol": {
+    "(5, 130433)": 180.59529599999996,
+    "(5, 130434)": -53.994762732000005,
+    "(4, 131217)": 69.65058976,
+    "(4, 131218)": -163.7514
+  },
+  "sharpe": 0.09731682565692237,
+  "sortino": 0.10990066772306875,
+  "sharpe_std": 0.11369247425912034,
+  "pct_positive_buckets": 0.8,
+  "warnings": [
+    "Missing S3 key: 131218/4/2026/8/19/14/29/mbp-10.zst",
+    "Missing S3 key: 131217/4/2026/8/19/14/29/mbp-10.zst",
+    "Missing S3 key: 130434/5/2026/8/19/14/48/mbp-10.zst"
+  ]
+}

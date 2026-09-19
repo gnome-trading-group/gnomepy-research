@@ -1,0 +1,31 @@
+{
+  "backtest_id": "01a0b9da-0f73-7237-94c0-550e0f2e8c06-0004",
+  "duration_seconds": 1787167916.516,
+  "market_record_count": 584110,
+  "intent_record_count": 9,
+  "fill_count": 0,
+  "total_volume": 0.0,
+  "total_notional": 0.0,
+  "final_position": 0.0,
+  "final_positions": {
+    "(5, 123678)": 0.0,
+    "(5, 123677)": 0.0,
+    "(4, 128311)": 0.0,
+    "(4, 128312)": 0.0
+  },
+  "total_fees": 0.0,
+  "final_pnl": 0.0,
+  "final_pnl_by_symbol": {
+    "(5, 123678)": 0.0,
+    "(5, 123677)": 0.0,
+    "(4, 128311)": 0.0,
+    "(4, 128312)": 0.0
+  },
+  "sharpe": 0.0,
+  "sortino": 0.0,
+  "sharpe_std": 0.0,
+  "pct_positive_buckets": 0.0,
+  "warnings": [
+    "Missing S3 key: 123678/5/2026/8/19/19/31/mbp-10.zst"
+  ]
+}
