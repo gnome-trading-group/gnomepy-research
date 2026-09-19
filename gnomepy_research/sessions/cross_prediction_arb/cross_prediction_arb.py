@@ -31,8 +31,7 @@ class Phase(IntEnum):
     SCANNING = 0
     ENTERING = 1
     PARTIAL_FILL = 2
-    HEDGED = 3
-    UNWINDING = 4
+    UNWINDING = 3
 
 
 # ---------------------------------------------------------------------------
@@ -105,10 +104,7 @@ class PairingState:
     last_close_ts: int = 0
     entry_ts: int = 0
     last_cancel_ts: int = 0
-    # Quantities at the moment we reset HEDGED→SCANNING for a new scaled entry.
-    # Unwind on partial-fill failure closes only the incremental (current - base),
-    # leaving previously-hedged positions intact to resolve at settlement.
-    base_quantities: dict[tuple[int, int], int] = field(default_factory=dict)
+    base_qty: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -316,13 +312,11 @@ class CrossPredictionArb(Strategy):
         k_sea_listing_id: int = 97203,
         k_tit_listing_id: int = 97202,
         max_position: int = 100,
-        max_entry_size: int = 0,
         min_edge_cents: float = 2.0,
         min_contract_price: float = 0.25,
         max_price_divergence_cents: float = 0.0,
         imbalance_timeout_ns: int = 30_000_000_000,
         max_staleness_ns: int = 60_000_000_000,
-        allow_scaling: bool = False,
         processing_time_ns: int = 5_000_000,
         # Fee rates keyed by exchange_id
         maker_fee_rates: dict[int, float] | None = None,
@@ -362,13 +356,11 @@ class CrossPredictionArb(Strategy):
         self._taker_fee_rates = taker_fee_rates
 
         self._max_position = max_position * SIZE_SCALE
-        self._max_entry_size = (max_entry_size * SIZE_SCALE) if max_entry_size > 0 else self._max_position
         self._min_edge = min_edge_cents / 100.0
         self._min_contract_price_scaled = int(min_contract_price * PRICE_SCALE)
         self._max_price_divergence = max_price_divergence_cents / 100.0
         self._imbalance_timeout_ns = imbalance_timeout_ns
         self._max_staleness_ns = max_staleness_ns
-        self._allow_scaling = allow_scaling
         self._processing_time_ns = processing_time_ns
         self._gamma_T = gamma_T
         self._resolution_time_ns = resolution_time_ns
@@ -472,8 +464,6 @@ class CrossPredictionArb(Strategy):
                 intents.extend(self._on_entering(ps, ts))
             elif ps.phase == Phase.PARTIAL_FILL:
                 intents.extend(self._on_partial_fill(ps, ts))
-            elif ps.phase == Phase.HEDGED:
-                intents.extend(self._on_hedged(ps, ts))
             elif ps.phase == Phase.UNWINDING:
                 intents.extend(self._on_closing(ps, ts))
         return intents
@@ -727,8 +717,7 @@ class CrossPredictionArb(Strategy):
             eid, sid = lg
             pos = self.positions.get_position(eid, sid)
             current = pos.net_quantity if pos is not None else 0
-            base = ps.base_quantities.get(lg, 0)
-            if current > base:
+            if current > ps.base_qty:
                 ps.legs = [LegState(listing=l) for l in ps.pairing.legs]
                 ps.phase = Phase.UNWINDING
                 ps.last_close_ts = 0
@@ -743,19 +732,16 @@ class CrossPredictionArb(Strategy):
         if edge < self._min_edge or qty <= 0:
             return []
 
-        if self._allow_scaling:
-            current_pos = 0
-            for lg in ps.pairing.legs:
-                eid, sid = lg
-                pos = self.positions.get_position(eid, sid)
-                if pos is not None:
-                    current_pos = max(current_pos, pos.net_quantity)
-            remaining = self._max_position - current_pos
-            if remaining <= 0:
-                return []
-            target_qty = min(qty, remaining, self._max_entry_size)
-        else:
-            target_qty = SIZE_SCALE
+        current_pos = 0
+        for lg in ps.pairing.legs:
+            eid, sid = lg
+            pos = self.positions.get_position(eid, sid)
+            if pos is not None:
+                current_pos = max(current_pos, pos.net_quantity)
+        remaining = self._max_position - current_pos
+        if remaining <= 0:
+            return []
+        target_qty = min(qty, remaining)
 
         bid_prices = self._compute_maker_bid_prices(ps.pairing, target_qty)
         if bid_prices is None:
@@ -806,7 +792,15 @@ class CrossPredictionArb(Strategy):
         some_filled = any_filled and not all_filled
 
         if all_filled:
-            ps.phase = Phase.HEDGED
+            base = 0
+            for lg in ps.legs:
+                eid, sid = lg.listing
+                pos = self.positions.get_position(eid, sid)
+                if pos is not None:
+                    base = max(base, pos.net_quantity)
+            ps.base_qty = base
+            ps.phase = Phase.SCANNING
+            self._reset(ps)
             return []
 
         if some_filled and ps.phase == Phase.ENTERING:
@@ -854,33 +848,15 @@ class CrossPredictionArb(Strategy):
     def _on_partial_fill(self, ps: PairingState, ts: int) -> list[Intent]:
         return self._check_fill_transitions(ps, ts)
 
-    def _on_hedged(self, ps: PairingState, ts: int) -> list[Intent]:
-        if self._allow_scaling:
-            # Record current settled quantities as the base before scanning for a new entry.
-            # If the new entry later fails and triggers UNWIND, _close_all_positions will
-            # only close the incremental (new entry's) quantity, leaving this base intact.
-            ps.base_quantities = {}
-            for lg in ps.pairing.legs:
-                eid, sid = lg
-                pos = self.positions.get_position(eid, sid)
-                ps.base_quantities[lg] = pos.net_quantity if pos is not None else 0
-            ps.phase = Phase.SCANNING
-            self._reset(ps)
-        return []
-
     def _on_closing(self, ps: PairingState, ts: int) -> list[Intent]:
-        # Check that the INCREMENTAL position (current - base) is flat, not necessarily total.
-        # When scaling, base_quantities tracks previously-hedged positions that should remain open.
         # Use net_quantity (settled fills) not effective_quantity (pending sells) to avoid
         # premature re-entry while close orders are still in flight.
-        def _incremental_qty(lg: LegState) -> int:
+        def _net_qty(lg: LegState) -> int:
             pos = self.positions.get_position(lg.listing[0], lg.listing[1])
-            total = pos.net_quantity if pos is not None else 0
-            base = ps.base_quantities.get(lg.listing, 0)
-            return total - base
+            return pos.net_quantity if pos is not None else 0
 
-        all_flat = all(_incremental_qty(lg) == 0 for lg in ps.legs)
-        if all_flat:
+        all_at_base = all(_net_qty(lg) <= ps.base_qty for lg in ps.legs)
+        if all_at_base:
             ps.phase = Phase.SCANNING
             self._reset(ps)
             return []
@@ -890,8 +866,7 @@ class CrossPredictionArb(Strategy):
             for leg in ps.legs:
                 eid, sid = leg.listing
                 eff_qty = self.positions.get_effective_quantity(eid, sid)
-                base = ps.base_quantities.get(leg.listing, 0)
-                qty = eff_qty - base  # only close the incremental portion
+                qty = eff_qty - ps.base_qty
                 if qty > 0:
                     intents.append(Intent(
                         exchange_id=eid, security_id=sid,
@@ -922,10 +897,7 @@ class CrossPredictionArb(Strategy):
             eid, sid = leg.listing
             pos = self.positions.get_position(eid, sid)
             total_qty = pos.net_quantity if pos is not None else 0
-            # When scaling, only unwind the incremental quantity from this entry cycle.
-            # Previously-hedged base positions are left open to settle at resolution.
-            base = ps.base_quantities.get(leg.listing, 0)
-            qty = total_qty - base
+            qty = total_qty - ps.base_qty
             if qty > 0:
                 intents.append(Intent(
                     exchange_id=eid, security_id=sid,
@@ -976,4 +948,3 @@ class CrossPredictionArb(Strategy):
         ps.legs = []
         ps.partial_fill_since = None
         ps.entry_ts = 0
-        # base_quantities is set by _on_hedged before calling _reset — do not clear here.

@@ -11,7 +11,6 @@ strategy = CrossPredictionArb(
     max_price_divergence_cents=5.0,
     imbalance_timeout_ns=60_000_000_000,
     max_staleness_ns=60_000_000_000,
-    allow_scaling=True,
     processing_time_ns=5_000_000,
     maker_fee_rates={4: 0.0, 5: 0.0175},
     taker_fee_rates={4: 0.07, 5: 0.07},
