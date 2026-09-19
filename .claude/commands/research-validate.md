@@ -69,6 +69,8 @@ poetry run research validate walk-forward $ARGUMENTS \
 
 This will print a per-fold results table and a PASS/FAIL verdict as it finishes. Each fold's output lands in `gnomepy_research/sessions/$ARGUMENTS/results/walk_forward/fold_NNN/`.
 
+**Scenario configs:** Walk-forward validation currently operates on single-scenario configs only (it patches top-level `start_date`/`end_date`). If the best iteration's config uses a `scenarios` key, create a single-scenario config for the primary scenario before running walk-forward.
+
 ---
 
 ## Step 4: Run holdout (if applicable)

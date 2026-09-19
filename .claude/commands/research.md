@@ -186,6 +186,36 @@ profiles:
   # repeat for each profile in spec
 ```
 
+When the strategy operates across multiple distinct events (e.g., different prediction market events with separate listing IDs and time windows), use a `scenarios` config instead of the flat format above. Each scenario provides its own `start_date`, `end_date`, `listings`, and optional `strategy_args` overrides (merged on top of the shared `strategy.args`):
+
+```yaml
+strategy:
+  class_name: "gnomepy_research.sessions.$ARGUMENTS.strategy:YourStrategyClassName"
+  args:
+    # shared constructor kwargs (can include sweep params)
+
+scenarios:
+  <event_name_1>:
+    start_date: "<start>"
+    end_date: "<end>"
+    listings:
+      - listing_id: <id>
+        profile: <profile_name>
+    strategy_args:       # optional — merged into strategy.args for this scenario only
+      event_ids: [...]
+  <event_name_2>:
+    start_date: "<start>"
+    end_date: "<end>"
+    listings: [...]
+    strategy_args:
+      event_ids: [...]
+
+profiles:
+  # same profile definitions as flat format
+```
+
+Each scenario produces a separate backtest job with its own report and summary.json. The top-level `start_date`, `end_date`, and `listings` keys are omitted when using `scenarios`.
+
 ### 4A.3 — Run the backtest
 
 **Always pass `--output`. Without it, results land in the project root as UUID-named directories.**
@@ -220,7 +250,18 @@ strategy:
     delta: {min: 0.5, max: 3.0, step: 0.5} # range sweep
 ```
 
-**Hard cap: the cartesian product of all sweep parameters must not exceed 100 jobs.** Before writing the config, calculate the total job count (product of all list/range lengths). If it exceeds 100, reduce the parameter grid — coarsen the ranges, drop less important parameters, or split into multiple iterations.
+**Hard cap: the cartesian product of scenarios × sweep parameters must not exceed 100 jobs.** Before writing the config, calculate the total job count (`len(scenarios) × product(sweep_lengths)`). If it exceeds 100, reduce the parameter grid or the number of scenarios.
+
+Scenarios compose with sweeps — a config can have both:
+```yaml
+strategy:
+  args:
+    min_pure_arb_bps: [5, 10, 15]   # sweep — 3 values
+scenarios:
+  baseball: { ... }
+  football: { ... }
+# → 2 scenarios × 3 values = 6 jobs total
+```
 
 ### 4B.2 — Commit and push the session branch
 
@@ -348,6 +389,7 @@ Note the printed `sharpe_ci_95`, `deflated_sharpe`, and `dsr_significant` values
 
 **Validation** (when all thresholds are met on the primary date range):
 - If the spec has additional `date_ranges`, run or submit the strategy on those ranges
+- If the iteration uses multiple scenarios, compare metrics across scenarios — consistent performance across events is a positive signal; large variance suggests the edge is event-specific
 - If performance degrades significantly, note potential overfitting
 
 **Sensitivity check** (when all thresholds are met AND `spec.meta.sensitivity_tests` is present AND this is the first iteration this strategy revision has passed thresholds — do not repeat on every iteration):

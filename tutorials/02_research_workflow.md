@@ -148,6 +148,41 @@ strategy:
 ```
 Hard cap: the cartesian product must not exceed 100 jobs. AWS Batch runs all jobs in parallel; results download to `results/iter_NNN/` per job, and the loop picks the best by `primary_metric`.
 
+**Multi-scenario configs** — for testing across multiple events or listing sets in a single run:
+```yaml
+strategy:
+  class_name: "gnomepy_research.sessions.my_arb.strategy:MyArb"
+  args:
+    min_pure_arb_bps: [5, 10]   # optional sweep — crosses with scenarios
+
+scenarios:
+  baseball:
+    start_date: "2026-08-24T00:23:00"
+    end_date: "2026-08-24T02:12:00"
+    listings:
+      - listing_id: 217772
+        profile: kalshi
+      - listing_id: 229125
+        profile: polymarket
+    strategy_args:
+      event_ids: [[46259, 48600]]
+  football:
+    start_date: "2026-08-24T00:26:00"
+    end_date: "2026-08-24T03:09:00"
+    listings:
+      - listing_id: 222852
+        profile: kalshi
+      - listing_id: 97202
+        profile: polymarket
+    strategy_args:
+      event_ids: [[47431, 18169]]
+
+profiles:
+  polymarket: { ... }
+  kalshi: { ... }
+```
+Scenarios compose with sweeps — total jobs = `len(scenarios) × product(sweep_lengths)`. Each scenario gets its own report and summary. Works for both local runs (`gnomepy backtest run`) and AWS Batch (`gnomepy backtest submit`). The hard cap of 100 jobs applies to the combined total.
+
 **When to sweep vs iterate locally:**
 - Always validate logic locally first — sweeping a broken strategy wastes time
 - Sweep when you have 2+ continuous parameters and the strategy structure is stable

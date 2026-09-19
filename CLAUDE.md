@@ -58,6 +58,7 @@ Saved exchange profiles live in `gnomepy_research/profiles/`. Current profiles: 
 ### Iteration modes
 - **Local run**: for logic changes — writes a config YAML, runs via `poetry run gnomepy backtest run --config <path>`
 - **Remote sweep**: for parameter search — commits+pushes the session branch, submits to AWS Batch via `gnomepy backtest submit --research-commit <sha>`
+- **Multi-scenario run**: for testing across multiple events/listings simultaneously — writes a config with a `scenarios` key; each scenario has its own `listings`, `start_date`, `end_date`, and optional `strategy_args` overrides. Works for both local runs and remote sweeps; scenarios compose with sweep params (total jobs = scenarios × sweep combinations). Each scenario gets its own report and summary.
 
 ## Code conventions
 - All imports at the top of the file — never inside functions or conditionals
