@@ -1,0 +1,64 @@
+{
+  "sweep_id": "01a0bf0b-7fe0-725a-9f85-ed6ea98fa77d",
+  "job_count": 6,
+  "completed_count": 0,
+  "sweep_params": {},
+  "jobs": [
+    {
+      "job_index": 0,
+      "job_id": "01a0bf0b-7fe0-725a-9f85-ed6ea98fa77d-0000",
+      "scenario": "seahawks_titans",
+      "config_params": {},
+      "status": "FAILED",
+      "error": "java.lang.RuntimeException: org.jpype.PyExceptionProxy"
+    },
+    {
+      "job_index": 1,
+      "job_id": "01a0bf0b-7fe0-725a-9f85-ed6ea98fa77d-0001",
+      "scenario": "csgo_eternalfire_exruby",
+      "config_params": {},
+      "status": "FAILED",
+      "error": "java.lang.RuntimeException: org.jpype.PyExceptionProxy"
+    },
+    {
+      "job_index": 2,
+      "job_id": "01a0bf0b-7fe0-725a-9f85-ed6ea98fa77d-0002",
+      "scenario": "tennis_geerts_albot",
+      "config_params": {},
+      "status": "FAILED",
+      "error": "java.lang.RuntimeException: org.jpype.PyExceptionProxy"
+    },
+    {
+      "job_index": 3,
+      "job_id": "01a0bf0b-7fe0-725a-9f85-ed6ea98fa77d-0003",
+      "scenario": "tennis_zverev_paul",
+      "config_params": {},
+      "status": "FAILED",
+      "error": "java.lang.RuntimeException: org.jpype.PyExceptionProxy"
+    },
+    {
+      "job_index": 4,
+      "job_id": "01a0bf0b-7fe0-725a-9f85-ed6ea98fa77d-0004",
+      "scenario": "baseball_detroit_pittsburgh",
+      "config_params": {},
+      "status": "FAILED",
+      "error": "java.lang.RuntimeException: org.jpype.PyExceptionProxy"
+    },
+    {
+      "job_index": 5,
+      "job_id": "01a0bf0b-7fe0-725a-9f85-ed6ea98fa77d-0005",
+      "scenario": "baseball_atlanta_milwaukee",
+      "config_params": {},
+      "status": "FAILED",
+      "error": "java.lang.RuntimeException: org.jpype.PyExceptionProxy"
+    }
+  ],
+  "scenarios": [
+    "seahawks_titans",
+    "csgo_eternalfire_exruby",
+    "tennis_geerts_albot",
+    "tennis_zverev_paul",
+    "baseball_detroit_pittsburgh",
+    "baseball_atlanta_milwaukee"
+  ]
+}
