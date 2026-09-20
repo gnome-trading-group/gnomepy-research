@@ -352,8 +352,8 @@ class CrossPredictionArb(Strategy):
             maker_fee_rates = {4: 0.0, 5: 0.0175}
         if taker_fee_rates is None:
             taker_fee_rates = {4: 0.07, 5: 0.07}
-        self._maker_fee_rates = maker_fee_rates
-        self._taker_fee_rates = taker_fee_rates
+        self._maker_fee_rates = {int(k): v for k, v in maker_fee_rates.items()}
+        self._taker_fee_rates = {int(k): v for k, v in taker_fee_rates.items()}
 
         self._max_position = max_position * SIZE_SCALE
         self._min_edge = min_edge_cents / 100.0
