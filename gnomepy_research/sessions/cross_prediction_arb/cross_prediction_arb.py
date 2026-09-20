@@ -556,6 +556,16 @@ class CrossPredictionArb(Strategy):
                     if leg.listing != listing:
                         continue
                     leg.record_fill(report.fill_price, report.filled_qty, report.fee)
+                    if self._debug:
+                        label = self._exchange_id_to_label.get(listing[0], f"eid={listing[0]}")
+                        price_c = report.fill_price / (PRICE_SCALE // 100)
+                        qty_c = report.filled_qty / SIZE_SCALE
+                        filled_legs = [(self._exchange_id_to_label.get(lg.listing[0],"?"), lg.filled_qty/SIZE_SCALE) for lg in ps.legs if lg.filled_qty > 0]
+                        print(
+                            f"[DEBUG] FILL {label} sid={listing[1]} "
+                            f"price={price_c:.2f}¢ qty={qty_c:.2f}c "
+                            f"pairing={ps.pairing.label} filled_legs={filled_legs}"
+                        )
                     if self._track_markouts:
                         self._record_markout(listing, report.fill_price, Side.BID, report.timestamp_event)
                     return self._check_fill_transitions(ps, report.timestamp_event)
@@ -899,17 +909,25 @@ class CrossPredictionArb(Strategy):
                 if pos is not None:
                     base = max(base, pos.net_quantity)
             ps.base_qty = base
+            if self._debug:
+                print(f"[DEBUG] ALL_FILLED pairing={ps.pairing.label} → SCANNING base_qty={base/SIZE_SCALE:.1f}c")
             ps.phase = Phase.SCANNING
             self._reset(ps)
             return []
 
         if some_filled and ps.phase == Phase.ENTERING:
+            filled = [(self._exchange_id_to_label.get(lg.listing[0],""), lg.filled_qty/SIZE_SCALE) for lg in ps.legs if lg.filled_qty > 0]
+            if self._debug:
+                print(f"[DEBUG] PARTIAL pairing={ps.pairing.label} → PARTIAL_FILL filled={filled}")
             ps.phase = Phase.PARTIAL_FILL
             ps.partial_fill_since = ts
             return []
 
         if some_filled and ps.phase == Phase.PARTIAL_FILL:
             if self._check_imbalance_timeout(ps, ts):
+                elapsed_s = (ts - ps.partial_fill_since) / 1e9
+                if self._debug:
+                    print(f"[DEBUG] IMBALANCE_TIMEOUT pairing={ps.pairing.label} elapsed={elapsed_s:.1f}s → UNWINDING")
                 ps.phase = Phase.UNWINDING
                 return self._close_all_positions(ps, ts)
             # Don't run a budget check here. The PM leg already filled at its price
@@ -935,6 +953,9 @@ class CrossPredictionArb(Strategy):
         if unfilled_legs:
             bid_prices = self._compute_maker_bid_prices(ps.pairing, unfilled_legs[0].target_qty)
             if bid_prices is None:
+                if self._debug:
+                    labels = [self._exchange_id_to_label.get(lg.listing[0], "?") for lg in unfilled_legs]
+                    print(f"[DEBUG] BUDGET_FAIL pairing={ps.pairing.label} unfilled={labels} any_filled={any_filled} → {'UNWINDING' if any_filled else 'SCANNING'}")
                 intents = []
                 for leg in unfilled_legs:
                     intents.append(Intent(exchange_id=leg.listing[0], security_id=leg.listing[1]))
@@ -961,6 +982,8 @@ class CrossPredictionArb(Strategy):
 
         all_at_base = all(_net_qty(lg) <= ps.base_qty for lg in ps.legs)
         if all_at_base:
+            if self._debug:
+                print(f"[DEBUG] CLOSED pairing={ps.pairing.label} → SCANNING")
             ps.phase = Phase.SCANNING
             self._reset(ps)
             return []
