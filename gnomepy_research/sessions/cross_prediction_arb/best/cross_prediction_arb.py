@@ -319,8 +319,8 @@ class CrossPredictionArb(Strategy):
         max_staleness_ns: int = 60_000_000_000,
         processing_time_ns: int = 5_000_000,
         # Fee rates keyed by exchange_id
-        maker_fee_rates: dict[int, float] | None = None,
-        taker_fee_rates: dict[int, float] | None = None,
+        maker_fee_rates: dict[int | str, float] | None = None,
+        taker_fee_rates: dict[int | str, float] | None = None,
         # Cost model
         fill_risk_lambda: float = 0.0,
         unwind_spread_mult: float = 2.0,
