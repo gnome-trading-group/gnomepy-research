@@ -758,6 +758,9 @@ class CrossPredictionArb(Strategy):
         return False
 
     def _on_scanning(self, ps: PairingState, ts: int) -> list[Intent]:
+        if self._listing_is_busy(ps.pairing):
+            return []
+
         for lg in ps.pairing.legs:
             eid, sid = lg
             pos = self.positions.get_position(eid, sid)
@@ -767,9 +770,6 @@ class CrossPredictionArb(Strategy):
                 ps.phase = Phase.UNWINDING
                 ps.last_close_ts = 0
                 return self._close_all_positions(ps, ts)
-
-        if self._listing_is_busy(ps.pairing):
-            return []
 
         if ps.last_cancel_ts > 0:
             if ts - ps.last_cancel_ts < _CANCEL_SETTLE_NS:

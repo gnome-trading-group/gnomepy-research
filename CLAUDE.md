@@ -57,7 +57,28 @@ Saved exchange profiles live in `gnomepy_research/profiles/`. Current profiles: 
 
 ### Iteration modes
 - **Local run**: for logic changes — writes a config YAML, runs via `poetry run gnomepy backtest run --config <path>`
-- **Remote sweep**: for parameter search — commits+pushes the session branch, submits to AWS Batch via `gnomepy backtest submit --research-commit <sha>`
+- **Remote sweep**: for parameter search — commits+pushes the session branch, submits to AWS Batch via `gnomepy backtest submit --research-commit <sha>`. Parameters to sweep go in a top-level `sweep:` section (see below) — lists in `strategy.args` are always passed as-is, never swept.
+- **Multi-scenario run**: for testing across multiple events/listings simultaneously — writes a config with a `scenarios` key; each scenario has its own `listings`, `start_date`, `end_date`, and optional `strategy_args` overrides. Works for both local runs and remote sweeps; scenarios compose with sweep params (total jobs = scenarios × sweep combinations). Each scenario gets its own report and summary.
+
+### Sweep config format
+Parameters to sweep are declared in a top-level `sweep:` section, keyed on `strategy` (for strategy args) and `profiles` (for profile values). Everything in `strategy.args` and `profiles` is always fixed — only the `sweep` section is expanded:
+
+```yaml
+strategy:
+  args:
+    gamma: 0.5      # fixed default
+    outcomes:       # list — always fixed, never swept
+      - {pm: 222852, k: 97203}
+
+sweep:
+  strategy:
+    gamma: [0.5, 1.0, 2.0, 4.0]             # list sweep
+    delta: {min: 0.5, max: 3.0, step: 0.5}  # range sweep
+  profiles:
+    default:
+      network_latency:
+        latency_nanos: [5000000, 10000000]   # profile sweep
+```
 
 ## Code conventions
 - All imports at the top of the file — never inside functions or conditionals
