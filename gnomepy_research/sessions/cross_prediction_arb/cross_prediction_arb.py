@@ -478,6 +478,47 @@ class CrossPredictionArb(Strategy):
         return self._processing_time_ns
 
     # ------------------------------------------------------------------
+    # Debug helpers
+    # ------------------------------------------------------------------
+
+    def _log_intents(self, context: str, intents: list[Intent], ts: int = 0) -> None:
+        if not self._debug or not intents:
+            return
+        ts_s = f"{ts / 1e9:.3f}" if ts else "?"
+        print(f"[DEBUG {ts_s}] {context}: {len(intents)} intent(s)")
+        CENT = PRICE_SCALE // 100
+        for intent in intents:
+            eid = intent.exchange_id
+            sid = intent.security_id
+            label = self._exchange_id_to_label.get(eid, f"eid={eid}")
+            parts = []
+            if intent.bid_price is not None and intent.bid_price > 0:
+                price_cents = intent.bid_price / CENT
+                qty_contracts = intent.bid_size / SIZE_SCALE if intent.bid_size else 0
+                notional = price_cents / 100 * qty_contracts
+                tick_ok = intent.bid_price % CENT == 0
+                parts.append(
+                    f"  MAKER BID {label} sid={sid} "
+                    f"price={price_cents:.2f}¢ {'OK' if tick_ok else 'SUBTICK!'} "
+                    f"qty={qty_contracts:.2f}c notional=${notional:.2f}"
+                )
+            if intent.take_size is not None and intent.take_size > 0:
+                side = "BID" if intent.take_side == Side.BID else "ASK"
+                price_cents = (intent.take_limit_price or 0) / CENT
+                qty_contracts = intent.take_size / SIZE_SCALE
+                notional = price_cents / 100 * qty_contracts
+                tick_ok = (intent.take_limit_price or 0) % CENT == 0
+                parts.append(
+                    f"  TAKER {side} {label} sid={sid} "
+                    f"price={price_cents:.2f}¢ {'OK' if tick_ok else 'SUBTICK!'} "
+                    f"qty={qty_contracts:.2f}c notional=${notional:.2f}"
+                )
+            if not parts:
+                parts.append(f"  CANCEL {label} sid={sid}")
+            for p in parts:
+                print(p)
+
+    # ------------------------------------------------------------------
     # Market data entry point
     # ------------------------------------------------------------------
 
@@ -799,6 +840,12 @@ class CrossPredictionArb(Strategy):
         ps.entry_ts = ts
         ps.phase = Phase.ENTERING
 
+        if self._debug:
+            print(
+                f"[DEBUG] ENTER pairing={ps.pairing.label} "
+                f"edge={edge*100:.3f}¢ qty={target_qty/SIZE_SCALE:.1f}c"
+            )
+
         if self._metrics_buf is not None:
             row = self._metrics_buf.appendRow()
             self._metrics_buf.setLong(row, self._m_ts, ts)
@@ -830,7 +877,9 @@ class CrossPredictionArb(Strategy):
                     bid_price=bid,
                     bid_size=leg.target_qty,
                 ))
-        return taker_intents + maker_intents
+        result = taker_intents + maker_intents
+        self._log_intents(f"entry {ps.pairing.label}", result, ts)
+        return result
 
     def _on_entering(self, ps: PairingState, ts: int) -> list[Intent]:
         return self._check_fill_transitions(ps, ts)
@@ -936,6 +985,7 @@ class CrossPredictionArb(Strategy):
                         take_order_type=OrderType.LIMIT,
                         take_limit_price=PRICE_SCALE - 1,
                     ))
+            self._log_intents(f"closing_retry {ps.pairing.label}", intents, ts)
             return intents
         return []
 
@@ -945,6 +995,8 @@ class CrossPredictionArb(Strategy):
 
     def _close_all_positions(self, ps: PairingState, ts: int) -> list[Intent]:
         ps.last_close_ts = ts
+        if self._debug:
+            print(f"[DEBUG] CLOSE_ALL pairing={ps.pairing.label} phase={ps.phase.name}")
         intents = []
         for leg in ps.legs:
             eid, sid = leg.listing
@@ -969,6 +1021,7 @@ class CrossPredictionArb(Strategy):
                 ))
             elif self._exchange_id_to_label.get(eid, "") not in self._taker_labels:
                 intents.append(Intent(exchange_id=eid, security_id=sid))
+        self._log_intents(f"close_all {ps.pairing.label}", intents)
         return intents
 
     # ------------------------------------------------------------------
