@@ -559,24 +559,26 @@ class CrossPredictionArb(Strategy):
                     if self._track_markouts:
                         self._record_markout(listing, report.fill_price, Side.BID, report.timestamp_event)
                     return self._check_fill_transitions(ps, report.timestamp_event)
-        elif (self._exchange_id_to_label.get(listing[0], "") in self._taker_labels
-              and report.exec_type in (ExecType.REJECT, ExecType.EXPIRE)):
+        elif report.exec_type in (ExecType.REJECT, ExecType.EXPIRE, ExecType.CANCEL):
+            rejected_label = self._exchange_id_to_label.get(listing[0], "")
             for ps in self._listing_to_ps.get(listing, []):
                 if ps.phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
                     continue
-                taker_leg_label = self._exchange_id_to_label.get(listing[0], "")
-                any_maker_filled = any(
-                    lg.filled_qty > 0 for lg in ps.legs
-                    if self._exchange_id_to_label.get(lg.listing[0], "") != taker_leg_label
+                any_other_filled = any(
+                    lg.filled_qty > 0 for lg in ps.legs if lg.listing != listing
                 )
-                if any_maker_filled:
+                if self._debug:
+                    print(
+                        f"[DEBUG] REJECT {rejected_label} sid={listing[1]} "
+                        f"pairing={ps.pairing.label} any_other_filled={any_other_filled}"
+                    )
+                if any_other_filled:
                     ps.phase = Phase.UNWINDING
                     return self._close_all_positions(ps, report.timestamp_event)
                 else:
                     cancel_intents = [
                         Intent(exchange_id=lg.listing[0], security_id=lg.listing[1])
-                        for lg in ps.legs
-                        if self._exchange_id_to_label.get(lg.listing[0], "") != taker_leg_label
+                        for lg in ps.legs if lg.listing != listing
                     ]
                     ps.phase = Phase.SCANNING
                     ps.last_cancel_ts = report.timestamp_event
@@ -975,7 +977,7 @@ class CrossPredictionArb(Strategy):
                         take_side=Side.ASK,
                         take_size=qty,
                         take_order_type=OrderType.LIMIT,
-                        take_limit_price=1,
+                        take_limit_price=PRICE_SCALE // 100,
                     ))
                 elif qty < 0:
                     intents.append(Intent(
@@ -983,7 +985,7 @@ class CrossPredictionArb(Strategy):
                         take_side=Side.BID,
                         take_size=-qty,
                         take_order_type=OrderType.LIMIT,
-                        take_limit_price=PRICE_SCALE - 1,
+                        take_limit_price=99 * PRICE_SCALE // 100,
                     ))
             self._log_intents(f"closing_retry {ps.pairing.label}", intents, ts)
             return intents
@@ -1009,7 +1011,7 @@ class CrossPredictionArb(Strategy):
                     take_side=Side.ASK,
                     take_size=qty,
                     take_order_type=OrderType.LIMIT,
-                    take_limit_price=1,
+                    take_limit_price=PRICE_SCALE // 100,
                 ))
             elif qty < 0:
                 intents.append(Intent(
@@ -1017,7 +1019,7 @@ class CrossPredictionArb(Strategy):
                     take_side=Side.BID,
                     take_size=-qty,
                     take_order_type=OrderType.LIMIT,
-                    take_limit_price=PRICE_SCALE - 1,
+                    take_limit_price=99 * PRICE_SCALE // 100,
                 ))
             elif self._exchange_id_to_label.get(eid, "") not in self._taker_labels:
                 intents.append(Intent(exchange_id=eid, security_id=sid))
