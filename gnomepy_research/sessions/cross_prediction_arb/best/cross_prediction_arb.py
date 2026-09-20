@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from enum import IntEnum
+from itertools import product
 from typing import NamedTuple
 
 from gnomepy import ExecutionReport, Intent, OrderType, Scales, Side, Strategy
@@ -120,13 +121,19 @@ class CostComponent:
 
 
 class FeeCost(CostComponent):
-    def __init__(self, maker_rates: dict[int, float], taker_rates: dict[int, float]):
-        self._maker = maker_rates
-        self._taker = taker_rates
+    def __init__(
+        self,
+        maker_rates: dict[str, float],
+        taker_rates: dict[str, float],
+        exchange_id_to_label: dict[int, str],
+    ):
+        self._maker: dict[str, float] = {str(k): float(v) for k, v in maker_rates.items()}
+        self._taker: dict[str, float] = {str(k): float(v) for k, v in taker_rates.items()}
+        self._id_to_label = exchange_id_to_label
 
     def cost(self, listing, price_scaled, qty, maker=True, **kwargs) -> float:
-        eid = listing[0]
-        rate = self._maker.get(eid, 0.0) if maker else self._taker.get(eid, 0.0)
+        label = self._id_to_label.get(listing[0], "")
+        rate = self._maker.get(label, 0.0) if maker else self._taker.get(label, 0.0)
         p = price_scaled / PRICE_SCALE
         return rate * p * (1.0 - p)
 
@@ -307,10 +314,7 @@ class OptimalEVModel(PriceModel):
 class CrossPredictionArb(Strategy):
     def __init__(
         self,
-        pm_a_listing_id: int = 222852,
-        pm_b_listing_id: int = 222853,
-        k_a_listing_id: int = 97203,
-        k_b_listing_id: int = 97202,
+        outcomes: list[dict[str, int]],  # [{"pm": listing_id, "k": listing_id}, ...]
         max_position: int = 100,
         min_edge_cents: float = 2.0,
         min_contract_price: float = 0.25,
@@ -318,9 +322,9 @@ class CrossPredictionArb(Strategy):
         imbalance_timeout_ns: int = 30_000_000_000,
         max_staleness_ns: int = 60_000_000_000,
         processing_time_ns: int = 5_000_000,
-        # Fee rates keyed by exchange_id
-        maker_fee_rates: dict[int | str, float] | None = None,
-        taker_fee_rates: dict[int | str, float] | None = None,
+        # Fee rates keyed by exchange label (e.g. "pm", "k")
+        maker_fee_rates: dict[str, float] | None = None,
+        taker_fee_rates: dict[str, float] | None = None,
         # Cost model
         fill_risk_lambda: float = 0.0,
         unwind_spread_mult: float = 2.0,
@@ -333,10 +337,10 @@ class CrossPredictionArb(Strategy):
         price_edge_share: float = 0.5,
         target_fill_prob: float = 0.7,
         optimal_ev_lambda: float = 30.0,
-        # PM taker mode — PM legs cross the ask for immediate fills
-        pm_taker_mode: bool = False,
-        # K_DUTCH_BOOK (P2) triggers EXEC_REPORT_FOR_UNKNOWN_ORDER OMS/engine mismatch — disable to avoid
-        allow_dutch_book: bool = True,
+        # Taker labels — legs on these exchanges cross the ask for immediate fills
+        taker_labels: list[str] | None = None,
+        # Dutch book labels — exchanges where single-exchange pairings are allowed
+        dutch_book_labels: list[str] | None = None,
         # Settlement risk (disabled by default — sports resolve before official expiry)
         gamma_T: float = 0.0,
         resolution_time_ns: int = 0,
@@ -346,14 +350,14 @@ class CrossPredictionArb(Strategy):
     ):
         registry = RegistryClient()
 
-        # Default fee rates matching backtest profiles
-        # exchange_id 4 = Polymarket, 5 = Kalshi
         if maker_fee_rates is None:
-            maker_fee_rates = {4: 0.0, 5: 0.0175}
+            maker_fee_rates = {"pm": 0.0, "k": 0.0175}
         if taker_fee_rates is None:
-            taker_fee_rates = {4: 0.07, 5: 0.07}
-        self._maker_fee_rates = {int(k): v for k, v in maker_fee_rates.items()}
-        self._taker_fee_rates = {int(k): v for k, v in taker_fee_rates.items()}
+            taker_fee_rates = {"pm": 0.07, "k": 0.07}
+        self._maker_fee_rates: dict[str, float] = {str(k): float(v) for k, v in maker_fee_rates.items()}
+        self._taker_fee_rates: dict[str, float] = {str(k): float(v) for k, v in taker_fee_rates.items()}
+        self._taker_labels: set[str] = set(str(x) for x in taker_labels) if taker_labels else set()
+        self._dutch_book_labels: set[str] = set(str(x) for x in dutch_book_labels) if dutch_book_labels else set()
 
         self._max_position = max_position * SIZE_SCALE
         self._min_edge = min_edge_cents / 100.0
@@ -374,29 +378,60 @@ class CrossPredictionArb(Strategy):
                 raise ValueError(f"No listing for listing_id={listing_id}")
             return (results[0].exchange_id, results[0].security_id)
 
-        pm_a = resolve(pm_a_listing_id)
-        pm_b = resolve(pm_b_listing_id)
-        k_a = resolve(k_a_listing_id)
-        k_b = resolve(k_b_listing_id)
+        # Build exchange_id → label mapping and resolve per-outcome listings
+        self._exchange_id_to_label: dict[int, str] = {}
+        outcome_listings: list[list[tuple[int, int]]] = []
+        for outcome in outcomes:
+            resolved = []
+            for label, lid in outcome.items():
+                r = resolve(lid)
+                self._exchange_id_to_label[r[0]] = label
+                resolved.append(r)
+            outcome_listings.append(resolved)
 
-        raw_pairings = [
-            (0, "PM_A + K_B", [pm_a, k_b]),
-            (1, "PM_B + K_A", [pm_b, k_a]),
-        ]
-        if allow_dutch_book:
-            raw_pairings.append((2, "K_DUTCH_BOOK", [k_a, k_b]))
+        # Generate all exchange assignments via cartesian product
+        n_outcomes = len(outcomes)
+        choices = [[(oi, lst) for lst in outcome_listings[oi]] for oi in range(n_outcomes)]
+        raw_pairings: list[tuple[int, str, list[tuple[int, int]]]] = []
+        idx = 0
+        for combo in product(*choices):
+            legs = [lst for _, lst in combo]
+            exchange_ids = {lst[0] for lst in legs}
+            if len(exchange_ids) < 2:
+                eid = next(iter(exchange_ids))
+                lbl = self._exchange_id_to_label.get(eid, "")
+                if lbl in self._dutch_book_labels:
+                    raw_pairings.append((idx, f"DUTCH_{lbl.upper()}", legs))
+                    idx += 1
+                continue
+            label_parts = [
+                f"{self._exchange_id_to_label[lst[0]].upper()}_O{oi}"
+                for oi, lst in combo
+            ]
+            raw_pairings.append((idx, "+".join(label_parts), legs))
+            idx += 1
+
+        if len(raw_pairings) > 20:
+            raise ValueError(f"Too many pairings ({len(raw_pairings)}) for {n_outcomes} outcomes")
+
         self._pairings: list[Pairing] = []
         self._tracked_listings: set[tuple[int, int]] = set()
-        for idx, label, legs in raw_pairings:
-            self._pairings.append(Pairing(index=idx, label=label, legs=legs))
-            for leg in legs:
+        for p_idx, p_label, p_legs in raw_pairings:
+            sorted_legs = sorted(
+                p_legs,
+                key=lambda lg: 0 if self._exchange_id_to_label.get(lg[0], "") in self._taker_labels else 1,
+            )
+            self._pairings.append(Pairing(index=p_idx, label=p_label, legs=sorted_legs))
+            for leg in p_legs:
                 self._tracked_listings.add(leg)
 
         # Book storage
         self._books: dict[tuple[int, int], Book] = {lst: Book() for lst in self._tracked_listings}
 
         # Cost model
-        cost_components: list[CostComponent] = [FeeCost(maker_fee_rates, taker_fee_rates)]
+        cost_components: list[CostComponent] = [
+            FeeCost(maker_fee_rates, taker_fee_rates, self._exchange_id_to_label)
+        ]
         if fill_risk_lambda > 0.0:
             cost_components.append(FillRiskCost(fill_risk_lambda, unwind_spread_mult, use_cst_fill_model))
         if depth_coverage_mult > 0.0:
@@ -412,8 +447,6 @@ class CrossPredictionArb(Strategy):
             self._price_model = OptimalEVModel(optimal_ev_lambda, unwind_spread_mult)
         else:
             self._price_model = JoinBestBidModel()
-
-        self._pm_taker_mode = pm_taker_mode
 
         # Per-pairing state machines (concurrent — each pairing is independent)
         self._pairing_states: list[PairingState] = [
@@ -485,19 +518,24 @@ class CrossPredictionArb(Strategy):
                     if self._track_markouts:
                         self._record_markout(listing, report.fill_price, Side.BID, report.timestamp_event)
                     return self._check_fill_transitions(ps, report.timestamp_event)
-        elif (self._pm_taker_mode and listing[0] == 4
+        elif (self._exchange_id_to_label.get(listing[0], "") in self._taker_labels
               and report.exec_type in (ExecType.REJECT, ExecType.EXPIRE)):
             for ps in self._listing_to_ps.get(listing, []):
                 if ps.phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
                     continue
-                any_k_filled = any(lg.filled_qty > 0 for lg in ps.legs if lg.listing[0] != 4)
-                if any_k_filled:
+                taker_leg_label = self._exchange_id_to_label.get(listing[0], "")
+                any_maker_filled = any(
+                    lg.filled_qty > 0 for lg in ps.legs
+                    if self._exchange_id_to_label.get(lg.listing[0], "") != taker_leg_label
+                )
+                if any_maker_filled:
                     ps.phase = Phase.UNWINDING
                     return self._close_all_positions(ps, report.timestamp_event)
                 else:
                     cancel_intents = [
                         Intent(exchange_id=lg.listing[0], security_id=lg.listing[1])
-                        for lg in ps.legs if lg.listing[0] != 4
+                        for lg in ps.legs
+                        if self._exchange_id_to_label.get(lg.listing[0], "") != taker_leg_label
                     ]
                     ps.phase = Phase.SCANNING
                     ps.last_cancel_ts = report.timestamp_event
@@ -538,12 +576,14 @@ class CrossPredictionArb(Strategy):
     # ------------------------------------------------------------------
 
     def _maker_fee(self, listing: tuple[int, int], price_scaled: int) -> float:
-        rate = self._maker_fee_rates.get(listing[0], 0.0)
+        label = self._exchange_id_to_label.get(listing[0], "")
+        rate = self._maker_fee_rates.get(label, 0.0)
         p = price_scaled / PRICE_SCALE
         return rate * p * (1.0 - p)
 
     def _taker_fee(self, listing: tuple[int, int], price_scaled: int) -> float:
-        rate = self._taker_fee_rates.get(listing[0], 0.0)
+        label = self._exchange_id_to_label.get(listing[0], "")
+        rate = self._taker_fee_rates.get(label, 0.0)
         p = price_scaled / PRICE_SCALE
         return rate * p * (1.0 - p)
 
@@ -576,15 +616,12 @@ class CrossPredictionArb(Strategy):
             if not book.asks:
                 return 0.0, 0
 
-        # Cross-exchange consistency gate: PM ask should ≈ 1 - Kalshi ask.
-        # Large divergence means PM is stale and will snap back before our taker fills,
-        # causing partial fills that get unwound at a loss.
-        if self._max_price_divergence > 0 and len(legs) == 2:
-            pm_asks = [books[i].best_ask() / PRICE_SCALE for i in range(2) if legs[i][0] == 4]
-            k_asks = [books[i].best_ask() / PRICE_SCALE for i in range(2) if legs[i][0] == 5]
-            if pm_asks and k_asks:
-                if abs(pm_asks[0] - (1.0 - k_asks[0])) > self._max_price_divergence:
-                    return 0.0, 0
+        # Cross-exchange consistency: implied probabilities (ask prices) should sum to ~1.
+        # Large divergence means prices are stale — skip to avoid partial fills unwound at a loss.
+        if self._max_price_divergence > 0:
+            ask_sum = sum(books[i].best_ask() / PRICE_SCALE for i in range(len(legs)))
+            if abs(ask_sum - 1.0) > self._max_price_divergence:
+                return 0.0, 0
 
         qty = 0
         total_edge = 0.0
@@ -605,7 +642,7 @@ class CrossPredictionArb(Strategy):
                 self._cost_model.total_cost(
                     legs[i], current_asks[i],
                     qty,
-                    maker=not (self._pm_taker_mode and legs[i][0] == 4),
+                    maker=self._exchange_id_to_label.get(legs[i][0], "") not in self._taker_labels,
                     other_listing=legs[1 - i] if len(legs) == 2 else None,
                 )
                 for i in range(len(legs))
@@ -626,9 +663,9 @@ class CrossPredictionArb(Strategy):
             for i in range(len(legs)):
                 remaining[i] -= chunk
                 if remaining[i] <= 0:
-                    # PM taker orders only fill at level 0 (limit to best ask).
-                    # Don't walk deeper — the walk would return qty > PM's actual fill.
-                    if self._pm_taker_mode and legs[i][0] == 4:
+                    # Taker orders only fill at level 0 (limit to best ask).
+                    # Don't walk deeper — the walk would return qty > actual fill.
+                    if self._exchange_id_to_label.get(legs[i][0], "") in self._taker_labels:
                         return total_edge / max(qty, 1), qty
                     next_idx = level_indices[i] + 1
                     if next_idx < len(books[i].asks):
@@ -679,8 +716,8 @@ class CrossPredictionArb(Strategy):
         prices: dict[tuple[int, int], int] = {}
         for leg in pairing.legs:
             book = self._books[leg]
-            eid = leg[0]
-            if self._pm_taker_mode and eid == 4:
+            is_taker = self._exchange_id_to_label.get(leg[0], "") in self._taker_labels
+            if is_taker:
                 ask = book.best_ask()
                 if ask <= 0:
                     return None
@@ -698,8 +735,7 @@ class CrossPredictionArb(Strategy):
         total = sum(p / PRICE_SCALE for p in prices.values())
         total_fees = 0.0
         for leg, p in prices.items():
-            eid = leg[0]
-            if self._pm_taker_mode and eid == 4:
+            if self._exchange_id_to_label.get(leg[0], "") in self._taker_labels:
                 total_fees += self._taker_fee(leg, p)
             else:
                 total_fees += self._maker_fee(leg, p)
@@ -759,13 +795,14 @@ class CrossPredictionArb(Strategy):
             self._metrics_buf.setDouble(row, self._m_edge, edge)
             self._metrics_buf.setLong(row, self._m_qty, target_qty)
 
-        intents = []
+        taker_intents = []
+        maker_intents = []
         for leg in ps.legs:
             eid = leg.listing[0]
-            if self._pm_taker_mode and eid == 4:
+            if self._exchange_id_to_label.get(eid, "") in self._taker_labels:
                 book = self._books[leg.listing]
                 limit_price = book.best_ask()
-                intents.append(Intent(
+                taker_intents.append(Intent(
                     exchange_id=eid,
                     security_id=leg.listing[1],
                     take_side=Side.BID,
@@ -775,13 +812,13 @@ class CrossPredictionArb(Strategy):
                 ))
             else:
                 bid = bid_prices[leg.listing]
-                intents.append(Intent(
+                maker_intents.append(Intent(
                     exchange_id=eid,
                     security_id=leg.listing[1],
                     bid_price=bid,
                     bid_size=leg.target_qty,
                 ))
-        return intents
+        return taker_intents + maker_intents
 
     def _on_entering(self, ps: PairingState, ts: int) -> list[Intent]:
         return self._check_fill_transitions(ps, ts)
@@ -818,13 +855,17 @@ class CrossPredictionArb(Strategy):
             # full imbalance_timeout before declaring the K leg missing.
             return []
 
-        # Guard: PM taker orders take ~300ms to settle. Don't cancel Kalshi makers
-        # or reset state until PM has had a chance to fill or be rejected — otherwise
-        # PM fills after the reset, creating untracked naked directional exposure.
-        if (self._pm_taker_mode
+        # Guard: taker orders take ~300ms to settle. Don't cancel maker legs
+        # or reset state until the taker leg has had a chance to fill or be rejected —
+        # otherwise taker fills after reset creating untracked naked directional exposure.
+        if (self._taker_labels
                 and ps.entry_ts > 0
                 and (ts - ps.entry_ts) < _PM_TAKER_SETTLE_NS
-                and any(lg.listing[0] == 4 and not lg.is_filled for lg in ps.legs)):
+                and any(
+                    self._exchange_id_to_label.get(lg.listing[0], "") in self._taker_labels
+                    and not lg.is_filled
+                    for lg in ps.legs
+                )):
             return []
 
         unfilled_legs = [lg for lg in ps.legs if not lg.is_filled]
@@ -914,7 +955,7 @@ class CrossPredictionArb(Strategy):
                     take_order_type=OrderType.LIMIT,
                     take_limit_price=PRICE_SCALE - 1,
                 ))
-            elif not (self._pm_taker_mode and eid == 4):
+            elif self._exchange_id_to_label.get(eid, "") not in self._taker_labels:
                 intents.append(Intent(exchange_id=eid, security_id=sid))
         return intents
 

@@ -139,12 +139,21 @@ poetry run gnomepy backtest submit \
   --config gnomepy_research/sessions/<name>/configs/sweep_008.yaml \
   --research-commit <sha>
 ```
-The sweep config uses list or range syntax:
+The sweep config uses a top-level `sweep:` section — lists in `strategy.args` are always passed as-is, never swept:
 ```yaml
 strategy:
   args:
+    gamma: 0.5    # fixed default
+    delta: 0.5
+
+sweep:
+  strategy:
     gamma: [0.5, 1.0, 2.0, 4.0]              # 4 values
     delta: {min: 0.5, max: 3.0, step: 0.5}   # 6 values → 24 jobs total
+  profiles:
+    default:
+      network_latency:
+        latency_nanos: [5000000, 10000000]    # profile sweep
 ```
 Hard cap: the cartesian product must not exceed 100 jobs. AWS Batch runs all jobs in parallel; results download to `results/iter_NNN/` per job, and the loop picks the best by `primary_metric`.
 
@@ -153,6 +162,10 @@ Hard cap: the cartesian product must not exceed 100 jobs. AWS Batch runs all job
 strategy:
   class_name: "gnomepy_research.sessions.my_arb.strategy:MyArb"
   args:
+    min_pure_arb_bps: 5   # fixed default
+
+sweep:
+  strategy:
     min_pure_arb_bps: [5, 10]   # optional sweep — crosses with scenarios
 
 scenarios:
@@ -165,7 +178,7 @@ scenarios:
       - listing_id: 229125
         profile: polymarket
     strategy_args:
-      event_ids: [[46259, 48600]]
+      event_ids: [46259, 48600]
   football:
     start_date: "2026-08-24T00:26:00"
     end_date: "2026-08-24T03:09:00"
@@ -175,7 +188,7 @@ scenarios:
       - listing_id: 97202
         profile: polymarket
     strategy_args:
-      event_ids: [[47431, 18169]]
+      event_ids: [47431, 18169]
 
 profiles:
   polymarket: { ... }

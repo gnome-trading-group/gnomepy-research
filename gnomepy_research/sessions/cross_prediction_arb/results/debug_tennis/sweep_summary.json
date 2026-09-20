@@ -1,0 +1,24 @@
+{
+  "sweep_id": "01a0bf50-5438-7c50-b5b0-72139aa354d3",
+  "job_count": 1,
+  "completed_count": 1,
+  "sweep_params": {},
+  "jobs": [
+    {
+      "job_index": 0,
+      "job_id": "01a0bf50-5438-7c50-b5b0-72139aa354d3-0000",
+      "scenario": "tennis_geerts_albot",
+      "config_params": {},
+      "status": "COMPLETED",
+      "warnings": [
+        "Missing S3 key: 131218/4/2026/8/19/14/29/mbp-10.zst",
+        "Missing S3 key: 131217/4/2026/8/19/14/29/mbp-10.zst",
+        "Missing S3 key: 130434/5/2026/8/19/14/48/mbp-10.zst"
+      ],
+      "output": "gnomepy_research/sessions/cross_prediction_arb/results/debug_tennis/jobs/0000"
+    }
+  ],
+  "scenarios": [
+    "tennis_geerts_albot"
+  ]
+}

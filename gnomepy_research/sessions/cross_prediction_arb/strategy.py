@@ -1,10 +1,10 @@
 from gnomepy_research.sessions.cross_prediction_arb.cross_prediction_arb import CrossPredictionArb
 
 strategy = CrossPredictionArb(
-    pm_a_listing_id=222852,
-    pm_b_listing_id=222853,
-    k_a_listing_id=97203,
-    k_b_listing_id=97202,
+    outcomes=[
+        {"pm": 222852, "k": 97203},
+        {"pm": 222853, "k": 97202},
+    ],
     max_position=2000,
     min_edge_cents=1.0,
     min_contract_price=0.10,
@@ -12,8 +12,8 @@ strategy = CrossPredictionArb(
     imbalance_timeout_ns=60_000_000_000,
     max_staleness_ns=60_000_000_000,
     processing_time_ns=5_000_000,
-    maker_fee_rates={4: 0.0, 5: 0.0175},
-    taker_fee_rates={4: 0.07, 5: 0.07},
+    maker_fee_rates={"pm": 0.0, "k": 0.0175},
+    taker_fee_rates={"pm": 0.07, "k": 0.07},
     fill_risk_lambda=0.0,
     unwind_spread_mult=2.0,
     depth_coverage_mult=0.0,
@@ -24,8 +24,8 @@ strategy = CrossPredictionArb(
     price_edge_share=0.5,
     target_fill_prob=0.7,
     optimal_ev_lambda=30.0,
-    pm_taker_mode=True,
-    allow_dutch_book=False,
+    taker_labels=["pm"],
+    dutch_book_labels=["k"],
     gamma_T=0.0,
     resolution_time_ns=0,
     track_markouts=False,

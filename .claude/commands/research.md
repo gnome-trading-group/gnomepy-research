@@ -192,7 +192,7 @@ When the strategy operates across multiple distinct events (e.g., different pred
 strategy:
   class_name: "gnomepy_research.sessions.$ARGUMENTS.strategy:YourStrategyClassName"
   args:
-    # shared constructor kwargs (can include sweep params)
+    # shared constructor kwargs (sweep params go in sweep: section, not here)
 
 scenarios:
   <event_name_1>:
@@ -241,13 +241,24 @@ Write a sweep config to:
 gnomepy_research/sessions/$ARGUMENTS/configs/sweep_NNN.yaml
 ```
 
-Use the same structure as the local config (Step 4A.2), but use list or range syntax in `strategy.args` for parameters to sweep:
+Use the same structure as the local config (Step 4A.2), but add a top-level `sweep:` section for parameters to sweep. Lists in `strategy.args` are always passed as-is — only values declared in `sweep:` are expanded:
 
 ```yaml
 strategy:
   args:
-    gamma: [0.5, 1.0, 2.0, 4.0]            # list sweep
-    delta: {min: 0.5, max: 3.0, step: 0.5} # range sweep
+    gamma: 0.5      # fixed default (overridden per job by sweep)
+    delta: 0.5
+    outcomes:       # list — always fixed, never swept
+      - {pm: 222852, k: 97203}
+
+sweep:
+  strategy:
+    gamma: [0.5, 1.0, 2.0, 4.0]             # list sweep
+    delta: {min: 0.5, max: 3.0, step: 0.5}  # range sweep
+  profiles:
+    default:
+      network_latency:
+        latency_nanos: [5000000, 10000000]   # profile sweep
 ```
 
 **Hard cap: the cartesian product of scenarios × sweep parameters must not exceed 100 jobs.** Before writing the config, calculate the total job count (`len(scenarios) × product(sweep_lengths)`). If it exceeds 100, reduce the parameter grid or the number of scenarios.
@@ -256,7 +267,12 @@ Scenarios compose with sweeps — a config can have both:
 ```yaml
 strategy:
   args:
+    min_pure_arb_bps: 5   # fixed default
+
+sweep:
+  strategy:
     min_pure_arb_bps: [5, 10, 15]   # sweep — 3 values
+
 scenarios:
   baseball: { ... }
   football: { ... }
