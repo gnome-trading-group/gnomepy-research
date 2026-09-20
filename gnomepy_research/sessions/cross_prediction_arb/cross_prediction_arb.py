@@ -748,6 +748,15 @@ class CrossPredictionArb(Strategy):
     # Phase handlers
     # ------------------------------------------------------------------
 
+    def _listing_is_busy(self, pairing: Pairing) -> bool:
+        for lg in pairing.legs:
+            for other in self._listing_to_ps.get(lg, []):
+                if other.pairing is pairing:
+                    continue
+                if other.phase != Phase.SCANNING:
+                    return True
+        return False
+
     def _on_scanning(self, ps: PairingState, ts: int) -> list[Intent]:
         for lg in ps.pairing.legs:
             eid, sid = lg
@@ -758,6 +767,9 @@ class CrossPredictionArb(Strategy):
                 ps.phase = Phase.UNWINDING
                 ps.last_close_ts = 0
                 return self._close_all_positions(ps, ts)
+
+        if self._listing_is_busy(ps.pairing):
+            return []
 
         if ps.last_cancel_ts > 0:
             if ts - ps.last_cancel_ts < _CANCEL_SETTLE_NS:
