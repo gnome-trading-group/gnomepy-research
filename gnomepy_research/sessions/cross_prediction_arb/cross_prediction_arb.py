@@ -371,22 +371,28 @@ class CrossPredictionArb(Strategy):
         self._track_markouts = track_markouts
         self._debug = debug
 
-        # Resolve listing_ids → (exchange_id, security_id)
-        def resolve(listing_id: int) -> tuple[int, int]:
+        def resolve(listing_id: int) -> tuple[tuple[int, int], tuple[int, int]]:
             results = registry.get_listing(listing_id=listing_id)
             if not results:
                 raise ValueError(f"No listing for listing_id={listing_id}")
-            return (results[0].exchange_id, results[0].security_id)
+            specs = registry.get_listing_spec(listing_id=listing_id)
+            if not specs:
+                raise ValueError(f"No listing spec for listing_id={listing_id}")
+            listing = (results[0].exchange_id, results[0].security_id)
+            spec = (int(specs[0].min_notional or 0), int(specs[0].lot_size or 0))
+            return listing, spec
 
         # Build exchange_id → label mapping and resolve per-outcome listings
         self._exchange_id_to_label: dict[int, str] = {}
         outcome_listings: list[list[tuple[int, int]]] = []
+        listing_specs: dict[tuple[int, int], tuple[int, int]] = {}
         for outcome in outcomes:
             resolved = []
             for label, lid in outcome.items():
-                r = resolve(lid)
+                r, spec = resolve(lid)
                 self._exchange_id_to_label[r[0]] = label
                 resolved.append(r)
+                listing_specs[r] = spec
             outcome_listings.append(resolved)
 
         # Generate all exchange assignments via cartesian product
@@ -424,6 +430,8 @@ class CrossPredictionArb(Strategy):
             self._pairings.append(Pairing(index=p_idx, label=p_label, legs=sorted_legs))
             for leg in p_legs:
                 self._tracked_listings.add(leg)
+
+        self._listing_specs: dict[tuple[int, int], tuple[int, int]] = listing_specs
 
         # Book storage
         self._books: dict[tuple[int, int], Book] = {lst: Book() for lst in self._tracked_listings}
@@ -801,6 +809,24 @@ class CrossPredictionArb(Strategy):
     # Phase handlers
     # ------------------------------------------------------------------
 
+    def _min_price_for_size(self, listing: tuple[int, int], size: int) -> int:
+        mn, _ = self._listing_specs[listing]
+        if mn <= 0 or size <= 0:
+            return 0
+        return (mn + size - 1) // size
+
+    def _passes_notional(self, listing: tuple[int, int], price: int, size: int) -> bool:
+        mn, _ = self._listing_specs[listing]
+        if mn <= 0:
+            return True
+        return size > 0 and price >= mn // size
+
+    def _align_lot(self, listing: tuple[int, int], size: int) -> int:
+        _, lot = self._listing_specs[listing]
+        if lot > 0 and size % lot != 0:
+            return (size // lot) * lot
+        return size
+
     def _listing_is_busy(self, pairing: Pairing) -> bool:
         for lg in pairing.legs:
             for other in self._listing_to_ps.get(lg, []):
@@ -843,10 +869,20 @@ class CrossPredictionArb(Strategy):
         if remaining <= 0:
             return []
         target_qty = min(qty, remaining)
+        for lg in ps.pairing.legs:
+            target_qty = self._align_lot(lg, target_qty)
+        if target_qty <= 0:
+            return []
 
         bid_prices = self._compute_maker_bid_prices(ps.pairing, target_qty)
         if bid_prices is None:
             return []
+
+        for lg in ps.pairing.legs:
+            is_taker = self._exchange_id_to_label.get(lg[0], "") in self._taker_labels
+            price = self._books[lg].best_ask() if is_taker else bid_prices[lg]
+            if not self._passes_notional(lg, price, target_qty):
+                return []
 
         ps.legs = [LegState(listing=lg, target_qty=target_qty) for lg in ps.pairing.legs]
         ps.entry_ts = ts
@@ -995,21 +1031,29 @@ class CrossPredictionArb(Strategy):
                 eff_qty = self.positions.get_effective_quantity(eid, sid)
                 qty = eff_qty - ps.base_qty
                 if qty > 0:
-                    intents.append(Intent(
-                        exchange_id=eid, security_id=sid,
-                        take_side=Side.ASK,
-                        take_size=qty,
-                        take_order_type=OrderType.LIMIT,
-                        take_limit_price=PRICE_SCALE // 100,
-                    ))
+                    qty = self._align_lot((eid, sid), qty)
+                    if qty > 0:
+                        limit_price = max(PRICE_SCALE // 100, self._min_price_for_size((eid, sid), qty))
+                        if limit_price <= 99 * PRICE_SCALE // 100:
+                            intents.append(Intent(
+                                exchange_id=eid, security_id=sid,
+                                take_side=Side.ASK,
+                                take_size=qty,
+                                take_order_type=OrderType.LIMIT,
+                                take_limit_price=limit_price,
+                            ))
                 elif qty < 0:
-                    intents.append(Intent(
-                        exchange_id=eid, security_id=sid,
-                        take_side=Side.BID,
-                        take_size=-qty,
-                        take_order_type=OrderType.LIMIT,
-                        take_limit_price=99 * PRICE_SCALE // 100,
-                    ))
+                    abs_qty = self._align_lot((eid, sid), -qty)
+                    if abs_qty > 0:
+                        limit_price = max(99 * PRICE_SCALE // 100, self._min_price_for_size((eid, sid), abs_qty))
+                        if limit_price <= PRICE_SCALE:
+                            intents.append(Intent(
+                                exchange_id=eid, security_id=sid,
+                                take_side=Side.BID,
+                                take_size=abs_qty,
+                                take_order_type=OrderType.LIMIT,
+                                take_limit_price=limit_price,
+                            ))
             self._log_intents(f"closing_retry {ps.pairing.label}", intents, ts)
             return intents
         return []
@@ -1029,21 +1073,29 @@ class CrossPredictionArb(Strategy):
             total_qty = pos.net_quantity if pos is not None else 0
             qty = total_qty - ps.base_qty
             if qty > 0:
-                intents.append(Intent(
-                    exchange_id=eid, security_id=sid,
-                    take_side=Side.ASK,
-                    take_size=qty,
-                    take_order_type=OrderType.LIMIT,
-                    take_limit_price=PRICE_SCALE // 100,
-                ))
+                qty = self._align_lot((eid, sid), qty)
+                if qty > 0:
+                    limit_price = max(PRICE_SCALE // 100, self._min_price_for_size((eid, sid), qty))
+                    if limit_price <= 99 * PRICE_SCALE // 100:
+                        intents.append(Intent(
+                            exchange_id=eid, security_id=sid,
+                            take_side=Side.ASK,
+                            take_size=qty,
+                            take_order_type=OrderType.LIMIT,
+                            take_limit_price=limit_price,
+                        ))
             elif qty < 0:
-                intents.append(Intent(
-                    exchange_id=eid, security_id=sid,
-                    take_side=Side.BID,
-                    take_size=-qty,
-                    take_order_type=OrderType.LIMIT,
-                    take_limit_price=99 * PRICE_SCALE // 100,
-                ))
+                abs_qty = self._align_lot((eid, sid), -qty)
+                if abs_qty > 0:
+                    limit_price = max(99 * PRICE_SCALE // 100, self._min_price_for_size((eid, sid), abs_qty))
+                    if limit_price <= PRICE_SCALE:
+                        intents.append(Intent(
+                            exchange_id=eid, security_id=sid,
+                            take_side=Side.BID,
+                            take_size=abs_qty,
+                            take_order_type=OrderType.LIMIT,
+                            take_limit_price=limit_price,
+                        ))
             elif self._exchange_id_to_label.get(eid, "") not in self._taker_labels:
                 intents.append(Intent(exchange_id=eid, security_id=sid))
         self._log_intents(f"close_all {ps.pairing.label}", intents)

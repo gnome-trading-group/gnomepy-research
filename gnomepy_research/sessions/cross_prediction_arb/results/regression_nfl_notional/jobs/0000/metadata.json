@@ -1,0 +1,131 @@
+{
+  "backtest_id": "01a0c5ab-f1c4-7ff1-b09b-2a9ff57ce249-0000",
+  "created_at": "2026-09-21T20:37:09.096871+00:00",
+  "start_date": "2026-08-24 00:25:00",
+  "end_date": "2026-08-24 03:11:00",
+  "wall_time_seconds": 253.678,
+  "event_count": 3449000,
+  "config_path": "gnomepy_research/sessions/cross_prediction_arb/configs/iter_056.yaml",
+  "config": {
+    "end_date": "2026-08-24T03:11:00",
+    "listings": [
+      {
+        "listing_id": 222852,
+        "profile": "polymarket"
+      },
+      {
+        "listing_id": 222853,
+        "profile": "polymarket"
+      },
+      {
+        "listing_id": 97203,
+        "profile": "kalshi"
+      },
+      {
+        "listing_id": 97202,
+        "profile": "kalshi"
+      }
+    ],
+    "profiles": {
+      "kalshi": {
+        "fee_model": {
+          "maker_fee_rate": 0.0175,
+          "taker_fee_rate": 0.07,
+          "type": "parametric"
+        },
+        "network_latency": {
+          "latency_nanos": 50000000,
+          "type": "static"
+        },
+        "order_processing_latency": {
+          "base_nanos": 5000000,
+          "maker_delay_nanos": 0,
+          "taker_delay_nanos": 0,
+          "type": "maker_taker"
+        },
+        "queue_model": {
+          "type": "risk_averse"
+        }
+      },
+      "polymarket": {
+        "fee_model": {
+          "maker_fee_rate": 0.0,
+          "taker_fee_rate": 0.07,
+          "type": "parametric"
+        },
+        "network_latency": {
+          "latency_nanos": 50000000,
+          "type": "static"
+        },
+        "order_processing_latency": {
+          "base_nanos": 5000000,
+          "maker_delay_nanos": 0,
+          "taker_delay_nanos": 50000000,
+          "type": "maker_taker"
+        },
+        "queue_model": {
+          "type": "risk_averse"
+        }
+      }
+    },
+    "record_depth": 10,
+    "start_date": "2026-08-24T00:25:00",
+    "strategy": {
+      "args": {
+        "debug": false,
+        "depth_coverage_mult": 0.0,
+        "dutch_book_labels": [],
+        "fill_risk_lambda": 0.0,
+        "gamma_T": 0.0,
+        "imbalance_timeout_ns": 60000000000,
+        "maker_fee_rates": {
+          "k": 0.0175,
+          "pm": 0.0
+        },
+        "max_position": 2000,
+        "max_price_divergence_cents": 5.0,
+        "max_staleness_ns": 60000000000,
+        "min_contract_price": 0.1,
+        "min_edge_cents": 1.0,
+        "optimal_ev_lambda": 30.0,
+        "outcomes": [
+          {
+            "k": 97203,
+            "pm": 222852
+          },
+          {
+            "k": 97202,
+            "pm": 222853
+          }
+        ],
+        "price_edge_share": 0.5,
+        "price_improve_bps": 50.0,
+        "price_model": "join_best_bid",
+        "price_window_cents": 2,
+        "processing_time_ns": 5000000,
+        "resolution_time_ns": 0,
+        "taker_fee_rates": {
+          "k": 0.07,
+          "pm": 0.07
+        },
+        "taker_labels": [
+          "pm"
+        ],
+        "target_fill_prob": 0.7,
+        "track_markouts": false,
+        "unwind_spread_mult": 2.0,
+        "use_cst_fill_model": false
+      },
+      "class_name": "gnomepy_research.sessions.cross_prediction_arb.cross_prediction_arb:CrossPredictionArb"
+    }
+  },
+  "gnomepy_version": "2.9.0",
+  "gnomepy_research_version": "0.1.0",
+  "gnomepy_commit": "a8cbfa4",
+  "java_version": "(17, 0, 10)",
+  "python_version": "3.13.11",
+  "os_info": "macOS-14.3-arm64-arm-64bit-Mach-O",
+  "data_scaled": true,
+  "warnings": [],
+  "extra": {}
+}
