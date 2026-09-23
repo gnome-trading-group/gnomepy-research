@@ -570,14 +570,14 @@ class CrossPredictionArb(Strategy):
                         qty_c = report.filled_qty / SIZE_SCALE
                         filled_legs = [(self._exchange_id_to_label.get(lg.listing[0],"?"), lg.filled_qty/SIZE_SCALE) for lg in ps.legs if lg.filled_qty > 0]
                         print(
-                            f"[DEBUG] FILL {label} sid={listing[1]} "
+                            f"[DEBUG] {"PARTIAL-" if report.exec_type == ExecType.PARTIAL_FILL else ""}FILL {label} sid={listing[1]} "
                             f"price={price_c:.2f}¢ qty={qty_c:.2f}c "
                             f"pairing={ps.pairing.label} filled_legs={filled_legs}"
                         )
                     if self._track_markouts:
                         self._record_markout(listing, report.fill_price, Side.BID, report.timestamp_event)
                     return self._check_fill_transitions(ps, report.timestamp_event)
-        elif report.exec_type in (ExecType.REJECT, ExecType.EXPIRE, ExecType.CANCEL):
+        elif report.exec_type in (ExecType.REJECT, ExecType.EXPIRE):
             rejected_label = self._exchange_id_to_label.get(listing[0], "")
             for ps in self._listing_to_ps.get(listing, []):
                 if ps.phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
@@ -587,7 +587,61 @@ class CrossPredictionArb(Strategy):
                 )
                 if self._debug:
                     print(
-                        f"[DEBUG] REJECT {rejected_label} sid={listing[1]} "
+                        f"[DEBUG] {"REJECT" if report.exec_type == ExecType.REJECT else "EXPIRE"} {rejected_label} sid={listing[1]} "
+                        f"pairing={ps.pairing.label} any_other_filled={any_other_filled}"
+                    )
+                if any_other_filled:
+                    ps.phase = Phase.UNWINDING
+                    return self._close_all_positions(ps, report.timestamp_event)
+                else:
+                    cancel_intents = [
+                        Intent(exchange_id=lg.listing[0], security_id=lg.listing[1])
+                        for lg in ps.legs if lg.listing != listing
+                    ]
+                    ps.phase = Phase.SCANNING
+                    ps.last_cancel_ts = report.timestamp_event
+                    self._reset(ps)
+                    return cancel_intents
+        elif report.exec_type == ExecType.CANCEL:
+            canceled_label = self._exchange_id_to_label.get(listing[0], "")
+            for ps in self._listing_to_ps.get(listing, []):
+                if ps.phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
+                    continue
+
+                canceled_leg = next((lg for lg in ps.legs if lg.listing == listing), None)
+
+                if canceled_leg and canceled_leg.filled_qty > 0:
+                    new_target = canceled_leg.filled_qty
+                    if self._debug:
+                        print(
+                            f"[DEBUG] TAKER_PARTIAL_CANCEL {canceled_label} sid={listing[1]} "
+                            f"pairing={ps.pairing.label} filled={new_target/SIZE_SCALE:.2f}c "
+                            f"target was {canceled_leg.target_qty/SIZE_SCALE:.2f}c"
+                        )
+                    for lg in ps.legs:
+                        lg.target_qty = new_target
+
+                    all_met = all(lg.filled_qty >= new_target for lg in ps.legs)
+                    if all_met:
+                        any_excess = any(lg.filled_qty > new_target for lg in ps.legs)
+                        if any_excess:
+                            ps.base_qty = new_target
+                            ps.phase = Phase.UNWINDING
+                            return self._close_all_positions(ps, report.timestamp_event)
+                        else:
+                            ps.base_qty = new_target
+                            ps.phase = Phase.SCANNING
+                            self._reset(ps)
+                            return []
+                    else:
+                        return self._check_fill_transitions(ps, report.timestamp_event)
+
+                any_other_filled = any(
+                    lg.filled_qty > 0 for lg in ps.legs if lg.listing != listing
+                )
+                if self._debug:
+                    print(
+                        f"[DEBUG] CANCEL_NOFILL {canceled_label} sid={listing[1]} "
                         f"pairing={ps.pairing.label} any_other_filled={any_other_filled}"
                     )
                 if any_other_filled:
