@@ -6,7 +6,7 @@ from enum import IntEnum
 from itertools import product
 from typing import NamedTuple
 
-from gnomepy import ExecutionReport, Intent, OrderType, Scales, Side, Strategy
+from gnomepy import ExecutionReport, Intent, OrderType, RejectReason, Scales, Side, Strategy
 from gnomepy.java.enums import ExecType
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
@@ -590,6 +590,13 @@ class CrossPredictionArb(Strategy):
             for ps in self._listing_to_ps.get(listing, []):
                 if ps.phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
                     continue
+                if report.reject_reason == RejectReason.POST_ONLY_WOULD_CROSS:
+                    if self._debug:
+                        print(
+                            f"[DEBUG] POST_ONLY_WOULD_CROSS {rejected_label} sid={listing[1]} "
+                            f"pairing={ps.pairing.label} — chase will retry without post_only"
+                        )
+                    return []
                 any_other_filled = any(
                     lg.filled_qty > 0 for lg in ps.legs if lg.listing != listing
                 )
@@ -987,6 +994,7 @@ class CrossPredictionArb(Strategy):
                     security_id=leg.listing[1],
                     bid_price=bid,
                     bid_size=leg.target_qty,
+                    post_only=True,
                 ))
         result = taker_intents + maker_intents
         self._log_intents(f"entry {ps.pairing.label}", result, ts)

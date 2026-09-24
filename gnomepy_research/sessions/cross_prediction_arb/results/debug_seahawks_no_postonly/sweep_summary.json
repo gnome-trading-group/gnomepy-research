@@ -1,16 +1,16 @@
 {
-  "sweep_id": "01a0d409-3e8b-78e6-bbd1-5324df70980e",
+  "sweep_id": "01a0d40f-ee85-7d9f-8d62-e93d36f710e5",
   "job_count": 1,
   "completed_count": 1,
   "sweep_params": {},
   "jobs": [
     {
       "job_index": 0,
-      "job_id": "01a0d409-3e8b-78e6-bbd1-5324df70980e-0000",
+      "job_id": "01a0d40f-ee85-7d9f-8d62-e93d36f710e5-0000",
       "scenario": "seahawks_titans",
       "config_params": {},
       "status": "COMPLETED",
-      "output": "gnomepy_research/sessions/cross_prediction_arb/results/debug_seahawks/jobs/0000"
+      "output": "gnomepy_research/sessions/cross_prediction_arb/results/debug_seahawks_no_postonly/jobs/0000"
     }
   ],
   "scenarios": [
