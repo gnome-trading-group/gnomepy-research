@@ -1,10 +1,10 @@
 {
-  "backtest_id": "01a0d3cf-fbb3-77c6-ae4f-1e8950aa3de3-0000",
-  "created_at": "2026-09-24T14:31:09.027058+00:00",
+  "backtest_id": "01a0d3b7-2931-7c00-9860-1527244d25be-0000",
+  "created_at": "2026-09-24T14:04:06.084328+00:00",
   "start_date": "2026-08-24 00:25:00",
   "end_date": "2026-08-24 03:11:00",
-  "wall_time_seconds": 250.695,
-  "event_count": 3449093,
+  "wall_time_seconds": 254.446,
+  "event_count": 3449000,
   "config_path": "gnomepy_research/sessions/cross_prediction_arb/configs/debug_seahawks.yaml",
   "config": {
     "end_date": "2026-08-24T03:11:00",

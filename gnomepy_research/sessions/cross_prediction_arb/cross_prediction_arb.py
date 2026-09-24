@@ -74,6 +74,8 @@ class LegState:
     filled_qty: int = 0
     fill_cost: int = 0  # sum of price * qty (scaled)
     entry_fees: float = 0.0  # cumulative dollar fees paid on entry fills
+    entry_bid: int = 0
+    last_chase_bid: int = 0
 
     @property
     def is_filled(self) -> bool:
@@ -344,6 +346,8 @@ class CrossPredictionArb(Strategy):
         # Settlement risk (disabled by default — sports resolve before official expiry)
         gamma_T: float = 0.0,
         resolution_time_ns: int = 0,
+        # Chase: how long to stay in arb-positive zone before entering damage-control
+        maker_patience_ns: int = 30_000_000_000,
         # Diagnostics
         track_markouts: bool = False,
         debug: bool = False,
@@ -364,6 +368,7 @@ class CrossPredictionArb(Strategy):
         self._min_contract_price_scaled = int(min_contract_price * PRICE_SCALE)
         self._max_price_divergence = max_price_divergence_cents / 100.0
         self._imbalance_timeout_ns = imbalance_timeout_ns
+        self._maker_patience_ns = maker_patience_ns
         self._max_staleness_ns = max_staleness_ns
         self._processing_time_ns = processing_time_ns
         self._gamma_T = gamma_T
@@ -371,7 +376,7 @@ class CrossPredictionArb(Strategy):
         self._track_markouts = track_markouts
         self._debug = debug
 
-        def resolve(listing_id: int) -> tuple[tuple[int, int], tuple[int, int]]:
+        def resolve(listing_id: int) -> tuple[tuple[int, int], tuple[int, int], int]:
             results = registry.get_listing(listing_id=listing_id)
             if not results:
                 raise ValueError(f"No listing for listing_id={listing_id}")
@@ -380,17 +385,20 @@ class CrossPredictionArb(Strategy):
                 raise ValueError(f"No listing spec for listing_id={listing_id}")
             listing = (results[0].exchange_id, results[0].security_id)
             spec = (int(specs[0].min_notional or 0), int(specs[0].lot_size or 0))
-            return listing, spec
+            tick_size = int(specs[0].tick_size) if specs[0].tick_size else PRICE_SCALE // 100
+            return listing, spec, tick_size
 
         # Build exchange_id → label mapping and resolve per-outcome listings
         self._exchange_id_to_label: dict[int, str] = {}
+        self._tick_sizes: dict[tuple[int, int], int] = {}
         outcome_listings: list[list[tuple[int, int]]] = []
         listing_specs: dict[tuple[int, int], tuple[int, int]] = {}
         for outcome in outcomes:
             resolved = []
             for label, lid in outcome.items():
-                r, spec = resolve(lid)
+                r, spec, tick_size = resolve(lid)
                 self._exchange_id_to_label[r[0]] = label
+                self._tick_sizes[r] = tick_size
                 resolved.append(r)
                 listing_specs[r] = spec
             outcome_listings.append(resolved)
@@ -973,6 +981,7 @@ class CrossPredictionArb(Strategy):
                 ))
             else:
                 bid = bid_prices[leg.listing]
+                leg.entry_bid = bid
                 maker_intents.append(Intent(
                     exchange_id=eid,
                     security_id=leg.listing[1],
@@ -982,6 +991,17 @@ class CrossPredictionArb(Strategy):
         result = taker_intents + maker_intents
         self._log_intents(f"entry {ps.pairing.label}", result, ts)
         return result
+
+    def _quantize_price(self, listing: tuple[int, int], price: int) -> int:
+        tick = self._tick_sizes.get(listing, PRICE_SCALE // 100)
+        return (price // tick) * tick
+
+    def _compute_chase_ceiling(self, ps: PairingState) -> int:
+        filled_cost_scaled = 0
+        for lg in ps.legs:
+            if lg.filled_qty > 0:
+                filled_cost_scaled += lg.fill_cost // lg.filled_qty
+        return PRICE_SCALE - filled_cost_scaled
 
     def _on_entering(self, ps: PairingState, ts: int) -> list[Intent]:
         return self._check_fill_transitions(ps, ts)
@@ -1014,16 +1034,82 @@ class CrossPredictionArb(Strategy):
             return []
 
         if some_filled and ps.phase == Phase.PARTIAL_FILL:
+            elapsed = ts - ps.partial_fill_since
+
+            chase_intents = []
+            for lg in ps.legs:
+                if lg.is_filled:
+                    continue
+                eid = lg.listing[0]
+                if self._exchange_id_to_label.get(eid, "") in self._taker_labels:
+                    continue
+
+                book = self._books[lg.listing]
+                best_bid = book.best_bid()
+                best_ask = book.best_ask()
+                ceiling = self._compute_chase_ceiling(ps)
+
+                if ceiling <= 0 or best_bid <= 0 or best_ask <= 0:
+                    continue
+
+                model_price = self._price_model.compute_bid(
+                    lg.listing, best_bid, best_ask, max_price=ceiling
+                )
+
+                if ceiling <= best_bid:
+                    phase2_window = self._imbalance_timeout_ns
+                    urgency2 = min(1.0, elapsed / phase2_window) if phase2_window > 0 else 1.0
+                    target_price = best_bid + int(urgency2 * (best_ask - best_bid))
+                    phase = 2
+                    if self._debug and elapsed < 1_000_000_000:
+                        print(
+                            f"[DEBUG] CHASE_SKIP_P1 pairing={ps.pairing.label} "
+                            f"ceiling={ceiling/(PRICE_SCALE//100):.1f}¢ < "
+                            f"best_bid={best_bid/(PRICE_SCALE//100):.1f}¢ → straight to phase 2"
+                        )
+                elif elapsed <= self._maker_patience_ns:
+                    floor = lg.entry_bid if lg.entry_bid > 0 else model_price
+                    urgency = elapsed / self._maker_patience_ns
+                    target_price = floor + int(urgency * (ceiling - floor))
+                    phase = 1
+                else:
+                    phase2_window = self._imbalance_timeout_ns - self._maker_patience_ns
+                    phase2_elapsed = elapsed - self._maker_patience_ns
+                    urgency2 = min(1.0, phase2_elapsed / phase2_window) if phase2_window > 0 else 1.0
+                    target_price = ceiling + int(urgency2 * (best_ask - ceiling))
+                    phase = 2
+
+                target_price = self._quantize_price(lg.listing, target_price)
+                if target_price == lg.last_chase_bid:
+                    continue
+
+                remaining = lg.target_qty - lg.filled_qty
+                lg.last_chase_bid = target_price
+                chase_intents.append(Intent(
+                    exchange_id=eid,
+                    security_id=lg.listing[1],
+                    bid_price=target_price,
+                    bid_size=remaining,
+                ))
+                if self._debug:
+                    print(
+                        f"[DEBUG] CHASE pairing={ps.pairing.label} phase={phase} "
+                        f"bid={target_price/(PRICE_SCALE//100):.1f}¢ "
+                        f"ceiling={ceiling/(PRICE_SCALE//100):.1f}¢ "
+                        f"ask={best_ask/(PRICE_SCALE//100):.1f}¢ "
+                        f"elapsed={elapsed/1e9:.1f}s"
+                    )
+
+            if chase_intents:
+                return chase_intents
+
+            # Safety net: no chase intents possible (no book data) → fall through to timeout
             if self._check_imbalance_timeout(ps, ts):
-                elapsed_s = (ts - ps.partial_fill_since) / 1e9
+                elapsed_s = elapsed / 1e9
                 if self._debug:
                     print(f"[DEBUG] IMBALANCE_TIMEOUT pairing={ps.pairing.label} elapsed={elapsed_s:.1f}s → UNWINDING")
                 ps.phase = Phase.UNWINDING
                 return self._close_all_positions(ps, ts)
-            # Don't run a budget check here. The PM leg already filled at its price
-            # (that cost is locked); using the *current* PM ask for the budget would
-            # falsely reject valid arbs whenever PM price jumps post-fill. Wait the
-            # full imbalance_timeout before declaring the K leg missing.
             return []
 
         # Guard: taker orders take ~300ms to settle. Don't cancel maker legs
