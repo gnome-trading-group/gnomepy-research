@@ -1,0 +1,38 @@
+name: cs2_win_probability
+description: >
+  CS2 win probability model trading prediction market contracts (Polymarket/Kalshi).
+  Takes a single event_id and level (map or match) as input. Uses GRID Esports
+  telemetry (sub-200ms server-direct) to compute live win probabilities via XGBoost,
+  then trades when model disagrees with market prices. Features: economy, players alive,
+  HP, bomb state, plus team priors (HLTV ratings, map win rates, head-to-head records).
+  Posts maker orders around model fair price; takes when edge > threshold.
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">0"
+  targets:
+    sharpe: ">0.5"
+
+constraints:
+  strategy_type: directional
+  max_iterations: 25
+  avoid:
+    - trading during GRID feed disconnection (no signal = no edge)
+    - taking against thick books without sufficient model confidence
+    - ignoring taker fees (Polymarket 7% parametric, Kalshi 7%)
+    - trading when model fair price is unavailable (no GRID state yet)
+  notes:
+    - Polymarket is a pure CLOB — no platform repricing, prices set by participants
+    - GRID data is sub-200ms server-direct; Twitch viewers see events 5-30s later
+    - Economy alone achieves 0.83 AUC; contested (equal sides) drops to ~0.58
+    - Simple XGBoost matches Transformers at 0.85 AUC (Huang et al. 2026 preprint)
+    - Model edge lies at transition moments: freeze time, bomb plant, half-time
+    - Maker-first: post at model fair price ± spread, let uninformed flow come to us
+    - Taker fees are 7% parametric on both PM and Kalshi — need >5% edge to profit taking
+
+meta:
+  execution_mode: local
+  interaction_mode: interactive

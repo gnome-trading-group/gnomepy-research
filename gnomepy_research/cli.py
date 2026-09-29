@@ -454,5 +454,196 @@ def validate_walk_forward(
     click.echo(f"Verdict: {verdict}")
 
 
+# ---------------------------------------------------------------------------
+# Artifacts
+# ---------------------------------------------------------------------------
+
+@main.group()
+def artifacts() -> None:
+    """Manage versioned model artifacts."""
+
+
+@artifacts.command(name="list")
+@click.option("--type", "artifact_type", default=None, help="Filter by artifact type")
+@click.option("--name", default=None, help="Filter by artifact name")
+@click.option("--session", default=None, help="Filter by session name")
+def artifacts_list(artifact_type: str | None, name: str | None, session: str | None) -> None:
+    """List artifacts in the store."""
+    from gnomepy_research.artifacts import ArtifactStore
+    store = ArtifactStore()
+    try:
+        refs = store.list(artifact_type=artifact_type, name=name, session_name=session)
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+    if not refs:
+        click.echo("no artifacts found")
+        return
+
+    refs.sort(key=lambda r: (r.artifact_type, r.name, r.version))
+    header = f"{'TYPE':<24} {'NAME':<30} {'VER':>4} {'SESSION':<24} {'S3 URI'}"
+    click.echo(header)
+    click.echo("-" * len(header))
+    for r in refs:
+        click.echo(f"{r.artifact_type:<24} {r.name:<30} {r.version:>4} {r.session_name:<24} {r.s3_uri}")
+
+
+@artifacts.command(name="publish")
+@click.argument("local_path", type=click.Path(exists=True))
+@click.option("--type", "artifact_type", required=True, help="Artifact type (e.g. xgboost_model)")
+@click.option("--name", required=True, help="Artifact name")
+@click.option("--session", default="__global__", show_default=True, help="Owning session name")
+@click.option("--description", default="", help="Human-readable description")
+@click.option("--params", default="{}", help="JSON dict of hyperparameters or config")
+def artifacts_publish(
+    local_path: str,
+    artifact_type: str,
+    name: str,
+    session: str,
+    description: str,
+    params: str,
+) -> None:
+    """Upload a local file as a new artifact version."""
+    import json
+    from gnomepy_research.artifacts import ArtifactStore
+    try:
+        params_dict = json.loads(params)
+    except json.JSONDecodeError as e:
+        raise click.UsageError(f"--params is not valid JSON: {e}")
+
+    store = ArtifactStore()
+    try:
+        ref = store.publish(
+            local_path,
+            artifact_type=artifact_type,
+            name=name,
+            session_name=session,
+            description=description,
+            params=params_dict or None,
+        )
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+    click.echo(f"published {ref}")
+
+
+@artifacts.command(name="get")
+@click.argument("ref")
+@click.option("--output", "-o", default=None, type=click.Path(), help="Destination path (default: current dir)")
+def artifacts_get(ref: str, output: str | None) -> None:
+    """Download an artifact to a local file.
+
+    REF format: type/name[:version]  or  artifact://type/name[:version]
+    """
+    import shutil
+    from gnomepy_research.artifacts import ArtifactStore
+
+    if not ref.startswith("artifact://"):
+        ref = f"artifact://{ref}"
+
+    store = ArtifactStore()
+    try:
+        cached = store.resolve(ref)
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+    if output:
+        shutil.copy2(cached, output)
+        click.echo(f"saved to {output}")
+    else:
+        import os
+        dest = os.path.join(".", os.path.basename(cached))
+        shutil.copy2(cached, dest)
+        click.echo(f"saved to {dest}")
+
+
+# ---------------------------------------------------------------------------
+# Datasets
+# ---------------------------------------------------------------------------
+
+@main.group()
+def datasets() -> None:
+    """Manage shared training datasets."""
+
+
+@datasets.command(name="list")
+@click.option("--name", default=None, help="Filter by dataset name")
+def datasets_list(name: str | None) -> None:
+    """List datasets in the store."""
+    from gnomepy_research.artifacts import DatasetStore
+    store = DatasetStore()
+    try:
+        refs = store.list(name=name)
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+    if not refs:
+        click.echo("no datasets found")
+        return
+
+    refs.sort(key=lambda r: (r.dataset_name, r.version))
+    header = f"{'NAME':<36} {'VER':>4} {'ROWS':>8}  {'S3 URI'}"
+    click.echo(header)
+    click.echo("-" * len(header))
+    for r in refs:
+        click.echo(f"{r.dataset_name:<36} {r.version:>4} {'—':>8}  {r.s3_uri}")
+
+
+@datasets.command(name="publish")
+@click.argument("parquet_path", type=click.Path(exists=True))
+@click.option("--name", required=True, help="Dataset name")
+@click.option("--description", default="", help="Human-readable description")
+@click.option("--session", default=None, help="Producing session name")
+def datasets_publish(
+    parquet_path: str,
+    name: str,
+    description: str,
+    session: str | None,
+) -> None:
+    """Publish a Parquet file as a new dataset version."""
+    import pandas as pd
+    from gnomepy_research.artifacts import DatasetStore
+
+    try:
+        df = pd.read_parquet(parquet_path)
+    except Exception as e:
+        raise click.ClickException(f"failed to read parquet: {e}")
+
+    store = DatasetStore()
+    try:
+        ref = store.publish(df, name=name, description=description, producing_session=session)
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+    click.echo(f"published {ref}  ({len(df)} rows)")
+
+
+@datasets.command(name="get")
+@click.argument("ref")
+@click.option("--output", "-o", default=None, type=click.Path(), help="Destination path (default: <name>_v<version>.parquet)")
+def datasets_get(ref: str, output: str | None) -> None:
+    """Download a dataset to a local Parquet file.
+
+    REF format: name  or  name:version
+    """
+    from gnomepy_research.artifacts import DatasetStore
+
+    store = DatasetStore()
+    try:
+        dataset_ref = store.latest(ref) if ":" not in ref else None
+        if dataset_ref is None:
+            df = store.load(ref)
+            name, ver_str = ref.rsplit(":", 1)
+            dest = output or f"{name}_v{ver_str}.parquet"
+        else:
+            df = store.load(dataset_ref)
+            dest = output or f"{dataset_ref.dataset_name}_v{dataset_ref.version}.parquet"
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+    df.to_parquet(dest, index=False)
+    click.echo(f"saved {len(df)} rows to {dest}")
+
+
 if __name__ == "__main__":
     main()

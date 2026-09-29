@@ -24,6 +24,7 @@ from gnomepy.registry import RegistryClient
 
 from gnomepy_research.signals.fair_value.microprice import MicropriceFairValue
 from gnomepy_research.signals.operations.kalman import KalmanOperation
+from gnomepy_research.artifacts import resolve_artifact_path
 from gnomepy_research.solvers.prediction_market_hjb import (
     HJBParams,
     load_solution,
@@ -59,7 +60,7 @@ class InformedPredictionMarketMaker(Strategy):
         self._processing_time_ns = processing_time_ns
 
         self._V, self._tau_grid, self._p_grid, self._q_levels, self._params = (
-            load_solution(value_function_path)
+            load_solution(resolve_artifact_path(value_function_path))
         )
         self._interp = RegularGridInterpolator(
             (self._tau_grid, self._p_grid, self._q_levels), self._V,

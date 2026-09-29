@@ -80,6 +80,43 @@ sweep:
         latency_nanos: [5000000, 10000000]   # profile sweep
 ```
 
+## Artifacts and Datasets
+
+Trained models and tabular training data are stored in S3 (`gnome-research-{STAGE}`) and registered in DynamoDB. See `tutorials/04_artifacts_and_datasets.md` for full workflows.
+
+**CLI:**
+```bash
+poetry run research artifacts list [--type TYPE] [--name NAME]
+poetry run research artifacts publish <path> --type TYPE --name NAME [--session SESSION]
+poetry run research artifacts get <type/name[:version]>
+
+poetry run research datasets list [--name NAME]
+poetry run research datasets publish <parquet_path> --name NAME
+poetry run research datasets get <name[:version]>
+```
+
+**In Python:**
+```python
+from gnomepy_research.artifacts import ArtifactStore, DatasetStore, resolve_artifact_path
+
+# publish a model
+ArtifactStore().publish("model.xgb", artifact_type="xgboost_model", name="cs2_fair_value", session_name="cs2_xgb")
+
+# load in a strategy (artifact://, s3://, or local path all work)
+local_path = resolve_artifact_path("artifact://xgboost_model/cs2_fair_value")
+
+# publish/load a dataset
+DatasetStore().publish(df, name="cs2_match_features")
+df = DatasetStore().load("cs2_match_features")
+```
+
+**Artifact URI scheme in YAML configs:**
+```yaml
+value_function_path: "artifact://value_function/kalshi_cal"    # latest
+value_function_path: "artifact://value_function/kalshi_cal:3"  # pinned
+```
+Old local paths continue to work — `resolve_artifact_path` passes them through unchanged.
+
 ## Code conventions
 - All imports at the top of the file — never inside functions or conditionals
 - No comments unless the WHY is non-obvious

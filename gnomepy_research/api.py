@@ -94,3 +94,87 @@ def add_note(session_name: str, content: str) -> dict:
 
 def get_notes(session_name: str) -> list[dict]:
     return get_session(session_name).get("notes", [])
+
+
+def list_artifacts(
+    artifact_type: str | None = None,
+    name: str | None = None,
+    session_name: str | None = None,
+) -> dict:
+    params: dict = {}
+    if artifact_type:
+        params["type"] = artifact_type
+    if name:
+        params["name"] = name
+    if session_name:
+        params["session_name"] = session_name
+    return _request("GET", "/research/artifacts", params=params)
+
+
+def register_artifact(
+    artifact_type: str,
+    name: str,
+    version: int,
+    s3_uri: str,
+    file_format: str,
+    size_bytes: int,
+    *,
+    session_name: str = "__global__",
+    description: str = "",
+    params: dict | None = None,
+    source_iteration: int | None = None,
+    git_commit: str | None = None,
+) -> dict:
+    body: dict = {
+        "artifact_type": artifact_type,
+        "name": name,
+        "version": version,
+        "s3_uri": s3_uri,
+        "file_format": file_format,
+        "size_bytes": size_bytes,
+        "session_name": session_name,
+        "description": description,
+    }
+    if params:
+        body["params"] = params
+    if source_iteration is not None:
+        body["source_iteration"] = source_iteration
+    if git_commit:
+        body["git_commit"] = git_commit
+    return _request("POST", "/research/artifacts", json=body)
+
+
+def list_datasets(name: str | None = None) -> dict:
+    params: dict = {}
+    if name:
+        params["name"] = name
+    return _request("GET", "/research/datasets", params=params)
+
+
+def register_dataset(
+    name: str,
+    version: int,
+    s3_uri: str,
+    file_format: str,
+    size_bytes: int,
+    *,
+    row_count: int | None = None,
+    columns: list[str] | None = None,
+    description: str = "",
+    producing_session: str | None = None,
+) -> dict:
+    body: dict = {
+        "name": name,
+        "version": version,
+        "s3_uri": s3_uri,
+        "file_format": file_format,
+        "size_bytes": size_bytes,
+        "description": description,
+    }
+    if row_count is not None:
+        body["row_count"] = row_count
+    if columns:
+        body["columns"] = columns
+    if producing_session:
+        body["producing_session"] = producing_session
+    return _request("POST", "/research/datasets", json=body)

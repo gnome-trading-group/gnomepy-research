@@ -16,7 +16,7 @@ Usage::
 
     mm = PredictionMarketMaker(
         listing_id=19757,
-        value_function_path='gnomepy_research/solvers/value_function_default.npz',
+        value_function_path='artifact://value_function/default',
         size=1_000_000,
         max_position=10,
     )
@@ -33,6 +33,7 @@ from gnomepy import ExecutionReport, Intent, Strategy
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
+from gnomepy_research.artifacts import resolve_artifact_path
 from gnomepy_research.solvers.prediction_market_hjb import (
     HJBParams,
     load_solution,
@@ -61,7 +62,7 @@ class PredictionMarketMaker(Strategy):
         self._processing_time_ns = processing_time_ns
 
         self._V, self._tau_grid, self._p_grid, self._q_levels, self._params = (
-            load_solution(value_function_path)
+            load_solution(resolve_artifact_path(value_function_path))
         )
         self._interp = RegularGridInterpolator(
             (self._tau_grid, self._p_grid, self._q_levels), self._V,

@@ -3,7 +3,7 @@ strategy:
   args:
     ref_listing_id: 129651
     quote_listing_id: 130435
-    value_function_path: "gnomepy_research/solvers/value_function_g50.npz"
+    value_function_path: "artifact://value_function/g50"
     size: 1000000
     max_position: 20
     inventory_fade: 0.2

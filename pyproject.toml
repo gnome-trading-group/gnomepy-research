@@ -7,11 +7,24 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.13,<3.14"
-gnomepy = {path = "/Users/mprey/Programming/gnome-trading-group/gnomepy", extras = ["backtest"], develop = true}
+gnomepy = {version = "^2.18.1", extras = ["backtest"]}
+joblib = "^1.6.0"
+scikit-learn = "^1.9.1"
+xgboost = "^3.4.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"
 notebook = "^7.5.5"
+
+[tool.poetry.group.pipelines]
+optional = true
+
+[tool.poetry.group.pipelines.dependencies]
+beautifulsoup4 = "*"
+zenrows = "^1.4.1"
+nodriver = "*"
+demoparser2 = "*"
+opencv-python = "*"
 
 [tool.poetry.scripts]
 research = "gnomepy_research.cli:main"

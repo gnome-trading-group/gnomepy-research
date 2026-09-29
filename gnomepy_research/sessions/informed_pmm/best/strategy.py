@@ -5,7 +5,7 @@ from gnomepy_research.sessions.informed_pmm.informed_prediction_market_maker imp
 strategy = InformedPredictionMarketMaker(
     ref_listing_id=97203,
     quote_listing_id=222852,
-    value_function_path="gnomepy_research/solvers/value_function_kalshi_cal.npz",
+    value_function_path="artifact://value_function/kalshi_cal",
     size=3_000_000,
     max_position=100,
     warmup_ticks=50,

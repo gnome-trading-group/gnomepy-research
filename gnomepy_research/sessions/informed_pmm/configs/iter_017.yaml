@@ -3,7 +3,7 @@ strategy:
   args:
     ref_listing_id: 129651
     quote_listing_id: 130435
-    value_function_path: "gnomepy_research/solvers/value_function_kalshi_cal.npz"
+    value_function_path: "artifact://value_function/kalshi_cal"
     size: 5000000
     max_position: 100
     warmup_ticks: 50
