@@ -13,6 +13,11 @@ Research sessions live in `gnomepy_research/sessions/<name>/`. Start a new sessi
 
 Each session runs on its own git branch `research/<name>`, created automatically on the first iteration.
 
+> **`sharpe` is a per-bar ratio at 10s bars, not annualized** — multiply by ~1776 for the annualized
+> figure. Set `goals.targets.sharpe` in per-bar units (0.002 ≈ 3.6 annualized). Targets written as if
+> the metric were annualized are unreachable; this stalled every session run before 2026-09-30, so
+> treat their Sharpe verdicts in `research_learnings.md` with suspicion.
+
 **Commands:**
 - `/research-new <name>` — Create a new session (5-round wizard)
 - `/research <name>` — Run one iteration
@@ -20,7 +25,8 @@ Each session runs on its own git branch `research/<name>`, created automatically
 - `/research-branch <parent> <suffix>` — Fork an existing session to explore a different approach in parallel. Creates session `<parent>__<suffix>` with its own git worktree for parallel execution.
 - `/research-status` — Dashboard showing all sessions grouped by parent/branch, with current metrics
 - `/research-validate <name>` — Walk-forward out-of-sample validation
-- `/research-hint <name>` — Queue a directive for the next autonomous iteration
+- `/research-ablate <name>` — Turn each signal off in turn to see which ones earn their place
+- `/research-clean <name>` — Tear down a finished session's worktree, branch and results
 
 **Parallel exploration workflow:**
 1. Create a base session: `/research-new my_arb`
@@ -44,13 +50,13 @@ gnomepy_research/sessions/<name>/
 
 **Code scope:** All code changes during a session stay under `sessions/<name>/`. Never modify files in `gnomepy_research/signals/`, `gnomepy_research/strategies/`, or elsewhere in the shared package — those are stable. If a session needs a modified signal or utility, copy it into the session directory and import from there. Promote session-local code to shared locations only after the session completes.
 
-Session state (iterations, notes, status) is stored in the API — viewable at the Research page in the web UI.
+Session state (iterations, notes, status) is stored in the API — viewable at the Research page in the web UI. **API responses are snake_case** (`session_name`, `iteration_count`, `best_iteration`, `best_pnl`, `best_sharpe`). `research sessions list --json` and `research validate significance --json` emit raw JSON for scripting.
 
-**Accept/reject gate:** After each evaluation, `/research` compares the current iteration's primary metric against the best accepted baseline (`best/` directory). On accept: all session `.py` files (except `__init__.py`) are snapshotted to `best/` and `bestIteration` is set in the API. On reject: session `.py` files are restored from `best/` (new files added in the rejected iteration are removed). Both outcomes are recorded in iteration metadata (`accepted: true/false`, `returned_to: N`).
+**Accept/reject gate:** After each evaluation, `/research` compares the current iteration's primary metric against the best accepted baseline, in the direction given by `spec.goals.direction`. On accept: all session `.py` files (except `__init__.py`) are snapshotted to `best/` and `best_iteration` is set in the API. On reject: session `.py` files are restored from `best/` *before* the commit (new files added in the rejected iteration are removed), so the commit records the reverted state and the tree is left clean. Both outcomes are recorded in iteration metadata (`accepted: true/false`, `returned_to: N`).
 
-**Cross-session memory:** `gnomepy_research/research_learnings.md` is appended when a session completes or stalls. `/research` Step 2 reads this file before forming each hypothesis — avoids re-running dead ends and bootstraps from known-good approaches. Learnings are also pushed as session notes (`poetry run research notes add`) for web UI visibility.
+**Cross-session memory:** `gnomepy_research/research_learnings.md` holds **one entry per session**, updated in place when a session completes or stalls. `/research` Step 2 reads this file before forming each hypothesis — avoids re-running dead ends and bootstraps from known-good approaches. Learnings are also pushed as session notes (`poetry run research notes add`) for web UI visibility.
 
-**Diagnostics:** `/research` Step 5 runs mandatory per-strategy-type diagnostic checks (fill rate, leg imbalance, fee drag, etc.) every iteration. Results are included in the iteration analysis and directly inform the next hypothesis.
+**Diagnostics:** `/research` Step 5 runs mandatory per-strategy-type diagnostic checks every iteration via `gnomepy_research.reporting.backtest` (`compute_mm_stats`, `compute_adverse_selection`, `compute_rolling_sharpe`) rather than hand-rolling them from parquet. Results are included in the iteration analysis and directly inform the next hypothesis.
 
 ### Exchange profiles
 Saved exchange profiles live in `gnomepy_research/profiles/`. Current profiles: `hyperliquid`, `lighter`, `polymarket`, `kalshi`. The `/research-new` wizard picks these up automatically so you don't re-specify fees and latency each time. New profiles created during `/research-new` are saved here for future reuse.
@@ -116,6 +122,33 @@ value_function_path: "artifact://value_function/kalshi_cal"    # latest
 value_function_path: "artifact://value_function/kalshi_cal:3"  # pinned
 ```
 Old local paths continue to work — `resolve_artifact_path` passes them through unchanged.
+
+## Tutorials
+
+- `tutorials/01_getting_started.md` — session creation through first backtest result
+- `tutorials/02_research_workflow.md` — evaluate → iterate → validate, and what the metrics mean
+- `tutorials/03_strategy_building.md` — signal catalog (generated) and strategy patterns
+- `tutorials/04_artifacts_and_datasets.md` — models and datasets in S3
+- `tutorials/05_analysis_toolkit.md` — `explore`, `analysis`, `validation`, `reporting.backtest`, `arb`
+
+The signal tables in `03` are generated: `poetry run python scripts/gen_signal_catalog.py`.
+`tests/test_docs_sync.py` fails if they drift from `gnomepy_research.signals.__all__`.
+
+## Known gaps
+
+Diagnosed 2026-09-30 and still open — don't assume the workflow covers these.
+
+**The loop only fits single-file, backtest-parameter research.** `/research-new` offers four strategy
+types and the Step 5 diagnostics dispatch on `arb` and `mm` only. A session whose inner loop is
+train-model → check AUC has no place in it: the accept/reject gate scores `final_pnl` from a backtest
+and snapshots every `*.py` into `best/`. `cs2_win_probability` is exactly this shape — ten modules,
+`strategy_type: directional` — and was built outside the workflow entirely, on `main`, with no
+iteration records. Either add a model-training track or say plainly that such work belongs elsewhere.
+
+**`spec.yaml` immutability is unenforced.** `informed_pmm/spec.yaml` was edited four times, once
+mid-iteration and once to repoint the session at a different market, against the "DO NOT MODIFY" rule
+stated here and in `research.md`. `max_iterations` is now checked at Step 1, but nothing prevents spec
+edits. A contract that is routinely broken is worse than no contract — either enforce it or drop it.
 
 ## Code conventions
 - All imports at the top of the file — never inside functions or conditionals

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +11,55 @@ import yaml
 
 from gnomepy_research import api
 from gnomepy_research.notes_sync import pull_notes, push_notes
+
+
+def _session_dir(session_name: str) -> Path:
+    """Locate a session directory, following the worktree /research-branch created for it.
+
+    Branch sessions live only inside their own worktree, so the path relative to the
+    current repo root does not exist when invoked from anywhere else.
+    """
+    local = Path("gnomepy_research") / "sessions" / session_name
+    if local.exists():
+        return local
+
+    branch = f"research/{session_name}"
+    try:
+        out = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        raise click.ClickException(f"session directory not found: {local}")
+
+    worktree = None
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            worktree = line[len("worktree "):]
+        elif line.startswith("branch ") and worktree:
+            if line[len("branch "):] == f"refs/heads/{branch}":
+                candidate = Path(worktree) / "gnomepy_research" / "sessions" / session_name
+                if candidate.exists():
+                    return candidate
+
+    raise click.ClickException(
+        f"session directory not found: {local} (and no worktree for branch '{branch}')"
+    )
+
+
+def _flag(value: object) -> str:
+    """Render a tri-state boolean from iteration metadata, which may be absent."""
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return "\u2014"
+
+
+def _num(value: object, places: int = 4) -> str:
+    if isinstance(value, (int, float)):
+        return f"{value:.{places}f}"
+    return "\u2014"
 
 
 @click.group()
@@ -29,32 +79,37 @@ def sessions() -> None:
 @sessions.command(name="list")
 @click.option("--status", type=click.Choice(["running", "completed", "stalled", "paused"]), default=None, help="Filter by status")
 @click.option("--limit", default=20, show_default=True, help="Max results")
-def sessions_list(status: str | None, limit: int) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Emit the raw API response as JSON")
+def sessions_list(status: str | None, limit: int, as_json: bool) -> None:
     """List research sessions."""
     try:
         result = api.list_sessions(status=status, limit=limit)
     except RuntimeError as e:
         raise click.ClickException(str(e))
 
+    if as_json:
+        click.echo(json.dumps(result, indent=2))
+        return
+
     sessions_data = result.get("sessions", [])
     if not sessions_data:
         click.echo("no sessions found")
         return
 
-    header = f"{'SESSION':<30} {'STATUS':<12} {'ITERS':>5} {'BEST PNL':>10} {'BEST SHARPE':>12} {'OWNER':<20} {'UPDATED'}"
+    header = f"{'SESSION':<38} {'STATUS':<12} {'ITERS':>5} {'BEST PNL':>10} {'BEST SHARPE':>12} {'TAGS':<26} {'UPDATED'}"
     click.echo(header)
     click.echo("-" * len(header))
     for s in sessions_data:
-        name = s.get("sessionName", "")[:30]
-        status_val = s.get("status", "")
-        iters = s.get("iterationCount", 0)
-        best_pnl = s.get("bestPnl")
-        best_sharpe = s.get("bestSharpe")
-        owner = (s.get("owner") or "")[:20]
-        updated = (s.get("updatedAt") or "")[:19].replace("T", " ")
+        name = (s.get("session_name") or "")[:38]
+        status_val = s.get("status") or ""
+        iters = s.get("iteration_count") or 0
+        best_pnl = s.get("best_pnl")
+        best_sharpe = s.get("best_sharpe")
+        tags = ",".join(s.get("tags") or [])[:26]
+        updated = (s.get("updated_at") or "")[:19].replace("T", " ")
         pnl_str = f"{best_pnl:.4f}" if best_pnl is not None else "—"
         sharpe_str = f"{best_sharpe:.4f}" if best_sharpe is not None else "—"
-        click.echo(f"{name:<30} {status_val:<12} {iters:>5} {pnl_str:>10} {sharpe_str:>12} {owner:<20} {updated}")
+        click.echo(f"{name:<38} {status_val:<12} {iters:>5} {pnl_str:>10} {sharpe_str:>12} {tags:<26} {updated}")
 
 
 @sessions.command(name="get")
@@ -110,6 +165,8 @@ def sessions_create(session_name: str, spec: str, description: str, tags: str, b
 @click.option("--best-iteration", type=int, default=None)
 @click.option("--best-pnl", type=float, default=None)
 @click.option("--best-sharpe", type=float, default=None)
+@click.option("--best-metric", default=None, help="Name of the session's primary metric (e.g. sortino)")
+@click.option("--best-metric-value", type=float, default=None, help="Best accepted value of --best-metric")
 def sessions_update(
     session_name: str,
     status: str | None,
@@ -118,6 +175,8 @@ def sessions_update(
     best_iteration: int | None,
     best_pnl: float | None,
     best_sharpe: float | None,
+    best_metric: str | None,
+    best_metric_value: float | None,
 ) -> None:
     """Update a research session's metadata."""
     fields: dict = {}
@@ -133,6 +192,11 @@ def sessions_update(
         fields["best_pnl"] = best_pnl
     if best_sharpe is not None:
         fields["best_sharpe"] = best_sharpe
+    if (best_metric is None) != (best_metric_value is None):
+        raise click.UsageError("--best-metric and --best-metric-value must be given together")
+    if best_metric is not None:
+        fields["best_metric"] = best_metric
+        fields["best_metric_value"] = best_metric_value
 
     if not fields:
         raise click.UsageError("provide at least one field to update")
@@ -152,6 +216,49 @@ def sessions_update(
 @main.group()
 def iterations() -> None:
     """Record research iterations."""
+
+
+@iterations.command(name="list")
+@click.argument("session_name")
+@click.option("--limit", default=10, show_default=True, help="Show the most recent N iterations")
+@click.option("--json", "as_json", is_flag=True, help="Emit the raw iteration records as JSON")
+def iterations_list(session_name: str, limit: int, as_json: bool) -> None:
+    """List recorded iterations for a session, most recent last."""
+    try:
+        session = api.get_session(session_name)
+    except RuntimeError as e:
+        raise click.ClickException(str(e))
+
+    records = sorted(session.get("iterations") or [], key=lambda r: r.get("iteration", 0))
+    if limit > 0:
+        records = records[-limit:]
+
+    if as_json:
+        click.echo(json.dumps(records, indent=2))
+        return
+
+    if not records:
+        click.echo(f"no iterations recorded for '{session_name}'")
+        return
+
+    header = f"{'ITER':>5} {'TYPE':<8} {'ACC':<4} {'THR':<4} {'PNL':>12} {'SHARPE':>10} {'FILLS':>7}  TITLE"
+    click.echo(header)
+    click.echo("-" * len(header))
+    for r in records:
+        metrics = r.get("metrics") or {}
+        metadata = r.get("metadata") or {}
+        accepted = metadata.get("accepted")
+        thresholds = metadata.get("thresholds_met")
+        click.echo(
+            f"{r.get('iteration', 0):>5} "
+            f"{(r.get('type') or ''):<8} "
+            f"{_flag(accepted):<4} "
+            f"{_flag(thresholds):<4} "
+            f"{_num(metrics.get('final_pnl')):>12} "
+            f"{_num(metrics.get('sharpe')):>10} "
+            f"{_num(metrics.get('fill_count'), 0):>7}  "
+            f"{(r.get('title') or '')[:60]}"
+        )
 
 
 @iterations.command(name="record")
@@ -323,9 +430,7 @@ def notes_add(session_name: str, content: str) -> None:
 @click.argument("session_name")
 def notes_pull(session_name: str) -> None:
     """Download API notes to local notes/ directory."""
-    session_dir = Path("gnomepy_research") / "sessions" / session_name
-    if not session_dir.exists():
-        raise click.ClickException(f"session directory not found: {session_dir}")
+    session_dir = _session_dir(session_name)
     try:
         n = pull_notes(session_name, session_dir)
     except RuntimeError as e:
@@ -337,9 +442,7 @@ def notes_pull(session_name: str) -> None:
 @click.argument("session_name")
 def notes_push(session_name: str) -> None:
     """Upload new local notes to API."""
-    session_dir = Path("gnomepy_research") / "sessions" / session_name
-    if not session_dir.exists():
-        raise click.ClickException(f"session directory not found: {session_dir}")
+    session_dir = _session_dir(session_name)
     try:
         n = push_notes(session_name, session_dir)
     except RuntimeError as e:
@@ -361,7 +464,8 @@ def validate() -> None:
 @click.option("--fills", required=True, type=click.Path(exists=True), help="Path to fills.parquet")
 @click.option("--market", required=True, type=click.Path(exists=True), help="Path to market.parquet")
 @click.option("--n-trials", required=True, type=int, help="Number of iterations tested so far")
-def validate_significance(session_name: str, fills: str, market: str, n_trials: int) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Emit results as JSON")
+def validate_significance(session_name: str, fills: str, market: str, n_trials: int, as_json: bool) -> None:
     """Compute bootstrap Sharpe CI and Deflated Sharpe Ratio."""
     import numpy as np
     import pandas as pd
@@ -381,8 +485,22 @@ def validate_significance(session_name: str, fills: str, market: str, n_trials: 
     dsr = deflated_sharpe_ratio(observed_sharpe=observed_sharpe, n_trials=n_trials, n_bars=n_bars)
     min_length = minimum_backtest_length(observed_sharpe) if observed_sharpe > 0 else 0
 
+    if as_json:
+        click.echo(json.dumps({
+            "session_name": session_name,
+            "observed_sharpe": observed_sharpe,
+            "sharpe_ci_95": [ci_lo, ci_hi],
+            "deflated_sharpe": dsr,
+            "dsr_significant": bool(dsr > 0.95),
+            "ci_excludes_zero": bool(ci_lo > 0),
+            "min_bars_for_significance": min_length,
+            "n_bars": n_bars,
+            "n_trials": n_trials,
+        }, indent=2))
+        return
+
     click.echo(f"\nSignificance test for '{session_name}'")
-    click.echo(f"  Observed Sharpe:     {observed_sharpe:.4f}")
+    click.echo(f"  Observed Sharpe:     {observed_sharpe:.4f}  (per-{sharpe_info.get('bar', '10s')} bar)")
     click.echo(f"  95% Bootstrap CI:    [{ci_lo:.4f}, {ci_hi:.4f}]")
     click.echo(f"  Deflated Sharpe:     {dsr:.4f}  (p-value: {1 - dsr:.4f})")
     click.echo(f"  Significant (DSR>0.95): {'YES' if dsr > 0.95 else 'NO'}")
@@ -397,7 +515,8 @@ def validate_significance(session_name: str, fills: str, market: str, n_trials: 
 @click.option("--start", "total_start", required=True, help="Total range start (ISO 8601)")
 @click.option("--end", "total_end", required=True, help="Total range end (ISO 8601)")
 @click.option("--folds", default=5, show_default=True, help="Number of OOS folds")
-@click.option("--mode", default="expanding", show_default=True, type=click.Choice(["expanding", "rolling"]))
+@click.option("--mode", default="rolling", show_default=True, type=click.Choice(["expanding", "rolling"]),
+              help="rolling: disjoint windows marching forward. expanding: windows anchored at --start that grow.")
 @click.option("--output", "output_dir", default=None, type=click.Path(), help="Output directory for fold results")
 def validate_walk_forward(
     session_name: str,

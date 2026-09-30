@@ -88,11 +88,16 @@ Use `AskUserQuestion` with exactly these 3 questions in a single call:
 ### 5. Round 4 — Goals
 Use `AskUserQuestion` with exactly these 2 questions in a single call:
 
+**`sharpe` is a per-bar ratio at 10s bars, not annualized.** The annualized equivalent is roughly
+1776x the per-bar value, so a target of `sharpe > 1.0` demands an annualized Sharpe of 1776 and can
+never be met. Every default below is in per-bar units: `0.002` per bar is about 3.6 annualized.
+See `tutorials/02_research_workflow.md`.
+
 1. **header: "Use recommended defaults?"** (single-select) — Show the strategy-type defaults:
-   - For `arb`: thresholds `sharpe>0, fill_count>0, final_pnl>0` / targets `sharpe>1.0`
-   - For `market_maker`: thresholds `sharpe>0, fill_count>10, final_pnl>0` / targets `sharpe>1.0, sortino>1.5, pct_positive_buckets>0.6` / mm_targets `time_quoting_both_sides>0.8, avg_net_edge_captured_bps>0.1`
-   - For `momentum`/`custom`: thresholds `sharpe>0, fill_count>10, final_pnl>0` / targets `sharpe>1.0, sortino>1.5, pct_positive_buckets>0.6`
-   
+   - For `arb`: thresholds `sharpe>0, fill_count>0, final_pnl>0` / targets `sharpe>0.002`
+   - For `market_maker`: thresholds `sharpe>0, fill_count>20, final_pnl>0` / targets `sharpe>0.002, sortino>0.003, pct_positive_buckets>0.6` / mm_targets `time_quoting_both_sides>0.8, avg_net_edge_captured_bps>0.1`
+   - For `momentum`/`custom`: thresholds `sharpe>0, fill_count>20, final_pnl>0` / targets `sharpe>0.002, sortino>0.003, pct_positive_buckets>0.6`
+
    Options:
    - `Yes — use defaults` *(Recommended)*
    - `No — customize`
@@ -101,10 +106,11 @@ Use `AskUserQuestion` with exactly these 2 questions in a single call:
    - `Use defaults for this strategy type`
    - `None / let Claude decide`
 
-**If "No — customize" was selected**, run a customization sub-round (AskUserQuestion with 4 questions):
-   - **"Sharpe floor"** — Minimum Sharpe: `>0` *(Recommended)*, `>0.5`, `>1.0`, or Other
-   - **"Fill floor"** — Minimum fill count: `>0`, `>10` *(Recommended)*, `>25`, or Other
-   - **"Sharpe target"** — Aspirational Sharpe: `>1.0` *(Recommended)*, `>1.5`, `>2.0`, or Other
+**If "No — customize" was selected**, run a customization sub-round (AskUserQuestion with 4 questions).
+All Sharpe values are per-bar; show the annualized equivalent in each option's description.
+   - **"Sharpe floor"** — Minimum per-bar Sharpe: `>0` *(Recommended)*, `>0.0005`, `>0.001`, or Other
+   - **"Fill floor"** — Minimum fill count: `>0`, `>20` *(Recommended — below this the Sharpe estimate is noise)*, `>50`, or Other
+   - **"Sharpe target"** — Aspirational per-bar Sharpe: `>0.002` *(Recommended, ≈ 3.6 annualized)*, `>0.003` *(≈ 5.3)*, `>0.005` *(≈ 8.9)*, or Other
    - **"Extra targets"** — Any additional targets as `metric: ">value"` (e.g., `max_drawdown: "<500"`), or "None"
 
 ---
@@ -123,7 +129,7 @@ Use `AskUserQuestion` with exactly these 4 questions in a single call:
    - `batch` — Always submit to AWS Batch
 
 3. **header: "Interaction mode"**
-   - `autonomous` *(Recommended)* — Runs hands-off; picks up hints.md if present
+   - `autonomous` *(Recommended)* — Runs hands-off; picks up directives you type into the running session
    - `interactive` — Pauses each iteration with a check-in before proceeding
 
 4. **header: "Confirm"** — Show a brief summary of all collected values and ask to confirm.

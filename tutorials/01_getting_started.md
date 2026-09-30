@@ -29,19 +29,19 @@ Run:
 
 The session name must be a valid Python identifier: lowercase letters, digits, and underscores only (`n_exchange_arb`, `mm_btc_v2`). No hyphens.
 
-The wizard walks you through 9 rounds of questions:
+The wizard walks you through 5 rounds of questions:
 
 | Round | What it collects |
 |-------|-----------------|
-| 1 | Strategy type (`market_maker`, `momentum`, `arb`, `custom`), description, primary metric |
-| 2a–2b | Exchange profile: fees (taker/maker), queue model, latency |
-| 3 | Listing ID(s), base preset, loop back for additional profiles |
-| 4 | Dev date range (keep to 30 min–2 hr), max iterations, signals to explore |
-| 5 | Hard thresholds (Sharpe floor, fill floor, PnL floor) |
-| 6 | Aspirational targets (Sharpe, Sortino, % positive time buckets) |
-| 7 | Market-making targets (time quoting, edge per fill) — MM only |
-| 8 | Design constraints, execution mode, sensitivity tests |
-| 9 | Interaction mode (autonomous/interactive), final confirmation |
+| 1 | Strategy type (`market_maker`, `momentum`, `arb`, `custom`), description, primary metric, direction |
+| 2 | Exchange profile(s) from `gnomepy_research/profiles/`, listing IDs per profile, loop for more profiles |
+| 3 | Dev date range (keep to 30 min–2 hr), max iterations |
+| 4 | Goals — thresholds and targets (accept the strategy-type defaults, or customize), signals to explore |
+| 5 | Design constraints, execution mode, interaction mode, final confirmation |
+
+Round 2 can create a new exchange profile (fees, latency, queue model) and saves it to
+`gnomepy_research/profiles/<name>.yaml` for reuse. Round 4's defaults are in **per-bar** Sharpe units
+— see "Reading Results" below.
 
 After confirmation, the wizard:
 1. Creates `gnomepy_research/sessions/<name>/` with `configs/` and `results/` subdirectories
@@ -69,7 +69,7 @@ data:
     - listing_id: 36
       profile: lighter
   date_ranges:
-    - start: "2026-05-12T23:28:00"    # dev window — keep short
+    - start: "2026-05-13T18:00:00"    # dev window — keep to 30min–2hr
       end:   "2026-05-13T19:50:00"
     # Additional ranges for OOS validation (not used during iteration):
     # - start: "2026-06-01T00:00:00"
@@ -94,11 +94,11 @@ goals:
   direction: maximize
   thresholds:                      # hard constraints — all must pass
     sharpe: ">0"
-    fill_count: ">10"
+    fill_count: ">20"
     final_pnl: ">0"
   targets:                         # aspirational — iteration continues until all met
-    sharpe: ">1.0"
-    sortino: ">1.5"
+    sharpe: ">0.002"               # PER-BAR at 10s bars (≈ 3.6 annualized), not annualized
+    sortino: ">0.003"
     pct_positive_buckets: ">0.6"
 
 constraints:
@@ -115,17 +115,7 @@ meta:
   interaction_mode: autonomous
 ```
 
-**Important: never modify `spec.yaml` after the session starts.** It is the source of truth for what the session is trying to achieve. Use `/research-hint` to influence the next iteration without touching the spec.
-
-### Available presets
-
-If you chose a base preset in Round 3, the first iteration starts from that preset's backtest config rather than building from scratch:
-
-- `mm_btc_30m` — market maker on BTC, 30-minute session, 5ms latency, risk_averse queue
-- `arb_btc_30m` — cross-exchange arb on BTC, two profiles, 20ms/200ms latency
-- `momentum_btc_30m` — momentum taker on BTC, 30-minute session
-
----
+**Treat `spec.yaml` as the session's contract.** It is the source of truth for what the session is trying to achieve, and the loop must not move its own goalposts. To steer an iteration without changing the contract, tell Claude directly in the session running the loop.
 
 ## Session Structure
 
@@ -162,7 +152,7 @@ What happens internally across the 7 steps:
 
 **Step 1 — Orient:** Reads `spec.yaml`, fetches session state from the API (iteration count, history of last 2-3 iterations, best metrics so far). Creates the git branch `research/<name>` on iteration 1.
 
-**Step 2 — Hypothesize:** Reads `hints.md` if it exists (your directives). On iteration 1, designs a strategy from scratch based on `spec.description` and `spec.constraints`. On later iterations, reads the previous iteration's analysis and `next_action` to decide what to change.
+**Step 2 — Hypothesize:** Picks up any directive you have given in the conversation. On iteration 1, designs a strategy from scratch based on `spec.description` and `spec.constraints`. On later iterations, reads the previous iteration's analysis and `next_action` to decide what to change.
 
 **Step 3 — Decide:** Chooses local run (logic change) or remote sweep (parameter search) based on `spec.meta.execution_mode`. On iteration 1, always local.
 
@@ -196,14 +186,18 @@ cat gnomepy_research/sessions/<name>/results/iter_001/summary.json | python3 -m 
 
 Or open `report.html` in a browser for the visual summary.
 
+**`sharpe` here is a per-bar ratio at 10s bars, not annualized** — multiply by roughly 1776 for the
+annualized figure. See `tutorials/02_research_workflow.md` for the full explanation; getting this
+wrong is what made every session before 2026-09-30 stall against unreachable targets.
+
 **What good looks like:**
-- Sharpe > 1.0 on the dev range is a reasonable starting target
-- Fill count > 25 — fewer fills means the Sharpe estimate is noisy
+- Per-bar Sharpe of 0.002–0.003 on the dev range (≈ 3.6–5.3 annualized) is a strong result
+- Fill count > 20 — fewer fills means the Sharpe estimate is noise
 - PnL curve that climbs consistently, not driven by 1-2 large trades
 
 **Red flags to watch for:**
-- Very few fills (< 10): the strategy isn't trading — check quoting logic or entry conditions
-- Sharpe > 3.0 with < 50 fills on a 30-minute window: likely a lucky fluke, not signal
+- Very few fills (< 20): the strategy isn't trading — check quoting logic or entry conditions
+- Per-bar Sharpe > 0.01 (≈ 18 annualized) with < 50 fills on a 30-minute window: a lucky fluke, not signal
 - PnL entirely in one 10-minute window: alpha may be concentrated on a single event
 
 Use `notebooks/02_backtest_deep_dive.ipynb` for a structured post-result analysis.
@@ -223,9 +217,9 @@ The loop runs `/research` repeatedly, committing each iteration. It stops when:
 - Primary metric plateaus for 3+ consecutive iterations with no clear path forward → status set to `stalled`
 
 **When to intervene:**
-- Use `/research-hint <name>` to inject a direction for the next iteration without stopping the loop
+- Type a directive into the session running the loop — it is picked up at the next iteration's hypothesis step
 - Interrupt the loop if you see a structural error (wrong listing IDs, broken position logic) — fix it manually, then resume
-- If the loop gets stuck after several identical iterations, check `hints.md` to make sure the hint was consumed, or restart with a stronger hint about what to change
+- If the loop gets stuck after several identical iterations, give it a more structural directive — a different signal or strategy class, not another parameter tweak
 
 ---
 

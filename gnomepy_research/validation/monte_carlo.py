@@ -17,24 +17,35 @@ def generate_latency_sweep_config(
     base_config_path: str | Path,
     output_path: str | Path,
     latency_values_nanos: list[int] | None = None,
+    profile_names: list[str] | None = None,
 ) -> Path:
-    """Generate a sweep YAML varying network_latency_nanos.
+    """Generate a sweep YAML varying each profile's network latency.
 
-    Uses the existing sweep.py cartesian product — submittable as one Batch job
-    or runnable locally via `gnomepy backtest run --config <path>`.
+    Values go in the top-level ``sweep.profiles`` section, which is the only part
+    ``gnomepy.sweep.expand_sweep`` expands; ``profiles`` itself stays fixed and keeps a
+    scalar default so the config is still runnable on its own.
+
+    Profiles sweep independently, so the job count is
+    ``len(latency_values_nanos) ** len(profile_names)``. Pass ``profile_names`` to vary one
+    venue at a time and keep that from exploding past the 100-job cap.
     """
     if latency_values_nanos is None:
-        latency_values_nanos = [2_000_000, 3_000_000, 5_000_000, 7_000_000,
-                                 10_000_000, 15_000_000, 20_000_000]
+        latency_values_nanos = [2_000_000, 5_000_000, 10_000_000, 20_000_000]
 
     with open(base_config_path) as f:
         config = yaml.safe_load(f)
 
-    for profile in config.get("profiles", {}).values():
-        nl = profile.get("network_latency", {})
-        nl["type"] = "static"
-        nl["latency_nanos"] = latency_values_nanos
-        profile["network_latency"] = nl
+    sweep_profiles: dict[str, Any] = {}
+    for profile_name, profile in config.get("profiles", {}).items():
+        if profile_names is not None and profile_name not in profile_names:
+            continue
+        network_latency = profile.setdefault("network_latency", {})
+        network_latency["type"] = "static"
+        network_latency.setdefault("latency_nanos", latency_values_nanos[0])
+        sweep_profiles[profile_name] = {"network_latency": {"latency_nanos": list(latency_values_nanos)}}
+
+    if sweep_profiles:
+        config.setdefault("sweep", {})["profiles"] = sweep_profiles
 
     output_path = Path(output_path)
     with open(output_path, "w") as f:
@@ -47,23 +58,37 @@ def generate_queue_sweep_config(
     base_config_path: str | Path,
     output_path: str | Path,
     cancel_ahead_probs: list[float] | None = None,
+    profile_names: list[str] | None = None,
 ) -> Path:
-    """Generate a sweep YAML varying queue cancel_ahead_probability.
+    """Generate a sweep YAML varying queue ``cancel_ahead_probability``.
 
-    Switches all profiles to probabilistic queue model and sweeps the
-    cancel_ahead_probability parameter.
+    Switches every profile to the probabilistic queue model and sweeps the
+    probability via the top-level ``sweep.profiles`` section.
+
+    Profiles sweep independently, so the job count is
+    ``len(cancel_ahead_probs) ** len(profile_names)``. Pass ``profile_names`` to vary one
+    venue at a time.
     """
     if cancel_ahead_probs is None:
-        cancel_ahead_probs = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        cancel_ahead_probs = [0.1, 0.3, 0.5, 0.7, 0.9]
 
     with open(base_config_path) as f:
         config = yaml.safe_load(f)
 
-    for profile in config.get("profiles", {}).values():
+    sweep_profiles: dict[str, Any] = {}
+    for profile_name, profile in config.get("profiles", {}).items():
+        if profile_names is not None and profile_name not in profile_names:
+            continue
         profile["queue_model"] = {
             "type": "probabilistic",
-            "cancel_ahead_probability": cancel_ahead_probs,
+            "cancel_ahead_probability": cancel_ahead_probs[0],
         }
+        sweep_profiles[profile_name] = {
+            "queue_model": {"cancel_ahead_probability": list(cancel_ahead_probs)}
+        }
+
+    if sweep_profiles:
+        config.setdefault("sweep", {})["profiles"] = sweep_profiles
 
     output_path = Path(output_path)
     with open(output_path, "w") as f:

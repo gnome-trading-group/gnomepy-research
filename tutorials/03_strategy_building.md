@@ -42,7 +42,7 @@ data.event_timestamp     # nanoseconds since epoch
 **Price scaling:** all prices in the engine are scaled integers. Divide by `Scales.PRICE` (≈ 1e9) to get a human-readable float. Never pass floats to `Intent` — the engine expects scaled integers. Example:
 ```python
 # Wrong: passing a float
-# Intent(..., quote_bid_price=102.50)
+# Intent(..., bid_price=102.50)
 
 # Right: prices from Schema are already scaled — pass them through directly
 bid = data.bid_price(0)  # e.g. 102500000000 (scaled)
@@ -55,90 +55,146 @@ mid = (data.bid_price(0) + data.ask_price(0)) // 2
 
 All signals live in `gnomepy_research/signals/` and are imported from `gnomepy_research.signals`.
 
-### Fair Value — `Signal[int]`
+The tables below are generated from the package's own `__all__` and docstrings — regenerate with
+`poetry run python scripts/gen_signal_catalog.py` after adding or renaming a signal.
+`tests/test_docs_sync.py` fails if they drift.
 
-Estimate where the true price is. Values are scaled integers (same units as bid/ask prices).
+<!-- BEGIN GENERATED SIGNAL CATALOG -->
 
-| Signal | What it measures |
-|--------|-----------------|
-| `MidFairValue` | Simple arithmetic mid `(bid + ask) / 2` |
-| `MicropriceFairValue` | Volume-weighted mid: `(bid × ask_size + ask × bid_size) / (bid_size + ask_size)` — shifts toward the side with more pressure |
-| `WeightedMicropriceFairValue(num_levels=5, decay=0.5)` | Multi-level microprice with exponential decay across book levels |
-| `ImbalanceAdjustedMid` | Mid adjusted by depth imbalance signal |
-| `TradeAdjustedFairValue` | Mid adjusted by recent trade flow |
+### Fair Value — 5 signals
 
-### Volatility — `Signal[float]`
+`Signal[int]` — scaled integer prices, same units as bid/ask.
 
-Measure market noise and spread environment. Values are floats.
+| Signal | Parameters | What it measures |
+|--------|-----------|------------------|
+| `MidFairValue` | — | Fair value = simple mid price. |
+| `MicropriceFairValue` | — | L1 microprice: volume-weighted mid using top-of-book. |
+| `WeightedMicropriceFairValue` | `num_levels=5, decay=0.5` | Multi-level weighted microprice using MBP book depth. |
+| `ImbalanceAdjustedMid` | `num_levels=1, warmup=10` | Fair value: mid shifted by depth imbalance (Stoikov 2018). |
+| `TradeAdjustedFairValue` | `flow_weight, flow_horizon_ns=1000000000, warmup=10` | Fair value: microprice adjusted by recent signed trade flow. |
 
-| Signal | What it measures |
-|--------|-----------------|
-| `SpreadVolatility(window=20)` | EWMA variance of bid-ask spread |
-| `RealizedVolatility(window=50)` | Rolling realized variance of mid returns |
-| `HighLowVolatility(window=20)` | Range-based volatility estimator |
-| `MicroVolatility(window=20)` | Tick-by-tick microprice variance |
-| `BidAskBounce(window=20)` | Fraction of ticks where mid bounces between bid and ask |
-| `VolOfVol(window=100)` | Volatility of volatility |
-| `SpreadVolRegime(window=50)` | Discrete regime: 0=calm, 1=elevated, 2=stressed |
+### Volatility — 9 signals
 
-### Flow — `Signal[float]`
+`Signal[float]` — market noise and spread environment.
 
-Measure trade activity and order flow pressure.
+| Signal | Parameters | What it measures |
+|--------|-----------|------------------|
+| `SpreadVolatility` | `warmup_ticks=50, scale=1.0` | Volatility estimate derived from the bid-ask spread. |
+| `RealizedVolatility` | `horizon=100, warmup=None` | Rolling standard deviation of mid-price log returns, in basis points. |
+| `HighLowVolatility` | `horizon=100, warmup=None` | Parkinson (1980) volatility estimator using rolling high-low range. |
+| `MicroVolatility` | `horizon=100, warmup=None` | Rolling standard deviation of microprice changes, in basis points. |
+| `ReturnKurtosis` | `horizon=200, warmup=None` | Rolling excess kurtosis of mid-price log returns. |
+| `SpreadVolRegime` | `alpha=0.999, warmup=100` | Current spread relative to its EWMA — a spread regime indicator. |
+| `VolOfVol` | `inner_horizon=50, outer_horizon=100` | Rolling standard deviation of RealizedVolatility. |
+| `BidAskBounce` | `horizon=50, warmup=50` | Fraction of mid-price changes that immediately reverse direction. |
+| `VolatilityAsymmetry` | `horizon=100, warmup=None` | Ratio of upside volatility to downside volatility. |
 
-| Signal | What it measures |
-|--------|-----------------|
-| `TradeImbalance(window=20)` | `(buy_vol - sell_vol) / (buy_vol + sell_vol)` in [-1, 1] |
-| `SignedVolume(window=20)` | Cumulative signed trade volume |
-| `Aggression(window=20)` | Fraction of trades that were aggressive (market orders) |
-| `Impact(window=20)` | Average mid-price impact per trade |
-| `TradeIntensity(window=20)` | Trades per unit time |
-| `SweepDetector(threshold=3)` | 1.0 when a sweep through multiple price levels occurred |
-| `MidMomentum(window=20)` | Short-term trend in mid price returns |
-| `CancelImbalance(window=20)` | `(bid_cancels - ask_cancels) / total` |
-| `SpoofDetector(window=20)` | Large order add + cancel within N ticks |
-| `PriceImpactDecay(window=20)` | How quickly price impact reverts |
+### Flow — 22 signals
 
-### Book — `Signal[float]`
+`Signal[float]` — trade activity and order-flow pressure.
 
-Measure order book shape and imbalance.
+| Signal | Parameters | What it measures |
+|--------|-----------|------------------|
+| `TradeImbalance` | `horizon_ns=1000000000, warmup_trades=20` | Trade-flow imbalance signal over a rolling horizon. |
+| `Aggression` | `warmup_trades=20` | How far past mid the aggressor reached, in bps. |
+| `Impact` | `warmup_trades=20` | Net book displacement from a trade, in bps. |
+| `Reversion` | `warmup_trades=20` | Where the book settled relative to the trade price, in bps. |
+| `LevelStaleness` | `side, level=0, warmup_ticks=1` | Staleness of a single book level in nanoseconds. |
+| `LevelLiquidityDelta` | `side, level=0, horizon_ns=1000000000, warmup_events=20` | Net liquidity change at a specific book level over a rolling horizon. |
+| `TradeArrivalTime` | `warmup_trades=2` | Time since the last trade event in nanoseconds. |
+| `SignedVolume` | `horizon_ns=1000000000, warmup_trades=20` | Cumulative signed trade volume over a rolling window. |
+| `TradeIntensity` | `horizon_ns=1000000000, warmup_trades=10` | Trade arrival rate within a rolling window, in trades per second. |
+| `SweepDetector` | `window_ns=10000000, min_levels=2, warmup_trades=20` | Detects multi-level sweeps: consecutive same-side trades spanning multiple prices. |
+| `TradeVWAP` | `horizon_ns=1000000000, warmup_trades=20` | Deviation of rolling trade VWAP from current mid, in basis points. |
+| `CancelImbalance` | `horizon_ns=5000000000, warmup_events=20` | Net cancel volume imbalance over a rolling window. |
+| `AddImbalance` | `horizon_ns=5000000000, warmup_events=20` | Net new-order volume imbalance over a rolling window. |
+| `TradeClusterRate` | `horizon_ns=10000000000, cluster_ns=1000000, warmup_trades=50` | Fraction of trades arriving within cluster_ns of the previous trade. |
+| `NetLiquidityDelta` | `horizon_ns=5000000000, warmup_events=20` | Net aggregate liquidity change (add - cancel) across all book levels. |
+| `TradeSizeSkew` | `horizon=100, min_trades=None` | Rolling skewness of trade size distribution. |
+| `MidMomentum` | `horizon=100, warmup=None` | Signed cumulative return normalized by realized vol — a t-statistic of trend. |
+| `PriceAnchor` | `alpha=0.999, warmup=100` | Distance of current mid from its EWMA, in basis points. |
+| `LevelMagnetism` | `size_threshold_mult=3.0, num_levels=10, warmup=10` | Distance from mid to the nearest abnormally thick resting price level. |
+| `SpoofDetector` | `detection_window_ns=1000000000, warmup_events=20` | L1 cancel-to-add volume ratio over a short rolling window. |
+| `TradeSizeEntropy` | `horizon_ns=60000000000, num_buckets=10, warmup_trades=50` | Rolling Shannon entropy of the trade size distribution. |
+| `PriceImpactDecay` | `observation_ns=1000000000, alpha=0.95, warmup_trades=20` | Fraction of trade price impact remaining after observation_ns. |
 
-| Signal | What it measures |
-|--------|-----------------|
-| `DepthImbalance(levels=5)` | `(bid_depth - ask_depth) / (bid_depth + ask_depth)` across N levels |
-| `BookPressure(levels=5)` | Price-weighted depth imbalance |
-| `CountImbalance(levels=5)` | Imbalance by order count rather than size |
-| `SpreadBps` | Current spread in basis points |
-| `BookSlope(levels=5)` | How steeply the book thins out from L1 |
-| `TopHeaviness(levels=5)` | Fraction of depth concentrated at L1 |
-| `BookEntropy(levels=5)` | Shanon entropy of depth distribution |
-| `GapRisk(levels=5)` | Largest price gap between adjacent levels |
-| `SyntheticDepth(levels=5)` | Hypothetical market impact of a given order size |
+### Book — 12 signals
 
-### Market State — `Signal[float]`
+`Signal[float]` — order book shape and imbalance.
 
-High-level regime and meta-market signals.
+| Signal | Parameters | What it measures |
+|--------|-----------|------------------|
+| `DepthImbalance` | `num_levels=5, warmup=10` | Volume-weighted depth imbalance across top N book levels. |
+| `BookPressure` | `num_levels=5, decay=0.5, warmup=10` | Exponentially-weighted depth imbalance, prioritizing near levels. |
+| `CountImbalance` | `num_levels=5, warmup=10` | Order count imbalance across top N book levels. |
+| `TopHeaviness` | `num_levels=5, warmup=10` | Fraction of total book depth concentrated at L1. |
+| `SpreadBps` | `warmup=10` | Bid-ask spread in basis points. |
+| `BookSlope` | `num_levels=5, warmup=10` | OLS regression slope of cumulative depth vs price distance from mid. |
+| `LevelConcentration` | `num_levels=5, warmup=10` | Herfindahl index of depth distribution across book levels. |
+| `DepthRatio` | `num_levels=5, warmup=10` | Ratio of L1 depth to deeper levels, averaged across both sides. |
+| `QueueImbalanceDelta` | `num_levels=5, diff_ticks=10, warmup=20` | Rate of change of depth imbalance over a fixed tick window. |
+| `BookEntropy` | `num_levels=5, warmup=10` | Shannon entropy of the depth distribution across book levels. |
+| `GapRisk` | `num_levels=5, warmup=10` | Weighted price gaps between consecutive book levels. |
+| `SyntheticDepth` | `bps_radius=10.0, warmup=10` | Cumulative depth available within a fixed bps radius of mid. |
 
-| Signal | What it measures |
-|--------|-----------------|
-| `LiquidityScore(window=20)` | Composite liquidity score (depth × tightness) |
-| `ActivityRegime(window=50)` | Discrete activity level: 0=quiet, 1=normal, 2=active |
-| `TickDirection(window=10)` | Recent tick direction: +1 up, -1 down, 0 mixed |
-| `ExchangeLatency(window=20)` | Estimated exchange processing latency from timestamp gaps |
-| `SequenceGap(window=20)` | Missing sequence numbers (connectivity issues) |
+### Market State — 5 signals
+
+`Signal[float]` — regime and meta-market signals.
+
+| Signal | Parameters | What it measures |
+|--------|-----------|------------------|
+| `LiquidityScore` | `num_levels=5, alpha=0.99, warmup=100` | Current book depth normalized by its EWMA. |
+| `ActivityRegime` | `fast_horizon_ns=1000000000, slow_horizon_ns=60000000000, warmup_trades=50` | Ratio of fast trade intensity to slow trade intensity. |
+| `TickDirection` | `horizon=50, warmup=50` | Normalized rolling count of up-ticks minus down-ticks. |
+| `ExchangeLatency` | `alpha=0.99, warmup=100` | EWMA of feed latency (timestamp_recv - timestamp_event), in nanoseconds. |
+| `SequenceGap` | `horizon=100, warmup=100` | Rolling rate of detected sequence number gaps per tick. |
+
+### Operations — 18 operators
+
+Every operator wraps a signal and **preserves its type**, so an operator applied to a fair-value signal is still int-valued. Note the spelling `Zscore`, not `ZScore`.
+
+| Operator | Parameters | What it does |
+|----------|-----------|--------------|
+| `Negate` | `_cls=<class 'abc.NegateOperation'>` | — |
+| `Abs` | `_cls=<class 'abc.AbsOperation'>` | — |
+| `Log` | `_cls=<class 'abc.LogOperation'>` | — |
+| `EWMA` | `alpha=0.95, warmup=1` | Apply EWMA smoothing to any signal, preserving its type. |
+| `Kalman` | `Q=0.0001, R=0.01, adaptive_alpha=None, r_floor=1e-10, warmup=1` | Apply Kalman filtering to any signal, preserving its type. |
+| `Std` | `horizon=100` | Apply rolling std to any signal, preserving its type. |
+| `PctChange` | `warmup=2` | Apply percent change to any signal, preserving its type. |
+| `Skew` | `horizon=100` | Apply rolling skewness to any signal, preserving its type. |
+| `Autocorrelation` | `horizon=100` | Apply rolling lag-1 autocorrelation to any signal, preserving its type. |
+| `Weight` | `s, weights` | Weighted combination of signals. All signals must be the same type. |
+| `Lag` | `n=1` | Apply n-tick lag to any signal, preserving its type. |
+| `Diff` | `n=1` | Apply first difference to any signal, preserving its type. |
+| `Zscore` | `horizon=100` | Apply rolling z-score normalization to any signal, preserving its type. |
+| `RollingSum` | `horizon=100` | Apply rolling sum to any signal, preserving its type. |
+| `RollingMax` | `horizon=100` | Apply rolling max to any signal, preserving its type. |
+| `RollingMin` | `horizon=100` | Apply rolling min to any signal, preserving its type. |
+| `Rank` | `horizon=100` | Apply rolling percentile rank to any signal, preserving its type. |
+| `Clip` | `lo, hi` | Clamp any signal's output to [lo, hi], preserving its type. |
+
+Each operator also has a lower-level `<Name>Operation` form (`ZscoreOperation`, `LagOperation`, ...) that you attach with `apply(op, signal)` when you want to build the operation once and reuse it.
+
+Plus `PerAsset` to filter a signal to one listing, the `Weighted*` combiners (`WeightedFairValue`, `WeightedVolatility`, `WeightedFlow`, `WeightedBook`, `WeightedMarketState`) for weighted blends of same-type signals, and `is_trade_event(data)` to test whether a tick was a trade.
+
+<!-- END GENERATED SIGNAL CATALOG -->
 
 ---
 
 ## Using Signals
 
-All signals share the same interface:
+All signals share the same interface. Constructor parameters vary per signal — check the catalog
+above rather than assuming a `window=` argument; most use `horizon`, `horizon_ns`, `num_levels`, or
+`warmup_trades`.
 
 ```python
-from gnomepy_research.signals import MicropriceFairValue, TradeImbalance, EWMA
+from gnomepy_research.signals import EWMA, MicropriceFairValue, TradeImbalance
 
 class MyStrategy(Strategy):
     def __init__(self):
         self._fair_value = MicropriceFairValue()
-        self._flow = EWMA(TradeImbalance(window=30), alpha=0.95, warmup=30)
+        self._flow = EWMA(TradeImbalance(horizon_ns=1_000_000_000), alpha=0.95, warmup=30)
 
     def on_market_data(self, data: Schema) -> list[Intent]:
         self._fair_value.update(data.event_timestamp, data)
@@ -148,7 +204,7 @@ class MyStrategy(Strategy):
             return []
 
         fv = self._fair_value.value()   # scaled int (same units as prices)
-        flow = self._flow.value()       # float in [-1, 1]
+        flow = self._flow.value()       # float
         ...
 ```
 
@@ -162,41 +218,52 @@ Key rules:
 
 ## Composing Signals
 
-Signals support arithmetic operators. The result is always a `float`-valued composite signal:
+Signals implement `+`, `-`, `*`, `/` and unary `-`, so they compose directly:
 
 ```python
-from gnomepy_research.signals import MicropriceFairValue, MidFairValue, DepthImbalance, EWMA, Weight
+from gnomepy_research.signals import (
+    DepthImbalance, EWMA, MicropriceFairValue, MidFairValue, TradeImbalance, WeightedFlow, Zscore,
+)
 
 # Arithmetic composition — runs both signals, combines their values
 spread_signal = MicropriceFairValue() - MidFairValue()   # signed difference
 
 # Scale by a constant
-skewed_fv = MicropriceFairValue() + 0.5 * DepthImbalance(levels=3)
+skewed_fv = MicropriceFairValue() + 0.5 * DepthImbalance(num_levels=3)
 
-# EWMA smoothing — wraps any signal
-smooth_flow = EWMA(TradeImbalance(window=20), alpha=0.99, warmup=50)
+# Operators wrap any signal and preserve its type
+smooth_flow = EWMA(TradeImbalance(horizon_ns=1_000_000_000), alpha=0.99, warmup=50)
+normalized  = Zscore(TradeImbalance(), horizon=200)
 
 # Weighted combination of multiple signals (all must be the same type)
-from gnomepy_research.signals import WeightedFlow
 composite_flow = WeightedFlow(
-    [TradeImbalance(window=10), TradeImbalance(window=50)],
+    [TradeImbalance(horizon_ns=500_000_000), TradeImbalance(horizon_ns=5_000_000_000)],
     weights=[0.7, 0.3],
 )
 ```
 
-**Type preservation:** `FairValueSignal op FairValueSignal` → `WeightedFairValue` (still int-typed). Mixing fair value with a float signal (e.g. `MicropriceFairValue() + DepthImbalance()`) produces a float composite — divide by `Scales.PRICE` before comparing to spread or flow signals.
+**Type preservation:** an operator applied to a `FairValueSignal` stays int-typed. Mixing a fair
+value with a float signal produces a float composite — divide by `Scales.PRICE` before comparing it
+to spread or flow signals.
 
-**`PerAsset`** — wraps any single-asset signal to maintain per-listing state in multi-exchange strategies:
+**`PerAsset`** is a function, not a wrapper class, and it takes a signal **instance** plus the
+listing to filter to. It forwards only matching ticks to the wrapped signal, which is how you build
+cross-asset signals — give each listing its own instance and combine them:
+
 ```python
-from gnomepy_research.signals import PerAsset, MicropriceFairValue
+from gnomepy_research.signals import MicropriceFairValue, PerAsset
 
-self._fv = PerAsset(MicropriceFairValue)   # creates one instance per listing seen
+btc_micro = PerAsset(MicropriceFairValue(), security_id=1)
+eth_micro = PerAsset(MicropriceFairValue(), security_id=2)
+spread = btc_micro - eth_micro
 
-# In on_market_data:
-listing_key = (data.exchange_id, data.security_id)
-self._fv.update(listing_key, data.event_timestamp, data)
-fv = self._fv.value(listing_key)
+# In on_market_data — feed every tick to each; PerAsset discards the ones it does not own
+spread.update(data.event_timestamp, data)
+if spread.is_ready():
+    value = spread.value()
 ```
+
+Pass `exchange_id=` as well when the same `security_id` trades on more than one venue.
 
 ---
 
@@ -212,19 +279,19 @@ return [
     Intent(
         exchange_id=data.exchange_id,
         security_id=data.security_id,
-        quote_bid_price=bid_price,          # scaled int
-        quote_bid_size=100_000,
-        quote_ask_price=ask_price,          # scaled int
-        quote_ask_size=100_000,
+        bid_price=bid_price,          # scaled int
+        bid_size=100_000,
+        ask_price=ask_price,          # scaled int
+        ask_size=100_000,
     )
 ]
 
-# Aggressive (taker) order
+# Aggressive (taker) order — BID buys, ASK sells
 return [
     Intent(
         exchange_id=data.exchange_id,
         security_id=data.security_id,
-        take_side=Side.ASK,                 # ASK = buy at ask price
+        take_side=Side.BID,                 # BID = buy
         take_size=100_000,
         take_order_type=OrderType.MARKET,
     )
@@ -233,6 +300,14 @@ return [
 # Cancel all orders on a listing (return empty intent for it)
 return []
 ```
+
+**Side is named for the side you are creating, not the side you are hitting.** `Side.BID` buys and
+`Side.ASK` sells, for both quotes and takes. To close a long position you take `Side.ASK`. Getting
+this backwards is the single easiest way to build a strategy that loses money on a real signal — see
+`gnomepy_research/strategies/momentum.py:97-121` for the canonical usage.
+
+Setting a size to `0` cancels that side; `Intent(exchange_id, security_id)` with no price or size
+fields cancels everything on the listing.
 
 **Return `[]` from `on_execution_report`** unless you need to react to a fill. Common reactive use case: after a fill on one leg of an arb, immediately submit the hedge on the other leg. Most strategies don't need this.
 
@@ -269,7 +344,7 @@ class SimpleMarketMaker(Strategy):
         self.gamma = gamma
         self.max_position = max_position
         self._fv = MicropriceFairValue()
-        self._vol = EWMA(SpreadVolatility(window=20), alpha=0.95, warmup=20)
+        self._vol = EWMA(SpreadVolatility(warmup_ticks=50), alpha=0.95, warmup=20)
 
     def on_market_data(self, data: Schema) -> list[Intent]:
         self._fv.update(data.event_timestamp, data)
@@ -290,10 +365,10 @@ class SimpleMarketMaker(Strategy):
         return [Intent(
             exchange_id=data.exchange_id,
             security_id=data.security_id,
-            quote_bid_price=fv - half_spread,
-            quote_bid_size=self.size,
-            quote_ask_price=fv + half_spread,
-            quote_ask_size=self.size,
+            bid_price=fv - half_spread,
+            bid_size=self.size,
+            ask_price=fv + half_spread,
+            ask_size=self.size,
         )]
 
     def on_execution_report(self, report):
@@ -310,10 +385,10 @@ from gnomepy.java.schemas import Schema
 from gnomepy_research.signals import EWMA, TradeImbalance
 
 class MomentumStrategy(Strategy):
-    def __init__(self, threshold: float = 0.3, size: int = 100_000, window: int = 30):
+    def __init__(self, threshold: float = 0.3, size: int = 100_000, horizon_ns: int = 1_000_000_000):
         self.threshold = threshold
         self.size = size
-        self._signal = EWMA(TradeImbalance(window=window), alpha=0.95)
+        self._signal = EWMA(TradeImbalance(horizon_ns=horizon_ns), alpha=0.95)
 
     def on_market_data(self, data: Schema) -> list[Intent]:
         self._signal.update(data.event_timestamp, data)
@@ -325,7 +400,7 @@ class MomentumStrategy(Strategy):
             return [Intent(
                 exchange_id=data.exchange_id,
                 security_id=data.security_id,
-                take_side=Side.ASK,
+                take_side=Side.BID,
                 take_size=self.size,
                 take_order_type=OrderType.MARKET,
             )]
@@ -333,7 +408,7 @@ class MomentumStrategy(Strategy):
             return [Intent(
                 exchange_id=data.exchange_id,
                 security_id=data.security_id,
-                take_side=Side.BID,
+                take_side=Side.ASK,
                 take_size=self.size,
                 take_order_type=OrderType.MARKET,
             )]
@@ -405,7 +480,7 @@ These apply to every `strategy.py`:
 
 **Zero fills:** Check that bid/ask prices are valid (`bid > 0 and ask > 0`) before computing fair value. An invalid spread (bid >= ask) causes the queue model to reject the order.
 
-**Position never closes:** If using aggressive close orders, verify the side is correct — to close a long position, take at the **ask** (sell), not bid. `Side.ASK` = sell at ask in the engine's convention.
+**Position never closes:** If using aggressive close orders, verify the side is correct — to close a long position, take `Side.ASK` (sell). `Side.BID` buys and `Side.ASK` sells.
 
 **Strategy not found by backtest runner:** Ensure `__init__.py` exists in `gnomepy_research/sessions/<name>/` and the `class_name` in the config exactly matches `gnomepy_research.sessions.<name>.strategy:ClassName`.
 

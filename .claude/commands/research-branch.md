@@ -155,5 +155,5 @@ claude
 
 - The parent session continues running on its own branch — this branch is fully independent
 - Use `/research-status` to monitor all branches and their metrics at a glance
-- Use `/research-hint <parent>__<suffix>` to steer the branch's autonomous loop
+- Steer a branch by typing a directive into the Claude session running its loop, in that worktree's terminal
 - Each branch has its own iteration history in the API, tagged with `parent:<parent>` for grouping

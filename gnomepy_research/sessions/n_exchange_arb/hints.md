@@ -1,1 +1,0 @@
-[2026-05-13T00:00:00] Can we use a more statistical approach to this pair trading? Rather than just using raw bps, experiment with cointegrated pairs or other statistical methods to identify and trade the spread.

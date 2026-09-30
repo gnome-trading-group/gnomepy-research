@@ -1,7 +1,11 @@
 """Walk-forward validation for backtesting.
 
-Divides a total date range into n_folds non-overlapping test windows and
-runs the best strategy on each, reporting per-fold and aggregate OOS metrics.
+Divides a total date range into n_folds evaluation windows and runs the best
+strategy on each, reporting per-fold and aggregate OOS metrics.
+
+No refitting happens between folds — the strategy's parameters are fixed from the
+session's best iteration — so these are evaluation windows, not train/test splits.
+``step_mode`` selects how the windows are laid out; see ``_generate_fold_windows``.
 """
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ class WalkForwardConfig:
     total_start: datetime
     total_end: datetime
     n_folds: int = 5
-    step_mode: str = "expanding"
+    step_mode: str = "rolling"
 
 
 @dataclass
@@ -81,11 +85,32 @@ class WalkForwardResult:
         }
 
 
+STEP_MODES = ("expanding", "rolling")
+
+
 def _generate_fold_windows(cfg: WalkForwardConfig) -> list[tuple[datetime, datetime]]:
-    total = cfg.total_end - cfg.total_start
-    fold_duration = total / cfg.n_folds
+    """Lay out each fold's evaluation window.
+
+    ``rolling`` gives n_folds equal, disjoint windows marching forward, so each fold
+    scores a distinct stretch of the range. ``expanding`` anchors every window at
+    ``total_start`` and grows it, so fold N scores everything seen up to that point and
+    the last fold covers the whole range.
+    """
+    if cfg.step_mode not in STEP_MODES:
+        raise ValueError(f"step_mode must be one of {STEP_MODES}, got {cfg.step_mode!r}")
+    if cfg.n_folds < 1:
+        raise ValueError(f"n_folds must be >= 1, got {cfg.n_folds}")
+    if cfg.total_end <= cfg.total_start:
+        raise ValueError("total_end must be after total_start")
+
+    step = (cfg.total_end - cfg.total_start) / cfg.n_folds
+    if cfg.step_mode == "expanding":
+        return [
+            (cfg.total_start, cfg.total_start + (i + 1) * step)
+            for i in range(cfg.n_folds)
+        ]
     return [
-        (cfg.total_start + i * fold_duration, cfg.total_start + (i + 1) * fold_duration)
+        (cfg.total_start + i * step, cfg.total_start + (i + 1) * step)
         for i in range(cfg.n_folds)
     ]
 

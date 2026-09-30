@@ -10,14 +10,53 @@ Every iteration produces a `summary.json` with the core metrics. The research lo
 
 | Metric | What it measures | When to worry |
 |--------|-----------------|---------------|
-| `sharpe` | Risk-adjusted return (annualized) | < 0 means losing money on average |
-| `sortino` | Like Sharpe but only penalizes downside vol | Low Sortino relative to Sharpe → big losing streaks |
+| `sharpe` | **Per-bar** Sharpe at 10s bars — see the warning below | < 0 means losing money on average |
+| `sortino` | Like Sharpe but only penalizes downside vol; same per-bar scale | Low Sortino relative to Sharpe → big losing streaks |
 | `final_pnl` | Total PnL in the backtest window | Positive but near zero → fees eating the edge |
 | `fill_count` | Number of fills | < 20: Sharpe is statistically meaningless |
 | `pct_positive_buckets` | Fraction of time windows with positive PnL | < 0.5 → not consistent |
 | `total_fees` | Total fees paid | If fees > gross PnL → strategy has no edge before fees |
 
-**Sharpe thresholds at bar level:** At 10-second bars, the minimum backtest length (at 95% confidence) for a bar-level Sharpe of 0.5 is roughly 80 observations. A 30-minute session has ~180 bars — barely enough to trust a moderate signal. This is why we use a short dev range for fast iteration but validate on longer windows before declaring success.
+### `sharpe` is per-bar, not annualized — set targets accordingly
+
+`summary.json`'s `sharpe` is the raw per-bar ratio `mean(bar_pnl) / std(bar_pnl)` at 10s bars.
+`gnomepy.reporting.metrics.compute_sharpe` defaults to `annualize=False` and `BacktestReport.sharpe`
+never overrides it.
+
+At 10s bars there are 3,153,600 bars per year, so the annualized equivalent is the per-bar figure
+times √3,153,600 ≈ **1776**:
+
+| Per-bar `sharpe` | ≈ Annualized |
+|---|---|
+| 0.00056 | 1.0 |
+| 0.00113 | 2.0 |
+| 0.00169 | 3.0 |
+| 0.0100 | 17.8 |
+| 0.1000 | 178 |
+
+**Set `goals.targets.sharpe` in per-bar units.** A target of `sharpe > 1.0` is asking for an
+annualized Sharpe of 1776 and can never be met. Every research session run before 2026-09-30 carried
+targets in the range 0.1–1.0 and was therefore marked `stalled` regardless of how it performed — see
+the contamination note at the top of `gnomepy_research/research_learnings.md`. Reasonable per-bar
+targets are **0.001 to 0.003**; anything above
+0.01 on a short window is far more likely to be noise than edge.
+
+**Minimum backtest length:** don't guess it — the library computes it.
+
+```python
+from gnomepy_research.validation.statistics import minimum_backtest_length
+
+minimum_backtest_length(0.002)   # per-bar Sharpe 0.002 -> ~676,000 bars
+minimum_backtest_length(0.05)    # per-bar Sharpe 0.05  -> ~1,085 bars
+```
+
+A 30-minute session is only ~180 bars, which is why a short dev range is for fast iteration and not
+for declaring success. Validate on longer windows before you believe a number.
+
+Note the consequence: a genuinely good strategy at per-bar 0.002 needs roughly 676,000 bars — about
+78 days of continuous data — before the number is significant on its own. On a session-length window
+the DSR gate will essentially never pass, and that is expected rather than a failure of the strategy.
+Treat significance as informational on short ranges and lean on walk-forward consistency instead.
 
 **Statistical significance** is checked automatically once all thresholds pass. The two key numbers:
 
@@ -97,26 +136,22 @@ The `next_action` field in each iteration record tells the next iteration what t
 
 ---
 
-## Injecting Hints
+## Steering a Running Loop
 
-When the loop is running autonomously and you want to steer it without stopping:
-```
-/research-hint <session_name>
-```
+When the loop is running autonomously and you want to redirect it, type the directive into the
+Claude session running the loop. It is picked up at the next iteration's hypothesis step and takes
+priority over the `next_action` recorded by the previous iteration.
 
-This appends a timestamped directive to `hints.md`:
-```
-[2026-07-10T15:00:00] Try increasing ewma_alpha to 0.995 — the current warmup is too short for the session open noise
-```
+For a branched session, that means the terminal attached to *that branch's worktree* — each branch
+runs its own loop in its own working directory.
 
-On the next iteration, the loop reads `hints.md` first. Hints take priority over the `next_action` from the previous iteration. After consuming them, `hints.md` is cleared.
-
-You can queue multiple hints before the next iteration runs — they are all consumed together.
-
-**When to use hints vs letting the loop run:**
-- Use hints when you notice something in the parquet data that the loop can't see (e.g. a specific market event causing fills to cluster)
-- Use hints when the loop has been doing minor parameter tweaks for 3+ iterations and needs a structural push
+**When to steer vs letting the loop run:**
+- Steer when you notice something in the parquet data that the loop can't see (e.g. a specific market event causing fills to cluster)
+- Steer when the loop has been doing minor parameter tweaks for 3+ iterations and needs a structural push
 - Let the loop run when the hypothesis is plausible and the metric is improving
+
+Anything worth remembering beyond this session belongs in a note
+(`poetry run research notes add <session> "..."`), not in a passing instruction.
 
 ---
 
@@ -212,34 +247,67 @@ Once all targets are met, run `/research-validate <session_name>`:
 
 This runs a walk-forward out-of-sample test on a date range that was **never touched during iteration**. The loop is forbidden from running backtests on the holdout range during research — once you've seen it, it's contaminated.
 
-**Walk-forward with 5 expanding folds** (the default):
-- Fold 1: OOS on weeks 1-1
-- Fold 2: OOS on weeks 1-2
-- Fold 3: OOS on weeks 1-3
-- ...
+**No refitting happens between folds** — the strategy's parameters are fixed from the best
+iteration — so these are evaluation windows, not train/test splits.
+
+**`--mode rolling` (the default)** — 5 equal, disjoint windows marching forward, each scoring a
+distinct stretch:
+- Fold 1: weeks 1–2 · Fold 2: weeks 2–3 · Fold 3: weeks 3–4 · ...
+
+**`--mode expanding`** — every window starts at the range start and grows, so the last covers
+everything:
+- Fold 1: weeks 1–2 · Fold 2: weeks 1–3 · Fold 3: weeks 1–4 · ...
+
+Use `rolling` to see whether the edge holds in each period independently; `expanding` to watch a
+cumulative estimate settle. `% positive folds` is only meaningful for `rolling`, since expanding
+windows overlap.
 
 **Interpreting the verdict:**
 - **PASS**: mean OOS Sharpe > 0, ≥ 60% of folds profitable, holdout consistent with OOS
 - **FAIL**: the strategy is overfit to the dev range. Not necessarily a bad idea — may be worth starting fresh on a new date range
 
-**Minimum Backtest Length** — a useful sanity check before validating. For a bar-level Sharpe of `SR`, the minimum number of bars for 95% confidence is approximately:
-```
-T_min = (1 + SR² / 2) / (SR / 1.645)²
-```
-For SR = 0.5: ~87 bars (14 minutes at 10s bars). For SR = 0.1: ~2185 bars (6 hours). Low Sharpe strategies need very long windows to validate reliably.
+**Minimum Backtest Length** — a useful sanity check before validating. Call the library rather than
+working it out by hand:
 
-**Deflated Sharpe Ratio** — the DSR adjusts for the number of iterations tried. After 20 iterations with 100 strategy variants each, the expected maximum Sharpe under the null hypothesis is around 2.5. A strategy showing Sharpe = 2.0 after 20 iterations likely reflects lucky parameter fitting, not genuine skill. The loop prints DSR alongside each iteration's metrics once thresholds are met.
+```python
+from gnomepy_research.validation.statistics import minimum_backtest_length
+
+minimum_backtest_length(0.5)    # 14 bars
+minimum_backtest_length(0.1)    # 273 bars
+minimum_backtest_length(0.002)  # 676,389 bars
+```
+
+Remember these are **per-bar** Sharpe inputs (see "Evaluating Results" above). Low per-bar Sharpe
+strategies — which is all of the realistic ones — need very long windows to validate reliably.
+
+**Deflated Sharpe Ratio** — the DSR adjusts for the number of iterations tried. The expected maximum
+Sharpe under the null grows with the trial count, and the library computes it:
+
+```python
+from gnomepy_research.validation.statistics import expected_max_sharpe
+
+expected_max_sharpe(20)     # 20 iterations
+expected_max_sharpe(2_000)  # 20 iterations x 100 sweep jobs
+```
+
+If you have run many trials, a Sharpe that merely beats zero is not evidence of skill — it has to
+clear the multiple-testing hurdle. The loop prints DSR alongside each iteration's metrics once
+thresholds are met.
 
 ---
 
 ## Cross-Session Comparison
 
-Once you have multiple sessions with good results, open `notebooks/03_cross_session_comparison.ipynb`:
+Once you have multiple sessions with good results, use `gnomepy_research.analysis.portfolio`
+(or open `notebooks/03_cross_session_comparison.ipynb`, which wraps it):
 
 1. **Summary table** — side-by-side Sharpe, PnL, fill count across sessions
 2. **PnL overlay** — normalized curves on the same axes to spot correlation
 3. **Correlation matrix** — low correlation between strategies is valuable (diversification)
-4. **Combined Sharpe** — if two strategies are 0.3 correlated with individual Sharpe 1.5, the combined Sharpe at equal weight is approximately `1.5 × √2 × 1/√(1 + 0.3) ≈ 1.86`
+4. **Combined Sharpe** — `analysis.portfolio.combined_sharpe(pnl_curves, weights)` computes it from the
+   actual curves. For intuition: two strategies at 0.3 correlation with individual Sharpe `s` combine at
+   equal weight to `s × √(2 / 1.3) ≈ 1.24 × s`, so 1.5 becomes about 1.86. Correlation is
+   `analysis.portfolio.compute_cross_strategy_correlation(results_dirs)`
 5. **Per-regime PnL** — does strategy A perform where strategy B doesn't?
 
 ---
@@ -253,10 +321,10 @@ Once you have multiple sessions with good results, open `notebooks/03_cross_sess
 
 **Stop and restart fresh** when:
 - Walk-forward FAIL — the strategy memorized the dev range
-- 20 iterations in, primary metric hasn't improved past 0.5 Sharpe — the signal hypothesis is wrong
+- 20 iterations in, per-bar Sharpe still under ~0.0005 (≈ 1.0 annualized) — the signal hypothesis is wrong
 - DSR < 0.5 despite a superficially good Sharpe — you've exhausted your trial budget
 
-**Don't stop just because results look noisy.** A Sharpe of 0.8 on 30 minutes of data with 40 fills is consistent with a true Sharpe of 1.5 — the window is too short to be sure. Add more date ranges to `spec.yaml` for validation, but don't interpret noise as evidence the strategy doesn't work.
+**Don't stop just because results look noisy.** A per-bar Sharpe of 0.002 on 30 minutes of data with 40 fills is consistent with a true value well above or well below that — the window is far too short to be sure (`minimum_backtest_length(0.002)` is ~676,000 bars). Add more date ranges to `spec.yaml` for validation, but don't interpret noise as evidence the strategy doesn't work.
 
 ---
 

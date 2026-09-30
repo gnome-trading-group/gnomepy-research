@@ -196,23 +196,34 @@ class ArtifactStore:
             session_name=session_name,
         )
 
+    def pinned(self, artifact_type: str, name: str, version: int) -> ArtifactRef:
+        """Return the ArtifactRef for one specific version of an artifact."""
+        for candidate in self.list(artifact_type=artifact_type, name=name):
+            if candidate.version == version:
+                return candidate
+        raise KeyError(f"no artifact found: {artifact_type}/{name}:{version}")
+
     def resolve(self, ref: str | ArtifactRef) -> str:
         """Resolve an artifact reference to a local cached file path, downloading if needed."""
         if isinstance(ref, str):
             if ref.startswith("artifact://"):
-                parsed = ArtifactRef.parse(ref)
-                if parsed.version == 0:
-                    parsed = self.latest(parsed.artifact_type, parsed.name)
-                ref = parsed
+                ref = ArtifactRef.parse(ref)
             elif ref.startswith("s3://"):
                 return self._download_s3(ref)
             else:
                 return ref
 
+        if ref.version == 0:
+            ref = self.latest(ref.artifact_type, ref.name)
+
         cache_dir = self._cache_dir(ref.artifact_type, ref.name, ref.version)
         existing = list(cache_dir.glob("artifact.*")) + list(cache_dir.glob("artifact"))
         if existing:
             return str(existing[0])
+
+        # ArtifactRef.parse cannot know the S3 location, so a pinned URI arrives without one.
+        if not ref.s3_uri:
+            ref = self.pinned(ref.artifact_type, ref.name, ref.version)
 
         cache_dir.mkdir(parents=True, exist_ok=True)
         fs, fs_path = resolve_fs(ref.s3_uri)

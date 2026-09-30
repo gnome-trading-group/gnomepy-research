@@ -10,10 +10,14 @@ If `$ARGUMENTS` is provided, also show the last 3 iterations for that specific s
 
 ### 1. Fetch all sessions
 ```bash
-poetry run research sessions list --limit 50
+poetry run research sessions list --limit 50 --json
 ```
 
-Parse the JSON output. Each session has: `sessionName`, `status`, `iterationCount`, `bestPnl`, `bestSharpe`, `tags`, `updatedAt`.
+`--json` is required — without it the command prints a table with no `tags` column, and the
+branch grouping below is impossible.
+
+Parse the JSON. Fields are **snake_case**: `session_name`, `status`, `iteration_count`, `best_pnl`,
+`best_sharpe`, `best_iteration`, `tags`, `updated_at`.
 
 ### 2. Group sessions by parent/branch relationship
 Sessions with a tag matching `parent:<name>` are branches of `<name>`. Build a tree:
@@ -41,13 +45,14 @@ prediction_market_mm     [paused]     iter  0   sharpe:    n/a   pnl:  n/a
 stablecoin_stat_arb      [stalled]    iter 22   sharpe: 0.3000   pnl: $0.80
 ```
 
-Branches with `bestSharpe` or `bestPnl` of null/zero show `n/a`.
+Branches with `best_sharpe` or `best_pnl` of null show `n/a`.
 
 ### 4. If $ARGUMENTS is provided — show iteration detail
-Fetch the specific session:
 ```bash
-poetry run research sessions get $ARGUMENTS
+poetry run research iterations list $ARGUMENTS --limit 3
 ```
+That prints iteration number, type, accept/reject, thresholds, PnL, Sharpe, fills and title directly.
+For the full records (hypothesis, analysis, metadata), use `poetry run research sessions get $ARGUMENTS`.
 
 Display the last 3 iterations with title, metrics, and whether thresholds were met:
 
@@ -66,3 +71,6 @@ Iter 18 │ [thresholds: PASS] sharpe=0.31   pnl=$1.02   fills=28
 End with a one-line summary:
 - Total sessions: X running, Y completed, Z stalled
 - Best performer: `<session_name>` with Sharpe <value> / PnL $<value>
+
+Note `sharpe` is a **per-bar** ratio at 10s bars, not annualized — multiply by ~1776 for the
+annualized figure. See `tutorials/02_research_workflow.md`.
