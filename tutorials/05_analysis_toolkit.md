@@ -116,7 +116,7 @@ generate_latency_sweep_config(base, "configs/sens_latency.yaml", profile_names=[
 generate_queue_sweep_config(base, "configs/sens_queue.yaml", profile_names=["kalshi"])
 
 # Path-luck check that needs no engine re-run:
-summarize_mc_paths(bootstrap_pnl_paths(report.fills_df(), report.market_records_df()))
+summarize_mc_paths(bootstrap_pnl_paths(report.fills, report.market_df))
 ```
 
 ---
@@ -130,8 +130,14 @@ from gnomepy_research.analysis.signal_attribution import (
 
 # Attribute realized PnL to signal values at fill time. Requires the strategy to log those
 # signals via register_metrics (see tutorials/03_strategy_building.md).
-attribute_pnl_by_signal(report.fills_df(), report.custom_metrics("diagnostics"),
-                        signal_columns=["z_score", "depth_imb"])
+#
+# The buffer name is whatever the strategy passed to self.metrics.create_buffer(...) —
+# cross_prediction_arb registers "cpa_signals". Call custom_metrics() with no argument
+# to see which buffers a run actually has.
+report.custom_metrics()                      # -> {"cpa_signals": DataFrame, ...}
+signals = report.custom_metrics("cpa_signals")
+
+attribute_pnl_by_signal(report.fills, signals, signal_columns=["edge", "qty"])
 
 # Turn each signal off in turn and compare.
 configs = generate_ablation_configs(base_config_path, {"use_flow_signal": False,

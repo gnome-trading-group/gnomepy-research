@@ -348,11 +348,11 @@ report = load_results("gnomepy_research/sessions/$ARGUMENTS/results/iter_NNN")
 print(json.dumps(compute_mm_stats(report), indent=2, default=str))
 
 # All strategy types
-adverse = compute_adverse_selection(report.fills_df(), report.market_records_df())
+adverse = compute_adverse_selection(report.fills, report.market_df)
 print(adverse)
 print(compute_rolling_sharpe(report.pnl_curve).describe())
 print(compute_alpha_decay(report.pnl_curve).describe())
-print(pnl_by_regime(report.pnl_curve, detect_regimes(report.market_records_df())))
+print(pnl_by_regime(report.pnl_curve, detect_regimes(report.market_df)))
 EOF
 ```
 
@@ -481,7 +481,7 @@ Run each generated config the same way as any other local run, with its own `--o
 Optionally, bootstrap the PnL path to see how much of the result is path luck:
 ```python
 from gnomepy_research.validation.monte_carlo import bootstrap_pnl_paths, summarize_mc_paths
-summarize_mc_paths(bootstrap_pnl_paths(report.fills_df(), report.market_records_df()))
+summarize_mc_paths(bootstrap_pnl_paths(report.fills, report.market_df))
 ```
 
 Record sensitivity results under a `"sensitivity"` key in the iteration's `results` block:

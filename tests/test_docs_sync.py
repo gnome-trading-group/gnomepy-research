@@ -20,6 +20,12 @@ REPO = Path(__file__).resolve().parents[1]
 TUTORIAL = REPO / "tutorials" / "03_strategy_building.md"
 GENERATOR = REPO / "scripts" / "gen_signal_catalog.py"
 
+# Docs that drive the analysis library through a `report` object.
+REPORT_DOCS = [
+    REPO / ".claude" / "commands" / "research.md",
+    REPO / "tutorials" / "05_analysis_toolkit.md",
+]
+
 
 @pytest.fixture(scope="module")
 def tutorial() -> str:
@@ -99,3 +105,54 @@ def test_side_convention_is_stated_correctly(tutorial: str):
     """Side.BID buys and Side.ASK sells; the tutorial once said the opposite."""
     assert "`Side.BID` buys and `Side.ASK` sells" in tutorial
     assert "ASK = buy" not in tutorial
+
+
+def _embedded_python(text: str) -> list[str]:
+    """Python from ```python fences AND from heredocs inside ```bash fences.
+
+    research.md runs most of its Python as `poetry run python3 - <<'EOF' ... EOF`
+    inside a bash fence, so a python-fence-only scan misses the Step 5 diagnostics
+    entirely — which is how the broken accessor survived the first version of this test.
+    """
+    blocks = list(_python_blocks(text))
+    for bash in re.findall(r"```bash\n(.*?)```", text, re.S):
+        blocks += [body for _, body in re.findall(r"<<'?(\w+)'?\n(.*?)\n\s*\1\b", bash, re.S)]
+    return blocks
+
+
+def _report_attributes(text: str) -> set[str]:
+    """Attributes accessed on a `report` object in any embedded Python."""
+    used: set[str] = set()
+    for block in _embedded_python(text):
+        used |= set(re.findall(r"\breport\.(\w+)", block))
+    return used
+
+
+@pytest.mark.parametrize("doc", REPORT_DOCS, ids=lambda p: p.name)
+def test_documented_report_attributes_exist(doc: Path):
+    """Every `report.X` in the docs must exist on BacktestReport.
+
+    Import-only validation missed this: `report.fills_df()` is a real method — on
+    BacktestResults, not on the BacktestReport that load_results() returns. The
+    docs shipped broken because every *symbol* resolved.
+    """
+    from gnomepy.reporting.report import BacktestReport
+
+    used = _report_attributes(doc.read_text())
+    assert used, f"no report.* usage found in {doc.name} — did the docs change shape?"
+    missing = sorted(a for a in used if not hasattr(BacktestReport, a))
+    assert not missing, (
+        f"{doc.name} uses BacktestReport attributes that do not exist: {missing}"
+    )
+
+
+def test_docs_do_not_teach_private_attribute_access():
+    """The analysis helpers have public accessors now; docs must not reach past them.
+
+    Matches attribute access specifically — `load_results` / `compare_results` are
+    public function names that happen to contain `_results`.
+    """
+    private = re.compile(r"\breport\._\w+|\.\_(market_df|intent_df|exec_df|results)\b")
+    for doc in REPORT_DOCS:
+        hits = private.findall(doc.read_text())
+        assert not hits, f"{doc.name} reaches into private attributes: {sorted(set(hits))}"

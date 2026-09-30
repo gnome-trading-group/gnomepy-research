@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 def _is_mm_strategy(report: "BacktestReport") -> bool:
     """Check if the strategy quoted passively (has intents with bid/ask sizes)."""
-    intents = report._intent_df
+    intents = report.intent_df
     if intents.empty:
         return False
     return (intents["bid_size"] > 0).any() or (intents["ask_size"] > 0).any()
@@ -24,9 +24,9 @@ def _is_mm_strategy(report: "BacktestReport") -> bool:
 
 def compute_mm_stats(report: "BacktestReport") -> dict:
     """Compute market-making specific scalar metrics."""
-    intents = report._intent_df
+    intents = report.intent_df
     fills = report.fills
-    market = report._market_df
+    market = report.market_df
     position = report.position_curve
 
     if intents.empty:
@@ -220,11 +220,11 @@ def plot_mm_dashboard(
     max_points: int | None = None,
 ) -> go.Figure:
     """Quoted spread over time, position histogram, fill side bar chart."""
-    intents = report._intent_df
+    intents = report.intent_df
     fills = report.fills
     position = report.position_curve
 
-    market = report._market_df
+    market = report.market_df
 
     fig = make_subplots(
         rows=2, cols=2,

@@ -181,7 +181,7 @@ def plot_rolling_performance(
 ) -> go.Figure:
     """Rolling Sharpe + alpha decay + regime breakdown in one figure."""
     pnl = report.pnl_curve
-    mkt = report._market_df
+    mkt = report.market_df
 
     rolling = compute_rolling_sharpe(pnl, window=window, bar=bar)
     decay = compute_alpha_decay(pnl, window=window, bar=bar)

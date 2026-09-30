@@ -29,8 +29,16 @@ def compute_adverse_selection(
     if horizons_ms is None:
         horizons_ms = DEFAULT_HORIZONS_MS
 
-    if fills.empty or market_df.empty or "mid_price" not in market_df.columns:
+    if fills.empty or market_df.empty:
         return pd.DataFrame()
+
+    # Only BacktestReport adds mid_price; passing a raw BacktestResults market frame
+    # used to return an empty result that looked like "no adverse selection".
+    if "mid_price" not in market_df.columns:
+        raise ValueError(
+            "market_df has no 'mid_price' column — pass report.market_df "
+            "(a BacktestReport frame), not BacktestResults.market_records_df()"
+        )
 
     # Build a clean mid series for lookups.
     mid_df = market_df[["mid_price"]].sort_index().copy()
@@ -96,7 +104,7 @@ def plot_adverse_selection(
     if horizons_ms is None:
         horizons_ms = DEFAULT_HORIZONS_MS
 
-    df = compute_adverse_selection(report.fills, report._market_df, horizons_ms)
+    df = compute_adverse_selection(report.fills, report.market_df, horizons_ms)
 
     fig = go.Figure()
 
