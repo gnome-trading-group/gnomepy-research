@@ -234,7 +234,7 @@ class CompositeCost:
 # ---------------------------------------------------------------------------
 
 class PriceModel:
-    def compute_bid(self, listing, best_bid: int, best_ask: int, max_price: int | None = None) -> int:
+    def compute_bid(self, listing, best_bid: int, best_ask: int) -> int:
         raise NotImplementedError
 
     def on_book_update(self, listing: tuple[int, int], book: Book) -> None:
@@ -242,80 +242,20 @@ class PriceModel:
 
 
 class JoinBestBidModel(PriceModel):
-    def compute_bid(self, listing, best_bid, best_ask, max_price=None):
-        price = best_bid
-        if max_price is not None:
-            price = min(price, max_price)
-        return price
+    def compute_bid(self, listing, best_bid, best_ask):
+        return best_bid
 
 
 class AggressiveModel(PriceModel):
-    def __init__(self, improve_bps: float = 50.0, edge_share: float = 0.5):
+    def __init__(self, improve_bps: float = 50.0):
         self._improve_bps = improve_bps
-        self._edge_share = edge_share
 
-    def compute_bid(self, listing, best_bid, best_ask, max_price=None):
+    def compute_bid(self, listing, best_bid, best_ask):
         mid = (best_bid + best_ask) // 2
-        improvement = int(mid * self._improve_bps / 10000)
-        price = best_bid + improvement
-        if max_price is not None:
-            price = min(price, int(max_price * self._edge_share + best_bid * (1.0 - self._edge_share)))
+        price = best_bid + int(mid * self._improve_bps / 10000)
+        # best_ask - 1 is one raw scale unit below the ask and lands off-tick; the
+        # caller quantizes, which floors it back onto the grid.
         return min(price, best_ask - 1)
-
-
-class FillProbTargetModel(PriceModel):
-    def __init__(self, target_fill_prob: float = 0.7, fill_risk_lambda: float = 10.0):
-        self._target = target_fill_prob
-        self._lambda = fill_risk_lambda
-
-    def compute_bid(self, listing, best_bid, best_ask, max_price=None):
-        if self._target >= 1.0:
-            return best_ask - 1
-        mid = (best_bid + best_ask) // 2
-        if mid <= 0:
-            return best_bid
-        target_spread_frac = -math.log(self._target) / self._lambda
-        price = int(best_ask - target_spread_frac * mid)
-        price = max(price, best_bid)
-        price = min(price, best_ask - 1)
-        if max_price is not None:
-            price = min(price, max_price)
-        return price
-
-
-class OptimalEVModel(PriceModel):
-    """Scan bid prices to maximize EV = P_fill * edge - (1-P_fill) * stuck_cost."""
-    def __init__(self, fill_risk_lambda: float = 30.0, unwind_spread_mult: float = 2.0):
-        self._lambda = fill_risk_lambda
-        self._unwind_mult = unwind_spread_mult
-        self._spreads: dict[tuple[int, int], float] = {}
-
-    def on_book_update(self, listing, book: Book) -> None:
-        bid, ask = book.best_bid(), book.best_ask()
-        if bid > 0 and ask > 0:
-            self._spreads[listing] = (ask - bid) / PRICE_SCALE
-
-    def compute_bid(self, listing, best_bid, best_ask, max_price=None):
-        mid = (best_bid + best_ask) // 2
-        if mid <= 0 or best_bid >= best_ask:
-            return best_bid
-        spread = self._spreads.get(listing, (best_ask - best_bid) / PRICE_SCALE)
-        stuck_cost = spread * self._unwind_mult
-        cap = max_price if max_price is not None else best_ask - 1
-        tick = max(PRICE_SCALE // 100, 1)
-        best_ev = float("-inf")
-        best_price = best_bid
-        price = best_bid
-        while price <= min(cap, best_ask - 1):
-            spread_frac = (best_ask - price) / mid
-            p_fill = math.exp(-self._lambda * spread_frac)
-            edge = (cap - price) / PRICE_SCALE if max_price is not None else 0.0
-            ev = p_fill * edge - (1.0 - p_fill) * stuck_cost
-            if ev > best_ev:
-                best_ev = ev
-                best_price = price
-            price += tick
-        return best_price
 
 
 # ---------------------------------------------------------------------------
@@ -345,21 +285,15 @@ class CrossPredictionArb(Strategy):
         # Price model
         price_model: str = "join_best_bid",
         price_improve_bps: float = 50.0,
-        price_edge_share: float = 0.5,
-        target_fill_prob: float = 0.7,
-        optimal_ev_lambda: float = 30.0,
         # Taker labels — legs on these exchanges cross the ask for immediate fills
         taker_labels: list[str] | None = None,
         # Dutch book labels — exchanges where single-exchange pairings are allowed
         dutch_book_labels: list[str] | None = None,
         # Settlement risk (disabled by default — sports resolve before official expiry)
-        gamma_T: float = 0.0,
-        resolution_time_ns: int = 0,
         # Chase: how long to stay in arb-positive zone before entering damage-control
         maker_patience_ns: int = 30_000_000_000,
         enable_chase: bool = False,
         # Diagnostics
-        track_markouts: bool = False,
         debug: bool = False,
     ):
         registry = RegistryClient()
@@ -386,9 +320,6 @@ class CrossPredictionArb(Strategy):
         self._enable_chase = enable_chase
         self._max_staleness_ns = max_staleness_ns
         self._processing_time_ns = processing_time_ns
-        self._gamma_T = gamma_T
-        self._resolution_time_ns = resolution_time_ns
-        self._track_markouts = track_markouts
         self._debug = debug
 
         def resolve(listing_id: int) -> tuple[tuple[int, int], tuple[int, int], int]:
@@ -471,11 +402,7 @@ class CrossPredictionArb(Strategy):
 
         # Price model
         if price_model == "aggressive":
-            self._price_model: PriceModel = AggressiveModel(price_improve_bps, price_edge_share)
-        elif price_model == "fill_prob_target":
-            self._price_model = FillProbTargetModel(target_fill_prob, fill_risk_lambda or 10.0)
-        elif price_model == "optimal_ev":
-            self._price_model = OptimalEVModel(optimal_ev_lambda, unwind_spread_mult)
+            self._price_model: PriceModel = AggressiveModel(price_improve_bps)
         else:
             self._price_model = JoinBestBidModel()
 
@@ -489,9 +416,6 @@ class CrossPredictionArb(Strategy):
         for ps in self._pairing_states:
             for leg in ps.pairing.legs:
                 self._listing_to_ps.setdefault(leg, []).append(ps)
-
-        # Markout tracking
-        self._pending_markouts: list[dict] = []
 
         # Metrics buffer (populated in register_metrics)
         self._metrics_buf = None
@@ -598,8 +522,6 @@ class CrossPredictionArb(Strategy):
                             f"price={price_c:.2f}¢ qty={qty_c:.2f}c "
                             f"pairing={ps.pairing.label} filled_legs={filled_legs}"
                         )
-                    if self._track_markouts:
-                        self._record_markout(listing, report.fill_price, Side.BID, report.timestamp_event)
                     return self._check_fill_transitions(ps, report.timestamp_event)
         elif report.exec_type in (ExecType.REJECT, ExecType.EXPIRE):
             rejected_label = self._exchange_id_to_label.get(listing[0], "")
@@ -787,8 +709,7 @@ class CrossPredictionArb(Strategy):
                 )
                 for i in range(len(legs))
             )
-            settlement_penalty = self._settlement_penalty_per_contract()
-            marginal_edge = 1.0 - total_cost - total_fee - settlement_penalty
+            marginal_edge = 1.0 - total_cost - total_fee
             if marginal_edge <= 0:
                 break
 
@@ -815,37 +736,6 @@ class CrossPredictionArb(Strategy):
                         return total_edge / max(qty, 1), qty
 
         return (total_edge / max(qty, 1), qty) if qty > 0 else (0.0, 0)
-
-    # ------------------------------------------------------------------
-    # Settlement penalty (Feil-Nendel) — disabled when resolution_time_ns=0
-    # ------------------------------------------------------------------
-
-    def _settlement_penalty_per_contract(self) -> float:
-        if self._gamma_T <= 0.0 or self._resolution_time_ns <= 0:
-            return 0.0
-        # Penalty is averaged across legs and applied per contract at scan time
-        # (Full per-fill accounting happens in _on_entering/_on_partial_fill)
-        return 0.0  # simplified: only apply when we have actual positions
-
-    def _settlement_penalty(self, ts: int) -> float:
-        if self._gamma_T <= 0.0 or self._resolution_time_ns <= 0:
-            return 0.0
-        tau = max(0, self._resolution_time_ns - ts) / 1e9
-        if tau <= 0:
-            return float("inf")
-        time_decay = 1.0 / max(tau / 3600.0, 0.01)
-        total = 0.0
-        for ps in self._pairing_states:
-            for leg in ps.legs:
-                q = leg.filled_qty / SIZE_SCALE
-                p = self._books[leg.listing].mid() / PRICE_SCALE
-                p = max(min(p, 0.99), 0.01)
-                total += self._gamma_T * q * q * p * (1.0 - p) * time_decay
-        return total
-
-    # ------------------------------------------------------------------
-    # Budget constraint for maker bids
-    # ------------------------------------------------------------------
 
     def _compute_maker_bid_prices(self, pairing: Pairing, qty: int) -> dict[tuple[int, int], int] | None:
         """Compute entry prices for each leg, respecting the budget constraint.
@@ -1205,10 +1095,6 @@ class CrossPredictionArb(Strategy):
                 if ceiling <= 0 or best_bid <= 0 or best_ask <= 0:
                     continue
 
-                model_price = self._price_model.compute_bid(
-                    lg.listing, best_bid, best_ask, max_price=ceiling
-                )
-
                 if ceiling <= best_bid:
                     # No price at or below the ceiling is even competitive with the
                     # current bid, so there is nothing profitable to chase. The old code
@@ -1223,7 +1109,7 @@ class CrossPredictionArb(Strategy):
                         )
                     continue
                 elif elapsed <= self._maker_patience_ns:
-                    floor = lg.entry_bid if lg.entry_bid > 0 else model_price
+                    floor = lg.entry_bid
                     urgency = elapsed / self._maker_patience_ns if self._maker_patience_ns > 0 else 1.0
                     target_price = floor + int(urgency * (ceiling - floor))
                     phase = 1
@@ -1296,7 +1182,7 @@ class CrossPredictionArb(Strategy):
             if bid_prices is None:
                 if self._debug:
                     labels = [self._exchange_id_to_label.get(lg.listing[0], "?") for lg in unfilled_legs]
-                    print(f"[DEBUG] BUDGET_FAIL pairing={ps.pairing.label} unfilled={labels} any_filled={any_filled} → {'UNWINDING' if any_filled else 'SCANNING'}")
+                    print(f"[DEBUG] BUDGET_FAIL pairing={ps.pairing.label} unfilled={labels} → SCANNING")
                 intents = []
                 for leg in unfilled_legs:
                     intents.append(Intent(exchange_id=leg.listing[0], security_id=leg.listing[1]))
@@ -1450,19 +1336,6 @@ class CrossPredictionArb(Strategy):
 
     # ------------------------------------------------------------------
     # Adverse selection / markout tracking
-    # ------------------------------------------------------------------
-
-    def _record_markout(self, listing: tuple[int, int], fill_price: int, side: Side, ts: int) -> None:
-        self._pending_markouts.append({
-            "listing": listing,
-            "fill_price": fill_price,
-            "side": side,
-            "timestamp": ts,
-            "mid_at_fill": self._books[listing].mid(),
-        })
-
-    # ------------------------------------------------------------------
-    # State reset
     # ------------------------------------------------------------------
 
     def _log_phase(self, ps: PairingState, ts: int, edge: float = 0.0, qty: int = 0) -> None:
