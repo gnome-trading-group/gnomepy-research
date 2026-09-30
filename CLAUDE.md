@@ -9,9 +9,16 @@ poetry run pytest       # run all tests
 
 ## Strategy Research Sessions
 
-Research sessions live in `gnomepy_research/sessions/<name>/`. Start a new session with `/research-new <name>`, then run `/research <name>` (or `/loop /research <name>` for continuous iteration).
+Research sessions live in `gnomepy_research/sessions/<name>/`. A session is just a directory of
+research — the `/research` commands are an **optional** tool for iterating on backtest-parameter
+problems, not a requirement. Plenty of sessions (model training, data pipelines, one-off analysis)
+never use them, and that is fine: no branch, no iteration records, no accept/reject gate needed.
 
-Each session runs on its own git branch `research/<name>`, created automatically on the first iteration.
+To use the loop: `/research-new <name>`, then `/research <name>` (or `/loop /research <name>` for
+continuous iteration).
+
+A session driven by `/research` runs on its own git branch `research/<name>`, created automatically on
+the first iteration. Sessions not driven by it commit wherever you are working.
 
 > **`sharpe` is a per-bar ratio at 10s bars, not annualized** — multiply by ~1776 for the annualized
 > figure. Set `goals.targets.sharpe` in per-bar units (0.002 ≈ 3.6 annualized). Targets written as if
@@ -48,9 +55,9 @@ gnomepy_research/sessions/<name>/
   notes/            # local note files synced from API (poetry run research notes pull <name>)
 ```
 
-**Code scope:** All code changes during a session stay under `sessions/<name>/`. Never modify files in `gnomepy_research/signals/`, `gnomepy_research/strategies/`, or elsewhere in the shared package — those are stable. If a session needs a modified signal or utility, copy it into the session directory and import from there. Promote session-local code to shared locations only after the session completes.
+**Code scope (autonomous iterations only):** during a `/research` iteration, all code changes stay under `sessions/<name>/` — never modify `gnomepy_research/signals/`, `gnomepy_research/strategies/`, or the rest of the shared package. This is a guardrail on the unattended loop, not a rule about sessions generally; working on a session directly, reach for whatever the work needs. If a session needs a modified signal or utility, copy it into the session directory and import from there. Promote session-local code to shared locations only after the session completes.
 
-Session state (iterations, notes, status) is stored in the API — viewable at the Research page in the web UI. **API responses are snake_case** (`session_name`, `iteration_count`, `best_iteration`, `best_pnl`, `best_sharpe`). `research sessions list --json` and `research validate significance --json` emit raw JSON for scripting.
+For loop-driven sessions, state (iterations, notes, status) is stored in the API — viewable at the Research page in the web UI. **API responses are snake_case** (`session_name`, `iteration_count`, `best_iteration`, `best_pnl`, `best_sharpe`). `research sessions list --json` and `research validate significance --json` emit raw JSON for scripting.
 
 **Accept/reject gate:** After each evaluation, `/research` compares the current iteration's primary metric against the best accepted baseline, in the direction given by `spec.goals.direction`. On accept: all session `.py` files (except `__init__.py`) are snapshotted to `best/` and `best_iteration` is set in the API. On reject: session `.py` files are restored from `best/` *before* the commit (new files added in the rejected iteration are removed), so the commit records the reverted state and the tree is left clean. Both outcomes are recorded in iteration metadata (`accepted: true/false`, `returned_to: N`).
 
@@ -133,22 +140,6 @@ Old local paths continue to work — `resolve_artifact_path` passes them through
 
 The signal tables in `03` are generated: `poetry run python scripts/gen_signal_catalog.py`.
 `tests/test_docs_sync.py` fails if they drift from `gnomepy_research.signals.__all__`.
-
-## Known gaps
-
-Diagnosed 2026-09-30 and still open — don't assume the workflow covers these.
-
-**The loop only fits single-file, backtest-parameter research.** `/research-new` offers four strategy
-types and the Step 5 diagnostics dispatch on `arb` and `mm` only. A session whose inner loop is
-train-model → check AUC has no place in it: the accept/reject gate scores `final_pnl` from a backtest
-and snapshots every `*.py` into `best/`. `cs2_win_probability` is exactly this shape — ten modules,
-`strategy_type: directional` — and was built outside the workflow entirely, on `main`, with no
-iteration records. Either add a model-training track or say plainly that such work belongs elsewhere.
-
-**`spec.yaml` immutability is unenforced.** `informed_pmm/spec.yaml` was edited four times, once
-mid-iteration and once to repoint the session at a different market, against the "DO NOT MODIFY" rule
-stated here and in `research.md`. `max_iterations` is now checked at Step 1, but nothing prevents spec
-edits. A contract that is routinely broken is worse than no contract — either enforce it or drop it.
 
 ## Code conventions
 - All imports at the top of the file — never inside functions or conditionals

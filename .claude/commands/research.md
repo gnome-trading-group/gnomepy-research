@@ -380,6 +380,11 @@ Report each number below explicitly in the `analysis` field, with the action you
 | Spread vs market | `quoted_vs_market_spread` | >2.0 → too wide to fill; <1.0 → crossing the book |
 | Quote-to-fill | `quote_to_fill_ratio` | >100 → too many phantom quotes |
 
+If `strategy_type` is neither `arb` nor `mm` (e.g. `momentum`, `directional`, `custom`), skip the two
+tables above and run the all-types checks plus whatever is diagnostic for this strategy — entry
+signal strength at fill, holding period, win/loss by regime. Say in the analysis which checks you
+chose and why.
+
 *All strategy types:*
 
 | Check | How | Action |
