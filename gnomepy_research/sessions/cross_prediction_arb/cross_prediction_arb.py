@@ -23,6 +23,14 @@ _PM_TAKER_SETTLE_NS = 500_000_000
 # the new order instead of the old one. 200ms >> 2×latency ensures settlement.
 _CANCEL_SETTLE_NS = 200_000_000
 
+# Prediction-market venues quote in whole cents. The registry currently reports a
+# $0.001 tick for Kalshi, which the recorded books contradict — see _effective_tick.
+_MIN_TICK = PRICE_SCALE // 100
+
+# Close retries before a pairing stops trying and returns to SCANNING. Without a cap
+# an un-closeable residual (sub-lot, or below the min-notional floor) looped forever.
+_MAX_CLOSE_ATTEMPTS = 5
+
 
 # ---------------------------------------------------------------------------
 # State machine phases
@@ -108,6 +116,7 @@ class PairingState:
     entry_ts: int = 0
     last_cancel_ts: int = 0
     base_qty: int = 0
+    close_attempts: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +357,7 @@ class CrossPredictionArb(Strategy):
         resolution_time_ns: int = 0,
         # Chase: how long to stay in arb-positive zone before entering damage-control
         maker_patience_ns: int = 30_000_000_000,
+        enable_chase: bool = False,
         # Diagnostics
         track_markouts: bool = False,
         debug: bool = False,
@@ -369,6 +379,11 @@ class CrossPredictionArb(Strategy):
         self._max_price_divergence = max_price_divergence_cents / 100.0
         self._imbalance_timeout_ns = imbalance_timeout_ns
         self._maker_patience_ns = maker_patience_ns
+        # The chase walks a resting maker bid upward until it fills. Measured on the
+        # Seahawks event it costs money at every setting tried: no chase $106.52,
+        # chase as shipped $66.55, chase with a correct ceiling $47.38, chase capped
+        # at the ceiling $58.88. Off by default until a variant beats the baseline.
+        self._enable_chase = enable_chase
         self._max_staleness_ns = max_staleness_ns
         self._processing_time_ns = processing_time_ns
         self._gamma_T = gamma_T
@@ -464,7 +479,8 @@ class CrossPredictionArb(Strategy):
         else:
             self._price_model = JoinBestBidModel()
 
-        # Per-pairing state machines (concurrent — each pairing is independent)
+        # Per-pairing state machines. Pairings that share no listing run concurrently;
+        # pairings sharing a listing are serialized by _listing_is_busy.
         self._pairing_states: list[PairingState] = [
             PairingState(pairing=p) for p in self._pairings
         ]
@@ -591,10 +607,13 @@ class CrossPredictionArb(Strategy):
                 if ps.phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
                     continue
                 if report.reject_reason == RejectReason.POST_ONLY_WOULD_CROSS:
+                    rejected_leg = next((lg for lg in ps.legs if lg.listing == listing), None)
+                    if rejected_leg is not None:
+                        self._on_post_only_reject(ps, rejected_leg)
                     if self._debug:
                         print(
                             f"[DEBUG] POST_ONLY_WOULD_CROSS {rejected_label} sid={listing[1]} "
-                            f"pairing={ps.pairing.label} — chase will retry without post_only"
+                            f"pairing={ps.pairing.label} — chase may retry this price"
                         )
                     return []
                 any_other_filled = any(
@@ -633,23 +652,12 @@ class CrossPredictionArb(Strategy):
                             f"pairing={ps.pairing.label} filled={new_target/SIZE_SCALE:.2f}c "
                             f"target was {canceled_leg.target_qty/SIZE_SCALE:.2f}c"
                         )
-                    for lg in ps.legs:
-                        lg.target_qty = new_target
-
-                    all_met = all(lg.filled_qty >= new_target for lg in ps.legs)
-                    if all_met:
-                        any_excess = any(lg.filled_qty > new_target for lg in ps.legs)
-                        if any_excess:
-                            ps.base_qty = new_target
-                            ps.phase = Phase.UNWINDING
-                            return self._close_all_positions(ps, report.timestamp_event)
-                        else:
-                            ps.base_qty = new_target
-                            ps.phase = Phase.SCANNING
-                            self._reset(ps)
-                            return []
-                    else:
-                        return self._check_fill_transitions(ps, report.timestamp_event)
+                    intents = self._apply_cancel_retarget(
+                        ps, canceled_leg, new_target, report.timestamp_event
+                    )
+                    if intents is not None:
+                        return intents
+                    return self._check_fill_transitions(ps, report.timestamp_event)
 
                 any_other_filled = any(
                     lg.filled_qty > 0 for lg in ps.legs if lg.listing != listing
@@ -747,10 +755,12 @@ class CrossPredictionArb(Strategy):
                 return 0.0, 0
 
         # Cross-exchange consistency: implied probabilities (ask prices) should sum to ~1.
-        # Large divergence means prices are stale — skip to avoid partial fills unwound at a loss.
+        # Only an ask_sum ABOVE 1 is evidence of staleness. An ask_sum below 1 is the
+        # arbitrage itself — a two-sided abs() guard rejected the widest opportunities
+        # (ask_sum 0.949 is a 5.1c risk-free edge, 5x min_edge).
         if self._max_price_divergence > 0:
             ask_sum = sum(books[i].best_ask() / PRICE_SCALE for i in range(len(legs)))
-            if abs(ask_sum - 1.0) > self._max_price_divergence:
+            if ask_sum - 1.0 > self._max_price_divergence:
                 return 0.0, 0
 
         qty = 0
@@ -888,7 +898,9 @@ class CrossPredictionArb(Strategy):
         mn, _ = self._listing_specs[listing]
         if mn <= 0:
             return True
-        return size > 0 and price >= mn // size
+        # price * size, not price >= mn // size: the floored form accepted prices whose
+        # actual notional fell short (33 * 3 == 99 < 100 while 100 // 3 == 33).
+        return size > 0 and price * size >= mn
 
     def _align_lot(self, listing: tuple[int, int], size: int) -> int:
         _, lot = self._listing_specs[listing]
@@ -896,7 +908,24 @@ class CrossPredictionArb(Strategy):
             return (size // lot) * lot
         return size
 
+    def _claimed_base(self, listing: tuple[int, int]) -> int:
+        """Position on `listing` already accounted for by any pairing that holds it.
+
+        With N>=3 outcomes a listing belongs to several pairings. Comparing against a
+        single pairing's base_qty made a pairing holding nothing treat a sibling's
+        parked position as an orphan and try to liquidate it.
+        """
+        return sum(other.base_qty for other in self._listing_to_ps.get(listing, []))
+
     def _listing_is_busy(self, pairing: Pairing) -> bool:
+        """True if another pairing sharing one of our listings is mid-cycle.
+
+        Note this SERIALIZES pairings that share a listing. At N=2 the two pairings are
+        disjoint so they run concurrently; at N>=3 each listing appears in several
+        pairings, so in practice only one is active at a time. That is deliberate — the
+        fill router cannot attribute a fill on a shared listing to a specific pairing —
+        but it does mean N>=3 throughput is much lower than the pairing count suggests.
+        """
         for lg in pairing.legs:
             for other in self._listing_to_ps.get(lg, []):
                 if other.pairing is pairing:
@@ -913,7 +942,7 @@ class CrossPredictionArb(Strategy):
             eid, sid = lg
             pos = self.positions.get_position(eid, sid)
             current = pos.net_quantity if pos is not None else 0
-            if current > ps.base_qty:
+            if current > self._claimed_base(lg):
                 ps.legs = [LegState(listing=l) for l in ps.pairing.legs]
                 ps.phase = Phase.UNWINDING
                 ps.last_close_ts = 0
@@ -987,8 +1016,13 @@ class CrossPredictionArb(Strategy):
                     take_limit_price=limit_price,
                 ))
             else:
-                bid = bid_prices[leg.listing]
+                # Quantize here too: join_best_bid lands on-tick, but the other price
+                # models can return best_ask - 1, which is one raw scale unit.
+                bid = self._quantize_price(leg.listing, bid_prices[leg.listing])
                 leg.entry_bid = bid
+                # Seed the chase dedupe, otherwise its first tick re-sends this exact
+                # price and resets queue position on the order carrying most of the size.
+                leg.last_chase_bid = bid
                 maker_intents.append(Intent(
                     exchange_id=eid,
                     security_id=leg.listing[1],
@@ -1001,15 +1035,118 @@ class CrossPredictionArb(Strategy):
         return result
 
     def _quantize_price(self, listing: tuple[int, int], price: int) -> int:
-        tick = self._tick_sizes.get(listing, PRICE_SCALE // 100)
+        tick = self._effective_tick(listing)
         return (price // tick) * tick
 
+    def _effective_tick(self, listing: tuple[int, int]) -> int:
+        """Tick to quantize to, floored at one cent.
+
+        The registry reports $0.001 for every Kalshi listing, but the recorded books
+        are 100% whole-cent across 1.5M observations. Trusting it produced orders at
+        prices the exchange cannot accept (0.431, 0.824) which the backtest happily
+        filled. Floor until the security master is corrected.
+        """
+        return max(self._tick_sizes.get(listing, _MIN_TICK), _MIN_TICK)
+
+    def _on_post_only_reject(self, ps: PairingState, leg: LegState) -> None:
+        """Clear the chase dedupe for a price the exchange refused.
+
+        The chase skips a target equal to `last_chase_bid`. Leaving it set after a
+        post-only reject suppressed the retry the handler's own comment promises,
+        permanently, for that price.
+        """
+        leg.last_chase_bid = 0
+
+    def _entry_expired(self, ps: PairingState, ts: int) -> bool:
+        """ENTERING has no natural exit if nothing fills and nothing is rejected again.
+
+        entry_ts was only ever read for the 500ms taker-settle guard, so a pairing whose
+        orders were all rejected sat in ENTERING with no live orders indefinitely.
+        """
+        if ps.entry_ts <= 0:
+            return False
+        return ts - ps.entry_ts > self._imbalance_timeout_ns
+
+    def _hedged_base(self, ps: PairingState) -> int:
+        """The quantity held on EVERY leg — i.e. the part that is actually hedged.
+
+        Taking max() here hid leg imbalance: with legs at 50 and 100 the base became
+        100, `all_at_base` was satisfied, and the pairing returned to SCANNING carrying
+        50 contracts of naked directional exposure. The common quantity is the only
+        part that represents complete sets.
+        """
+        held = []
+        for lg in ps.legs:
+            eid, sid = lg.listing
+            pos = self.positions.get_position(eid, sid)
+            held.append(pos.net_quantity if pos is not None else 0)
+        return min(held) if held else 0
+
+    def _apply_cancel_retarget(
+        self, ps: PairingState, canceled_leg: LegState, new_target: int, ts: int
+    ) -> list[Intent] | None:
+        """Retarget every leg down to what the canceled leg actually filled.
+
+        base_qty must stay the absolute hedged position. Setting it to `new_target`
+        (this entry's increment) meant a 50-lot cancel against an accumulated 2000
+        position reset the base to 50, after which _close_all_positions computed
+        2050 - 50 and tried to liquidate the entire book position at a 1c ask.
+        Returns the intents to emit, or None to fall through to the caller.
+        """
+        for lg in ps.legs:
+            lg.target_qty = new_target
+
+        if not all(lg.filled_qty >= new_target for lg in ps.legs):
+            return None
+
+        ps.base_qty = self._hedged_base(ps)
+        if any(lg.filled_qty > new_target for lg in ps.legs):
+            ps.phase = Phase.UNWINDING
+            return self._close_all_positions(ps, ts)
+
+        ps.phase = Phase.SCANNING
+        self._reset(ps)
+        return []
+
     def _compute_chase_ceiling(self, ps: PairingState) -> int:
+        """Highest price one unfilled leg may bid and still leave the pairing profitable.
+
+        Budget is $1 per complete set, minus what the filled legs cost, minus the fees
+        already paid on them, minus the fee this leg will pay, minus min_edge. Split
+        across the unfilled legs so N of them bidding at the ceiling cannot together
+        exceed the remaining budget — with 2 unfilled siblings the previous version
+        allowed a total above $1, a guaranteed loss on a supposed arb.
+        """
         filled_cost_scaled = 0
+        filled_qty_total = 0
+        fees_paid = 0.0
+        unfilled = 0
         for lg in ps.legs:
             if lg.filled_qty > 0:
                 filled_cost_scaled += lg.fill_cost // lg.filled_qty
-        return PRICE_SCALE - filled_cost_scaled
+                filled_qty_total = max(filled_qty_total, lg.filled_qty)
+                fees_paid += lg.entry_fees
+            if not lg.is_filled:
+                unfilled += 1
+
+        budget = PRICE_SCALE - filled_cost_scaled
+
+        # Fees already paid, expressed per contract in scaled price units.
+        if filled_qty_total > 0:
+            fee_per_contract = fees_paid / (filled_qty_total / SIZE_SCALE)
+            budget -= int(fee_per_contract * PRICE_SCALE)
+
+        budget -= int(self._min_edge * PRICE_SCALE)
+
+        if unfilled > 1:
+            budget //= unfilled
+
+        # The fee this leg will pay is itself a function of the price, so charge the
+        # worst case (rate/4, the maximum of rate*p*(1-p)) rather than solving it.
+        worst_maker_rate = max(self._maker_fee_rates.values(), default=0.0)
+        budget -= int(worst_maker_rate / 4.0 * PRICE_SCALE)
+
+        return budget
 
     def _on_entering(self, ps: PairingState, ts: int) -> list[Intent]:
         return self._check_fill_transitions(ps, ts)
@@ -1020,13 +1157,21 @@ class CrossPredictionArb(Strategy):
         some_filled = any_filled and not all_filled
 
         if all_filled:
-            base = 0
+            base = self._hedged_base(ps)
+            ps.base_qty = base
+            held = []
             for lg in ps.legs:
                 eid, sid = lg.listing
                 pos = self.positions.get_position(eid, sid)
-                if pos is not None:
-                    base = max(base, pos.net_quantity)
-            ps.base_qty = base
+                held.append(pos.net_quantity if pos is not None else 0)
+            if any(q > base for q in held):
+                # Legs are imbalanced; the excess above the common quantity is naked.
+                if self._debug:
+                    print(f"[DEBUG] ALL_FILLED_IMBALANCED pairing={ps.pairing.label} "
+                          f"held={[q/SIZE_SCALE for q in held]} base={base/SIZE_SCALE:.1f}c → UNWINDING")
+                ps.phase = Phase.UNWINDING
+                self._log_phase(ps, ts)
+                return self._close_all_positions(ps, ts)
             if self._debug:
                 print(f"[DEBUG] ALL_FILLED pairing={ps.pairing.label} → SCANNING base_qty={base/SIZE_SCALE:.1f}c")
             ps.phase = Phase.SCANNING
@@ -1045,7 +1190,7 @@ class CrossPredictionArb(Strategy):
             elapsed = ts - ps.partial_fill_since
 
             chase_intents = []
-            for lg in ps.legs:
+            for lg in (ps.legs if self._enable_chase else []):
                 if lg.is_filled:
                     continue
                 eid = lg.listing[0]
@@ -1065,39 +1210,47 @@ class CrossPredictionArb(Strategy):
                 )
 
                 if ceiling <= best_bid:
-                    phase2_window = self._imbalance_timeout_ns
-                    urgency2 = min(1.0, elapsed / phase2_window) if phase2_window > 0 else 1.0
-                    target_price = best_bid + int(urgency2 * (best_ask - best_bid))
-                    phase = 2
+                    # No price at or below the ceiling is even competitive with the
+                    # current bid, so there is nothing profitable to chase. The old code
+                    # walked from best_bid toward best_ask here, ignoring the ceiling and
+                    # buying at a guaranteed loss; leave the order resting and let the
+                    # imbalance timeout unwind if it never fills.
                     if self._debug and elapsed < 1_000_000_000:
                         print(
-                            f"[DEBUG] CHASE_SKIP_P1 pairing={ps.pairing.label} "
-                            f"ceiling={ceiling/(PRICE_SCALE//100):.1f}¢ < "
-                            f"best_bid={best_bid/(PRICE_SCALE//100):.1f}¢ → straight to phase 2"
+                            f"[DEBUG] CHASE_ABANDON pairing={ps.pairing.label} "
+                            f"ceiling={ceiling/(PRICE_SCALE//100):.1f}¢ <= "
+                            f"best_bid={best_bid/(PRICE_SCALE//100):.1f}¢ — no profitable price"
                         )
+                    continue
                 elif elapsed <= self._maker_patience_ns:
                     floor = lg.entry_bid if lg.entry_bid > 0 else model_price
-                    urgency = elapsed / self._maker_patience_ns
+                    urgency = elapsed / self._maker_patience_ns if self._maker_patience_ns > 0 else 1.0
                     target_price = floor + int(urgency * (ceiling - floor))
                     phase = 1
                 else:
-                    phase2_window = self._imbalance_timeout_ns - self._maker_patience_ns
-                    phase2_elapsed = elapsed - self._maker_patience_ns
-                    urgency2 = min(1.0, phase2_elapsed / phase2_window) if phase2_window > 0 else 1.0
-                    target_price = ceiling + int(urgency2 * (best_ask - ceiling))
+                    # Phase 2 used to walk from the ceiling toward best_ask, i.e. above
+                    # the price at which the pairing is still profitable. Cap at the
+                    # ceiling: completing a leg at a loss is the timeout's job, not the
+                    # chase's.
+                    target_price = min(ceiling, best_ask)
                     phase = 2
 
-                target_price = self._quantize_price(lg.listing, target_price)
-                if target_price == lg.last_chase_bid:
+                target_price = self._quantize_price(lg.listing, min(target_price, ceiling))
+                if target_price <= 0 or target_price == lg.last_chase_bid:
                     continue
 
-                remaining = lg.target_qty - lg.filled_qty
+                remaining = self._align_lot(lg.listing, lg.target_qty - lg.filled_qty)
+                if remaining <= 0:
+                    continue
+                if not self._passes_notional(lg.listing, target_price, remaining):
+                    continue
                 lg.last_chase_bid = target_price
                 chase_intents.append(Intent(
                     exchange_id=eid,
                     security_id=lg.listing[1],
                     bid_price=target_price,
                     bid_size=remaining,
+                    post_only=True,
                 ))
                 if self._debug:
                     print(
@@ -1108,16 +1261,20 @@ class CrossPredictionArb(Strategy):
                         f"elapsed={elapsed/1e9:.1f}s"
                     )
 
-            if chase_intents:
-                return chase_intents
-
-            # Safety net: no chase intents possible (no book data) → fall through to timeout
+            # Check the timeout BEFORE returning chase intents. The phase-2 target tracks
+            # best_ask, so in a moving book a new intent is emitted every tick and the
+            # timeout was never reached — imbalance_timeout_ns was effectively disabled
+            # exactly when it mattered.
             if self._check_imbalance_timeout(ps, ts):
                 elapsed_s = elapsed / 1e9
                 if self._debug:
                     print(f"[DEBUG] IMBALANCE_TIMEOUT pairing={ps.pairing.label} elapsed={elapsed_s:.1f}s → UNWINDING")
                 ps.phase = Phase.UNWINDING
+                self._log_phase(ps, ts)
                 return self._close_all_positions(ps, ts)
+
+            if chase_intents:
+                return chase_intents
             return []
 
         # Guard: taker orders take ~300ms to settle. Don't cancel maker legs
@@ -1152,6 +1309,23 @@ class CrossPredictionArb(Strategy):
                     self._reset(ps)
                 return intents
 
+        if ps.phase == Phase.ENTERING and self._entry_expired(ps, ts):
+            if self._debug:
+                print(f"[DEBUG] ENTRY_EXPIRED pairing={ps.pairing.label} "
+                      f"elapsed={(ts - ps.entry_ts)/1e9:.1f}s any_filled={any_filled}")
+            intents = [
+                Intent(exchange_id=lg.listing[0], security_id=lg.listing[1])
+                for lg in ps.legs if not lg.is_filled
+            ]
+            if any_filled:
+                ps.phase = Phase.UNWINDING
+                intents.extend(self._close_all_positions(ps, ts))
+            else:
+                ps.phase = Phase.SCANNING
+                ps.last_cancel_ts = ts
+                self._reset(ps)
+            return intents
+
         return []
 
     def _on_partial_fill(self, ps: PairingState, ts: int) -> list[Intent]:
@@ -1169,10 +1343,13 @@ class CrossPredictionArb(Strategy):
             if self._debug:
                 print(f"[DEBUG] CLOSED pairing={ps.pairing.label} → SCANNING")
             ps.phase = Phase.SCANNING
+            self._log_phase(ps, ts)
+            ps.close_attempts = 0
             self._reset(ps)
             return []
         if ts - ps.last_close_ts > 2_000_000_000:
             ps.last_close_ts = ts
+            ps.close_attempts += 1
             intents = []
             for leg in ps.legs:
                 eid, sid = leg.listing
@@ -1203,6 +1380,19 @@ class CrossPredictionArb(Strategy):
                                 take_limit_price=limit_price,
                             ))
             self._log_intents(f"closing_retry {ps.pairing.label}", intents, ts)
+            if not intents and ps.close_attempts >= _MAX_CLOSE_ATTEMPTS:
+                # Nothing closeable: _align_lot floored a sub-lot remainder to zero, or
+                # the min-notional floor exceeded the 99c cap. Retrying every 2s forever
+                # kept the pairing out of SCANNING permanently; give up and let the
+                # residual sit rather than wedging the state machine.
+                if self._debug:
+                    print(f"[DEBUG] CLOSE_GAVE_UP pairing={ps.pairing.label} "
+                          f"attempts={ps.close_attempts} — residual left in place")
+                ps.phase = Phase.SCANNING
+                ps.base_qty = self._hedged_base(ps)
+                ps.close_attempts = 0
+                self._reset(ps)
+                return []
             return intents
         return []
 
@@ -1274,6 +1464,22 @@ class CrossPredictionArb(Strategy):
     # ------------------------------------------------------------------
     # State reset
     # ------------------------------------------------------------------
+
+    def _log_phase(self, ps: PairingState, ts: int, edge: float = 0.0, qty: int = 0) -> None:
+        """Record a row per phase transition.
+
+        The buffer declares a `phase` column but the only writer hardcoded ENTERING, so
+        it was a constant across every row and the parquet carried no information about
+        chases, timeouts or unwinds — those were print-only and lost to the run.
+        """
+        if self._metrics_buf is None:
+            return
+        row = self._metrics_buf.appendRow()
+        self._metrics_buf.setLong(row, self._m_ts, ts)
+        self._metrics_buf.setInt(row, self._m_phase, int(ps.phase))
+        self._metrics_buf.setInt(row, self._m_pairing, ps.pairing.index)
+        self._metrics_buf.setDouble(row, self._m_edge, edge)
+        self._metrics_buf.setLong(row, self._m_qty, qty)
 
     def _reset(self, ps: PairingState) -> None:
         ps.legs = []
