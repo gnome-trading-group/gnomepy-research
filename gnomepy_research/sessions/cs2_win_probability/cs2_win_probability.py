@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from dataclasses import dataclass, field
 from typing import NamedTuple
@@ -19,8 +18,15 @@ from gnomepy_research.sessions.cs2_win_probability.game_state import CS2GameStat
 from gnomepy_research.sessions.cs2_win_probability.map_model import (
     map_win_probs_to_series_win_prob,
     round_win_prob_to_map_win_prob,
+    series_win_prob_per_map,
 )
 from gnomepy_research.sessions.cs2_win_probability.model import CS2RoundModel
+from gnomepy_research.sessions.cs2_win_probability.pre_map_features import extract_pre_map_features
+from gnomepy_research.sessions.cs2_win_probability.pre_map_model import CS2PreMapModel
+from gnomepy_research.sessions.cs2_win_probability.team_priors import (
+    SeriesVetoInfo,
+    load_series_priors,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +84,7 @@ class CS2WinProbability(Strategy):
     listing_id_no : int
         The complementary NO contract (team B wins). Used only for position tracking.
     model_path : str
-        Artifact URI or local path to the XGBoost model.
+        Artifact URI or local path to the XGBoost round model.
         E.g. "artifact://xgboost_model/cs2_round_win_prob"
     level : str
         "map" or "match" — determines which probability output to use.
@@ -95,6 +101,24 @@ class CS2WinProbability(Strategy):
         Maps won by T-side team.
     maps_to_win : int
         Maps needed to win the series (2 for BO3, 3 for BO5).
+    pre_map_model_path : str | None
+        Artifact URI or local path to the XGBoost pre-map model.
+        E.g. "artifact://xgboost_model/cs2_pre_map_win_prob"
+    veto_maps : list[str] | None
+        Ordered list of maps to be played in this series (e.g. ["de_mirage", "de_nuke", "de_inferno"]).
+        Required for per-map series pricing and pre-map fair value.
+    veto_pickers : dict[str, str] | None
+        Map from map_name to picker team name (team_a_name or team_b_name). None entry = decider.
+    team_a_name : str | None
+        Team A's name (the YES contract side). Used for priors computation.
+    team_b_name : str | None
+        Team B's name.
+    bo_type : int
+        Best-of count (1, 3, 5).
+    current_map_index : int
+        0-indexed position of the current map in veto_maps.
+    event_tier : int | None
+        HLTV event star rating (0-5).
     fair_value_series_path : str | None
         Path or DatasetStore name for pre-computed fair values (backtesting).
         Parquet with columns [timestamp_ns, ct_win_prob].
@@ -103,7 +127,7 @@ class CS2WinProbability(Strategy):
     grid_series_id : str | None
         GRID series ID for this match (live trading only).
     team_priors : dict | None
-        Optional team priors dict (see features.py). Defaults to neutral (0.5).
+        Optional team priors dict (see features.py). Defaults to neutral (NaN).
     edge_threshold : float
         Minimum absolute probability edge to post a maker order (default 0.03).
     half_spread : float
@@ -128,6 +152,14 @@ class CS2WinProbability(Strategy):
         ct_maps_won: int = 0,
         t_maps_won: int = 0,
         maps_to_win: int = 2,
+        pre_map_model_path: str | None = None,
+        veto_maps: list[str] | None = None,
+        veto_pickers: dict[str, str] | None = None,
+        team_a_name: str | None = None,
+        team_b_name: str | None = None,
+        bo_type: int = 1,
+        current_map_index: int = 0,
+        event_tier: int | None = None,
         fair_value_series_path: str | None = None,
         grid_api_key: str | None = None,
         grid_series_id: str | None = None,
@@ -151,9 +183,20 @@ class CS2WinProbability(Strategy):
         self._maker_size_int = maker_size * SIZE_SCALE
         self._max_book_spread_int = int(max_book_spread_pct * PRICE_SCALE)
         self._processing_time_ns = processing_time_ns
+        self._team_a_name = team_a_name
+        self._team_b_name = team_b_name
+        self._bo_type = bo_type
+        self._current_map_index = current_map_index
+        self._event_tier = event_tier
+        self._veto_maps = veto_maps or []
+        self._veto_pickers = veto_pickers or {}
 
         resolved = resolve_artifact_path(model_path)
         self._round_model = CS2RoundModel(resolved)
+
+        self._pre_map_model: CS2PreMapModel | None = None
+        if pre_map_model_path:
+            self._pre_map_model = CS2PreMapModel(resolve_artifact_path(pre_map_model_path))
 
         registry = RegistryClient()
         yes_listings = registry.get_listing(listing_id=listing_id_yes)
@@ -184,6 +227,8 @@ class CS2WinProbability(Strategy):
         self._grid_client = None
         self._fair_value_series: pd.DataFrame | None = None
 
+        self._remaining_map_probs: list[float] = self._compute_remaining_map_probs()
+
         if fair_value_series_path:
             self._fair_value_series = self._load_fair_value_series(fair_value_series_path)
         elif grid_api_key and grid_series_id:
@@ -192,6 +237,46 @@ class CS2WinProbability(Strategy):
             logger.warning(
                 "No GRID feed or fair value series provided — fair value will be None until state updates"
             )
+
+    def _compute_remaining_map_probs(self) -> list[float]:
+        """Pre-compute P(team_a wins) for each remaining veto map at startup."""
+        if not self._pre_map_model or not self._veto_maps or not self._team_a_name:
+            return []
+
+        remaining = self._veto_maps[self._current_map_index + 1:]
+        if not remaining:
+            return []
+
+        all_priors = load_series_priors(
+            team_a_name=self._team_a_name,
+            team_b_name=self._team_b_name or "",
+            veto=SeriesVetoInfo(
+                map_names=self._veto_maps,
+                map_pickers=self._veto_pickers,
+                bo_type=self._bo_type,
+            ),
+            is_lan=bool(self._team_priors.get("is_lan", True)),
+        )
+
+        probs = []
+        for idx, map_name in enumerate(remaining, start=self._current_map_index + 1):
+            map_priors = all_priors.get(map_name, {})
+            map_priors["map_name"] = map_name
+            map_priors["bo_type"] = self._bo_type
+            map_priors["map_position_in_series"] = idx + 1
+            map_priors["is_decider"] = float(map_name not in self._veto_pickers)
+            map_priors["event_tier"] = float(self._event_tier) if self._event_tier is not None else float("nan")
+            # Series scores for this map are unknown at startup — use 0 as placeholder
+            # (the model will see NaN for maps that haven't been played yet is preferable,
+            # but series score is always known from the veto position)
+            map_priors["team_a_series_score"] = float("nan")
+            map_priors["team_b_series_score"] = float("nan")
+            features = extract_pre_map_features(map_priors)
+            prob = self._pre_map_model.predict_team_a_win_prob(features)
+            probs.append(prob)
+
+        logger.info("Pre-computed remaining map probs for %s: %s", remaining, [f"{p:.3f}" for p in probs])
+        return probs
 
     def _load_fair_value_series(self, path: str) -> pd.DataFrame:
         from gnomepy_research.artifacts import DatasetStore
@@ -220,28 +305,72 @@ class CS2WinProbability(Strategy):
         features = extract_features(self._game_state, self._team_priors)
         p_ct_round = self._round_model.predict_ct_win_prob(features)
 
+        p_ct_map = round_win_prob_to_map_win_prob(
+            p_ct_wins_round=p_ct_round,
+            ct_score=self._game_state.ct_score,
+            t_score=self._game_state.t_score,
+        )
+
         if self._level == "map":
-            p_ct_map = round_win_prob_to_map_win_prob(
-                p_ct_wins_round=p_ct_round,
-                ct_score=self._game_state.ct_score,
-                t_score=self._game_state.t_score,
-            )
             p_team_a = p_ct_map if self._ct_team_is_team_a else (1.0 - p_ct_map)
         else:
-            p_ct_map = round_win_prob_to_map_win_prob(
-                p_ct_wins_round=p_ct_round,
-                ct_score=self._game_state.ct_score,
-                t_score=self._game_state.t_score,
-            )
-            p_team_a_series = map_win_probs_to_series_win_prob(
-                p_ct_wins_map=p_ct_map if self._ct_team_is_team_a else (1.0 - p_ct_map),
-                ct_maps_won=self._ct_maps_won,
-                t_maps_won=self._t_maps_won,
-                maps_to_win=self._maps_to_win,
-            )
-            p_team_a = p_team_a_series
+            p_team_a_map = p_ct_map if self._ct_team_is_team_a else (1.0 - p_ct_map)
+            a_won = self._ct_maps_won if self._ct_team_is_team_a else self._t_maps_won
+            b_won = self._t_maps_won if self._ct_team_is_team_a else self._ct_maps_won
+            if self._remaining_map_probs:
+                p_team_a = series_win_prob_per_map(
+                    current_map_prob=p_team_a_map,
+                    remaining_map_probs=self._remaining_map_probs,
+                    team_a_maps_won=a_won,
+                    team_b_maps_won=b_won,
+                    maps_to_win=self._maps_to_win,
+                )
+            else:
+                p_team_a = map_win_probs_to_series_win_prob(
+                    p_ct_wins_map=p_team_a_map,
+                    ct_maps_won=a_won,
+                    t_maps_won=b_won,
+                    maps_to_win=self._maps_to_win,
+                )
 
         self._fair_value = float(np.clip(p_team_a, 0.01, 0.99))
+
+    def _compute_pre_map_fair_value(self) -> float | None:
+        """Compute fair value from pre-map model when no live game data is available."""
+        if not self._pre_map_model:
+            return None
+
+        current_map = self._veto_maps[self._current_map_index] if self._veto_maps else ""
+        priors = dict(self._team_priors)
+        priors["map_name"] = current_map
+        priors["bo_type"] = float(self._bo_type)
+        priors["map_position_in_series"] = float(self._current_map_index + 1)
+        priors["is_decider"] = float(current_map not in self._veto_pickers) if current_map else float("nan")
+        priors["event_tier"] = float(self._event_tier) if self._event_tier is not None else float("nan")
+        a_won = self._ct_maps_won if self._ct_team_is_team_a else self._t_maps_won
+        b_won = self._t_maps_won if self._ct_team_is_team_a else self._ct_maps_won
+        priors["team_a_series_score"] = float(a_won)
+        priors["team_b_series_score"] = float(b_won)
+
+        features = extract_pre_map_features(priors)
+        p_map = self._pre_map_model.predict_team_a_win_prob(features)
+
+        if self._level == "match":
+            if self._remaining_map_probs:
+                return series_win_prob_per_map(
+                    current_map_prob=p_map,
+                    remaining_map_probs=self._remaining_map_probs,
+                    team_a_maps_won=a_won,
+                    team_b_maps_won=b_won,
+                    maps_to_win=self._maps_to_win,
+                )
+            return map_win_probs_to_series_win_prob(
+                p_ct_wins_map=p_map,
+                ct_maps_won=a_won,
+                t_maps_won=b_won,
+                maps_to_win=self._maps_to_win,
+            )
+        return p_map
 
     def _get_fair_value_from_series(self, timestamp_ns: int) -> float | None:
         if self._fair_value_series is None:
@@ -281,6 +410,9 @@ class CS2WinProbability(Strategy):
         else:
             with self._fair_value_lock:
                 fv = self._fair_value
+
+        if fv is None or np.isnan(fv):
+            fv = self._compute_pre_map_fair_value()
 
         if fv is None or np.isnan(fv):
             return []

@@ -74,6 +74,39 @@ def map_win_probs_to_series_win_prob(
     return float(min(max(prob_ct_wins, 0.0), 1.0))
 
 
+def series_win_prob_per_map(
+    current_map_prob: float,
+    remaining_map_probs: list[float],
+    team_a_maps_won: int,
+    team_b_maps_won: int,
+    maps_to_win: int = 2,
+) -> float:
+    """
+    Compute P(team_a wins series) given heterogeneous per-map win probabilities.
+
+    current_map_prob: P(team_a wins the current map)
+    remaining_map_probs: P(team_a wins map_i) for each subsequent map in veto order
+    team_a_maps_won / team_b_maps_won: maps already won before the current map
+    """
+    all_probs = [float(current_map_prob)] + [float(p) for p in remaining_map_probs]
+
+    def _dp(a_wins: int, b_wins: int, map_idx: int) -> float:
+        if a_wins >= maps_to_win:
+            return 1.0
+        if b_wins >= maps_to_win:
+            return 0.0
+        if map_idx >= len(all_probs):
+            raise ValueError(
+                f"veto list holds {len(all_probs)} map(s) but the series is undecided at "
+                f"{a_wins}-{b_wins} needing {maps_to_win}; returning here would assign all "
+                "remaining probability to team_b"
+            )
+        p = all_probs[map_idx]
+        return p * _dp(a_wins + 1, b_wins, map_idx + 1) + (1 - p) * _dp(a_wins, b_wins + 1, map_idx + 1)
+
+    return float(_dp(team_a_maps_won, team_b_maps_won, 0))
+
+
 def _binom_coef(n: int, r: int) -> float:
     if r < 0 or r > n:
         return 0.0

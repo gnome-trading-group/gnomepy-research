@@ -29,6 +29,7 @@ from bs4 import BeautifulSoup
 from zenrows import ZenRowsClient
 
 from gnomepy_research.artifacts import DatasetStore
+from gnomepy_research.pipelines.hltv_cs2.config import MAP_POOL
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +174,18 @@ def parse_match_ids_from_html(html: str) -> tuple[list[tuple[int, str, int]], bo
 # Match detail pages
 # ---------------------------------------------------------------------------
 
+def _ranking_value(ranking_div, selector: str, prefix: str) -> int | None:
+    """Pull an integer rank out of a '#12'-style ranking link, or None if absent."""
+    link = ranking_div.select_one(selector)
+    if not link:
+        return None
+    text = link.get_text(strip=True).replace(prefix, "").strip().lstrip("#")
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
 def _avg_rating(players: list[dict]) -> float:
     rated = [p["rating"] for p in players if p["rating"] is not None]
     return sum(rated) / len(rated) if rated else float("nan")
@@ -185,56 +198,377 @@ def _picked_map_value(picked_maps: dict, map_name: str, team_a_name: str) -> flo
     return 1.0 if picker == team_a_name else 0.0
 
 
-def _parse_veto(soup: BeautifulSoup) -> list[dict]:
-    # HLTV renders two .veto-box elements: first is format text, second has picks/bans
+def _parse_bo_type(fmt: str) -> int:
+    m = re.search(r"Best of (\d+)", fmt)
+    return int(m.group(1)) if m else 1
+
+
+_VETO_ACTION = re.compile(
+    r"^(?P<order>\d+)\.\s+(?P<team>.+?)\s+(?P<action>removed|picked)\s+(?P<map>[A-Za-z0-9]+)\s*$", re.I)
+_VETO_LEFTOVER = re.compile(
+    r"^(?P<order>\d+)\.\s+(?P<map>[A-Za-z0-9]+)\s+was left over\s*$", re.I)
+
+
+def _parse_veto(soup: BeautifulSoup, team_names: list[str], team_ids: list, context: str = "") -> list[dict]:
+    """
+    The full pick/ban sequence, in order.
+
+    Previously only lines containing "picked" survived, so every ban and the
+    ordering were discarded. The picker was also identified by testing whether a
+    team name appeared *as a substring* of the line — so a team called "G2"
+    matched inside "G2 Ares", and "Spirit" inside "Team Spirit". That silently
+    mis-attributed or dropped picks, which is the likely source of much of the
+    ~19.6% team_a_picked_map NaN rate.
+    """
     veto_boxes = soup.select(".veto-box")
     veto_box = veto_boxes[-1] if veto_boxes else None
     if not veto_box:
         return []
-    rows = []
+
+    short_to_map = {m.replace("de_", "").lower(): m for m in MAP_POOL}
+    by_name = {n.strip().lower(): (n, i) for i, n in enumerate(team_names[:2]) if n}
+
+    steps = []
     for item in veto_box.select(".padding > div"):
-        text = item.get_text(strip=True)
-        if text:
-            rows.append({"text": text})
+        text = item.get_text(" ", strip=True)
+        if not text:
+            continue
+        m = _VETO_ACTION.match(text)
+        if m:
+            raw_team = m.group("team").strip()
+            resolved = by_name.get(raw_team.lower())
+            if resolved is None:
+                logger.warning("%s: veto line %r names a team that is neither %r nor %r",
+                               context, text, team_names[0], team_names[1])
+            map_name = short_to_map.get(m.group("map").lower())
+            steps.append({
+                "order": int(m.group("order")),
+                "team_name": resolved[0] if resolved else raw_team,
+                "team_id": team_ids[resolved[1]] if resolved else None,
+                "action": m.group("action").lower(),
+                "map_name": map_name,
+            })
+            continue
+        m = _VETO_LEFTOVER.match(text)
+        if m:
+            steps.append({
+                "order": int(m.group("order")),
+                "team_name": None,
+                "team_id": None,
+                "action": "left_over",
+                "map_name": short_to_map.get(m.group("map").lower()),
+            })
+    return steps
+
+
+def _stat_float(cell) -> float | None:
+    try:
+        return float(cell.get_text(strip=True).replace("%", "").replace("+", ""))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _kd_kills(cell) -> float | None:
+    # K-D format: "23-18" — take kills only
+    try:
+        return float(cell.get_text(strip=True).split("-")[0])
+    except (ValueError, AttributeError, IndexError):
+        return None
+
+
+def _kd_deaths(cell) -> float | None:
+    # K-D format: "23-18" — take deaths only
+    try:
+        return float(cell.get_text(strip=True).split("-")[1])
+    except (ValueError, AttributeError, IndexError):
+        return None
+
+
+_STAT_SIDES = {"all": ".totalstats", "ct": ".ctstats", "t": ".tstats"}
+
+
+def _cell(row, *classes):
+    """First cell carrying all of `classes`. Positional indexing is what let four columns go unread."""
+    for td in row.find_all("td"):
+        got = set(td.get("class") or [])
+        if all(c in got for c in classes):
+            return td
+    return None
+
+
+def _parse_player_stats(container, context: str = "", has_sub: bool = False, side: str = "all") -> list[dict]:
+    """
+    Per-player stats for one side of the map.
+
+    HLTV ships three tables per team in every {mapstatsid}-content div — overall,
+    CT-only and T-only — with the latter two merely CSS-hidden. Only the overall
+    table was ever read, and of its nine columns only five, so the side split, the
+    economy-adjusted variants and roundSwing were all discarded at parse time.
+
+    roundSwing is the notable one: it is HLTV's own per-player change in round-win
+    probability, already denominated in the units the model predicts.
+
+    Cells are located by class rather than position, so a column order change
+    surfaces as missing data instead of silently mis-read data.
+    """
+    selector = _STAT_SIDES.get(side, ".totalstats")
+    players = []
+    seen_teams: set[int | str] = set()
+    for table in container.select(selector):
+        all_rows = table.select("tbody tr")
+        if not all_rows:
+            continue
+        header_cols = all_rows[0].find_all("td")
+        team_name = header_cols[0].get_text(strip=True) if header_cols else ""
+        team_link = all_rows[0].select_one("a[href*='/team/']")
+        team_id = _href_id(team_link)
+        if len(header_cols) != 9:
+            logger.warning("Unexpected stats table column count %d for team %r [%s]", len(header_cols), team_name, context)
+        key = team_id if team_id is not None else team_name
+        if key in seen_teams:
+            continue
+        seen_teams.add(key)
+        players_before = len(players)
+        for row in all_rows[1:]:
+            player_link = row.select_one("a[href*='/player/']")
+            if not player_link:
+                continue
+            nick_el = player_link.select_one(".player-nick")
+            player_name = nick_el.get_text(strip=True) if nick_el else player_link.get_text(strip=True)
+            kd = _cell(row, "kd", "traditional-data") or _cell(row, "kd")
+            ekd = _cell(row, "kd", "eco-adjusted-data")
+            rating_cell = _cell(row, "rating")
+            if rating_cell is None:
+                logger.warning("Could not locate rating cell for player %r team %r [%s]", player_name, team_name, context)
+            players.append({
+                "team_name": team_name,
+                "team_id": team_id,
+                "player_id": _href_id(player_link),
+                "player_name": player_name,
+                "side": side,
+                "kills": _kd_kills(kd),
+                "deaths": _kd_deaths(kd),
+                "ek": _kd_kills(ekd),
+                "ed": _kd_deaths(ekd),
+                "round_swing_pct": _stat_float(_cell(row, "roundSwing")),
+                "adr": _stat_float(_cell(row, "adr", "traditional-data") or _cell(row, "adr")),
+                "eadr": _stat_float(_cell(row, "adr", "eco-adjusted-data")),
+                "kast": _stat_float(_cell(row, "kast", "traditional-data") or _cell(row, "kast")),
+                "ekast": _stat_float(_cell(row, "kast", "eco-adjusted-data")),
+                "rating": _stat_float(rating_cell),
+            })
+        team_player_count = len(players) - players_before
+        if team_player_count == 0:
+            logger.warning("Parsed 0 players for team %r on side %r — possible selector change [%s]", team_name, side, context)
+        elif team_player_count != 5 and side == "all":
+            if has_sub:
+                logger.info("Parsed %d players for team %r (substitute in lineup) [%s]", team_player_count, team_name, context)
+            else:
+                logger.warning("Parsed %d players for team %r (expected 5) [%s]", team_player_count, team_name, context)
+    return players
+
+
+def _same_team(player: dict, team_id, team_name: str) -> bool:
+    """Prefer the stable id; fall back to the display name only when the id is missing."""
+    if player.get("team_id") is not None and team_id is not None:
+        return player["team_id"] == team_id
+    return player.get("team_name") == team_name
+
+
+_STAGE_MARKERS = {
+    "is_elimination": ("elimination", "lower bracket", "decider"),
+    "is_qualifier": ("qualifier", "open qualifier", "closed qualifier"),
+    "is_playoff": ("bracket", "final", "semi-final", "quarter-final", "playoff"),
+    "is_group": ("group", "swiss"),
+}
+
+
+def _parse_event_context(fmt: str) -> dict:
+    """
+    Stage and stakes out of the format blurb, e.g.
+    "Best of 3 (LAN)\n\n* Swiss round 2 (teams with a 1-0 record)".
+
+    Only bo_type and is_lan were ever read off this string. Whether a match is an
+    elimination game, a qualifier or a dead rubber changes how hard teams try, and
+    it costs nothing to extract.
+    """
+    text = (fmt or "").lower()
+    stage = ""
+    for line in (fmt or "").splitlines():
+        line = line.strip()
+        if line.startswith("*") and not line.startswith("**"):
+            stage = line.lstrip("*").strip()
+            break
+    flags = {k: float(any(m in text for m in markers)) for k, markers in _STAGE_MARKERS.items()}
+    return {"stage_text": stage, **flags}
+
+
+def _parse_recent_form(soup: BeautifulSoup, match_id: int, match_date) -> list[dict]:
+    """
+    Each team's recent results as shown on the match page.
+
+    HLTV renders four tables but 2-3 are byte-identical duplicates of 0-1, so only
+    the first two are read. The "16 weeks ago" label is relative to when the page
+    was *fetched*, not when the match was played, so it is kept only as a fallback —
+    the row's href carries a real match id, which is both exact and doubles as a
+    crawl frontier into matches older than our nine-month history.
+    """
+    rows = []
+    for team_index, table in enumerate(soup.select("table.past-matches-table")[:2]):
+        for position, tr in enumerate(table.select("tr")):
+            opponent = tr.select_one("td.past-matches-team")
+            link = tr.select_one("td.past-matches-map a[href*='/matches/']")
+            score = tr.select_one("td.past-matches-score")
+            if opponent is None:
+                continue
+            text = opponent.get_text(" ", strip=True)
+            weeks = re.search(r"(\d+)\s+weeks?\s+ago", text)
+            scores = re.findall(r"(\d+)", score.get_text(" ", strip=True)) if score else []
+            rows.append({
+                "match_id": match_id,
+                "match_date": match_date,
+                "team_index": team_index,          # 0 = team_a, 1 = team_b
+                "position": position,
+                "opponent_team_id": _href_id(opponent.select_one("a[href*='/team/']")),
+                "opponent_name": re.sub(r"\s*\d+\s+weeks?\s+ago\s*$", "", text).strip(),
+                "ref_match_id": _href_id(link),
+                "weeks_ago": int(weeks.group(1)) if weeks else None,
+                "score_for": int(scores[0]) if len(scores) >= 2 else None,
+                "score_against": int(scores[1]) if len(scores) >= 2 else None,
+            })
     return rows
 
 
-def _parse_player_stats(soup: BeautifulSoup) -> list[dict]:
-    players = []
-    for table in soup.select(".stats-table"):
-        team_header = table.find_previous("div", class_="teamLine")
-        team_name = team_header.get_text(strip=True) if team_header else ""
-        for row in table.select("tbody tr"):
-            cols = row.find_all("td")
-            if len(cols) < 6:
-                continue
-            player_link = cols[0].select_one("a[href*='/player/']")
-            if not player_link:
-                continue
-            href = player_link.get("href", "")
-            parts = href.split("/")
-            try:
-                player_id = int(parts[2]) if len(parts) >= 3 else None
-            except ValueError:
-                player_id = None
+def _parse_h2h(soup: BeautifulSoup, match_id: int, match_date) -> tuple[dict, list[dict]]:
+    """
+    Head-to-head, both the lifetime aggregate and the individual meetings.
 
-            def _float(cell):
-                try:
-                    return float(cell.get_text(strip=True).replace("%", "").replace("+", ""))
-                except (ValueError, AttributeError):
-                    return None
+    Our own h2h_win_rate is NaN on ~72% of rows because the match history only
+    spans nine months. HLTV's box reaches back over the teams' whole shared
+    history, and the listing carries real timestamps rather than relative labels.
 
+    Returns (scalars_for_the_match_row, meeting_rows).
+    """
+    scalars = {"h2h_team_a_wins": None, "h2h_team_b_wins": None, "h2h_overtimes": None}
+    box = soup.select_one(".head-to-head")
+    if box:
+        numbers = []
+        for col in box.select(".flexbox-column"):
+            m = re.search(r"(\d+)", col.get_text(" ", strip=True))
+            numbers.append(int(m.group(1)) if m else None)
+        if len(numbers) >= 3:
+            scalars["h2h_team_a_wins"], scalars["h2h_overtimes"], scalars["h2h_team_b_wins"] = numbers[:3]
+
+    meetings = []
+    listing = soup.select_one(".head-to-head-listing")
+    for row in (listing.select("tr") if listing else []):
+        date_td = row.select_one("td.date")
+        stamp = date_td.select_one("[data-unix]") if date_td else None
+        unix = (stamp or date_td or {}).get("data-unix") if (stamp or date_td) else None
+        result = row.select_one("td.result")
+        scores = re.findall(r"(\d+)", result.get_text(" ", strip=True)) if result else []
+        map_td = row.select_one("td.map")
+        map_text = map_td.get_text(" ", strip=True).split() if map_td else []
+        map_name = f"de_{map_text[-1].lower()}" if map_text else None
+        t1, t2 = row.select_one("td.team1"), row.select_one("td.team2")
+        meetings.append({
+            "match_id": match_id,
+            "match_date": match_date,
+            "h2h_date": datetime.datetime.fromtimestamp(int(unix) / 1000, tz=datetime.timezone.utc) if unix else None,
+            "team1_name": t1.get_text(" ", strip=True) if t1 else None,
+            "team2_name": t2.get_text(" ", strip=True) if t2 else None,
+            "team1_won": ("winner" in (t1.get("class") or [])) if t1 else None,
+            "event_name": (row.select_one("td.event").get_text(" ", strip=True) if row.select_one("td.event") else None),
+            "map_name": map_name if map_name in MAP_POOL else None,
+            "team1_score": int(scores[0]) if len(scores) >= 2 else None,
+            "team2_score": int(scores[1]) if len(scores) >= 2 else None,
+        })
+    return scalars, meetings
+
+
+def _parse_lineups(soup: BeautifulSoup) -> list[list[dict]]:
+    """
+    The announced starting five per team, with AWP/IGL roles where HLTV marks them.
+
+    This is the honest source for roster features. Rosters were previously derived
+    from the per-map stats tables, which only exist once the match is over — so a
+    roster feature built from them could never have been available at prediction
+    time. The lineup box is rendered before the match starts.
+    """
+    out: list[list[dict]] = []
+    for box in soup.select(".lineups .lineup")[:2]:
+        players = []
+        for cell in box.select(".player"):
+            link = cell.select_one("a[href*='/player/']")
+            if not link:
+                continue
+            # the lineup box holds only a photo, so the nick comes from the image
+            # title ("Danil 'molodoy' Golubenko") or, failing that, the href slug
+            name = ""
+            img = cell.select_one("img[title], img[alt]")
+            if img:
+                blurb = img.get("title") or img.get("alt") or ""
+                quoted = re.search(r"['\u2018\u2019\"](.+?)['\u2018\u2019\"]", blurb)
+                if quoted:
+                    name = quoted.group(1)
+            if not name:
+                parts = (link.get("href") or "").rstrip("/").split("/")
+                name = parts[-1] if parts else ""
+            # roles live in a sibling .role-pills container, not on the link's parent
             players.append({
-                "team_name": team_name,
-                "player_id": player_id,
-                "player_name": player_link.get_text(strip=True),
-                "kills": _float(cols[1]),
-                "deaths": _float(cols[2]),
-                "adr": _float(cols[3]) if len(cols) > 3 else None,
-                "kast": _float(cols[4]) if len(cols) > 4 else None,
-                "rating": _float(cols[5]) if len(cols) > 5 else None,
+                "player_id": _href_id(link),
+                "player_name": name,
+                "is_awp": cell.select_one(".role-pill--awp") is not None,
+                "is_igl": cell.select_one(".role-pill--igl") is not None,
             })
-    return players
+        seen, unique = set(), []
+        for pl in players:
+            if pl["player_id"] in seen:
+                continue
+            seen.add(pl["player_id"])
+            unique.append(pl)
+        out.append(unique)
+    while len(out) < 2:
+        out.append([])
+    return out
+
+
+def _href_id(link) -> int | None:
+    """The numeric id out of an HLTV /team/{id}/slug or /player/{id}/slug href."""
+    if not link:
+        return None
+    parts = (link.get("href") or "").split("/")
+    try:
+        return int(parts[2]) if len(parts) >= 3 else None
+    except ValueError:
+        return None
+
+
+def _parse_half_scores(mapholder_el, context: str = "") -> dict:
+    hs = mapholder_el.select_one(".results-center-half-score")
+    if not hs:
+        return {"team_a_h1_score": None, "team_b_h1_score": None, "team_a_started_ct": None}
+    # Spans with a class are the score values; classless spans are separators (: and ;)
+    spans = [s for s in hs.select("span") if s.get("class")]
+    if len(spans) < 4:
+        logger.warning("Half-score element found but only %d scored spans (expected >=4) [%s]", len(spans), context)
+        return {"team_a_h1_score": None, "team_b_h1_score": None, "team_a_started_ct": None}
+    try:
+        team_a_h1 = int(spans[0].get_text(strip=True))
+        team_b_h1 = int(spans[1].get_text(strip=True))
+        team_a_side_h1 = (spans[0].get("class") or [""])[0]
+        if team_a_side_h1 not in ("ct", "t"):
+            logger.warning("Unexpected starting-side class %r (expected 'ct' or 't') [%s]", team_a_side_h1, context)
+        if team_a_h1 + team_b_h1 > 15:
+            logger.warning("H1 scores sum to %d > 15 (impossible in regulation) [%s]", team_a_h1 + team_b_h1, context)
+        return {
+            "team_a_h1_score": team_a_h1,
+            "team_b_h1_score": team_b_h1,
+            "team_a_started_ct": int(team_a_side_h1 == "ct"),
+        }
+    except (ValueError, IndexError):
+        logger.warning("Failed to parse half-score values [%s]", context)
+        return {"team_a_h1_score": None, "team_b_h1_score": None, "team_a_started_ct": None}
 
 
 def parse_match_detail_html(soup: BeautifulSoup, match_id: int, stars: int = 0) -> dict | None:
@@ -262,18 +596,24 @@ def parse_match_detail_html(soup: BeautifulSoup, match_id: int, stars: int = 0) 
                 team_ids.append(None)
 
         if len(team_names) < 2:
+            logger.warning("match %d: found %d team name(s), expected 2 — skipping", match_id, len(team_names))
             return None
 
-        rank_els = soup.select(".teamRanking a")
-        ranks = []
-        for el in rank_els[:2]:
-            text = el.get_text(strip=True).lstrip("#")
-            try:
-                ranks.append(int(text))
-            except ValueError:
-                ranks.append(None)
+        # Every .teamRanking div carries both an HLTV rank and a Valve Regional
+        # Standings rank. Only HLTV was read, and it is absent for lower-tier teams —
+        # which is why rank_diff was NaN on ~19% of rows, concentrated exactly where
+        # the model is weakest. VRS is present on those rows.
+        ranks, vrs_ranks = [], []
+        ranking_divs = soup.select(".teamRanking")
+        if len(ranking_divs) < 2:
+            logger.warning("match %d: found %d .teamRanking div(s), expected 2", match_id, len(ranking_divs))
+        for ranking_div in ranking_divs[:2]:
+            ranks.append(_ranking_value(ranking_div, "a.hltv-ranking", "HLTV:"))
+            vrs_ranks.append(_ranking_value(ranking_div, "a.vrs-ranking", "VRS:"))
         while len(ranks) < 2:
             ranks.append(None)
+        while len(vrs_ranks) < 2:
+            vrs_ranks.append(None)
 
         event_el = soup.select_one(".event a")
         event_name = event_el.get_text(strip=True) if event_el else ""
@@ -284,10 +624,29 @@ def parse_match_detail_html(soup: BeautifulSoup, match_id: int, stars: int = 0) 
 
         date_el = soup.select_one(".date")
         match_date = None
+        match_time = None
         if date_el:
             ts = date_el.get("data-unix")
             if ts:
-                match_date = datetime.datetime.fromtimestamp(int(ts) / 1000, tz=datetime.timezone.utc).date()
+                # The page carries the real kick-off time; truncating to a date is
+                # what forced Elo into same-day batch updates and left market-timing
+                # analysis guessing at when a match actually started.
+                match_time = datetime.datetime.fromtimestamp(int(ts) / 1000, tz=datetime.timezone.utc)
+                match_date = match_time.date()
+        if match_date is None:
+            logger.warning("match %d: could not parse match_date", match_id)
+
+        if not fmt:
+            logger.warning("match %d: empty format string — bo_type and is_lan will be wrong", match_id)
+
+        raw_map_names = [
+            el.select_one(".mapname").get_text(strip=True)
+            for el in soup.select(".mapholder")
+            if el.select_one(".mapname")
+        ]
+        if any(n.lower() == "default" for n in raw_map_names):
+            logger.info("match %d: contains a forfeit/default map — skipping", match_id)
+            return None
 
         maps = []
         for map_el in soup.select(".mapholder"):
@@ -295,53 +654,131 @@ def parse_match_detail_html(soup: BeautifulSoup, match_id: int, stars: int = 0) 
             score_els = map_el.select(".results-team-score")
             if name_el and len(score_els) >= 2:
                 try:
+                    stats_link = map_el.select_one("a.results-stats[href*='mapstatsid']")
+                    msid_match = re.search(r"mapstatsid/(\d+)/", stats_link["href"]) if stats_link else None
+                    raw_map = name_el.get_text(strip=True)
+                    ctx = f"match {match_id} map {raw_map}"
                     maps.append({
-                        "map": name_el.get_text(strip=True),
+                        "map": raw_map,
                         "score_a": int(score_els[0].get_text(strip=True)),
                         "score_b": int(score_els[1].get_text(strip=True)),
+                        "mapstatsid": msid_match.group(1) if msid_match else None,
+                        **_parse_half_scores(map_el, context=ctx),
                     })
+                    if not msid_match:
+                        logger.warning("match %d map %r: no mapstatsid found — per-map player stats unavailable", match_id, raw_map)
                 except ValueError:
                     pass
 
-        veto = _parse_veto(soup)
-        players = _parse_player_stats(soup)
-        team_a_players = [p for p in players if p["team_name"] == team_names[0]]
-        team_b_players = [p for p in players if p["team_name"] == team_names[1]]
+        if not maps:
+            logger.warning("match %d: no playable maps found — page may not be fully rendered", match_id)
 
-        picked_maps: dict[str, str] = {}
-        for v in veto:
-            text = v["text"].lower()
-            for m in ["inferno", "mirage", "nuke", "dust2", "anubis", "ancient", "vertigo"]:
-                if m in text and "picked" in text:
-                    picker = team_names[0] if team_names[0].lower() in text else (team_names[1] if team_names[1].lower() in text else "")
-                    if picker:
-                        picked_maps[f"de_{m}"] = picker
+        veto = _parse_veto(soup, team_names, team_ids, context=f"match {match_id}")
+        picked_maps = {
+            v["map_name"]: v["team_name"]
+            for v in veto
+            if v["action"] == "picked" and v["map_name"] and v["team_name"]
+        }
 
         # Demo download link
         demo_link_el = soup.select_one("a[href*='/download/demo/']")
         demo_url = f"{_BASE_URL}{demo_link_el['href']}" if demo_link_el else None
 
+        lineups = _parse_lineups(soup)
+        h2h_scalars, h2h_rows = _parse_h2h(soup, match_id, match_date)
+        form_rows = _parse_recent_form(soup, match_id, match_date)
+        event_context = _parse_event_context(fmt)
+        veto_rows = [
+            {"match_id": match_id, "match_date": match_date, **v}
+            for v in veto
+        ]
+
+        has_sub = "substitut" in fmt.lower()
+        bo_type = _parse_bo_type(fmt)
         rows = []
-        for m in maps:
+        player_rows: list[dict] = []
+        series_a, series_b = 0, 0
+        for idx, m in enumerate(maps):
             map_name = f"de_{m['map'].lower()}" if not m["map"].startswith("de_") else m["map"].lower()
+            ctx = f"match {match_id} map {map_name}"
             team_a_won = m["score_a"] > m["score_b"]
+
+            if map_name not in MAP_POOL:
+                logger.warning("match %d: map %r not in MAP_POOL — new map added to pool?", match_id, map_name)
+                continue
+
+            if m.get("team_a_h1_score") is None:
+                logger.warning("%s: half scores missing", ctx)
+
+            per_map_sc = soup.find(id=f"{m['mapstatsid']}-content") if m.get("mapstatsid") else None
+            per_map_players = []
+            if per_map_sc is not None:
+                for side in _STAT_SIDES:
+                    per_map_players.extend(
+                        _parse_player_stats(per_map_sc, context=ctx, has_sub=has_sub, side=side)
+                    )
+
+            # Match on team_id, not display name. The name comparison dropped a whole
+            # team's players whenever the stats table spelled the name differently
+            # from the match header.
+            overall = [p for p in per_map_players if p["side"] == "all"]
+            team_a_players = [p for p in overall if _same_team(p, team_ids[0], team_names[0])]
+            team_b_players = [p for p in overall if _same_team(p, team_ids[1], team_names[1])]
+
+            if overall and not team_a_players:
+                logger.warning("%s: team_a %r (id=%s) not found in stats (found %s)", ctx, team_names[0], team_ids[0],
+                               list({(p["team_id"], p["team_name"]) for p in overall}))
+            if overall and not team_b_players:
+                logger.warning("%s: team_b %r (id=%s) not found in stats (found %s)", ctx, team_names[1], team_ids[1],
+                               list({(p["team_id"], p["team_name"]) for p in overall}))
+
+            for p in per_map_players:
+                is_a = _same_team(p, team_ids[0], team_names[0])
+                player_rows.append({
+                    "match_id": match_id,
+                    "match_date": match_date,
+                    "map_name": map_name,
+                    "mapstatsid": m.get("mapstatsid"),
+                    "is_team_a": is_a,
+                    **p,
+                })
+
             rows.append({
                 "match_id": match_id,
                 "match_date": match_date,
                 "event_name": event_name,
                 "event_tier": stars,
                 "format": fmt,
+                "bo_type": bo_type,
+                "is_lan": int("(LAN)" in fmt),
                 "team_a_name": team_names[0],
                 "team_a_id": team_ids[0] if team_ids else None,
                 "team_b_name": team_names[1],
                 "team_b_id": team_ids[1] if len(team_ids) > 1 else None,
                 "team_a_rank": ranks[0],
                 "team_b_rank": ranks[1],
+                "team_a_vrs_rank": vrs_ranks[0],
+                "team_b_vrs_rank": vrs_ranks[1],
+                "match_time": match_time,
+                "mapstatsid": m.get("mapstatsid"),
+                "team_a_lineup_ids": [pl["player_id"] for pl in lineups[0]],
+                "team_b_lineup_ids": [pl["player_id"] for pl in lineups[1]],
+                **h2h_scalars,
+                **event_context,
+                "team_a_awp_id": next((pl["player_id"] for pl in lineups[0] if pl["is_awp"]), None),
+                "team_b_awp_id": next((pl["player_id"] for pl in lineups[1] if pl["is_awp"]), None),
                 "map_name": map_name,
+                "map_position_in_series": idx + 1,
+                "is_decider": float(map_name not in picked_maps),
+                "team_a_series_score": series_a,
+                "team_b_series_score": series_b,
                 "team_a_score": m["score_a"],
                 "team_b_score": m["score_b"],
                 "team_a_won": int(team_a_won),
                 "team_a_picked_map": _picked_map_value(picked_maps, map_name, team_names[0]),
+                "team_a_h1_score": m.get("team_a_h1_score"),
+                "team_b_h1_score": m.get("team_b_h1_score"),
+                "team_a_started_ct": m.get("team_a_started_ct"),
                 "team_a_player_ids": [p["player_id"] for p in team_a_players],
                 "team_a_player_names": [p["player_name"] for p in team_a_players],
                 "team_b_player_ids": [p["player_id"] for p in team_b_players],
@@ -349,8 +786,13 @@ def parse_match_detail_html(soup: BeautifulSoup, match_id: int, stars: int = 0) 
                 "team_a_avg_rating": _avg_rating(team_a_players),
                 "team_b_avg_rating": _avg_rating(team_b_players),
             })
+            if team_a_won:
+                series_a += 1
+            else:
+                series_b += 1
 
-        return {"rows": rows, "demo_url": demo_url}
+        return {"rows": rows, "players": player_rows, "veto": veto_rows,
+                "h2h": h2h_rows, "recent_form": form_rows, "demo_url": demo_url}
 
     except Exception as exc:
         logger.warning("Failed to parse match %d: %s", match_id, exc)

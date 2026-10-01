@@ -21,6 +21,7 @@ optional = true
 
 [tool.poetry.group.pipelines.dependencies]
 beautifulsoup4 = "*"
+lxml = "^6.0"
 zenrows = "^1.4.1"
 nodriver = "*"
 demoparser2 = "*"

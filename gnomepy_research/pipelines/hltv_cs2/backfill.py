@@ -29,13 +29,16 @@ import asyncio
 import calendar
 import datetime
 import gzip
+import json
 import logging
+import re
 import shutil
 import subprocess
 import time
 from pathlib import Path
 
 import nodriver as uc
+from nodriver import cdp
 import pandas as pd
 from bs4 import BeautifulSoup
 
@@ -52,6 +55,8 @@ from gnomepy_research.pipelines.hltv_cs2.scraper import (
     parse_match_ids_from_html,
     parse_team_ranking_html,
 )
+from gnomepy_research.pipelines.hltv_cs2.html_cache import CachePolicy, HtmlCache
+from gnomepy_research.pipelines.hltv_cs2.sides import attach_team_keyed_scores
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +71,32 @@ _CF_PHRASES = (
     "Checking your browser",
     "Performing security verification",
 )
+
+# HLTV rate-limits on cumulative request volume, and a block does NOT look like a
+# Cloudflare challenge. Without these the scraper cannot tell it is being refused:
+# _wait_for_page would spin to its deadline, _get_html would retry three times, and
+# every page would burn 90s and be silently skipped for as long as the block lasted.
+_BLOCK_PHRASES = (
+    "Access denied",
+    "access to this page has been denied",
+    "Too many requests",
+    "Rate limited",
+    "You have been blocked",
+    "Error 1015",
+    "Error 429",
+)
+
+_SELECTOR_GRACE = 3.0    # seconds to keep looking after the document is complete
+# _BLOCK_PHRASES is a best guess at HLTV's wording. If it is wrong, a block looks
+# exactly like a page that loaded without the selector — complete, no .teamRanking —
+# and fail-fast would quietly skip every page. A run of consecutive failures is the
+# wording-independent signal that something is systematically wrong.
+_MAX_CONSECUTIVE_FAILURES = 15
+_POLL_INTERVAL = 0.15
+
+
+class RateLimited(RuntimeError):
+    """HLTV is refusing requests. Continuing would escalate the block."""
 
 _download_state: dict = {}
 
@@ -92,20 +123,69 @@ def _on_download_progress(event: uc.cdp.browser.DownloadProgress) -> None:
         _download_state["done"] = True
 
 
-async def _wait_for_page(page: uc.Tab, url: str, wait_selector: str | None, base_timeout: float = 30.0) -> str | None:
-    """Wait for a page to load, notifying user on CF and waiting for manual solve."""
+_PROBE_JS = """
+(() => {
+  const t = (document.body ? document.body.textContent : "").slice(0, 6000);
+  const has = ps => ps.some(p => t.toLowerCase().includes(p.toLowerCase()));
+  return JSON.stringify({
+    n: document.querySelectorAll(%s).length,
+    cf: has(%s),
+    blocked: has(%s),
+    ready: document.readyState === "complete",
+    footer: !!document.querySelector("footer")
+  });
+})()
+"""
+
+
+async def _probe(page: uc.Tab, selector: str) -> dict | None:
+    """
+    Readiness, Cloudflare and block state in a single scalar round-trip.
+
+    The previous implementation called page.get_content() every poll, which is
+    DOM.getDocument(depth=-1, pierce=True) — the whole DOM serialised to JSON and
+    rebuilt as tens of thousands of Python objects, then discarded — just to run a
+    substring count. Runtime.evaluate returns one string instead.
+
+    nodriver's Tab.evaluate wrapper always sends serialization_options, which
+    overrides returnByValue and makes it drop falsy results, so the CDP command is
+    sent directly and .value read off the RemoteObject.
+    """
+    expr = _PROBE_JS % (json.dumps(selector), json.dumps(list(_CF_PHRASES)), json.dumps(list(_BLOCK_PHRASES)))
+    try:
+        obj, _errors = await page.send(cdp.runtime.evaluate(expression=expr, return_by_value=True))
+    except Exception:
+        return None
+    if obj is None or obj.value is None:
+        return None
+    try:
+        return json.loads(obj.value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _wait_for_page(page: uc.Tab, url: str, wait_selector: str | None, base_timeout: float = 30.0, wait_count: int = 1) -> str | None:
+    """
+    Wait for a page to load, prompting on Cloudflare and aborting on a block.
+
+    Raises RateLimited when HLTV refuses the request — retrying into a block only
+    escalates it, and a silently-skipped page is worse than a failed run.
+    """
     cf_seen = False
     notified = False
+    complete_since: float | None = None
     deadline = time.monotonic() + base_timeout
 
     while time.monotonic() < deadline:
-        try:
-            content = await page.get_content()
-        except Exception:
-            await asyncio.sleep(2.0)
+        state = await _probe(page, wait_selector or "html")
+        if state is None:
+            await asyncio.sleep(0.3)
             continue
 
-        if any(p in content for p in _CF_PHRASES):
+        if state.get("blocked"):
+            raise RateLimited(f"HLTV refused {url} — cumulative rate limit reached")
+
+        if state.get("cf"):
             if not cf_seen:
                 cf_seen = True
                 deadline = time.monotonic() + _CF_TIMEOUT
@@ -113,31 +193,59 @@ async def _wait_for_page(page: uc.Tab, url: str, wait_selector: str | None, base
                 logger.info("CF challenge on %s — solve in Chrome...", url)
                 _notify_cf(url)
                 notified = True
-            await asyncio.sleep(2.0)
+            complete_since = None
+            await asyncio.sleep(1.0)
             continue
 
-        if not wait_selector or wait_selector in content:
+        selector_met = not wait_selector or state.get("n", 0) >= wait_count
+        # The selector alone is not readiness. Both wait selectors sit near the top
+        # of the page, so returning on them captured documents mid-stream: 34
+        # results listings and 36 match pages were cached with everything below
+        # the cut missing, silently dropping 406 series. Only a fully parsed
+        # document that has reached its footer is complete.
+        if selector_met and state.get("ready") and state.get("footer"):
             if cf_seen:
                 logger.info("CF resolved on %s", url)
-            return content
+            try:
+                return await page.get_content()
+            except Exception:
+                await asyncio.sleep(0.3)
+                continue
 
-        await asyncio.sleep(2.0)
+        # A complete document that still lacks the selector (or a footer) will
+        # never grow one. Waiting out the full 30s three times costs 90s per page.
+        if state.get("ready"):
+            if complete_since is None:
+                complete_since = time.monotonic()
+            elif time.monotonic() - complete_since > _SELECTOR_GRACE:
+                missing = "a footer" if selector_met else f"'{wait_selector}'"
+                logger.info("%s loaded without %s — not waiting further", url, missing)
+                return None
+
+        await asyncio.sleep(_POLL_INTERVAL)
 
     logger.warning("Timed out on %s (cf_seen=%s, selector='%s')", url, cf_seen, wait_selector)
     return None
 
 
-async def _get_html(page: uc.Tab, url: str, wait_selector: str | None = None, retries: int = 3) -> str | None:
-    """Navigate to URL and return page HTML once CF resolves and target element appears."""
+async def _get_html(page: uc.Tab, url: str, wait_selector: str | None = None, retries: int = 3, wait_count: int = 1) -> str | None:
+    """
+    Navigate and return the page HTML once it is ready.
+
+    RateLimited is deliberately not retried: retrying into a block escalates it,
+    and the whole point of detecting it is to stop rather than burn the remaining
+    pages against a refusing server.
+    """
     for attempt in range(1, retries + 1):
         try:
             await page.get(url)
-            await asyncio.sleep(2.0)
-            html = await _wait_for_page(page, url, wait_selector)
+            html = await _wait_for_page(page, url, wait_selector, wait_count=wait_count)
             if html is not None:
                 return html
             if attempt < retries:
                 logger.info("Retrying %s (attempt %d/%d)...", url, attempt + 1, retries)
+        except RateLimited:
+            raise
         except Exception as exc:
             logger.warning("nodriver error for %s (attempt %d/%d): %s", url, attempt, retries, exc)
     return None
@@ -255,7 +363,9 @@ def _extract_dem(archive_path: Path) -> list[Path]:
     return []
 
 
-def _publish_match_data(match_rows: list[dict], demo_rows: list[dict]) -> None:
+def _publish_match_data(match_rows: list[dict], demo_rows: list[dict], player_rows: list[dict] | None = None, veto_rows: list[dict] | None = None,
+                        h2h_rows: list[dict] | None = None,
+                        form_rows: list[dict] | None = None) -> None:
     if match_rows:
         df = pd.DataFrame(match_rows)
         df["match_date"] = pd.to_datetime(df["match_date"])
@@ -264,15 +374,54 @@ def _publish_match_data(match_rows: list[dict], demo_rows: list[dict]) -> None:
     else:
         logger.warning("No match rows — cs2_match_history not updated")
 
+    if player_rows:
+        df = pd.DataFrame(player_rows)
+        df["match_date"] = pd.to_datetime(df["match_date"])
+        logger.info("Publishing cs2_player_map_stats (%d rows)...", len(df))
+        merge_publish("cs2_player_map_stats", df,
+                      ["match_id", "map_name", "player_id", "side"], "match_date")
+
+    if veto_rows:
+        df = pd.DataFrame(veto_rows)
+        df["match_date"] = pd.to_datetime(df["match_date"])
+        logger.info("Publishing cs2_match_veto (%d rows)...", len(df))
+        merge_publish("cs2_match_veto", df, ["match_id", "order"], "match_date")
+
+    if h2h_rows:
+        df = pd.DataFrame(h2h_rows)
+        df["match_date"] = pd.to_datetime(df["match_date"])
+        logger.info("Publishing cs2_h2h_history (%d rows)...", len(df))
+        merge_publish("cs2_h2h_history", df, ["match_id", "h2h_date", "map_name"], "match_date")
+
+    if form_rows:
+        df = pd.DataFrame(form_rows)
+        df["match_date"] = pd.to_datetime(df["match_date"])
+        logger.info("Publishing cs2_team_recent_form (%d rows)...", len(df))
+        merge_publish("cs2_team_recent_form", df, ["match_id", "team_index", "position"], "match_date")
+
     if demo_rows:
         df = pd.DataFrame(demo_rows)
         df["match_date"] = pd.to_datetime(df["match_date"])
+        if match_rows:
+            history = pd.DataFrame(match_rows)
+            history["match_date"] = pd.to_datetime(history["match_date"])
+        else:
+            history = DatasetStore().load("cs2_match_history")
+        df, dropped = attach_team_keyed_scores(df, history)
+        if len(dropped):
+            logger.warning(
+                "dropped %d map(s) that could not be reconciled with HLTV scores: %s",
+                len(dropped), dropped.reason.value_counts().to_dict(),
+            )
+        if df.empty:
+            logger.warning("No reconcilable round rows — cs2_round_features not updated")
+            return
         logger.info("Publishing cs2_round_features (%d rows)...", len(df))
         merge_publish("cs2_round_features", df, ["match_id", "map_name"], "match_date")
 
 
 async def backfill_matches(
-    page: uc.Tab,
+    fetcher: "HltvFetcher",
     start_date: datetime.date,
     end_date: datetime.date,
     min_stars_match: int = 0,
@@ -283,9 +432,18 @@ async def backfill_matches(
     """
     Scrape all matches for every date in [start_date, end_date].
     Accumulates data across all dates and publishes once in the finally block.
-    Returns True on full success, False if short-circuited on any failure.
+    Pages are served from the cache where possible, so a re-run only fetches what is
+    still missing. Unreachable dates and failed demos are skipped and reported rather
+    than aborting the pass.
     """
     match_rows: list[dict] = []
+    player_rows: list[dict] = []
+    veto_rows: list[dict] = []
+    h2h_rows: list[dict] = []
+    form_rows: list[dict] = []
+    failed_dates: list[datetime.date] = []
+    n_demos_failed = 0
+    consecutive_failures = 0
     demo_rows: list[dict] = []
     stars_param = f"&stars={min_stars_match}" if min_stars_match >= 2 else ""
 
@@ -299,10 +457,14 @@ async def backfill_matches(
 
             while True:
                 url = f"{_BASE_URL}/results?startDate={current.isoformat()}&endDate={current.isoformat()}&offset={offset}{stars_param}"
-                html = await _get_html(page, url, wait_selector="contentCol")
+                html, _ = await fetcher.html(url, kind="results", wait_selector=".contentCol")
                 if html is None:
-                    logger.warning("Match listing failed for %s at offset %d — short-circuiting", current, offset)
-                    return False
+                    # One unreachable day must not end an unattended multi-hour pass.
+                    # Per-page cache write-through means a later re-run only refetches
+                    # what is still missing, so skipping the date is recoverable.
+                    logger.warning("Match listing failed for %s at offset %d — skipping this date", current, offset)
+                    failed_dates.append(current)
+                    break
                 if "results-all" not in html:
                     logger.info("No matches for %s at offset %d", current, offset)
                     break
@@ -332,19 +494,33 @@ async def backfill_matches(
             for i, (match_id, match_href, match_stars) in enumerate(matches):
                 n = i + 1
                 logger.info("[%d/%d] match %d — fetching page", n, len(matches), match_id)
-                html = await _get_html(page, f"{_BASE_URL}{match_href}", wait_selector="mapholder")
+                html, page_fetched_at = await fetcher.html(
+                    f"{_BASE_URL}{match_href}", kind="match",
+                    wait_selector=".teamRanking", wait_count=2,
+                )
                 if html is None:
-                    logger.warning("[%d/%d] match %d — no HTML, short-circuiting", n, len(matches), match_id)
-                    return False
+                    consecutive_failures += 1
+                    if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                        raise RateLimited(
+                            f"{consecutive_failures} consecutive match pages failed — "
+                            "almost certainly blocked or rate-limited, stopping before it escalates"
+                        )
+                    logger.warning("[%d/%d] match %d — page timed out (cancelled/no rankings?) — skipping", n, len(matches), match_id)
+                    continue
+                consecutive_failures = 0
 
-                soup = BeautifulSoup(html, "html.parser")
+                soup = BeautifulSoup(html, "lxml")
                 result = parse_match_detail_html(soup, match_id, stars=match_stars)
                 if result is None:
-                    logger.warning("[%d/%d] match %d — parse failed, short-circuiting", n, len(matches), match_id)
-                    return False
+                    logger.warning("[%d/%d] match %d — parse returned None — skipping", n, len(matches), match_id)
+                    continue
 
                 if result["rows"]:
                     match_rows.extend(result["rows"])
+                    player_rows.extend(result.get("players", []))
+                    veto_rows.extend(result.get("veto", []))
+                    h2h_rows.extend(result.get("h2h", []))
+                    form_rows.extend(result.get("recent_form", []))
                     logger.info("[%d/%d] match %d — %d maps parsed (stars=%d)", n, len(matches), match_id, len(result["rows"]), match_stars)
                 else:
                     logger.warning("[%d/%d] match %d — no map rows", n, len(matches), match_id)
@@ -361,15 +537,17 @@ async def backfill_matches(
 
                 logger.info("[%d/%d] match %d — downloading demo (stars=%d)", n, len(matches), match_id, match_stars)
 
-                archive = await _download_demo(page, demo_url)
+                archive = await _download_demo(await fetcher.page(), demo_url)
                 if archive is None:
-                    logger.warning("[%d/%d] match %d — demo download failed, short-circuiting", n, len(matches), match_id)
-                    return False
+                    logger.warning("[%d/%d] match %d — demo download failed, skipping", n, len(matches), match_id)
+                    n_demos_failed += 1
+                    continue
 
                 dem_paths = _extract_dem(archive)
                 if not dem_paths:
-                    logger.warning("[%d/%d] match %d — demo extraction failed, short-circuiting", n, len(matches), match_id)
-                    return False
+                    logger.warning("[%d/%d] match %d — demo extraction failed, skipping", n, len(matches), match_id)
+                    n_demos_failed += 1
+                    continue
 
                 match_date = result["rows"][0]["match_date"] if result["rows"] else None
                 score_by_map = {
@@ -426,11 +604,16 @@ async def backfill_matches(
         return True
 
     finally:
-        _publish_match_data(match_rows, demo_rows)
+        if failed_dates:
+            logger.warning("%d date(s) could not be listed and were skipped: %s",
+                           len(failed_dates), ", ".join(d.isoformat() for d in failed_dates[:10]))
+        if n_demos_failed:
+            logger.warning("%d demo(s) failed and were skipped", n_demos_failed)
+        _publish_match_data(match_rows, demo_rows, player_rows, veto_rows, h2h_rows, form_rows)
 
 
 async def backfill_rankings(
-    page: uc.Tab,
+    fetcher: "HltvFetcher",
     start_date: datetime.date,
     end_date: datetime.date,
 ) -> None:
@@ -443,9 +626,9 @@ async def backfill_rankings(
     for j, date in enumerate(mondays):
         month_name = calendar.month_name[date.month].lower()
         url = f"{_BASE_URL}/ranking/teams/{date.year}/{month_name}/{date.day}"
-        html = await _get_html(page, url, wait_selector="ranked-team")
+        html, _ = await fetcher.html(url, kind="ranking", wait_selector=".ranked-team")
         if html:
-            soup = BeautifulSoup(html, "html.parser")
+            soup = BeautifulSoup(html, "lxml")
             rows = parse_team_ranking_html(soup, date)
             if rows:
                 ranking_rows.extend(rows)
@@ -477,26 +660,200 @@ def backfill_priors() -> None:
     logger.info("Priors backfill complete.")
 
 
-async def _run_with_browser(coro) -> None:
-    """Start a Chrome browser, run coro(page), stop browser when done."""
-    _DEMO_TMP.mkdir(parents=True, exist_ok=True)
-    _CHROME_PROFILE.mkdir(parents=True, exist_ok=True)
+def _is_complete(html: str) -> bool:
+    """
+    Whether a captured page reached its footer.
 
-    browser = await uc.start(headless=False, user_data_dir=str(_CHROME_PROFILE))
-    page = await browser.get("about:blank")
+    A DOM serialised mid-load still ends in </html> - the browser closes open tags
+    on capture - so the file looks whole. The footer is the reliable tell.
+    """
+    return "<footer" in html
 
-    await page.send(uc.cdp.browser.set_download_behavior(
-        behavior="allow",
-        download_path=str(_DEMO_TMP),
-        events_enabled=True,
-    ))
-    browser.add_handler(uc.cdp.browser.DownloadWillBegin, _on_download_begin)
-    browser.add_handler(uc.cdp.browser.DownloadProgress, _on_download_progress)
 
+def _is_cacheable(kind: str, html: str) -> bool:
+    """
+    Guard the immutable tier.
+
+    Match pages are cached forever on the premise that a finished match never
+    changes. A live or postponed page would be frozen wrong, so require evidence
+    the match actually completed before storing one. Nothing is cached without
+    its footer: a truncated listing hides matches, and a truncated match page
+    loses the stats, veto, head-to-head and form sections at the bottom.
+    """
+    if not _is_complete(html):
+        logger.warning("not caching an incomplete page (no footer)")
+        return False
+    if kind != "match":
+        return True
+    if "results-team-score" not in html:
+        logger.info("not caching a match page with no final scores (live or postponed?)")
+        return False
+    return True
+
+
+class HltvFetcher:
+    """
+    Cache-first page access with a lazily started browser.
+
+    Chrome is the expensive part — it needs a visible window for the Cloudflare
+    challenge — so it must not start at all when every page is already cached.
+    That is where a re-parse goes from hours to minutes, and it only works if the
+    browser is created on the first genuine miss rather than up front.
+    """
+
+    def __init__(self, cache: HtmlCache):
+        self._cache = cache
+        self._browser = None
+        self._page = None
+
+    async def page(self) -> uc.Tab:
+        if self._page is None:
+            _DEMO_TMP.mkdir(parents=True, exist_ok=True)
+            _CHROME_PROFILE.mkdir(parents=True, exist_ok=True)
+            logger.info("starting Chrome (first cache miss)")
+            self._browser = await uc.start(headless=False, user_data_dir=str(_CHROME_PROFILE))
+            self._page = await self._browser.get("about:blank")
+            await self._page.send(uc.cdp.browser.set_download_behavior(
+                behavior="allow", download_path=str(_DEMO_TMP), events_enabled=True,
+            ))
+            self._browser.add_handler(uc.cdp.browser.DownloadWillBegin, _on_download_begin)
+            self._browser.add_handler(uc.cdp.browser.DownloadProgress, _on_download_progress)
+        return self._page
+
+    async def html(
+        self, url: str, *, kind: str, wait_selector: str | None = None, wait_count: int = 1,
+    ) -> tuple[str | None, datetime.datetime | None]:
+        hit = self._cache.get(url, kind=kind)
+        if hit is not None and _is_complete(hit.html):
+            return hit.html, hit.fetched_at
+        if hit is not None:
+            logger.info("cached copy of %s is truncated — refetching", url)
+        page = await self.page()
+        fetched_at = datetime.datetime.now(datetime.timezone.utc)
+        html = await _get_html(page, url, wait_selector, wait_count=wait_count)
+        if html is not None and _is_cacheable(kind, html):
+            # Write through per page, never batched: a ten-hour run that stalls on
+            # Cloudflare must resume against what it already fetched.
+            self._cache.put(url, html, kind=kind, fetched_at=fetched_at)
+        return html, fetched_at
+
+    def stop(self) -> None:
+        if self._browser is not None:
+            self._browser.stop()
+            self._browser = None
+            self._page = None
+
+
+async def _run_with_fetcher(coro, policy: CachePolicy | None = None) -> None:
+    """Run coro(fetcher); Chrome starts only if something is not cached."""
+    cache = HtmlCache(policy=policy or CachePolicy())
     try:
-        await coro(page)
+        cache.warm_index()
+    except Exception as exc:
+        logger.warning("could not warm the remote cache index (%s) — falling back to per-key lookups", exc)
+    fetcher = HltvFetcher(cache)
+    try:
+        await coro(fetcher)
     finally:
-        browser.stop()
+        fetcher.stop()
+        cache.sync_pending()
+
+
+def parse_cache_to_frames(
+    start: datetime.date | None = None, end: datetime.date | None = None,
+) -> dict[str, pd.DataFrame]:
+    """
+    Parse every cached page into DataFrames without publishing anything.
+
+    Separate from reparse_from_cache so feature work can read a partially filled
+    cache while a scrape is still running, without upserting a half month into
+    the shared datasets.
+    """
+    cache = HtmlCache()
+    stars_by_id: dict[int, int] = {}
+    listing_keys = cache.local_keys(kind="results")
+    for key in listing_keys:
+        entry = cache.read_key(key)
+        if entry is None:
+            continue
+        listed, _more = parse_match_ids_from_html(entry.html)
+        for match_id, _href, stars in listed:
+            stars_by_id[int(match_id)] = int(stars)
+    logger.info("event tiers recovered from %d cached listing page(s): %d matches",
+                len(listing_keys), len(stars_by_id))
+
+    match_keys = cache.local_keys(kind="match")
+    logger.info("re-parsing %d cached match page(s)...", len(match_keys))
+
+    rows: list[dict] = []
+    players: list[dict] = []
+    vetos: list[dict] = []
+    h2hs: list[dict] = []
+    forms: list[dict] = []
+    skipped = 0
+    truncated = 0
+    for i, key in enumerate(match_keys):
+        entry = cache.read_key(key)
+        if entry is None:
+            continue
+        if not _is_complete(entry.html):
+            truncated += 1
+            continue
+        m = re.search(r"matches_(\d+)", key)
+        if m is None:
+            continue
+        match_id = int(m.group(1))
+        result = parse_match_detail_html(
+            BeautifulSoup(entry.html, "lxml"), match_id, stars=stars_by_id.get(match_id, 0),
+        )
+        if result is None:
+            skipped += 1
+            continue
+        players.extend(result.get("players", []))
+        vetos.extend(result.get("veto", []))
+        h2hs.extend(result.get("h2h", []))
+        forms.extend(result.get("recent_form", []))
+        for row in result["rows"]:
+            if start and row["match_date"] < start:
+                continue
+            if end and row["match_date"] > end:
+                continue
+            rows.append(row)
+        if (i + 1) % 500 == 0:
+            logger.info("  %d / %d parsed, %d rows", i + 1, len(match_keys), len(rows))
+
+    logger.info("re-parse complete: %d rows from %d pages (%d skipped)", len(rows), len(match_keys), skipped)
+    if truncated:
+        logger.warning("%d cached match page(s) are truncated and were skipped — re-run the backfill "
+                       "over their dates to refetch them", truncated)
+    return {
+        "cs2_match_history": pd.DataFrame(rows),
+        "cs2_player_map_stats": pd.DataFrame(players),
+        "cs2_match_veto": pd.DataFrame(vetos),
+        "cs2_h2h_history": pd.DataFrame(h2hs),
+        "cs2_team_recent_form": pd.DataFrame(forms),
+    }
+
+
+def reparse_from_cache(start: datetime.date | None = None, end: datetime.date | None = None) -> None:
+    """
+    Rebuild the published datasets from cached HTML — no network, no Chrome.
+
+    This is what the cache is for: a parser change costs minutes here instead of
+    a multi-hour re-scrape behind a manual Cloudflare challenge.
+    """
+    frames = parse_cache_to_frames(start, end)
+    if frames["cs2_match_history"].empty:
+        logger.warning("no rows parsed — nothing published")
+        return
+    _publish_match_data(
+        frames["cs2_match_history"].to_dict("records"),
+        [],
+        frames["cs2_player_map_stats"].to_dict("records"),
+        frames["cs2_match_veto"].to_dict("records"),
+        frames["cs2_h2h_history"].to_dict("records"),
+        frames["cs2_team_recent_form"].to_dict("records"),
+    )
 
 
 def _run_cancellable(coro) -> None:
@@ -519,6 +876,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
 
+    rp_ = sub.add_parser("reparse", help="Rebuild datasets from cached HTML (no network, no browser)")
+    rp_.add_argument("--start-date", default=None)
+    rp_.add_argument("--end-date", default=None)
+
     mp = sub.add_parser("matches", help="Scrape match stats and demos")
     mp.add_argument("--start-date", required=True)
     mp.add_argument("--end-date", required=True)
@@ -526,6 +887,8 @@ if __name__ == "__main__":
     mp.add_argument("--skip-demos", action="store_true")
     mp.add_argument("--min-stars-demo", type=int, default=2, help="Min stars to download a demo")
     mp.add_argument("--match-ids", type=int, nargs="+", default=None, help="Only process these match IDs")
+    mp.add_argument("--refresh", action="store_true", help="Bypass the page cache and re-fetch")
+    mp.add_argument("--no-cache-write", action="store_true", help="Fetch live without storing pages")
 
     rp = sub.add_parser("rankings", help="Scrape weekly team rankings")
     rp.add_argument("--start-date", required=True)
@@ -542,10 +905,16 @@ if __name__ == "__main__":
         start = datetime.date.fromisoformat(args.start_date)
         end = datetime.date.fromisoformat(args.end_date)
 
-        async def _rankings(page: uc.Tab) -> None:
-            await backfill_rankings(page, start, end)
+        async def _rankings(fetcher: HltvFetcher) -> None:
+            await backfill_rankings(fetcher, start, end)
 
-        _run_cancellable(_run_with_browser(_rankings))
+        _run_cancellable(_run_with_fetcher(_rankings))
+
+    elif args.cmd == "reparse":
+        reparse_from_cache(
+            datetime.date.fromisoformat(args.start_date) if args.start_date else None,
+            datetime.date.fromisoformat(args.end_date) if args.end_date else None,
+        )
 
     elif args.cmd == "matches":
         start = datetime.date.fromisoformat(args.start_date)
@@ -555,13 +924,16 @@ if __name__ == "__main__":
         min_stars_demo = args.min_stars_demo
         match_ids = set(args.match_ids) if args.match_ids else None
 
-        async def _matches(page: uc.Tab) -> None:
+        async def _matches(fetcher: HltvFetcher) -> None:
             await backfill_matches(
-                page, start, end,
+                fetcher, start, end,
                 min_stars_match=min_stars,
                 skip_demos=skip_demos,
                 min_stars_demo=min_stars_demo,
                 match_ids=match_ids,
             )
 
-        _run_cancellable(_run_with_browser(_matches))
+        _run_cancellable(_run_with_fetcher(
+            _matches,
+            CachePolicy(refresh_all=args.refresh, write=not args.no_cache_write),
+        ))
