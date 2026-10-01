@@ -79,19 +79,19 @@ class EquivalentEventArb(TargetPortfolioStrategy):
         self._group = discover_group(event_ids, registry)
 
         all_exchanges = registry.get_exchange()
-        exchange_by_name = {e.exchange_name.lower(): e for e in all_exchanges}
+        exchange_by_code = {e.exchange_code: e for e in all_exchanges}
 
         if exchange_fees is None:
             exchange_fees = {
-                "polymarket": {"taker": 0.07, "maker": 0.0},
-                "kalshi": {"taker": 0.07, "maker": 0.0175},
+                "POLYMARKET_INTL": {"taker": 0.07, "maker": 0.0},
+                "KALSHI": {"taker": 0.07, "maker": 0.0175},
             }
 
         fee_rates: dict[int, tuple[float, float]] = {}
-        for name, rates in exchange_fees.items():
-            exchange = exchange_by_name.get(name.lower())
+        for code, rates in exchange_fees.items():
+            exchange = exchange_by_code.get(code)
             if exchange is None:
-                raise ValueError(f"Exchange '{name}' not found in registry")
+                raise ValueError(f"Exchange code '{code}' not found in registry")
             fee_rates[exchange.exchange_id] = (rates["taker"], rates["maker"])
 
         all_eids = {lst[0] for lst in self._group.all_listings}

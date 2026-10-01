@@ -4,10 +4,10 @@ strategy:
     event_ids: [[24069, 25057]]
     max_position: 1000
     exchange_fees:
-      polymarket:
+      POLYMARKET_INTL:
         taker: 0.07
         maker: 0.0
-      kalshi:
+      KALSHI:
         taker: 0.07
         maker: 0.0175
     min_pure_arb_bps: 5.0

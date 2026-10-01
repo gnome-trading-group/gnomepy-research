@@ -7,7 +7,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.13,<3.14"
-gnomepy = {version = "^2.18.1", extras = ["backtest"]}
+gnomepy = {version = "^2.19.0", extras = ["backtest"]}
 joblib = "^1.6.0"
 scikit-learn = "^1.9.1"
 xgboost = "^3.4.1"
