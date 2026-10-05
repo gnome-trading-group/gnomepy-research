@@ -3,12 +3,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from gnomepy import Side
+from gnomepy import OrderType, Side
 
 from gnomepy_research.strategies import random_trader
 from gnomepy_research.strategies.random_trader import RandomTrader
 
 SECOND = 1_000_000_000
+DOLLAR = 1_000_000_000
+CENT = DOLLAR // 100
 
 
 class FakePositions:
@@ -39,8 +41,9 @@ class Book:
 
 @pytest.fixture(autouse=True)
 def fake_intent(monkeypatch):
-    # The real Intent wraps a Java object and needs a running JVM.
+    # The real Intent wraps a Java object and the real Scales reads Java statics; both need a running JVM.
     monkeypatch.setattr(random_trader, "Intent", lambda **kw: SimpleNamespace(**kw))
+    monkeypatch.setattr(random_trader, "Scales", SimpleNamespace(PRICE=DOLLAR))
 
 
 def make(positions: FakePositions, **kwargs) -> RandomTrader:
@@ -84,3 +87,56 @@ def test_rounds_up_to_listing_minimum():
     strategy = make(FakePositions(min_size=10), max_position=50)
     [intent] = strategy.on_market_data(Book(0))
     assert intent.take_size == 10
+
+
+def test_takes_are_market_orders_by_default():
+    [intent] = make(FakePositions()).on_market_data(Book(0))
+    assert intent.take_order_type == OrderType.MARKET
+    assert not hasattr(intent, "bid_size")
+
+
+def test_limit_takes_are_priced_through_the_touch():
+    strategy = make(FakePositions(), take_type="limit", take_through=0.20)
+    book = Book(0, bid=40 * CENT, ask=42 * CENT)
+    [intent] = strategy.on_market_data(book)
+    assert intent.take_order_type == OrderType.LIMIT
+    expected = 62 * CENT if intent.take_side == Side.BID else 20 * CENT
+    assert intent.take_limit_price == expected
+
+
+def test_quote_only_rests_both_sides_outside_the_touch_without_taking():
+    strategy = make(FakePositions(min_size=5), trade=False, quote=True, quote_offset=0.02)
+    [intent] = strategy.on_market_data(Book(0, bid=40 * CENT, ask=42 * CENT))
+    assert (intent.bid_price, intent.ask_price) == (38 * CENT, 44 * CENT)
+    assert (intent.bid_size, intent.ask_size) == (5, 5)
+    assert not hasattr(intent, "take_side")
+
+
+def test_quote_and_trade_together_send_one_intent_with_both():
+    strategy = make(FakePositions(), quote=True)
+    [intent] = strategy.on_market_data(Book(0, bid=40 * CENT, ask=42 * CENT))
+    assert intent.bid_size and intent.take_size
+
+
+def test_a_quote_that_would_go_below_zero_is_skipped():
+    strategy = make(FakePositions(), trade=False, quote=True, quote_offset=0.05)
+    assert strategy.on_market_data(Book(0, bid=2 * CENT, ask=4 * CENT)) == []
+
+
+def test_nothing_enabled_sends_nothing():
+    assert make(FakePositions(), trade=False).on_market_data(Book(0)) == []
+
+
+def test_rejects_an_unknown_take_type():
+    with pytest.raises(ValueError):
+        RandomTrader(take_type="stop")
+
+
+def test_execution_reports_are_logged_with_their_reject_reason(capsys):
+    report = SimpleNamespace(
+        exchange_id=1, security_id=2, client_oid="17", exec_type=SimpleNamespace(name="REJECT"),
+        filled_qty=0, fill_price=0, leaves_qty=0, reject_reason=SimpleNamespace(name="RISK_LIMIT"),
+    )
+    assert make(FakePositions()).on_execution_report(report) == []
+    line = capsys.readouterr().out
+    assert "order 17 REJECT" in line and "reason=RISK_LIMIT" in line
