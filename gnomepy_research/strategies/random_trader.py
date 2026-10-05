@@ -74,7 +74,8 @@ class RandomTrader(Strategy):
 
     def _quote(self, exchange_id: int, security_id: int, bid: int, ask: int) -> dict:
         offset = _to_price(self.quote_offset)
-        bid_price, ask_price = bid - offset, ask + offset
+        bid_price = self.positions.compliant_price(exchange_id, security_id, bid - offset, Side.BID)
+        ask_price = self.positions.compliant_price(exchange_id, security_id, ask + offset, Side.ASK)
         if bid_price <= 0:
             return {}
         print(
@@ -101,7 +102,9 @@ class RandomTrader(Strategy):
         fields: dict = {"take_side": side, "take_size": size}
         if self.take_type == "limit":
             through = _to_price(self.take_through)
-            limit = ask + through if side == Side.BID else bid - through
+            limit = self.positions.compliant_price(
+                exchange_id, security_id, ask + through if side == Side.BID else bid - through, side
+            )
             fields.update(take_order_type=OrderType.LIMIT, take_limit_price=limit)
             detail = f"limit {_dollars(limit)}"
         else:
