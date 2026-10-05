@@ -14,9 +14,13 @@ CENT = DOLLAR // 100
 
 
 class FakePositions:
-    def __init__(self, min_size: int = 1):
+    def __init__(self, min_size: int = 1, tick: int = 1):
         self.quantity: dict[tuple[int, int], int] = {}
         self.min_size = min_size
+        self.tick = tick
+
+    def compliant_price(self, exchange_id, security_id, price, side):
+        return price // self.tick * self.tick if side == Side.BID else -(-price // self.tick) * self.tick
 
     def get_effective_quantity(self, exchange_id, security_id):
         return self.quantity.get((exchange_id, security_id), 0)
@@ -140,3 +144,14 @@ def test_execution_reports_are_logged_with_their_reject_reason(capsys):
     assert make(FakePositions()).on_execution_report(report) == []
     line = capsys.readouterr().out
     assert "order 17 REJECT" in line and "reason=RISK_LIMIT" in line
+
+
+def test_quotes_and_limit_takes_land_on_the_listing_tick():
+    tick = CENT
+    book = Book(0, bid=40 * CENT + 3_000_000, ask=42 * CENT + 3_000_000)  # an off-tick book
+    [quote] = make(FakePositions(tick=tick), trade=False, quote=True, quote_offset=0.02).on_market_data(book)
+    assert quote.bid_price % tick == 0 and quote.ask_price % tick == 0
+    assert (quote.bid_price, quote.ask_price) == (38 * CENT, 45 * CENT)
+
+    [take] = make(FakePositions(tick=tick), take_type="limit", take_through=0.20).on_market_data(book)
+    assert take.take_limit_price % tick == 0
