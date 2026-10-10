@@ -1,0 +1,63 @@
+name: cross_prediction_arb__multi
+description: >
+  Cross-venue prediction-market arbitrage specialised for events with THREE OR MORE
+  outcomes (3-way soccer, multi-way futures), forked from cross_prediction_arb.
+
+  Rationale: a scan of all 15 cross-venue EQUIVALENT contract pairs with recorded
+  market data (7 events, 584 venue-crossing episodes) found that dislocation lifetime
+  depends sharply on outcome count. Two-outcome markets closed in 30-190ms (median
+  ~120ms); the one 3-outcome market measured, ManCity/Draw/Sunderland, ran 400-440ms
+  with 765 ticks above 5c on the ManCity leg. Kalshi and Polymarket sit in different
+  AWS regions (~37ms one-way), so sub-200ms gaps are unreachable from either seat
+  while 400ms+ gaps are not.
+
+  This session exists to establish whether that is a property of N>=3 markets, of
+  soccer, or of that single match.
+
+data:
+  listings:
+    - listing_id: 723614   # Polymarket - Manchester City
+      profile: polymarket
+    - listing_id: 723615   # Polymarket - Draw
+      profile: polymarket
+    - listing_id: 723616   # Polymarket - Sunderland
+      profile: polymarket
+    - listing_id: 635464   # Kalshi - Manchester City
+      profile: kalshi
+    - listing_id: 635466   # Kalshi - Tie
+      profile: kalshi
+    - listing_id: 635465   # Kalshi - Sunderland
+      profile: kalshi
+  date_ranges:
+    - start: "2026-09-20T12:45:00"
+      end:   "2026-09-20T15:22:00"
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">20"
+  targets:
+    # PER-BAR at 10s bars, not annualized. 0.002 per bar is ~3.6 annualized.
+    sharpe: ">0.002"
+
+constraints:
+  strategy_type: arb
+  max_iterations: 20
+  avoid:
+    - "report PnL under BOTH outcomes; a hedged floor is the only result that counts"
+    - "entering when the cartesian product leaves a leg unhedged at window end"
+    - "assuming symmetric venue latency - Kalshi and Polymarket are ~37ms apart one way"
+  notes:
+    - "At N=3 the cartesian product yields 6 pairings and each listing appears in 4 of
+       them, so _listing_is_busy serialises nearly everything. Fixing that concurrency
+       is the main lever this session has over its parent."
+    - "The chase is disabled by default (enable_chase=False); every variant measured on
+       the parent's NFL event lost money against no chase at all."
+    - "Registry reports a $0.001 tick for Kalshi; recorded books are 100% whole-cent.
+       The strategy floors at 1c until the security master is corrected."
+
+meta:
+  execution_mode: local
+  interaction_mode: interactive

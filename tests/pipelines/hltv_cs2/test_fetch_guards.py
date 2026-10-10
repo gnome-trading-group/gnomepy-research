@@ -7,11 +7,14 @@ being blocked was invisible — every page would time out, retry three times,
 burn 90s and be silently skipped, and the run would still report success.
 """
 import asyncio
+import gzip
 import time
+from pathlib import Path
 
 import pytest
 
 from gnomepy_research.pipelines.hltv_cs2 import backfill
+from gnomepy_research.pipelines.hltv_cs2.html_cache import is_cacheable, is_complete
 
 
 def _state(n=0, cf=False, blocked=False, ready=True, footer=True):
@@ -108,13 +111,8 @@ def test_consecutive_failure_breaker_is_wording_independent():
 
 def test_committed_fixtures_are_complete_pages():
     """Every fixture must reach its footer, or it would be a truncated capture."""
-    import gzip
-    from pathlib import Path
-
-    from gnomepy_research.pipelines.hltv_cs2.backfill import _is_complete
-
     for path in sorted((Path(__file__).parent / "fixtures").glob("*.html.gz")):
-        assert _is_complete(gzip.open(path, "rt", errors="ignore").read()), path.name
+        assert is_complete(gzip.open(path, "rt", errors="ignore").read()), path.name
 
 
 def test_truncated_page_is_never_cached():
@@ -122,23 +120,16 @@ def test_truncated_page_is_never_cached():
     A DOM captured mid-load still ends in </html>, so it looks whole. Cutting a
     real page off above its footer must make it uncacheable for every kind.
     """
-    import gzip
-    from pathlib import Path
-
-    from gnomepy_research.pipelines.hltv_cs2.backfill import _is_cacheable, _is_complete
-
     html = gzip.open(Path(__file__).parent / "fixtures" / "hltv_mid.html.gz", "rt", errors="ignore").read()
     truncated = html[: html.index("<footer")] + "</body></html>"
-    assert not _is_complete(truncated)
+    assert not is_complete(truncated)
     for kind in ("match", "results"):
-        assert _is_cacheable(kind, html) or kind == "match" and "results-team-score" not in html
-        assert not _is_cacheable(kind, truncated)
+        assert is_cacheable(kind, html) or kind == "match" and "results-team-score" not in html
+        assert not is_cacheable(kind, truncated)
 
 
 def test_probe_reports_footer_presence():
-    from gnomepy_research.pipelines.hltv_cs2.backfill import _PROBE_JS
-
-    assert 'footer: !!document.querySelector("footer")' in _PROBE_JS
+    assert 'footer: !!document.querySelector("footer")' in backfill._PROBE_JS
 
 
 def test_selector_without_footer_is_not_ready(monkeypatch):

@@ -3,7 +3,8 @@
 Params (passed via PIPELINE_PARAMS env var):
   start_date: str  — YYYY-MM-DD
   end_date: str    — YYYY-MM-DD
-  min_stars: int   — 0=all matches, 2=top-tier+, 3=big events only (default 2)
+  min_stars: int   — 0=all matches, 2=top-tier+, 3=big events only (default 2).
+                     The models are trained on all tiers, so 0 keeps the data consistent.
 """
 from __future__ import annotations
 
@@ -35,7 +36,14 @@ class HltvCs2Pipeline(Pipeline):
         ds = DatasetStore()
         all_matches = ds.load("cs2_match_history")
         all_rankings = ds.load("cs2_team_rankings")
-        priors_df = build_priors(all_matches, all_rankings)
+        # The harvested blocks (player form, veto, page H2H) need their datasets; without
+        # them build_priors still runs but publishes those 61 features blank.
+        priors_df = build_priors(
+            all_matches, all_rankings,
+            player_stats=ds.load("cs2_player_map_stats"),
+            veto=ds.load("cs2_match_veto"),
+            h2h=ds.load("cs2_h2h_history"),
+        )
         min_date = pd.Timestamp(priors_df["match_date"].min()).date().isoformat()
         max_date = pd.Timestamp(priors_df["match_date"].max()).date().isoformat()
         ds.publish(priors_df, "cs2_match_priors", description=f"{min_date} to {max_date}")

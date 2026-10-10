@@ -59,6 +59,20 @@ PRE_MAP_FEATURE_NAMES = [
 ] + HARVEST_FEATURE_NAMES + [f"map_{m}" for m in MAP_POOL]
 
 _MAP_OHE_NAMES = frozenset(f"map_{m}" for m in MAP_POOL)
+
+# HLTV posts the veto only when a match goes live, so before kickoff neither the
+# map nor who picked it is known. The pre-veto model drops every feature that
+# depends on them and keeps the rest - including player form, since lineups are
+# announced in advance. Walk-forward Mar-Sep 2026 (holding/preveto_checks.py):
+# beats the series and map-1 markets in 7/7 months.
+_MAP_DEPENDENT = frozenset(
+    ["team_a_picked_map", "is_decider", "team_a_map_winrate_long", "team_b_map_winrate_long",
+     "team_a_map_winrate_short", "team_b_map_winrate_short", "elo_map_diff", "elo_map_resid_diff"]
+    + list(VETO_FEATURES)
+)
+PREVETO_FEATURE_NAMES = [
+    n for n in PRE_MAP_FEATURE_NAMES if n not in _MAP_OHE_NAMES and n not in _MAP_DEPENDENT
+]
 _SCALAR_KEYS = tuple(f for f in PRE_MAP_FEATURE_NAMES if f not in _MAP_OHE_NAMES)
 _REQUIRED_KEYS = frozenset(_SCALAR_KEYS) | {"map_name"}
 

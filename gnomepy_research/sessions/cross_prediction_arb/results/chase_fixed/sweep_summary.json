@@ -1,0 +1,19 @@
+{
+  "sweep_id": "01a0f381-9815-7c14-a8f5-75ada22b8e7d",
+  "job_count": 1,
+  "completed_count": 1,
+  "sweep_params": {},
+  "jobs": [
+    {
+      "job_index": 0,
+      "job_id": "01a0f381-9815-7c14-a8f5-75ada22b8e7d-0000",
+      "scenario": "seahawks_titans",
+      "config_params": {},
+      "status": "COMPLETED",
+      "output": "gnomepy_research/sessions/cross_prediction_arb/results/chase_fixed/jobs/0000"
+    }
+  ],
+  "scenarios": [
+    "seahawks_titans"
+  ]
+}

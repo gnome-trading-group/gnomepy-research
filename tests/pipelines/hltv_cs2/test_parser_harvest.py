@@ -15,6 +15,8 @@ from gnomepy_research.pipelines.hltv_cs2.scraper import (
     _STAT_SIDES,
     _parse_player_stats,
     parse_match_detail_html,
+    _parse_veto,
+    _parse_lineups,
 )
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
@@ -154,7 +156,6 @@ def test_exact_team_match_not_substring():
     The old code tested `team_name.lower() in text`, so a team called "G2" matched
     inside "G2 Ares". Attribution must be exact.
     """
-    from gnomepy_research.pipelines.hltv_cs2.scraper import _parse_veto
     soup = load("hltv_january")
     steps = _parse_veto(soup, ["G2 Ares", "Nobody"], [1, 2])
     assert all(v["team_id"] is None for v in steps if v["action"] != "left_over"), \
@@ -175,7 +176,6 @@ def test_awp_role_is_detected():
 
 
 def test_lineup_names_and_roles_resolve():
-    from gnomepy_research.pipelines.hltv_cs2.scraper import _parse_lineups
     teams = _parse_lineups(load("hltv_mid"))
     names = {p["player_name"] for t in teams for p in t}
     assert "FalleN" in names and "torzsi" in names, names

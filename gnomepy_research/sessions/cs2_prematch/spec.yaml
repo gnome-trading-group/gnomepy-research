@@ -1,0 +1,38 @@
+# DRAFT written by Claude on 2026-10-04 for review - spec.yaml is user-authored, so edit freely.
+name: cs2_prematch
+description: >
+  Pre-match CS2 moneylines on Polymarket: series winner and map 1 winner, no in-play.
+  Model probabilities come from a predictions table produced outside the strategy
+  (the frozen 95-feature pre-map model + series DP). The strategy buys whichever
+  team's outcome token is underpriced by at least the threshold after the taker
+  fee, with IOC limit orders, and holds to settlement.
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">0"
+
+constraints:
+  strategy_type: directional
+  avoid:
+    - trading without a prediction for the market (no model = no edge)
+    - in-play trading - the pre-match model knows nothing about the score
+    - buying both sides of one market (no hedging into the spread)
+    - walking the book more than max_slippage above the best ask
+    - adding after the price falls adverse_move below our entry (likely news the model lacks)
+  notes:
+    - Six-month walk-forward backtest (Mar-Sep 2026, price history, fee + spread modelled) - series and map 1 positive in 7/7 months, ~+18-21% per $ risked
+    - A model+market log-odds blend beats the market even after recalibrating the market - the model carries independent information
+    - Entry windows - series from 12h before kickoff (books ~1-1.5c wide), map 1 only in the final hour (map books are 15c+ wide before that)
+    - Thresholds after fee - series 5c, map 1 10c (map 1's 5-10c edge bucket was break-even)
+    - Bigger predicted edges realised bigger returns in both markets - do not cap large edges
+    - Map 2 tied the market in the forward test and is fragile to spreads - not traded
+    - Capacity is the binding constraint - a few hundred dollars per match near the best price
+    - Historical CS2 order books were not recorded before this session; platform backtests need recording first
+    - Tentative, unconfirmed filter - skip series where a team is unranked (skip_unranked_series, off by default)
+
+meta:
+  execution_mode: local
+  interaction_mode: interactive

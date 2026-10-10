@@ -259,6 +259,25 @@ def train(
     return metrics
 
 
+def fit_production(df: pd.DataFrame, names: list[str], n_estimators: int = 1000, max_depth: int = 5) -> dict:
+    """
+    A bundle fit on all of df, for live use: no test hold-out, only the latest
+    slice reserved for early stopping and calibration - exactly how each month of
+    the walk-forward backtest was fit, so live predictions come from the
+    procedure that was validated.
+    """
+    plan = build_swap_plan(names)
+    tr, val, _ = temporal_split_by_series(df, frac_train=0.88, frac_val=0.12)
+    es, cal = split_val_for_calibration(df, val)
+    pos = {k: df.index.get_indexer(v) for k, v in (("tr", tr), ("es", es), ("cal", cal))}
+    X, y = _matrix(df, names), df["team_a_won"].to_numpy().astype(int)
+    X_tr, y_tr = augment(X[pos["tr"]], y[pos["tr"]], plan)
+    model = _fit(X_tr, y_tr, X[pos["es"]], y[pos["es"]], n_estimators, max_depth)
+    calibrator = fit_calibrator(symmetric_predict_proba(model, X[pos["cal"]], plan), y[pos["cal"]])
+    return {"model": model, "calibrator": calibrator, "feature_names": list(names), "symmetric": True,
+            "trained_through": pd.Timestamp(df["match_date"].max()), "n_maps": int(len(df))}
+
+
 def _matrix(df: pd.DataFrame, names: list[str]) -> np.ndarray:
     """Feature matrix restricted to `names`, so ablations drop columns without reshaping."""
     scalars = [n for n in names if n not in _MAP_OHE_NAMES]

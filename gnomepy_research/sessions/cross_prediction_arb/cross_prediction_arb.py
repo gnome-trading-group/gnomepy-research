@@ -322,7 +322,7 @@ class CrossPredictionArb(Strategy):
         self._processing_time_ns = processing_time_ns
         self._debug = debug
 
-        def resolve(listing_id: int) -> tuple[tuple[int, int], tuple[int, int], int]:
+        def resolve(listing_id: int) -> tuple[tuple[int, int], tuple[int, int, int], int]:
             results = registry.get_listing(listing_id=listing_id)
             if not results:
                 raise ValueError(f"No listing for listing_id={listing_id}")
@@ -330,7 +330,7 @@ class CrossPredictionArb(Strategy):
             if not specs:
                 raise ValueError(f"No listing spec for listing_id={listing_id}")
             listing = (results[0].exchange_id, results[0].security_id)
-            spec = (int(specs[0].min_notional or 0), int(specs[0].lot_size or 0))
+            spec = (int(specs[0].min_notional or 0), int(specs[0].lot_size or 0), int(specs[0].min_size or 0))
             tick_size = int(specs[0].tick_size) if specs[0].tick_size else PRICE_SCALE // 100
             return listing, spec, tick_size
 
@@ -338,7 +338,7 @@ class CrossPredictionArb(Strategy):
         self._exchange_id_to_label: dict[int, str] = {}
         self._tick_sizes: dict[tuple[int, int], int] = {}
         outcome_listings: list[list[tuple[int, int]]] = []
-        listing_specs: dict[tuple[int, int], tuple[int, int]] = {}
+        listing_specs: dict[tuple[int, int], tuple[int, int, int]] = {}
         for outcome in outcomes:
             resolved = []
             for label, lid in outcome.items():
@@ -385,7 +385,7 @@ class CrossPredictionArb(Strategy):
             for leg in p_legs:
                 self._tracked_listings.add(leg)
 
-        self._listing_specs: dict[tuple[int, int], tuple[int, int]] = listing_specs
+        self._listing_specs: dict[tuple[int, int], tuple[int, int, int]] = listing_specs
 
         # Book storage
         self._books: dict[tuple[int, int], Book] = {lst: Book() for lst in self._tracked_listings}
@@ -779,13 +779,13 @@ class CrossPredictionArb(Strategy):
     # ------------------------------------------------------------------
 
     def _min_price_for_size(self, listing: tuple[int, int], size: int) -> int:
-        mn, _ = self._listing_specs[listing]
+        mn, _, _ = self._listing_specs[listing]
         if mn <= 0 or size <= 0:
             return 0
         return (mn + size - 1) // size
 
     def _passes_notional(self, listing: tuple[int, int], price: int, size: int) -> bool:
-        mn, _ = self._listing_specs[listing]
+        mn, _, _ = self._listing_specs[listing]
         if mn <= 0:
             return True
         # price * size, not price >= mn // size: the floored form accepted prices whose
@@ -793,10 +793,11 @@ class CrossPredictionArb(Strategy):
         return size > 0 and price * size >= mn
 
     def _align_lot(self, listing: tuple[int, int], size: int) -> int:
-        _, lot = self._listing_specs[listing]
+        _, lot, min_size = self._listing_specs[listing]
         if lot > 0 and size % lot != 0:
-            return (size // lot) * lot
-        return size
+            size = (size // lot) * lot
+        # The venue rejects an order under its minimum, so a sub-minimum size is as untradable as a sub-lot one.
+        return size if size >= min_size else 0
 
     def _claimed_base(self, listing: tuple[int, int]) -> int:
         """Position on `listing` already accounted for by any pairing that holds it.

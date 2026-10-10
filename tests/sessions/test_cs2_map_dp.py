@@ -2,6 +2,7 @@ import math
 
 import numpy as np
 import pytest
+from sklearn.metrics import log_loss
 
 from gnomepy_research.sessions.cs2_win_probability.map_dp import (
     DEFAULT_FORMAT,
@@ -13,6 +14,12 @@ from gnomepy_research.sessions.cs2_win_probability.map_dp import (
     side_probs,
     sigmoid,
     solve_theta,
+    _period_value,
+)
+from gnomepy_research.sessions.cs2_win_probability.pre_map_model import (
+    _PROB_EPS,
+    _calibrated,
+    _fit_temperature,
 )
 
 
@@ -69,7 +76,6 @@ def test_overtime_fixed_point_matches_brute_force_unrolling():
     exact = overtime_value(p_ct, p_t, True)
 
     # unroll many periods explicitly; the closed form is the limit
-    from gnomepy_research.sessions.cs2_win_probability.map_dp import _period_value
     value = 0.5
     for _ in range(400):
         value = _period_value(p_ct, p_t, True, 0, value, DEFAULT_FORMAT)
@@ -136,13 +142,6 @@ def test_overtime_scorelines_are_priced():
 
 def test_calibrated_probabilities_never_saturate():
     """An exact 0/1 on a map winner makes log-loss and Kelly sizing degenerate."""
-    import numpy as np
-
-    from gnomepy_research.sessions.cs2_win_probability.pre_map_model import (
-        _PROB_EPS,
-        _calibrated,
-    )
-
     raw = np.array([0.0, 1e-9, 0.5, 1.0 - 1e-9, 1.0])
     for temperature in (0.5, 1.0, 2.0):
         out = _calibrated(temperature, raw)
@@ -156,10 +155,6 @@ def test_temperature_scaling_is_exactly_symmetric():
     A/B order-invariance. Isotonic needed a both-orientations fit to approximate
     this; temperature scaling gets it to machine precision.
     """
-    import numpy as np
-
-    from gnomepy_research.sessions.cs2_win_probability.pre_map_model import _calibrated
-
     p = np.linspace(0.02, 0.98, 49)
     for temperature in (0.5, 0.9, 1.0, 1.4, 3.0):
         out = _calibrated(temperature, p)
@@ -169,13 +164,6 @@ def test_temperature_scaling_is_exactly_symmetric():
 
 def test_temperature_recovers_a_known_distortion():
     """A deliberately over-confident input should fit T > 1 and be pulled back."""
-    import numpy as np
-
-    from gnomepy_research.sessions.cs2_win_probability.pre_map_model import (
-        _calibrated,
-        _fit_temperature,
-    )
-
     rng = np.random.default_rng(0)
     true_p = rng.uniform(0.15, 0.85, 4000)
     y = (rng.uniform(size=4000) < true_p).astype(int)
@@ -183,5 +171,4 @@ def test_temperature_recovers_a_known_distortion():
 
     temperature = _fit_temperature(over, y)
     assert temperature > 1.2, temperature
-    from sklearn.metrics import log_loss
     assert log_loss(y, _calibrated(temperature, over)) < log_loss(y, np.clip(over, 0.01, 0.99))

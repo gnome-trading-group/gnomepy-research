@@ -50,13 +50,12 @@ from gnomepy_research.pipelines.hltv_cs2.demo_parser import parse_demo
 from gnomepy_research.pipelines.hltv_cs2.scraper import (
     _BASE_URL,
     _all_mondays,
-    merge_publish,
     parse_match_detail_html,
     parse_match_ids_from_html,
     parse_team_ranking_html,
 )
-from gnomepy_research.pipelines.hltv_cs2.html_cache import CachePolicy, HtmlCache
-from gnomepy_research.pipelines.hltv_cs2.sides import attach_team_keyed_scores
+from gnomepy_research.pipelines.hltv_cs2.html_cache import CachePolicy, HtmlCache, is_cacheable, is_complete
+from gnomepy_research.pipelines.hltv_cs2.publish import merge_publish, publish_match_data
 
 logger = logging.getLogger(__name__)
 
@@ -363,63 +362,6 @@ def _extract_dem(archive_path: Path) -> list[Path]:
     return []
 
 
-def _publish_match_data(match_rows: list[dict], demo_rows: list[dict], player_rows: list[dict] | None = None, veto_rows: list[dict] | None = None,
-                        h2h_rows: list[dict] | None = None,
-                        form_rows: list[dict] | None = None) -> None:
-    if match_rows:
-        df = pd.DataFrame(match_rows)
-        df["match_date"] = pd.to_datetime(df["match_date"])
-        logger.info("Publishing cs2_match_history (%d rows)...", len(df))
-        merge_publish("cs2_match_history", df, ["match_id", "map_name"], "match_date")
-    else:
-        logger.warning("No match rows — cs2_match_history not updated")
-
-    if player_rows:
-        df = pd.DataFrame(player_rows)
-        df["match_date"] = pd.to_datetime(df["match_date"])
-        logger.info("Publishing cs2_player_map_stats (%d rows)...", len(df))
-        merge_publish("cs2_player_map_stats", df,
-                      ["match_id", "map_name", "player_id", "side"], "match_date")
-
-    if veto_rows:
-        df = pd.DataFrame(veto_rows)
-        df["match_date"] = pd.to_datetime(df["match_date"])
-        logger.info("Publishing cs2_match_veto (%d rows)...", len(df))
-        merge_publish("cs2_match_veto", df, ["match_id", "order"], "match_date")
-
-    if h2h_rows:
-        df = pd.DataFrame(h2h_rows)
-        df["match_date"] = pd.to_datetime(df["match_date"])
-        logger.info("Publishing cs2_h2h_history (%d rows)...", len(df))
-        merge_publish("cs2_h2h_history", df, ["match_id", "h2h_date", "map_name"], "match_date")
-
-    if form_rows:
-        df = pd.DataFrame(form_rows)
-        df["match_date"] = pd.to_datetime(df["match_date"])
-        logger.info("Publishing cs2_team_recent_form (%d rows)...", len(df))
-        merge_publish("cs2_team_recent_form", df, ["match_id", "team_index", "position"], "match_date")
-
-    if demo_rows:
-        df = pd.DataFrame(demo_rows)
-        df["match_date"] = pd.to_datetime(df["match_date"])
-        if match_rows:
-            history = pd.DataFrame(match_rows)
-            history["match_date"] = pd.to_datetime(history["match_date"])
-        else:
-            history = DatasetStore().load("cs2_match_history")
-        df, dropped = attach_team_keyed_scores(df, history)
-        if len(dropped):
-            logger.warning(
-                "dropped %d map(s) that could not be reconciled with HLTV scores: %s",
-                len(dropped), dropped.reason.value_counts().to_dict(),
-            )
-        if df.empty:
-            logger.warning("No reconcilable round rows — cs2_round_features not updated")
-            return
-        logger.info("Publishing cs2_round_features (%d rows)...", len(df))
-        merge_publish("cs2_round_features", df, ["match_id", "map_name"], "match_date")
-
-
 async def backfill_matches(
     fetcher: "HltvFetcher",
     start_date: datetime.date,
@@ -609,7 +551,7 @@ async def backfill_matches(
                            len(failed_dates), ", ".join(d.isoformat() for d in failed_dates[:10]))
         if n_demos_failed:
             logger.warning("%d demo(s) failed and were skipped", n_demos_failed)
-        _publish_match_data(match_rows, demo_rows, player_rows, veto_rows, h2h_rows, form_rows)
+        publish_match_data(match_rows, demo_rows, player_rows, veto_rows, h2h_rows, form_rows)
 
 
 async def backfill_rankings(
@@ -660,37 +602,6 @@ def backfill_priors() -> None:
     logger.info("Priors backfill complete.")
 
 
-def _is_complete(html: str) -> bool:
-    """
-    Whether a captured page reached its footer.
-
-    A DOM serialised mid-load still ends in </html> - the browser closes open tags
-    on capture - so the file looks whole. The footer is the reliable tell.
-    """
-    return "<footer" in html
-
-
-def _is_cacheable(kind: str, html: str) -> bool:
-    """
-    Guard the immutable tier.
-
-    Match pages are cached forever on the premise that a finished match never
-    changes. A live or postponed page would be frozen wrong, so require evidence
-    the match actually completed before storing one. Nothing is cached without
-    its footer: a truncated listing hides matches, and a truncated match page
-    loses the stats, veto, head-to-head and form sections at the bottom.
-    """
-    if not _is_complete(html):
-        logger.warning("not caching an incomplete page (no footer)")
-        return False
-    if kind != "match":
-        return True
-    if "results-team-score" not in html:
-        logger.info("not caching a match page with no final scores (live or postponed?)")
-        return False
-    return True
-
-
 class HltvFetcher:
     """
     Cache-first page access with a lazily started browser.
@@ -724,14 +635,14 @@ class HltvFetcher:
         self, url: str, *, kind: str, wait_selector: str | None = None, wait_count: int = 1,
     ) -> tuple[str | None, datetime.datetime | None]:
         hit = self._cache.get(url, kind=kind)
-        if hit is not None and _is_complete(hit.html):
+        if hit is not None and is_complete(hit.html):
             return hit.html, hit.fetched_at
         if hit is not None:
             logger.info("cached copy of %s is truncated — refetching", url)
         page = await self.page()
         fetched_at = datetime.datetime.now(datetime.timezone.utc)
         html = await _get_html(page, url, wait_selector, wait_count=wait_count)
-        if html is not None and _is_cacheable(kind, html):
+        if html is not None and is_cacheable(kind, html):
             # Write through per page, never batched: a ten-hour run that stalls on
             # Cloudflare must resume against what it already fetched.
             self._cache.put(url, html, kind=kind, fetched_at=fetched_at)
@@ -796,7 +707,7 @@ def parse_cache_to_frames(
         entry = cache.read_key(key)
         if entry is None:
             continue
-        if not _is_complete(entry.html):
+        if not is_complete(entry.html):
             truncated += 1
             continue
         m = re.search(r"matches_(\d+)", key)
@@ -846,7 +757,7 @@ def reparse_from_cache(start: datetime.date | None = None, end: datetime.date | 
     if frames["cs2_match_history"].empty:
         logger.warning("no rows parsed — nothing published")
         return
-    _publish_match_data(
+    publish_match_data(
         frames["cs2_match_history"].to_dict("records"),
         [],
         frames["cs2_player_map_stats"].to_dict("records"),

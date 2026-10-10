@@ -1,8 +1,11 @@
+import asyncio
 import gzip
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
+from gnomepy_research.pipelines.hltv_cs2 import backfill, html_cache as hc
+from gnomepy_research.pipelines.hltv_cs2.backfill import HltvFetcher
 from gnomepy_research.pipelines.hltv_cs2.html_cache import (
     CachePolicy,
     HtmlCache,
@@ -119,10 +122,6 @@ def test_cache_hit_never_starts_chrome(tmp_path):
     Chrome needs a visible window for the Cloudflare challenge and is the entire
     cost of a re-parse. On a full cache hit it must not be constructed at all.
     """
-    import asyncio
-
-    from gnomepy_research.pipelines.hltv_cs2.backfill import HltvFetcher
-
     cache = HtmlCache(local_root=tmp_path / "l", remote_root=str(tmp_path / "r"))
     url = "https://www.hltv.org/matches/2389638/x"
     cache.put(url, _COMPLETE, kind="match")
@@ -138,10 +137,6 @@ def test_cache_hit_never_starts_chrome(tmp_path):
 
 def test_miss_would_need_a_browser(tmp_path, monkeypatch):
     """The complement: a miss does reach for the page, so the hit path is meaningful."""
-    import asyncio
-
-    from gnomepy_research.pipelines.hltv_cs2 import backfill
-
     cache = HtmlCache(local_root=tmp_path / "l", remote_root=str(tmp_path / "r"))
     fetcher = backfill.HltvFetcher(cache)
 
@@ -165,7 +160,6 @@ def test_remote_write_failure_does_not_lose_the_page_or_kill_the_run(tmp_path, m
     A ten-hour unattended scrape must survive a transient S3 failure over a page
     it has already fetched. The local write is authoritative.
     """
-    from gnomepy_research.pipelines.hltv_cs2 import html_cache as hc
 
     cache = HtmlCache(local_root=tmp_path / "l", remote_root=str(tmp_path / "r"))
 
@@ -186,8 +180,6 @@ def test_remote_write_failure_does_not_lose_the_page_or_kill_the_run(tmp_path, m
 
 
 def test_remote_read_failure_is_a_miss_not_a_crash(tmp_path, monkeypatch):
-    from gnomepy_research.pipelines.hltv_cs2 import html_cache as hc
-
     cache = HtmlCache(local_root=tmp_path / "l", remote_root=str(tmp_path / "r"))
     url = "https://www.hltv.org/matches/2389701/x"
     cache.put(url, "<html>x</html>", kind="match")

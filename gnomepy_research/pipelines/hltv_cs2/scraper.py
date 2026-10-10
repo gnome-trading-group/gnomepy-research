@@ -30,6 +30,8 @@ from zenrows import ZenRowsClient
 
 from gnomepy_research.artifacts import DatasetStore
 from gnomepy_research.pipelines.hltv_cs2.config import MAP_POOL
+from gnomepy_research.pipelines.hltv_cs2.html_cache import HtmlCache, is_cacheable, is_complete
+from gnomepy_research.pipelines.hltv_cs2.publish import merge_publish, publish_match_data
 
 logger = logging.getLogger(__name__)
 
@@ -57,49 +59,45 @@ class _Session:
             return None
 
 
+def _match_url(match_id: int) -> str:
+    # HLTV ignores the slug but needs one: /matches/<id>/ alone serves the home page
+    return f"{_BASE_URL}/matches/{match_id}/match"
+
+
 def _make_session() -> _Session:
     return _Session()
 
 
-def _get(session: _Session, url: str, retries: int = 3) -> BeautifulSoup | None:
+def _get_html(session: _Session, url: str, retries: int = 3) -> str | None:
+    """
+    Fetch a page through ZenRows, retrying on failure, rate limits and truncation.
+
+    A page without its footer is treated as a failed fetch: the local fetcher once
+    cached listings cut off mid-render and silently lost 406 series, so a partial
+    page is never parsed here either.
+    """
     for attempt in range(retries):
         html = session.get_html(url)
         if html is None:
             time.sleep(5 * (attempt + 1))
             continue
-
-        soup = BeautifulSoup(html, "html.parser")
-        title_el = soup.find("title")
-        title_text = title_el.get_text() if title_el else ""
-        if "429" in title_text:
+        title = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
+        if title and "429" in title.group(1):
             wait = 60 * (attempt + 1)
             logger.warning("Rate limited — sleeping %ds", wait)
             time.sleep(wait)
             continue
-
-        return soup
-
+        if not is_complete(html):
+            logger.warning("incomplete page for %s (attempt %d)", url, attempt + 1)
+            time.sleep(5 * (attempt + 1))
+            continue
+        return html
     return None
 
 
-def merge_publish(name: str, new_df: pd.DataFrame, key_cols: list[str], date_col: str) -> None:
-    """Key-based upsert: replace all rows whose key_cols values appear in new_df, keep everything else."""
-    if new_df.empty:
-        logger.warning("merge_publish called with empty DataFrame — %s not updated", name)
-        return
-    ds = DatasetStore()
-    try:
-        existing = ds.load(name)
-        new_keys = new_df[key_cols].drop_duplicates()
-        indicator = existing.merge(new_keys, on=key_cols, how="left", indicator=True)
-        keep = existing[indicator["_merge"] == "left_only"]
-        merged = pd.concat([keep, new_df], ignore_index=True).sort_values(date_col).reset_index(drop=True)
-    except KeyError:
-        merged = new_df
-    min_date = pd.Timestamp(merged[date_col].min()).date().isoformat()
-    max_date = pd.Timestamp(merged[date_col].max()).date().isoformat()
-    ds.publish(merged, name, description=f"{min_date} to {max_date}")
-    logger.info("Published %s: %d rows (%s to %s)", name, len(merged), min_date, max_date)
+def _get(session: _Session, url: str, retries: int = 3) -> BeautifulSoup | None:
+    html = _get_html(session, url, retries)
+    return BeautifulSoup(html, "lxml") if html is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -499,8 +497,12 @@ def _parse_lineups(soup: BeautifulSoup) -> list[list[dict]]:
     for box in soup.select(".lineups .lineup")[:2]:
         players = []
         for cell in box.select(".player"):
+            # completed pages link each photo to the player; upcoming and live pages
+            # render a compare widget with only a data attribute instead
             link = cell.select_one("a[href*='/player/']")
-            if not link:
+            compare = cell.select_one("[data-player-id]")
+            player_id = _href_id(link) if link else _int_or_none(compare.get("data-player-id")) if compare else None
+            if player_id is None:
                 continue
             # the lineup box holds only a photo, so the nick comes from the image
             # title ("Danil 'molodoy' Golubenko") or, failing that, the href slug
@@ -511,12 +513,12 @@ def _parse_lineups(soup: BeautifulSoup) -> list[list[dict]]:
                 quoted = re.search(r"['\u2018\u2019\"](.+?)['\u2018\u2019\"]", blurb)
                 if quoted:
                     name = quoted.group(1)
-            if not name:
+            if not name and link:
                 parts = (link.get("href") or "").rstrip("/").split("/")
                 name = parts[-1] if parts else ""
             # roles live in a sibling .role-pills container, not on the link's parent
             players.append({
-                "player_id": _href_id(link),
+                "player_id": player_id,
                 "player_name": name,
                 "is_awp": cell.select_one(".role-pill--awp") is not None,
                 "is_igl": cell.select_one(".role-pill--igl") is not None,
@@ -531,6 +533,13 @@ def _parse_lineups(soup: BeautifulSoup) -> list[list[dict]]:
     while len(out) < 2:
         out.append([])
     return out
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _href_id(link) -> int | None:
@@ -571,73 +580,140 @@ def _parse_half_scores(mapholder_el, context: str = "") -> dict:
         return {"team_a_h1_score": None, "team_b_h1_score": None, "team_a_started_ct": None}
 
 
+def _parse_match_header(soup: BeautifulSoup, match_id: int) -> dict | None:
+    """
+    Everything on a match page that is known before the first map starts.
+
+    Shared by completed and upcoming pages so that the features served live are
+    parsed by exactly the code that built the training data.
+    """
+    team_boxes = soup.select(".team")
+    team_names = []
+    team_ids = []
+    for box in team_boxes[:2]:
+        link = box.select_one("a[href*='/team/']")
+        if link:
+            parts = link.get("href", "").split("/")
+            try:
+                team_ids.append(int(parts[2]))
+            except (ValueError, IndexError):
+                team_ids.append(None)
+            name_el = box.select_one(".teamName")
+            team_names.append(name_el.get_text(strip=True) if name_el else link.get_text(strip=True))
+        else:
+            name_el = box.select_one(".teamName")
+            team_names.append(name_el.get_text(strip=True) if name_el else "")
+            team_ids.append(None)
+
+    if len(team_names) < 2 or not all(team_names):
+        logger.warning("match %d: found %d team name(s), expected 2 — skipping", match_id, len([n for n in team_names if n]))
+        return None
+
+    # Every .teamRanking div carries both an HLTV rank and a Valve Regional
+    # Standings rank. Only HLTV was read, and it is absent for lower-tier teams —
+    # which is why rank_diff was NaN on ~19% of rows, concentrated exactly where
+    # the model is weakest. VRS is present on those rows.
+    ranks, vrs_ranks = [], []
+    ranking_divs = soup.select(".teamRanking")
+    if len(ranking_divs) < 2:
+        logger.warning("match %d: found %d .teamRanking div(s), expected 2", match_id, len(ranking_divs))
+    for ranking_div in ranking_divs[:2]:
+        ranks.append(_ranking_value(ranking_div, "a.hltv-ranking", "HLTV:"))
+        vrs_ranks.append(_ranking_value(ranking_div, "a.vrs-ranking", "VRS:"))
+    while len(ranks) < 2:
+        ranks.append(None)
+    while len(vrs_ranks) < 2:
+        vrs_ranks.append(None)
+
+    event_el = soup.select_one(".event a")
+    event_name = event_el.get_text(strip=True) if event_el else ""
+
+
+    format_el = soup.select_one(".preformatted-text")
+    fmt = format_el.get_text(strip=True) if format_el else ""
+
+    date_el = soup.select_one(".date")
+    match_date = None
+    match_time = None
+    if date_el:
+        ts = date_el.get("data-unix")
+        if ts:
+            # The page carries the real kick-off time; truncating to a date is
+            # what forced Elo into same-day batch updates and left market-timing
+            # analysis guessing at when a match actually started.
+            match_time = datetime.datetime.fromtimestamp(int(ts) / 1000, tz=datetime.timezone.utc)
+            match_date = match_time.date()
+    if match_date is None:
+        logger.warning("match %d: could not parse match_date", match_id)
+
+    if not fmt:
+        logger.warning("match %d: empty format string — bo_type and is_lan will be wrong", match_id)
+
+    veto = _parse_veto(soup, team_names, team_ids, context=f"match {match_id}")
+    picked_maps = {
+        v["map_name"]: v["team_name"]
+        for v in veto
+        if v["action"] == "picked" and v["map_name"] and v["team_name"]
+    }
+
+    lineups = _parse_lineups(soup)
+    h2h_scalars, h2h_rows = _parse_h2h(soup, match_id, match_date)
+    form_rows = _parse_recent_form(soup, match_id, match_date)
+    event_context = _parse_event_context(fmt)
+    veto_rows = [
+        {"match_id": match_id, "match_date": match_date, **v}
+        for v in veto
+    ]
+
+    return {
+        "team_names": team_names, "team_ids": team_ids, "ranks": ranks, "vrs_ranks": vrs_ranks,
+        "event_name": event_name, "fmt": fmt, "match_time": match_time, "match_date": match_date,
+        "veto": veto, "picked_maps": picked_maps, "lineups": lineups, "h2h_scalars": h2h_scalars,
+        "h2h_rows": h2h_rows, "form_rows": form_rows, "event_context": event_context, "veto_rows": veto_rows,
+    }
+
+
+def _series_fields(h: dict, match_id: int, stars: int) -> dict:
+    """The series-level columns of a cs2_match_history row."""
+    lineups, fmt = h["lineups"], h["fmt"]
+    return {
+        "match_id": match_id,
+        "match_date": h["match_date"],
+        "event_name": h["event_name"],
+        "event_tier": stars,
+        "format": fmt,
+        "bo_type": _parse_bo_type(fmt),
+        "is_lan": int("(LAN)" in fmt),
+        "team_a_name": h["team_names"][0],
+        "team_a_id": h["team_ids"][0],
+        "team_b_name": h["team_names"][1],
+        "team_b_id": h["team_ids"][1],
+        "team_a_rank": h["ranks"][0],
+        "team_b_rank": h["ranks"][1],
+        "team_a_vrs_rank": h["vrs_ranks"][0],
+        "team_b_vrs_rank": h["vrs_ranks"][1],
+        "match_time": h["match_time"],
+        "team_a_lineup_ids": [pl["player_id"] for pl in lineups[0]],
+        "team_b_lineup_ids": [pl["player_id"] for pl in lineups[1]],
+        **h["h2h_scalars"],
+        **h["event_context"],
+        "team_a_awp_id": next((pl["player_id"] for pl in lineups[0] if pl["is_awp"]), None),
+        "team_b_awp_id": next((pl["player_id"] for pl in lineups[1] if pl["is_awp"]), None),
+    }
+
+
 def parse_match_detail_html(soup: BeautifulSoup, match_id: int, stars: int = 0) -> dict | None:
     """
     Parse a single HLTV match detail page from a BeautifulSoup object.
     Returns a dict with "rows" (list of per-map dicts) and "demo_url" (str or None).
     """
     try:
-        team_boxes = soup.select(".team")
-        team_names = []
-        team_ids = []
-        for box in team_boxes[:2]:
-            link = box.select_one("a[href*='/team/']")
-            if link:
-                parts = link.get("href", "").split("/")
-                try:
-                    team_ids.append(int(parts[2]))
-                except (ValueError, IndexError):
-                    team_ids.append(None)
-                name_el = box.select_one(".teamName")
-                team_names.append(name_el.get_text(strip=True) if name_el else link.get_text(strip=True))
-            else:
-                name_el = box.select_one(".teamName")
-                team_names.append(name_el.get_text(strip=True) if name_el else "")
-                team_ids.append(None)
-
-        if len(team_names) < 2:
-            logger.warning("match %d: found %d team name(s), expected 2 — skipping", match_id, len(team_names))
+        h = _parse_match_header(soup, match_id)
+        if h is None:
             return None
-
-        # Every .teamRanking div carries both an HLTV rank and a Valve Regional
-        # Standings rank. Only HLTV was read, and it is absent for lower-tier teams —
-        # which is why rank_diff was NaN on ~19% of rows, concentrated exactly where
-        # the model is weakest. VRS is present on those rows.
-        ranks, vrs_ranks = [], []
-        ranking_divs = soup.select(".teamRanking")
-        if len(ranking_divs) < 2:
-            logger.warning("match %d: found %d .teamRanking div(s), expected 2", match_id, len(ranking_divs))
-        for ranking_div in ranking_divs[:2]:
-            ranks.append(_ranking_value(ranking_div, "a.hltv-ranking", "HLTV:"))
-            vrs_ranks.append(_ranking_value(ranking_div, "a.vrs-ranking", "VRS:"))
-        while len(ranks) < 2:
-            ranks.append(None)
-        while len(vrs_ranks) < 2:
-            vrs_ranks.append(None)
-
-        event_el = soup.select_one(".event a")
-        event_name = event_el.get_text(strip=True) if event_el else ""
-
-
-        format_el = soup.select_one(".preformatted-text")
-        fmt = format_el.get_text(strip=True) if format_el else ""
-
-        date_el = soup.select_one(".date")
-        match_date = None
-        match_time = None
-        if date_el:
-            ts = date_el.get("data-unix")
-            if ts:
-                # The page carries the real kick-off time; truncating to a date is
-                # what forced Elo into same-day batch updates and left market-timing
-                # analysis guessing at when a match actually started.
-                match_time = datetime.datetime.fromtimestamp(int(ts) / 1000, tz=datetime.timezone.utc)
-                match_date = match_time.date()
-        if match_date is None:
-            logger.warning("match %d: could not parse match_date", match_id)
-
-        if not fmt:
-            logger.warning("match %d: empty format string — bo_type and is_lan will be wrong", match_id)
+        team_names, team_ids, fmt, match_date = h["team_names"], h["team_ids"], h["fmt"], h["match_date"]
+        picked_maps = h["picked_maps"]
+        series = _series_fields(h, match_id, stars)
 
         raw_map_names = [
             el.select_one(".mapname").get_text(strip=True)
@@ -673,28 +749,11 @@ def parse_match_detail_html(soup: BeautifulSoup, match_id: int, stars: int = 0) 
         if not maps:
             logger.warning("match %d: no playable maps found — page may not be fully rendered", match_id)
 
-        veto = _parse_veto(soup, team_names, team_ids, context=f"match {match_id}")
-        picked_maps = {
-            v["map_name"]: v["team_name"]
-            for v in veto
-            if v["action"] == "picked" and v["map_name"] and v["team_name"]
-        }
-
         # Demo download link
         demo_link_el = soup.select_one("a[href*='/download/demo/']")
         demo_url = f"{_BASE_URL}{demo_link_el['href']}" if demo_link_el else None
 
-        lineups = _parse_lineups(soup)
-        h2h_scalars, h2h_rows = _parse_h2h(soup, match_id, match_date)
-        form_rows = _parse_recent_form(soup, match_id, match_date)
-        event_context = _parse_event_context(fmt)
-        veto_rows = [
-            {"match_id": match_id, "match_date": match_date, **v}
-            for v in veto
-        ]
-
         has_sub = "substitut" in fmt.lower()
-        bo_type = _parse_bo_type(fmt)
         rows = []
         player_rows: list[dict] = []
         series_a, series_b = 0, 0
@@ -744,29 +803,8 @@ def parse_match_detail_html(soup: BeautifulSoup, match_id: int, stars: int = 0) 
                 })
 
             rows.append({
-                "match_id": match_id,
-                "match_date": match_date,
-                "event_name": event_name,
-                "event_tier": stars,
-                "format": fmt,
-                "bo_type": bo_type,
-                "is_lan": int("(LAN)" in fmt),
-                "team_a_name": team_names[0],
-                "team_a_id": team_ids[0] if team_ids else None,
-                "team_b_name": team_names[1],
-                "team_b_id": team_ids[1] if len(team_ids) > 1 else None,
-                "team_a_rank": ranks[0],
-                "team_b_rank": ranks[1],
-                "team_a_vrs_rank": vrs_ranks[0],
-                "team_b_vrs_rank": vrs_ranks[1],
-                "match_time": match_time,
+                **series,
                 "mapstatsid": m.get("mapstatsid"),
-                "team_a_lineup_ids": [pl["player_id"] for pl in lineups[0]],
-                "team_b_lineup_ids": [pl["player_id"] for pl in lineups[1]],
-                **h2h_scalars,
-                **event_context,
-                "team_a_awp_id": next((pl["player_id"] for pl in lineups[0] if pl["is_awp"]), None),
-                "team_b_awp_id": next((pl["player_id"] for pl in lineups[1] if pl["is_awp"]), None),
                 "map_name": map_name,
                 "map_position_in_series": idx + 1,
                 "is_decider": float(map_name not in picked_maps),
@@ -791,21 +829,109 @@ def parse_match_detail_html(soup: BeautifulSoup, match_id: int, stars: int = 0) 
             else:
                 series_b += 1
 
-        return {"rows": rows, "players": player_rows, "veto": veto_rows,
-                "h2h": h2h_rows, "recent_form": form_rows, "demo_url": demo_url}
+        return {"rows": rows, "players": player_rows, "veto": h["veto_rows"],
+                "h2h": h["h2h_rows"], "recent_form": h["form_rows"], "demo_url": demo_url}
 
     except Exception as exc:
         logger.warning("Failed to parse match %d: %s", match_id, exc)
         return None
 
 
-def scrape_match_detail(session: _Session, match_id: int, stars: int = 0) -> dict | None:
-    """Scrape a single HLTV match detail page via ZenRows."""
-    url = f"{_BASE_URL}/matches/{match_id}/"
-    soup = _get(session, url)
-    if soup is None:
+# ---------------------------------------------------------------------------
+# Upcoming matches
+# ---------------------------------------------------------------------------
+
+def parse_upcoming_listing_html(html: str) -> list[dict]:
+    """
+    Every match on HLTV's /matches page: id, scheduled time, stars, format and team names.
+
+    Teams are None while still TBD (later Swiss rounds, playoff brackets); such
+    matches cannot be priced yet and are left for a later run.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    out, seen = [], set()
+    for wrap in soup.select("div.match-wrapper[data-match-id]"):
+        match_id = _int_or_none(wrap.get("data-match-id"))
+        if match_id is None or match_id in seen:
+            continue
+        seen.add(match_id)
+        time_el = wrap.select_one(".match-time[data-unix]")
+        unix = _int_or_none(time_el.get("data-unix")) if time_el else None
+        meta = wrap.select_one(".match-meta")
+        names = [el.get_text(strip=True) or None for el in wrap.select(".match-teamname")][:2]
+        while len(names) < 2:
+            names.append(None)
+        out.append({
+            "match_id": match_id,
+            "match_time": datetime.datetime.fromtimestamp(unix / 1000, tz=datetime.timezone.utc) if unix else None,
+            "stars": _int_or_none(wrap.get("data-stars")) or 0,
+            "event_id": _int_or_none(wrap.get("data-event-id")),
+            "bo_type": _int_or_none(bo.group(1)) if (bo := re.search(r"bo(\d)", meta.get_text(strip=True) if meta else "")) else None,
+            "is_live": "live-match-container" in (wrap.get("class") or []),
+            "team_a_name": names[0],
+            "team_b_name": names[1],
+        })
+    return out
+
+
+def parse_upcoming_match_html(soup: BeautifulSoup, match_id: int, stars: int = 0) -> dict | None:
+    """
+    The pre-match state of an upcoming match page.
+
+    "match" carries the same series-level columns as a cs2_match_history row, so
+    the feature builders treat it like any other series. None while either team
+    is TBD. The veto is only posted once the match goes live, so veto_known is
+    normally False before kickoff.
+    """
+    try:
+        h = _parse_match_header(soup, match_id)
+    except Exception as exc:
+        logger.warning("Failed to parse upcoming match %d: %s", match_id, exc)
         return None
-    return parse_match_detail_html(soup, match_id, stars=stars)
+    if h is None or None in h["team_ids"]:
+        return None
+    return {
+        "match": _series_fields(h, match_id, stars),
+        "veto": h["veto_rows"],
+        "veto_known": bool(h["veto_rows"]),
+        "h2h": h["h2h_rows"],
+        "recent_form": h["form_rows"],
+    }
+
+
+def scrape_upcoming_matches(session: _Session, hours_ahead: float, bo_types: tuple[int, ...] = (3,)) -> list[dict]:
+    """Upcoming matches with known teams kicking off within hours_ahead, pages parsed."""
+    html = _get_html(session, f"{_BASE_URL}/matches")
+    if html is None:
+        logger.warning("could not fetch the upcoming matches listing")
+        return []
+    now = datetime.datetime.now(datetime.timezone.utc)
+    horizon = now + datetime.timedelta(hours=hours_ahead)
+    wanted = [
+        m for m in parse_upcoming_listing_html(html)
+        if m["match_time"] and now < m["match_time"] <= horizon and m["bo_type"] in bo_types
+        and m["team_a_name"] and m["team_b_name"] and not m["is_live"]
+    ]
+    out = []
+    for m in wanted:
+        page = _get_html(session, _match_url(m["match_id"]))
+        parsed = parse_upcoming_match_html(BeautifulSoup(page, "lxml"), m["match_id"], m["stars"]) if page else None
+        if parsed is not None:
+            out.append(parsed)
+    logger.info("%d upcoming matches within %.0fh, %d parsed", len(wanted), hours_ahead, len(out))
+    return out
+
+
+def scrape_match_detail(session: _Session, match_id: int, stars: int = 0,
+                        cache: HtmlCache | None = None) -> dict | None:
+    """Scrape one HLTV match page via ZenRows, caching it once the match is complete."""
+    url = _match_url(match_id)
+    html = _get_html(session, url)
+    if html is None:
+        return None
+    if cache is not None and is_cacheable("match", html):
+        cache.put(url, html, kind="match")
+    return parse_match_detail_html(BeautifulSoup(html, "lxml"), match_id, stars=stars)
 
 
 # ---------------------------------------------------------------------------
@@ -892,30 +1018,46 @@ def run_matches(
     start_date: datetime.date,
     end_date: datetime.date,
     min_stars: int = 2,
+    cache_pages: bool = True,
 ) -> pd.DataFrame:
-    """Scrape all match detail pages between start_date and end_date with concurrency."""
+    """
+    Scrape every match page between start_date and end_date and publish all datasets.
+
+    Publishes match history, per-player map stats, veto, head-to-head and recent
+    form through the same path as the local backfill, so production keeps every
+    dataset the features are built from current - not only match history.
+    """
     session = _make_session()
+    cache = HtmlCache() if cache_pages else None
 
     match_stars = scrape_match_ids(session, start_date, end_date, min_stars=min_stars)
     logger.info("%d matches to scrape", len(match_stars))
 
-    new_rows: list[dict] = []
+    out: dict[str, list[dict]] = {"rows": [], "players": [], "veto": [], "h2h": [], "recent_form": []}
     total_done = 0
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
-        for batch_start in range(0, len(match_stars), 100):
-            batch = list(match_stars.items())[batch_start : batch_start + 100]
-            futures = {pool.submit(scrape_match_detail, session, mid, stars): mid for mid, stars in batch}
-            for future in as_completed(futures):
-                result = future.result()
-                if result and result["rows"]:
-                    new_rows.extend(result["rows"])
-                total_done += 1
-            logger.info("Progress: %d / %d matches", total_done, len(match_stars))
+    try:
+        with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
+            for batch_start in range(0, len(match_stars), 100):
+                batch = list(match_stars.items())[batch_start : batch_start + 100]
+                futures = {pool.submit(scrape_match_detail, session, mid, stars, cache): mid for mid, stars in batch}
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result and result["rows"]:
+                        for key in out:
+                            out[key].extend(result.get(key, []))
+                    total_done += 1
+                logger.info("Progress: %d / %d matches", total_done, len(match_stars))
+    finally:
+        if cache is not None:
+            cache.drain()
 
-    df = pd.DataFrame(new_rows)
+    df = pd.DataFrame(out["rows"])
+    if df.empty:
+        logger.warning("no match rows scraped for %s..%s", start_date, end_date)
+        return df
     df["match_date"] = pd.to_datetime(df["match_date"])
     logger.info("Scraped %d map rows", len(df))
-    merge_publish("cs2_match_history", df, ["match_id", "map_name"], "match_date")
+    publish_match_data(out["rows"], [], out["players"], out["veto"], out["h2h"], out["recent_form"])
     return df
 
 

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import boto3
 
 from gnomepy_research.pipelines import PIPELINE_REGISTRY
+from gnomepy_research.pipelines.cs2_prematch import CS2PrematchPredictPipeline, CS2PrematchTrainPipeline  # noqa: F401 — registers pipelines
 from gnomepy_research.pipelines.hltv_cs2 import HltvCs2Pipeline  # noqa: F401 — registers pipeline
 
 logger = logging.getLogger(__name__)

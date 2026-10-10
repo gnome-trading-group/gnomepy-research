@@ -321,3 +321,34 @@ def _gunzip(blob: bytes) -> tuple[str, datetime]:
     html = gz.read().decode("utf-8", errors="replace")
     mtime = gz.mtime or 0
     return html, datetime.fromtimestamp(mtime, tz=timezone.utc)
+
+
+def is_complete(html: str) -> bool:
+    """
+    Whether a captured page reached its footer.
+
+    A DOM serialised mid-load still ends in </html> - the browser closes open tags
+    on capture - so the file looks whole. The footer is the reliable tell.
+    """
+    return "<footer" in html
+
+
+def is_cacheable(kind: str, html: str) -> bool:
+    """
+    Guard the immutable tier.
+
+    Match pages are cached forever on the premise that a finished match never
+    changes. A live or postponed page would be frozen wrong, so require evidence
+    the match actually completed before storing one. Nothing is cached without
+    its footer: a truncated listing hides matches, and a truncated match page
+    loses the stats, veto, head-to-head and form sections at the bottom.
+    """
+    if not is_complete(html):
+        logger.warning("not caching an incomplete page (no footer)")
+        return False
+    if kind != "match":
+        return True
+    if "results-team-score" not in html:
+        logger.info("not caching a match page with no final scores (live or postponed?)")
+        return False
+    return True

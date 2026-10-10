@@ -41,6 +41,7 @@ class _Spec:
     min_notional: int
     lot_size: int
     tick_size: int
+    min_size: int = 0
 
 
 class _FakeRegistry:
@@ -52,10 +53,11 @@ class _FakeRegistry:
     """
 
     def __init__(self, tick_overrides: dict[int, int] | None = None,
-                 min_notional: int = 0, lot_size: int = SIZE_SCALE):
+                 min_notional: int = 0, lot_size: int = SIZE_SCALE, min_size: int = 0):
         self._ticks = tick_overrides or {}
         self._min_notional = min_notional
         self._lot_size = lot_size
+        self._min_size = min_size
 
     def get_listing(self, *, listing_id: int, **_):
         eid, sid = LISTINGS[listing_id]
@@ -68,6 +70,7 @@ class _FakeRegistry:
             min_notional=self._min_notional,
             lot_size=self._lot_size,
             tick_size=self._ticks.get(listing_id, default_tick),
+            min_size=self._min_size,
         )]
 
 

@@ -165,6 +165,8 @@ profiles:
   # repeat for each profile in spec
 ```
 
+`network_latency` is only our order connection, each way: orders out and reports back. Market data reaches the strategy at the receive time recorded with each record, about 50ms after the venue event on Polymarket and Kalshi, so leave `market_data_latency` unset unless the experiment is about data staleness.
+
 When the strategy operates across multiple distinct events (e.g., different prediction market events with separate listing IDs and time windows), use a `scenarios` config instead of the flat format above. Each scenario provides its own `start_date`, `end_date`, `listings`, and optional `strategy_args` overrides (merged on top of the shared `strategy.args`):
 
 ```yaml

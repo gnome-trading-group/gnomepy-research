@@ -6,14 +6,19 @@ machine. Every one fails on the pre-fix code.
 """
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from gnomepy import Scales
+from gnomepy.java.enums import Action
 from gnomepy_research.sessions.cross_prediction_arb.cross_prediction_arb import (
     BookLevel,
     LegState,
     Phase,
 )
+from gnomepy_research.sessions.cross_prediction_arb__multi import strategy as multi
+from tests.sessions.conftest import FakePositions, _FakeRegistry
 
 PRICE_SCALE = Scales.PRICE
 SIZE_SCALE = Scales.SIZE
@@ -69,8 +74,6 @@ class TestNotionalConsistency:
     def test_passes_notional_agrees_with_min_price(self, make_strategy, size, min_notional):
         """_passes_notional floored while _min_price_for_size ceilinged, so a price
         the predicate accepted could still be below the exchange minimum."""
-        from tests.sessions.conftest import _FakeRegistry
-
         s = make_strategy(registry=_FakeRegistry(min_notional=min_notional))
         listing = s._pairings[0].legs[0]
         floor = s._min_price_for_size(listing, size)
@@ -79,8 +82,6 @@ class TestNotionalConsistency:
             assert not s._passes_notional(listing, floor - 1, size)
 
     def test_rejects_price_whose_notional_is_short(self, make_strategy):
-        from tests.sessions.conftest import _FakeRegistry
-
         s = make_strategy(registry=_FakeRegistry(min_notional=100))
         listing = s._pairings[0].legs[0]
         # 33 * 3 == 99 < 100 — previously accepted because 100 // 3 == 33
@@ -363,3 +364,333 @@ class TestSharedListingOrphanCheck:
         assert other.phase != Phase.UNWINDING, (
             "a pairing must not treat a sibling's parked position as its own orphan"
         )
+
+
+# ---------------------------------------------------------------------------
+# Queue-drain fill probability
+# ---------------------------------------------------------------------------
+
+SEC = 1_000_000_000
+
+
+class _Tick:
+    """Minimal MBP stand-in for _update_book: one level per side plus an optional print."""
+
+    def __init__(self, bid, ask, size=500, action=Action.ADD.value, price=0.0, qty=0):
+        self._bid, self._ask, self._size = int(bid * PRICE_SCALE), int(ask * PRICE_SCALE), size * SIZE_SCALE
+        self.action = action
+        self.price = int(price * PRICE_SCALE)
+        self.size = qty * SIZE_SCALE
+
+    def bid_price(self, i):
+        return self._bid if i == 0 else 0
+
+    def bid_size(self, i):
+        return self._size if i == 0 else 0
+
+    def ask_price(self, i):
+        return self._ask if i == 0 else 0
+
+    def ask_size(self, i):
+        return self._size if i == 0 else 0
+
+
+def _multi(**kwargs):
+    with patch.object(multi, "RegistryClient", lambda *a, **k: _FakeRegistry()):
+        return multi.CrossPredictionArbMulti(
+            outcomes=[{"pm": 222852}, {"pm": 222853}],
+            dutch_book_labels=["pm"], taker_labels=[], **kwargs,
+        )
+
+
+def _sell_into_bid(s, lg, ts, qty, queue=500):
+    s._update_book(lg, _Tick(0.40, 0.42, size=queue), ts)
+    s._update_book(lg, _Tick(0.40, 0.42, size=queue, action=Action.TRADE.value, price=0.40, qty=qty), ts + 1)
+
+
+class TestFillProbability:
+    """P(fill) = 1 - exp(-lambda*T/Q), lambda measured from trades that hit the bid."""
+
+    def test_no_observed_flow_means_no_fill(self):
+        s = _multi(fill_risk_horizon_ns=60 * SEC)
+        lg = s._pairings[0].legs[0]
+        s._update_book(lg, _Tick(0.40, 0.42), SEC)
+        assert s._fill_prob(lg, 60 * SEC) == 0.0, "never-traded queue cannot be assumed to fill"
+
+    def test_queue_shrinking_without_trades_is_not_flow(self):
+        """Cancellations drain the queue but never fill a resting bid."""
+        s = _multi(fill_risk_horizon_ns=60 * SEC)
+        lg = s._pairings[0].legs[0]
+        for k, q in enumerate(range(5000, 0, -100)):
+            s._update_book(lg, _Tick(0.40, 0.42, size=q), (k + 1) * 1_000_000)
+        assert s._sell_rate(lg) == 0.0
+
+    def test_buys_lifting_the_ask_are_not_flow(self):
+        s = _multi(fill_risk_horizon_ns=60 * SEC)
+        lg = s._pairings[0].legs[0]
+        s._update_book(lg, _Tick(0.40, 0.42), SEC)
+        s._update_book(lg, _Tick(0.40, 0.42, action=Action.TRADE.value, price=0.42, qty=1000), SEC + 1)
+        assert s._sell_rate(lg) == 0.0
+
+    def test_rate_matches_traded_volume_over_window(self):
+        s = _multi(fill_risk_horizon_ns=60 * SEC, flow_window_ns=600 * SEC)
+        lg = s._pairings[0].legs[0]
+        _sell_into_bid(s, lg, SEC, 600)
+        assert s._sell_rate(lg) == pytest.approx(1.0, rel=1e-6)
+
+    def test_flow_decays_when_trading_stops(self):
+        s = _multi(fill_risk_horizon_ns=60 * SEC, flow_window_ns=600 * SEC)
+        lg = s._pairings[0].legs[0]
+        _sell_into_bid(s, lg, SEC, 600)
+        fresh = s._sell_rate(lg)
+        s._update_book(lg, _Tick(0.40, 0.42), 1200 * SEC)
+        assert s._sell_rate(lg) < 0.2 * fresh
+
+    def test_deeper_queue_is_less_likely_to_fill(self):
+        s = _multi(fill_risk_horizon_ns=60 * SEC)
+        lg = s._pairings[0].legs[0]
+        _sell_into_bid(s, lg, SEC, 600, queue=100)
+        shallow = s._fill_prob(lg, 60 * SEC)
+        s._update_book(lg, _Tick(0.40, 0.42, size=100_000), SEC + 2)
+        deep = s._fill_prob(lg, 60 * SEC)
+        assert 0.0 <= deep < shallow <= 1.0
+
+    def test_longer_horizon_raises_fill_probability(self):
+        s = _multi(fill_risk_horizon_ns=60 * SEC)
+        lg = s._pairings[0].legs[0]
+        _sell_into_bid(s, lg, SEC, 600)
+        assert s._fill_prob(lg, 300 * SEC) > s._fill_prob(lg, 30 * SEC)
+
+    def test_horizon_zero_disables_the_discount(self):
+        """Default must preserve prior behaviour exactly."""
+        assert _multi()._fill_risk_horizon_ns == 0
+
+
+# ---------------------------------------------------------------------------
+# Taker completion of the last leg
+# ---------------------------------------------------------------------------
+
+def _three_way(**kwargs):
+    with patch.object(multi, "RegistryClient", lambda *a, **k: _FakeRegistry()):
+        return multi.CrossPredictionArbMulti(
+            outcomes=[{"pm": 222852}, {"pm": 222853}, {"pm": 900001}],
+            dutch_book_labels=["pm"], taker_labels=[], **kwargs,
+        )
+
+
+def _stuck_on_last_leg(s, paid=(0.50, 0.30), stuck_bid=0.12, stuck_ask=0.14, ask_depth=1000):
+    """Two legs fully filled at `paid`, the third resting unfilled at stuck_bid."""
+    ps = s._pairing_states[0]
+    ps.phase = Phase.PARTIAL_FILL
+    ps.partial_fill_since = SEC
+    qty = 100 * SIZE_SCALE
+    ps.legs = [multi.LegState(listing=lg, target_qty=qty) for lg in ps.pairing.legs]
+    for lg, px in zip(ps.legs[:2], paid):
+        lg.record_fill(int(px * PRICE_SCALE), qty)
+    stuck = ps.legs[2]
+    stuck.entry_bid = int(stuck_bid * PRICE_SCALE)
+    for lg, px in zip(ps.pairing.legs[:2], paid):
+        _fill_book(s, lg, px - 0.01, px + 0.01)
+    book = s._books[stuck.listing]
+    book.bids = [BookLevel(price=stuck.entry_bid, size=10_000 * SIZE_SCALE)]
+    book.asks = [BookLevel(price=int(stuck_ask * PRICE_SCALE), size=ask_depth * SIZE_SCALE)]
+    return ps, stuck
+
+
+class TestTakerCompletion:
+    """Cross the last leg when the set still completes below $1 - edge."""
+
+    def test_disabled_by_default(self):
+        s = _three_way()
+        ps, _ = _stuck_on_last_leg(s)
+        assert s._taker_completion(ps, 2 * SEC) == []
+
+    def test_crosses_when_set_stays_profitable(self):
+        # 0.50 + 0.30 + 0.14 + fee(0.07*0.14*0.86 ~ 0.84c) ~ 94.8c < 99c
+        s = _three_way(taker_complete_edge_cents=1.0)
+        ps, stuck = _stuck_on_last_leg(s)
+        out = s._taker_completion(ps, 2 * SEC)
+        assert len(out) == 1
+        it = out[0]
+        assert (it.exchange_id, it.security_id) == stuck.listing
+        assert it.take_size == 100 * SIZE_SCALE
+        assert it.take_limit_price == int(0.14 * PRICE_SCALE)
+        assert it.bid_size == 0, "a fully-covered take leaves nothing resting"
+
+    def test_holds_when_crossing_would_lose(self):
+        s = _three_way(taker_complete_edge_cents=1.0)
+        ps, _ = _stuck_on_last_leg(s, paid=(0.55, 0.35), stuck_ask=0.10)
+        assert s._taker_completion(ps, 2 * SEC) == []
+
+    def test_fees_already_paid_count_against_the_set(self):
+        s = _three_way(taker_complete_edge_cents=1.0)
+        ps, _ = _stuck_on_last_leg(s, paid=(0.50, 0.30), stuck_ask=0.17)
+        assert s._taker_completion(ps, 2 * SEC), "precondition: crossable without fees"
+        ps.completion_ts = 0
+        ps.legs[0].entry_fees = 2.0   # $2 on 100 contracts = 2c per set
+        assert s._taker_completion(ps, 2 * SEC) == []
+
+    def test_thin_ask_takes_touch_and_rests_the_remainder(self):
+        s = _three_way(taker_complete_edge_cents=1.0)
+        ps, stuck = _stuck_on_last_leg(s, ask_depth=30)
+        it = s._taker_completion(ps, 2 * SEC)[0]
+        assert it.take_size == 30 * SIZE_SCALE
+        assert it.bid_size == 70 * SIZE_SCALE
+        assert it.bid_price == stuck.entry_bid
+        assert it.post_only
+
+    def test_no_resend_inside_settle_window(self):
+        s = _three_way(taker_complete_edge_cents=1.0)
+        ps, _ = _stuck_on_last_leg(s, ask_depth=30)
+        assert s._taker_completion(ps, 2 * SEC)
+        assert s._taker_completion(ps, 2 * SEC + 100_000_000) == []
+        assert s._taker_completion(ps, 3 * SEC)
+
+    def test_two_unfilled_legs_take_equal_size(self):
+        """Unequal takes would themselves unbalance the set."""
+        s = _three_way(taker_complete_edge_cents=1.0)
+        ps, _ = _stuck_on_last_leg(s, paid=(0.50, 0.30), stuck_ask=0.14, ask_depth=40)
+        ps.legs[1].filled_qty = 0
+        ps.legs[1].fill_cost = 0
+        ps.legs[1].entry_bid = int(0.29 * PRICE_SCALE)
+        s._books[ps.legs[1].listing].asks = [BookLevel(price=int(0.31 * PRICE_SCALE), size=25 * SIZE_SCALE)]
+        out = s._taker_completion(ps, 2 * SEC)
+        assert len(out) == 2
+        assert {i.take_size for i in out} == {25 * SIZE_SCALE}
+
+    def test_nothing_filled_means_nothing_to_complete(self):
+        s = _three_way(taker_complete_edge_cents=1.0)
+        ps, _ = _stuck_on_last_leg(s)
+        for lg in ps.legs:
+            lg.filled_qty = 0
+            lg.fill_cost = 0
+        assert s._taker_completion(ps, 2 * SEC) == []
+
+    def test_rest_never_crosses_a_fallen_ask(self):
+        """Resting at entry_bid after the ask drops through it is post-only rejected,
+        and that reject unwound the whole pairing in the soccer backtest."""
+        s = _three_way(taker_complete_edge_cents=1.0)
+        ps, stuck = _stuck_on_last_leg(s, stuck_bid=0.20, stuck_ask=0.17, ask_depth=30)
+        it = s._taker_completion(ps, 2 * SEC)[0]
+        assert it.bid_size == 70 * SIZE_SCALE
+        assert it.bid_price < int(0.17 * PRICE_SCALE)
+
+
+class TestClosingRetryKeepsHedgedSets:
+    def test_retry_does_not_sell_complete_sets(self):
+        """First close kept 1792 complete sets; the 2s retry used base_qty=0 and sold them."""
+        s = _three_way()
+        positions = FakePositions()
+        s._position_view = positions
+        ps = s._pairing_states[0]
+        ps.phase = Phase.UNWINDING
+        ps.base_qty = 0
+        ps.legs = [multi.LegState(listing=lg, target_qty=2506 * SIZE_SCALE) for lg in ps.pairing.legs]
+        for lg in ps.pairing.legs:
+            positions.set(lg, 1792 * SIZE_SCALE)
+            _fill_book(s, lg, 0.20, 0.22)
+        assert s._on_closing(ps, 10 * SEC) == []
+        assert ps.phase == Phase.SCANNING
+
+    def test_retry_sheds_only_the_naked_excess(self):
+        s = _three_way()
+        positions = FakePositions()
+        s._position_view = positions
+        ps = s._pairing_states[0]
+        ps.phase = Phase.UNWINDING
+        ps.legs = [multi.LegState(listing=lg, target_qty=2506 * SIZE_SCALE) for lg in ps.pairing.legs]
+        for lg, q in zip(ps.pairing.legs, (2506, 1792, 2506)):
+            positions.set(lg, q * SIZE_SCALE)
+            _fill_book(s, lg, 0.20, 0.22)
+        out = s._on_closing(ps, 10 * SEC)
+        sold = {(i.exchange_id, i.security_id): i.take_size for i in out if i.take_size}
+        assert sold == {ps.pairing.legs[0]: 714 * SIZE_SCALE, ps.pairing.legs[2]: 714 * SIZE_SCALE}
+
+
+# ---------------------------------------------------------------------------
+# Lead with the illiquid leg
+# ---------------------------------------------------------------------------
+
+def _scannable(s, bids=(0.50, 0.30, 0.10), ts=SEC):
+    positions = FakePositions()
+    s._position_view = positions
+    for lg, b in zip(s._pairings[0].legs, bids):
+        positions.set(lg, 0)
+        _fill_book(s, lg, b, b + 0.02)
+        s._books[lg].last_update_ts = ts
+    s._now_ns = ts
+    return s._pairing_states[0]
+
+
+class TestLeadWithIlliquid:
+    def test_entry_posts_only_the_least_fillable_leg(self):
+        s = _three_way(lead_with_illiquid=True, min_contract_price=0.03)
+        ps = _scannable(s)
+        legs = s._pairings[0].legs
+        for lg in legs[:2]:
+            s._sell_flow[lg] = (6_000.0, SEC)   # 10 c/s over the 600s window
+        out = s._on_scanning(ps, SEC)
+        assert [(i.exchange_id, i.security_id) for i in out] == [legs[2]]
+        assert [lg.posted for lg in ps.legs] == [False, False, True]
+
+    def test_ties_go_to_the_cheapest_leg(self):
+        s = _three_way(lead_with_illiquid=True, min_contract_price=0.03)
+        ps = _scannable(s, bids=(0.30, 0.10, 0.50))
+        out = s._on_scanning(ps, SEC)
+        assert [(i.exchange_id, i.security_id) for i in out] == [s._pairings[0].legs[1]]
+
+    def test_default_posts_every_leg(self):
+        s = _three_way(min_contract_price=0.03)
+        ps = _scannable(s)
+        assert len(s._on_scanning(ps, SEC)) == 3
+
+    def _lead_filled(self, s, lead_px=0.10, filled=100):
+        ps = s._pairing_states[0]
+        ps.phase = Phase.PARTIAL_FILL
+        ps.partial_fill_since = SEC
+        ps.legs = [multi.LegState(listing=lg, target_qty=100 * SIZE_SCALE, posted=False)
+                   for lg in ps.pairing.legs]
+        lead = ps.legs[2]
+        lead.posted = True
+        lead.record_fill(int(lead_px * PRICE_SCALE), filled * SIZE_SCALE)
+        return ps
+
+    def test_held_legs_post_one_at_a_time_least_fillable_first(self):
+        s = _three_way(lead_with_illiquid=True)
+        _scannable(s)
+        ps = self._lead_filled(s)
+        first = s._post_deferred_legs(ps, 2 * SEC)
+        assert [(i.exchange_id, i.security_id) for i in first] == [ps.pairing.legs[1]], (
+            "no flow anywhere, so the cheaper of the two held legs goes next")
+        assert first[0].bid_size == 100 * SIZE_SCALE and first[0].post_only
+        assert s._post_deferred_legs(ps, 3 * SEC) == [], "wait for it to fill"
+        ps.legs[1].record_fill(int(0.30 * PRICE_SCALE), 100 * SIZE_SCALE)
+        second = s._post_deferred_legs(ps, 4 * SEC)
+        assert [(i.exchange_id, i.security_id) for i in second] == [ps.pairing.legs[0]]
+        assert all(lg.posted for lg in ps.legs)
+
+    def test_partial_lead_holds_the_rest_back(self):
+        s = _three_way(lead_with_illiquid=True)
+        _scannable(s)
+        ps = self._lead_filled(s, filled=40)
+        assert s._post_deferred_legs(ps, 2 * SEC) == []
+
+    def test_unprofitable_after_lead_posts_nothing(self):
+        s = _three_way(lead_with_illiquid=True)
+        _scannable(s, bids=(0.55, 0.35, 0.10))
+        ps = self._lead_filled(s, lead_px=0.10)
+        assert s._post_deferred_legs(ps, 2 * SEC) == []
+        assert not ps.legs[0].posted
+
+    def test_completion_crosses_deferred_legs_when_affordable(self):
+        s = _three_way(lead_with_illiquid=True, taker_complete_edge_cents=1.0)
+        _scannable(s)
+        ps = self._lead_filled(s)
+        out = s._taker_completion(ps, 2 * SEC)
+        assert len(out) == 2 and all(i.take_size == 100 * SIZE_SCALE for i in out)
+
+    def test_completion_waits_for_the_lead(self):
+        s = _three_way(lead_with_illiquid=True, taker_complete_edge_cents=1.0)
+        _scannable(s)
+        ps = self._lead_filled(s, filled=40)
+        assert s._taker_completion(ps, 2 * SEC) == []

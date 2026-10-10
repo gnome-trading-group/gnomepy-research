@@ -12,8 +12,10 @@ from gnomepy_research.pipelines.hltv_cs2.player_form import (
     PLAYERS_AUX,
     PlayerFormAccumulator,
     compute_player_form_features,
+    PLAYER_FORM_FEATURES,
 )
 from gnomepy_research.pipelines.hltv_cs2.scraper import parse_match_detail_html
+from gnomepy_research.sessions.cs2_win_probability.symmetry import build_swap_plan, swap_features
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -227,9 +229,6 @@ def test_own_h2h_rate_is_a_share_of_prior_meetings():
 # --- symmetry ---------------------------------------------------------------
 
 def test_new_features_all_have_a_mirror():
-    from gnomepy_research.sessions.cs2_win_probability.symmetry import build_swap_plan
-    from gnomepy_research.pipelines.hltv_cs2.player_form import PLAYER_FORM_FEATURES
-
     names = (PLAYER_FORM_FEATURES + cf.SCHEDULE_FEATURES + cf.RANK_FEATURES
              + cf.EVENT_FEATURES + cf.VETO_FEATURES + cf.PAGE_H2H_FEATURES)
     plan = build_swap_plan(names)
@@ -237,9 +236,6 @@ def test_new_features_all_have_a_mirror():
 
 
 def test_swapping_twice_is_the_identity():
-    from gnomepy_research.sessions.cs2_win_probability.symmetry import build_swap_plan, swap_features
-    from gnomepy_research.pipelines.hltv_cs2.player_form import PLAYER_FORM_FEATURES
-
     names = (PLAYER_FORM_FEATURES + cf.SCHEDULE_FEATURES + cf.RANK_FEATURES
              + cf.EVENT_FEATURES + cf.VETO_FEATURES + cf.PAGE_H2H_FEATURES)
     plan = build_swap_plan(names)

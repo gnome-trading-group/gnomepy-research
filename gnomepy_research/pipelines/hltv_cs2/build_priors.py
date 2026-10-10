@@ -273,6 +273,50 @@ def build_priors(
     return out
 
 
+def build_priors_for(
+    match_history: pd.DataFrame,
+    team_rankings: pd.DataFrame,
+    targets: pd.DataFrame,
+    *,
+    player_stats: pd.DataFrame | None = None,
+    veto: pd.DataFrame | None = None,
+    h2h: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """
+    Priors for the target rows only - upcoming maps whose outcome is unknown -
+    computed exactly as build_priors would compute them with the targets appended
+    to history.
+
+    The point-in-time scans are linear and run over everything; the legacy per-row
+    priors are quadratic, so they run for the targets alone (seconds, not the
+    minutes a full rebuild takes every 30 min). Targets are only ever read by the
+    scans before their own day is observed, so their missing outcomes never leak.
+    """
+    combined = pd.concat([match_history, targets], ignore_index=True)
+    combined["match_date"] = pd.to_datetime(combined["match_date"])
+    combined = combined.sort_values("match_date").reset_index(drop=True)
+    rankings = team_rankings.sort_values("date").reset_index(drop=True)
+    keys = set(zip(targets.match_id, targets.map_name))
+    is_target = [k in keys for k in zip(combined.match_id, combined.map_name)]
+
+    rows = [compute_priors_for_row(row, combined, rankings) for _, row in combined[is_target].iterrows()]
+    out = pd.DataFrame([r for r in rows if r is not None])
+    if out.empty:
+        return out
+    out = out.merge(compute_elo_features(combined, rankings), on=["match_id", "map_name"], how="left")
+    blocks = [
+        (compute_player_form_features(combined, _frame(player_stats)), PLAYER_FORM_FEATURES),
+        (compute_schedule_features(combined), SCHEDULE_FEATURES),
+        (compute_rank_features(combined), RANK_FEATURES),
+        (compute_event_features(combined), EVENT_FEATURES),
+        (compute_veto_features(combined, _frame(veto)), VETO_FEATURES),
+        (compute_page_h2h_features(combined, _frame(h2h)), PAGE_H2H_FEATURES),
+    ]
+    for block, declared in blocks:
+        out = _merge_block(out, block, declared)
+    return out
+
+
 def compute_live_priors(
     team_a_name: str,
     team_b_name: str,

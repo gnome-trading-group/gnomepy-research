@@ -1,0 +1,19 @@
+{
+  "sweep_id": "01a0f397-2c9a-747f-80bc-7d8f6a2a36d6",
+  "job_count": 1,
+  "completed_count": 1,
+  "sweep_params": {},
+  "jobs": [
+    {
+      "job_index": 0,
+      "job_id": "01a0f397-2c9a-747f-80bc-7d8f6a2a36d6-0000",
+      "scenario": "seahawks_titans",
+      "config_params": {},
+      "status": "COMPLETED",
+      "output": "gnomepy_research/sessions/cross_prediction_arb/results/deadcode_removed/jobs/0000"
+    }
+  ],
+  "scenarios": [
+    "seahawks_titans"
+  ]
+}
