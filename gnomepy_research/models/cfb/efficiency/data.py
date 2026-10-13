@@ -25,11 +25,15 @@ DEF_FEATURES = [
 ]
 # Flags that widen the preseason prior: less is known about a team that changed a lot.
 UNCERTAINTY_FLAGS = ["coach_new", "qb_not_returning", "prior_missing"]
+UNITS_ALL = ("all",)
+UNITS_SPLIT = ("pass", "rush")
+UNIT_COLUMNS = {"all": ("plays", "off_ppa"), "pass": ("pass_plays", "off_pass_ppa"),
+                "rush": ("rush_plays", "off_rush_ppa")}
 
 
 @dataclass
 class ModelData:
-    ts_keys: pd.DataFrame          # (season, team_id) per team-season index; FCS rows have team_id == FCS_TEAM
+    ts_keys: pd.DataFrame          # (season, team_id, unit) per team-season index; FCS rows have team_id == FCS_TEAM
     n_periods: int
     x_off: np.ndarray              # (TS, F_off) standardized preseason features + missing flags + is_fcs
     x_def: np.ndarray              # (TS, F_def)
@@ -46,6 +50,10 @@ class ModelData:
     obs_season: np.ndarray         # (N,) index into `seasons`
     seasons: list[int]
     periods: pd.DataFrame          # (season, period) -> cutoff, season_type, week
+    units: tuple[str, ...]
+    alpha_keys: pd.DataFrame       # (season, unit) per intercept index
+    obs_alpha: np.ndarray          # (N,) intercept index
+    obs_unit: np.ndarray           # (N,) index into `units`
 
 
 def season_periods(games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
@@ -75,8 +83,18 @@ def _standardize(pre: pd.DataFrame, cols: list[str]) -> tuple[pd.DataFrame, list
     return out, names
 
 
+def _block(x: np.ndarray, u: int, n_units: int) -> np.ndarray:
+    out = np.zeros((x.shape[0], x.shape[1] * n_units))
+    out[:, u * x.shape[1]:(u + 1) * x.shape[1]] = x
+    return out
+
+
+def _unit_names(names: list[str], units: tuple[str, ...]) -> list[str]:
+    return names if units == UNITS_ALL else [f"{u}:{n}" for u in units for n in names]
+
+
 def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: pd.DataFrame,
-                     seasons: list[int]) -> ModelData:
+                     seasons: list[int], units: tuple[str, ...] = UNITS_ALL) -> ModelData:
     """`efficiency` must already be point-in-time filtered (as_of the fit's cutoff)."""
     pre = preseason[preseason["season"].isin(seasons)].sort_values(["season", "team_id"]).reset_index(drop=True)
     pre["qb_returning_starter"] = pre["qb_returning_starter"].astype(float)
@@ -85,7 +103,7 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
     xd, def_names = _standardize(pre, DEF_FEATURES)
 
     fcs = pd.DataFrame({"season": seasons, "team_id": FCS_TEAM})
-    ts_keys = pd.concat([pre[["season", "team_id"]], fcs], ignore_index=True)
+    base_keys = pd.concat([pre[["season", "team_id"]], fcs], ignore_index=True)
     n_fbs = len(pre)
 
     def with_fcs(x: pd.DataFrame) -> np.ndarray:
@@ -98,32 +116,49 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
         "qb_not_returning": 1.0 - pre["qb_returning_starter"].fillna(0.0),
         "prior_missing": pre["prior_off_rating"].isna().astype(float),
     })
-    z_unc = np.vstack([unc[UNCERTAINTY_FLAGS].to_numpy(float), np.ones((len(seasons), len(UNCERTAINTY_FLAGS)))])
+    base_x_off, base_x_def = with_fcs(xo), with_fcs(xd)
+    base_z = np.vstack([unc[UNCERTAINTY_FLAGS].to_numpy(float), np.ones((len(seasons), len(UNCERTAINTY_FLAGS)))])
+
+    n_u = len(units)
+    ts_keys = pd.concat([base_keys.assign(unit=u) for u in units], ignore_index=True)
+    x_off = np.vstack([_block(base_x_off, i, n_u) for i in range(n_u)])
+    x_def = np.vstack([_block(base_x_def, i, n_u) for i in range(n_u)])
+    z_unc = np.vstack([base_z] * n_u)
+    alpha_keys = pd.DataFrame([(s, u) for u in units for s in seasons], columns=["season", "unit"])
+    a_idx = {(s, u): i for i, (s, u) in enumerate(zip(alpha_keys["season"], alpha_keys["unit"]))}
 
     periods = season_periods(games, seasons)
     e = efficiency[efficiency["season"].isin(seasons) & efficiency["usable"]]
     e = e.merge(periods[[*WEEK_KEYS, "period"]], on=WEEK_KEYS)
-
-    idx = {(s, t): i for i, (s, t) in enumerate(zip(ts_keys["season"], ts_keys["team_id"]))}
+    idx = {(s, t, u): i for i, (s, t, u) in enumerate(zip(ts_keys["season"], ts_keys["team_id"], ts_keys["unit"]))}
     off_team = np.where(e["team_classification"] == "fbs", e["team_id"], FCS_TEAM)
     def_team = np.where(e["opponent_classification"] == "fbs", e["opponent_id"], FCS_TEAM)
-    obs_off = np.array([idx.get((s, t), -1) for s, t in zip(e["season"], off_team)], dtype=int)
-    obs_def = np.array([idx.get((s, t), -1) for s, t in zip(e["season"], def_team)], dtype=int)
-    # An FBS team missing from the preseason table (e.g. a program's first FBS year) is pooled
-    # with FCS rather than silently dropped.
-    fcs_idx = {s: idx[(s, FCS_TEAM)] for s in seasons}
-    fcs_of_row = np.array([fcs_idx[s] for s in e["season"]], dtype=int)
-    obs_off = np.where(obs_off < 0, fcs_of_row, obs_off)
-    obs_def = np.where(obs_def < 0, fcs_of_row, obs_def)
+
+    parts = []
+    for ui, u in enumerate(units):
+        plays_col, y_col = UNIT_COLUMNS[u]
+        keep = (e[plays_col].to_numpy(float) > 0) & np.isfinite(e[y_col].to_numpy(float))
+        eu = e[keep]
+        fcs_row = np.array([idx[(s, FCS_TEAM, u)] for s in eu["season"]], dtype=int)
+        # An FBS team missing from the preseason table is pooled with FCS rather than silently dropped.
+        o = np.array([idx.get((s, t, u), -1) for s, t in zip(eu["season"], off_team[keep])], dtype=int)
+        d = np.array([idx.get((s, t, u), -1) for s, t in zip(eu["season"], def_team[keep])], dtype=int)
+        parts.append(pd.DataFrame({
+            "off": np.where(o < 0, fcs_row, o), "def": np.where(d < 0, fcs_row, d),
+            "period": eu["period"].to_numpy(int), "venue": eu["venue"].to_numpy(float),
+            "plays": eu[plays_col].to_numpy(float), "y": eu[y_col].to_numpy(float), "game": eu["game_id"].to_numpy(),
+            "season": eu["season"].map({s: i for i, s in enumerate(seasons)}).to_numpy(int),
+            "alpha": [a_idx[(s, u)] for s in eu["season"]], "unit": ui,
+        }))
+    obs = pd.concat(parts, ignore_index=True)
 
     return ModelData(
         ts_keys=ts_keys,
         n_periods=int(periods.groupby("season")["period"].max().max()) + 1,
-        x_off=with_fcs(xo), x_def=with_fcs(xd), z_unc=z_unc,
-        off_names=[*off_names, "is_fcs"], def_names=[*def_names, "is_fcs"],
-        obs_off=obs_off, obs_def=obs_def, obs_period=e["period"].to_numpy(int),
-        obs_venue=e["venue"].to_numpy(float), obs_plays=e["plays"].to_numpy(float),
-        obs_y=e["off_ppa"].to_numpy(float), obs_game=e["game_id"].to_numpy(),
-        obs_season=e["season"].map({s: i for i, s in enumerate(seasons)}).to_numpy(int), seasons=list(seasons),
-        periods=periods,
+        x_off=x_off, x_def=x_def, z_unc=z_unc,
+        off_names=_unit_names([*off_names, "is_fcs"], units), def_names=_unit_names([*def_names, "is_fcs"], units),
+        obs_off=obs["off"].to_numpy(int), obs_def=obs["def"].to_numpy(int), obs_period=obs["period"].to_numpy(int),
+        obs_venue=obs["venue"].to_numpy(float), obs_plays=obs["plays"].to_numpy(float), obs_y=obs["y"].to_numpy(float),
+        obs_game=obs["game"].to_numpy(), obs_season=obs["season"].to_numpy(int), seasons=list(seasons), periods=periods,
+        units=tuple(units), alpha_keys=alpha_keys, obs_alpha=obs["alpha"].to_numpy(int), obs_unit=obs["unit"].to_numpy(int),
     )
