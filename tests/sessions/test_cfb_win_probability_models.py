@@ -14,7 +14,7 @@ from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
     sample,
 )
 from gnomepy_research.models.cfb.efficiency.inference import HYPER_DIR, Inputs
-from gnomepy_research.models.cfb.efficiency.posterior_snapshots import draws_name
+from gnomepy_research.models.cfb.efficiency.posterior_snapshots import draws_name, form_at
 from gnomepy_research.models.cfb.efficiency.gaussian_solver import _state_map, fit_cutoff_exact, solve
 from gnomepy_research.models.cfb.features.rush_share import league_rush_share, rush_share
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import (
@@ -347,3 +347,31 @@ class TestSplitGameDraws:
         self.write(tmp_path, [2, 1, FCS_TEAM])
         with pytest.raises(ValueError, match="not aligned"):
             game_draws(self.games(), [self.SEASON], directory=tmp_path, units=UNITS_SPLIT)
+
+
+class TestFormAt:
+    CUTOFF = pd.Timestamp("2024-09-10", tz="UTC")
+
+    def rows(self, late_vals):
+        cols = ["early_success", "late_success", "pace", "pts_per_qd", "field_position"]
+        before = pd.DataFrame({
+            "team_id": [1, 1, 2, 2], "season": 2024,
+            "available_at": pd.Timestamp("2024-09-05", tz="UTC"),
+            "early_success": [0.6, 0.55, 0.4, 0.45], "late_success": [0.5, 0.45, 0.35, 0.4],
+            "pace": [70.0, 72.0, 60.0, 62.0], "pts_per_qd": [4.0, 5.0, 3.0, 2.5],
+            "field_position": [3.0, 2.0, -1.0, -2.0],
+        })
+        after = before.assign(available_at=pd.Timestamp("2024-09-12", tz="UTC"))
+        after[cols] = late_vals
+        return pd.concat([before, after], ignore_index=True)
+
+    def test_point_in_time_shape_and_unseen_team(self):
+        ids = np.array([1, 2, FCS_TEAM])
+        a = form_at(self.rows(0.0), 2024, self.CUTOFF, ids)
+        b = form_at(self.rows(99.0), 2024, self.CUTOFF, ids)
+        np.testing.assert_array_equal(a, b)
+        assert a.shape == (3, 5)
+        assert a.dtype == np.float32
+        assert (a[2] == 0).all()
+        assert a[:2].std() > 0
+        assert form_at(self.rows(0.0), 2024, pd.Timestamp("2024-01-01", tz="UTC"), ids).shape == (3, 5)

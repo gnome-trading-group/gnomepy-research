@@ -24,6 +24,7 @@ import pandas as pd
 
 from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, UNITS_SPLIT, season_periods
 from gnomepy_research.models.cfb.efficiency.gaussian_solver import fit_cutoff_exact
+from gnomepy_research.models.cfb.features.team_form import FORM_FEATURES, team_form, with_luck
 from gnomepy_research.models.cfb.features.rush_share import league_rush_share, rush_share
 from gnomepy_research.models.cfb.efficiency.inference import (
     EFFICIENCY,
@@ -70,6 +71,12 @@ def ensure_hyperparameters(inputs: Inputs, likelihood: str, season: int, units: 
     return name
 
 
+def form_at(form_rows: pd.DataFrame, season: int, cutoff: pd.Timestamp, team_ids: np.ndarray) -> np.ndarray:
+    visible = form_rows[(form_rows["available_at"] < cutoff) & (form_rows["season"] == season)]
+    f = team_form(with_luck(visible), season) if len(visible) else pd.DataFrame(columns=FORM_FEATURES)
+    return f.reindex(team_ids).fillna(0.0)[FORM_FEATURES].to_numpy(np.float32)
+
+
 def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
                     out_dir: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL) -> tuple[pd.DataFrame, Path]:
     name = ensure_hyperparameters(inputs, likelihood, season, units)
@@ -92,6 +99,9 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
         lg = league_rush_share(seen, season)
         draws[f"{key}__units"] = post.units.astype("U8")
         draws[f"{key}__rush_share"] = shares.reindex(post.team_ids).fillna(lg).to_numpy(np.float32)
+        if inputs.form_rows is not None:
+            draws[f"{key}__form"] = form_at(inputs.form_rows, season, p.cutoff, post.team_ids)
+            draws[f"{key}__form_names"] = np.array(FORM_FEATURES)
         counts = seen.groupby("team_id").agg(games_observed=("game_id", "nunique"), plays_observed=("plays", "sum"))
         s = post.summary().merge(counts, left_on="team_id", right_index=True, how="left")
         s[["games_observed", "plays_observed"]] = s[["games_observed", "plays_observed"]].fillna(0)
@@ -131,9 +141,10 @@ def main() -> None:
     ap.add_argument("last", type=int)
     ap.add_argument("--likelihood", default="studentt")
     ap.add_argument("--units", choices=["all", "split"], default="all")
+    ap.add_argument("--form", action="store_true")
     args = ap.parse_args()
     units = UNITS_ALL if args.units == "all" else UNITS_SPLIT
-    table, _ = snapshot_seasons(Inputs.load(), args.first, args.last, args.likelihood, units=units)
+    table, _ = snapshot_seasons(Inputs.load(with_form=args.form), args.first, args.last, args.likelihood, units=units)
     print(f"{len(table):,} team-week rows")
 
 

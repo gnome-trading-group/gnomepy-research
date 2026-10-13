@@ -16,6 +16,7 @@ from scipy import stats
 
 from gnomepy.data import DatasetStore
 from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, ModelData, build_model_data
+from gnomepy_research.models.cfb.features.team_form import team_game_form
 from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
     Hyperparameters,
     build_model,
@@ -31,6 +32,8 @@ HYPER_VARS = ["alpha", "sigma_alpha", "hfa", "beta_off", "beta_def", "gamma", "s
 PRESEASON_FEATURES = "cfb_team_preseason_features"
 EFFICIENCY = "cfb_team_game_efficiency"
 GAMES = "cfb_games"
+PLAYS = "cfb_plays"
+DRIVES = "cfb_drives"
 
 
 @dataclass
@@ -39,14 +42,20 @@ class Inputs:
     efficiency: pd.DataFrame
     games: pd.DataFrame
     as_of: datetime
+    form_rows: pd.DataFrame | None = None
 
     @classmethod
-    def load(cls, ds: DatasetStore | None = None, as_of: datetime | None = None) -> Inputs:
+    def load(cls, ds: DatasetStore | None = None, as_of: datetime | None = None,
+             with_form: bool = False) -> Inputs:
         """The model inputs as known at as_of (default now); ds records the loads for lineage."""
         ds = ds or DatasetStore()
         as_of = as_of or datetime.now(timezone.utc)
-        return cls(ds.load(PRESEASON_FEATURES, as_of=as_of), ds.load(EFFICIENCY, as_of=as_of),
-                   ds.load(GAMES, as_of=as_of), as_of)
+        games = ds.load(GAMES, as_of=as_of)
+        form_rows = None
+        if with_form:
+            form_rows = team_game_form(ds.load(PLAYS, as_of=as_of), ds.load(DRIVES, as_of=as_of), games)
+        return cls(ds.load(PRESEASON_FEATURES, as_of=as_of), ds.load(EFFICIENCY, as_of=as_of), games, as_of,
+                   form_rows)
 
     def visible(self, cutoff: pd.Timestamp) -> pd.DataFrame:
         return self.efficiency[self.efficiency["available_at"] < cutoff]
