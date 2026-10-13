@@ -109,3 +109,4 @@ cython_debug/
 *.parquet
 *.html
 *.npz
+.superpowers/
