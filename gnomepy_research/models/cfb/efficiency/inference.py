@@ -15,7 +15,7 @@ import pandas as pd
 from scipy import stats
 
 from gnomepy.data import DatasetStore
-from gnomepy_research.models.cfb.efficiency.data import ModelData, build_model_data
+from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, ModelData, build_model_data
 from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
     Hyperparameters,
     build_model,
@@ -66,11 +66,13 @@ class CutoffPosterior:
     diagnostics: dict
 
     def summary(self) -> pd.DataFrame:
+        units = list(pd.unique(self.units))
         return pd.DataFrame({
-            "season": self.season, "cutoff": self.cutoff, "team_id": self.team_ids,
+            "season": self.season, "cutoff": self.cutoff, "team_id": self.team_ids, "unit": self.units,
             "offense_mean": self.off.mean(0), "offense_sd": self.off.std(0),
             "defense_mean": self.de.mean(0), "defense_sd": self.de.std(0),
             "od_corr": [np.corrcoef(self.off[:, i], self.de[:, i])[0, 1] for i in range(len(self.team_ids))],
+            "alpha_mean": [float(self.alpha[:, units.index(u)].mean()) for u in self.units],
         })
 
 
@@ -82,9 +84,10 @@ def hyper_cutoff(inputs: Inputs, last_train_season: int) -> pd.Timestamp:
 
 
 def fit_hyperparameters(inputs: Inputs, seasons: list[int], likelihood: str, draws: int = 1000,
-                        tune: int = 1500, seed: int = 0) -> tuple[Hyperparameters, dict]:
+                        tune: int = 1500, seed: int = 0,
+                        units: tuple[str, ...] = UNITS_ALL) -> tuple[Hyperparameters, dict]:
     cutoff = hyper_cutoff(inputs, max(seasons))
-    data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, seasons)
+    data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, seasons, units=units)
     idata = sample(build_model(data, likelihood=likelihood, store_states=False), draws=draws, tune=tune, seed=seed)
     hv = HYPER_VARS + (["nu"] if likelihood == "studentt" else [])
     diag = {"hyper": diagnostics(idata, hv), "states": diagnostics(idata, ["z0_off", "z0_def"]),
@@ -125,7 +128,7 @@ def predictive_logpdf(post: CutoffPosterior, obs: pd.DataFrame) -> np.ndarray:
     """Log posterior-predictive density of each observed team-game PPA (mixture over draws).
     `obs` rows need off_idx/def_idx (columns of post.off) plus venue, plays, off_ppa."""
     h = post.hypers
-    mu = (post.alpha[:, None] + post.off[:, obs["off_idx"].to_numpy()] - post.de[:, obs["def_idx"].to_numpy()]
+    mu = (post.alpha[:, obs["alpha_idx"].to_numpy()] + post.off[:, obs["off_idx"].to_numpy()] - post.de[:, obs["def_idx"].to_numpy()]
           + h.hfa * obs["venue"].to_numpy()[None, :])
     sigma = np.sqrt(h.sigma_game ** 2 + h.sigma_play ** 2 / obs["plays"].to_numpy())[None, :]
     y = obs["off_ppa"].to_numpy()[None, :]
@@ -144,6 +147,7 @@ def week_observations(inputs: Inputs, post: CutoffPosterior, data: ModelData) ->
     col = {t: i for i, t in enumerate(post.team_ids)}
     fcs = col[post.team_ids[-1]]
     e = e.assign(
+        alpha_idx=0,
         off_idx=[col.get(t, fcs) if c == "fbs" else fcs for t, c in zip(e["team_id"], e["team_classification"])],
         def_idx=[col.get(t, fcs) if c == "fbs" else fcs for t, c in zip(e["opponent_id"], e["opponent_classification"])],
     )

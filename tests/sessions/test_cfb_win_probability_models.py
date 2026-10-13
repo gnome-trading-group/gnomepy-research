@@ -4,6 +4,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from gnomepy_research.models.cfb.features.ratings import FCS_TEAM
 from gnomepy_research.models.cfb.efficiency.data import DEF_FEATURES, OFF_FEATURES, UNITS_SPLIT, build_model_data
@@ -12,8 +13,9 @@ from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
     build_model,
     sample,
 )
-from gnomepy_research.models.cfb.efficiency.inference import HYPER_DIR
-from gnomepy_research.models.cfb.efficiency.gaussian_solver import _state_map, solve
+from gnomepy_research.models.cfb.efficiency.inference import HYPER_DIR, Inputs
+from gnomepy_research.models.cfb.efficiency.gaussian_solver import _state_map, fit_cutoff_exact, solve
+from gnomepy_research.models.cfb.features.rush_share import league_rush_share, rush_share
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import OutcomeModel
 
 SEASON = 2024
@@ -231,3 +233,33 @@ def test_split_recovers_unit_baselines_and_ratings():
     assert np.corrcoef(o[n:n + N_TEAMS], true_o)[0, 1] > 0.7
     a = post["alpha_season"].mean(("chain", "draw")).values
     assert a[0] > a[1]
+
+
+def test_rush_share_is_shrunk_toward_league():
+    e = pd.DataFrame({"season": 2024, "team_id": [1, 1, 2], "rush_plays": [50, 50, 10], "pass_plays": [10, 10, 50]})
+    s = rush_share(e, 2024, shrink_plays=150)
+    lg = league_rush_share(e, 2024)
+    assert lg == pytest.approx(110 / 180)
+    assert lg < s[1] < 100 / 120
+    assert 10 / 60 < s[2] < lg
+
+
+def test_rush_share_with_no_rows_is_empty_and_league_half():
+    e = pd.DataFrame(columns=["season", "team_id", "rush_plays", "pass_plays"])
+    assert rush_share(e, 2024).empty and league_rush_share(e, 2024) == 0.5
+
+
+def test_split_cutoff_posterior_shapes():
+    games, eff, pre, _, _ = synthetic(seed=2)
+    inputs = Inputs(preseason=pre, efficiency=eff, games=games, as_of=pd.Timestamp("2025-01-01", tz="UTC"))
+    d = build_model_data(pre, eff, games, [SEASON], units=UNITS_SPLIT)
+    h = hypers(d)
+    h.likelihood = "normal"
+    h.alpha = np.array([0.15, 0.05])
+    cutoff = d.periods["cutoff"].iloc[-1]
+    post, _ = fit_cutoff_exact(inputs, SEASON, cutoff, h, n_draws=200)
+    assert post.off.shape == (200, 2 * (N_TEAMS + 1))
+    assert list(pd.unique(post.units)) == ["pass", "rush"]
+    assert post.alpha.shape == (200, 2)
+    s = post.summary()
+    assert set(s["unit"]) == {"pass", "rush"} and len(s) == 2 * (N_TEAMS + 1)
