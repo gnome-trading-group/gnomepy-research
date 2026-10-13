@@ -9,8 +9,8 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import log_loss
 
-from gnomepy_research.sessions.cs2_win_probability.pre_map_model import _calibrated, _fit_temperature
-from gnomepy_research.sessions.cs2_win_probability.splits import calibration_slope, clustered_bootstrap_delta
+from gnomepy_research.models.cs2.win_probability.pre_map_model import _calibrated, _fit_temperature
+from gnomepy_research.models.cs2.win_probability.splits import calibration_slope, clustered_bootstrap_delta
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 
 D = str(DATA_DIR)

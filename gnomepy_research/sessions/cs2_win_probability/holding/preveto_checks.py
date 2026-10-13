@@ -21,16 +21,16 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import log_loss
 
-from gnomepy_research.pipelines.hltv_cs2.context_features import VETO_FEATURES
-from gnomepy_research.pipelines.hltv_cs2.player_form import PLAYER_FORM_FEATURES
+from gnomepy_research.models.cs2.hltv.context_features import VETO_FEATURES
+from gnomepy_research.models.cs2.hltv.player_form import PLAYER_FORM_FEATURES
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
-from gnomepy_research.sessions.cs2_win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
-from gnomepy_research.sessions.cs2_win_probability.pre_map_model import _fit, _matrix, fit_calibrator
-from gnomepy_research.sessions.cs2_win_probability.series_dp import series_nodes, series_win_prob
-from gnomepy_research.sessions.cs2_win_probability.splits import (
+from gnomepy_research.models.cs2.win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
+from gnomepy_research.models.cs2.win_probability.pre_map_model import _fit, _matrix, fit_calibrator
+from gnomepy_research.models.cs2.win_probability.series_dp import series_nodes, series_win_prob
+from gnomepy_research.models.cs2.win_probability.splits import (
     clustered_bootstrap_delta, split_val_for_calibration, temporal_split_by_series,
 )
-from gnomepy_research.sessions.cs2_win_probability.symmetry import augment, build_swap_plan, symmetric_predict_proba
+from gnomepy_research.models.cs2.win_probability.symmetry import augment, build_swap_plan, symmetric_predict_proba
 
 logging.basicConfig(level=logging.WARNING)
 MONTHS = pd.date_range("2026-03-01", "2026-09-01", freq="MS")

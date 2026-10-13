@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gnomepy_research.sessions.cs2_win_probability.series_dp import (
+from gnomepy_research.models.cs2.win_probability.series_dp import (
     _MAP_SPECIFIC,
     build_node_frame,
     series_win_prob,

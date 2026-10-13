@@ -12,9 +12,9 @@ import pandas as pd
 from sklearn.metrics import log_loss, roc_auc_score
 
 from gnomepy_research.sessions.cs2_win_probability.ablate import BASELINE_NAMES
-from gnomepy_research.sessions.cs2_win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
-from gnomepy_research.sessions.cs2_win_probability.pre_map_model import CS2PreMapModel, _matrix
-from gnomepy_research.sessions.cs2_win_probability.splits import calibration_slope, clustered_bootstrap_delta
+from gnomepy_research.models.cs2.win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
+from gnomepy_research.models.cs2.win_probability.pre_map_model import CS2PreMapModel, _matrix
+from gnomepy_research.models.cs2.win_probability.splits import calibration_slope, clustered_bootstrap_delta
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 
 D = str(DATA_DIR)

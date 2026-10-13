@@ -22,7 +22,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from gnomepy_research.pipelines.hltv_cs2.sides import side_swaps_before_round
+from gnomepy_research.models.cs2.hltv.sides import side_swaps_before_round
 
 _EPS = 1e-12
 

@@ -1,17 +1,18 @@
 import pandas as pd
 import pytest
 
-from gnomepy_research.sessions.cs2_prematch.identity import (
+from gnomepy_research.models.cs2.prematch.identity import (
     CONFIRMED,
     MIN_CONFIRMATIONS,
     PROVISIONAL,
+    REJECTED,
     empty_aliases,
     learn,
     resolve_match,
     settle,
     sibling_market,
 )
-from gnomepy_research.sessions.cs2_prematch.polymarket import index_markets
+from gnomepy_research.models.cs2.prematch.polymarket import index_markets
 
 KICK = pd.Timestamp("2026-09-20 15:00", tz="UTC")
 NOW = pd.Timestamp("2026-09-20 03:00", tz="UTC")
@@ -76,15 +77,25 @@ def test_confirmed_alias_beats_provisional():
     assert resolve_match(FLUXO, pm, aliases).market_slug == "cs2-flx-navi-2026-09-20"
 
 
-def test_settlement_confirms_or_removes():
+def test_settlement_confirms_or_rejects():
     aliases = learn(empty_aliases(), (("fluxow7m", 9996), ("nip", 4411)), NOW)
     assert set(aliases.status) == {PROVISIONAL}
     aliases = settle(aliases, "polymarket", "fluxow7m", 9996, agrees=True)
     assert aliases.status.iloc[0] == PROVISIONAL, "one agreeing result is a coin flip, not confirmation"
     aliases = settle(aliases, "polymarket", "fluxow7m", 9996, agrees=True)
     aliases = settle(aliases, "polymarket", "nip", 4411, agrees=False)
-    assert aliases.source_name_norm.tolist() == ["fluxow7m"]
-    assert aliases.status.iloc[0] == CONFIRMED and aliases.evidence_count.iloc[0] == 2
+    assert aliases.status.tolist() == [CONFIRMED, REJECTED]
+    assert aliases.evidence_count.iloc[0] == 2
+
+
+def test_rejected_alias_is_ignored_until_relearned():
+    pm = _markets(("cs2-flx-navi-2026-09-20", ("Fluxo W7M", "Natus Vincere"), KICK))
+    aliases = learn(empty_aliases(), (("fluxow7m", 1234),), NOW)
+    aliases = settle(aliases, "polymarket", "fluxow7m", 1234, agrees=False)
+    assert resolve_match(FLUXO, pm, aliases).market_slug == "cs2-flx-navi-2026-09-20"
+
+    aliases = learn(aliases, (("fluxow7m", 1234),), NOW + pd.Timedelta(days=1))
+    assert aliases.status.tolist() == [PROVISIONAL] and aliases.evidence_count.iloc[0] == 0
 
 
 def test_relearning_an_alias_does_not_duplicate_it():

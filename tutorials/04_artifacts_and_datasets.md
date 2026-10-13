@@ -1,181 +1,87 @@
 # Artifacts and Datasets
 
-Research sessions produce two kinds of shareable outputs: **artifacts** (trained models, calibrated value functions) and **datasets** (tabular training data shared across sessions). Both are versioned, stored in S3, and queryable from the web UI.
+Research reads two kinds of shared outputs through `gnomepy.data`: **datasets** (tables of features,
+labels and raw game data) and **artifacts** (trained models and other files). Research code never
+writes them. Every writer lives in gnome-pipelines, next to the table schemas.
 
 ---
 
 ## Concepts
 
-**Artifact** — a versioned binary file produced by a research session (XGBoost model, `.npz` value function, calibration output, etc.). Identified by `type/name:version`. Lives under the producing session or `__global__` if session-independent.
+**Dataset** — an append-only Iceberg table on S3 Tables. Every row carries `ingested_at` and the
+`code_version` that wrote it. A correction appends a new row, and readers take the newest row per key,
+so a dataset can be read as it was known at any past moment.
 
-**Dataset** — a versioned Parquet file containing tabular data (features, labels, raw game data). Shared across all sessions. Identified by `name:version`.
+**Artifact** — a versioned file (XGBoost model, `.npz` draws) under the research bucket, indexed by
+three Iceberg tables: one row per version, aliases such as `production` (the newest alias row wins), and
+the datasets each version was trained on. Versions are UTC timestamps like `20261013T165937051464Z`.
 
-Both are stored in `s3://gnome-research-{STAGE}/` and registered in DynamoDB for metadata querying.
-
----
-
-## Publishing Artifacts
-
-```python
-from gnomepy_research.artifacts import ArtifactStore
-
-store = ArtifactStore()
-
-# After training an XGBoost model:
-model.save_model("/tmp/cs2_fair_value.xgb")
-ref = store.publish(
-    "/tmp/cs2_fair_value.xgb",
-    artifact_type="xgboost_model",
-    name="cs2_fair_value",
-    session_name="cs2_xgb",
-    description="CS2 fair value model trained on match features",
-    params={"n_estimators": 200, "max_depth": 6},
-)
-print(ref)  # artifact://xgboost_model/cs2_fair_value:1
-```
-
-Versions are auto-incremented — republishing the same `type/name` creates version 2, 3, etc.
-
----
-
-## Resolving Artifacts (using in strategies)
-
-In YAML configs, reference artifacts by URI scheme instead of a local path:
-
-```yaml
-# pinned version:
-value_function_path: "artifact://value_function/kalshi_cal:3"
-
-# always latest:
-value_function_path: "artifact://value_function/kalshi_cal"
-```
-
-In Python, call `resolve_artifact_path()` before loading. Old local paths still work unchanged:
-
-```python
-from gnomepy_research.artifacts import resolve_artifact_path
-
-path = resolve_artifact_path("artifact://xgboost_model/cs2_fair_value")
-model = xgb.Booster()
-model.load_model(path)
-```
-
-`resolve_artifact_path` handles three URI forms:
-- `artifact://type/name[:version]` — downloads from artifact store, caches at `~/.cache/gnomepy/artifacts/`
-- `s3://bucket/key` — downloads directly from S3
-- any other string — passed through as a local path
-
----
-
-## Publishing Datasets
-
-```python
-import pandas as pd
-from gnomepy_research.artifacts import DatasetStore
-
-ds = DatasetStore()
-
-cs2_df = pd.DataFrame(...)  # your features / labels
-ref = ds.publish(
-    cs2_df,
-    name="cs2_match_features",
-    description="CS2 match-level features: team stats, map, round outcomes",
-    producing_session="cs2_xgb",
-)
-print(ref)  # dataset://cs2_match_features:1
-```
-
-To update with new data, publish again — a new version is created, old versions remain immutable:
-
-```python
-updated_df = pd.concat([ds.load("cs2_match_features"), new_games_df])
-ds.publish(updated_df, name="cs2_match_features", description="Added Sep 2026 matches")
-# → version 2
-```
+Where things live is read from the account's SSM parameters (`/gnome/research/table-bucket-arn`,
+`/gnome/research/artifact-root`), so the AWS profile you run under picks dev or prod. Set
+`GNOME_TABLE_BUCKET_ARN` and `GNOME_ARTIFACT_ROOT` to override, or `GNOME_LOCAL_WAREHOUSE` to work
+against a local SQLite catalog.
 
 ---
 
 ## Loading Datasets
 
 ```python
-from gnomepy_research.artifacts import DatasetStore
+from datetime import datetime, timezone
+from gnomepy.data import DatasetStore
 
 ds = DatasetStore()
-
-# latest version:
-df = ds.load("cs2_match_features")
-
-# pinned version for reproducibility:
-df = ds.load("cs2_match_features:1")
+df = ds.load("cs2_match_history")                                  # as known now
+df = ds.load("cs2_match_history", as_of=datetime(2026, 10, 1, tzinfo=timezone.utc))
+df = ds.load("cs2_player_map_stats", columns=["rating"])           # key columns always included
 ```
 
-Data is cached locally at `~/.cache/gnomepy/datasets/` after first download. Remote Batch jobs have S3 access to the research bucket and download directly.
+`ds.loaded` records every load (dataset, as_of, row count, a hash of the rows). Hand it to the
+pipeline that publishes a model so the model records exactly what it was trained on.
 
 ---
 
-## Composing Multiple Datasets at Training Time
+## Resolving Artifacts
 
-Use multiple named datasets to keep concerns separate:
+In YAML configs, reference artifacts by URI instead of a local path:
+
+```yaml
+model_path: "artifact://xgboost_model/cs2_pre_map_win_prob"                          # latest
+model_path: "artifact://xgboost_model/cs2_pre_map_win_prob:20261013T165937051464Z"   # pinned
+model_path: "artifact://xgboost_model/cs2_pre_map_win_prob@production"               # alias
+```
+
+In Python, call `resolve_artifact_path()` before loading:
 
 ```python
-features = ds.load("cs2_match_features")
-labels = ds.load("cs2_labels")
-df = features.merge(labels, on="match_id")
+from gnomepy.data import ArtifactStore, resolve_artifact_path
+
+path = resolve_artifact_path("artifact://xgboost_model/cs2_pre_map_win_prob")
+store = ArtifactStore()
+store.list("xgboost_model")
+store.inputs(store.latest("xgboost_model", "cs2_prematch_preveto"))   # datasets it was trained on
 ```
+
+`resolve_artifact_path` handles three forms:
+- `artifact://type/name[:version|@alias]` — downloads once, cached under `~/.cache/gnomepy/artifacts/`
+- `s3://bucket/key` — downloads directly from S3
+- anything else — passed through as a local path
 
 ---
 
 ## CLI Commands
 
 ```bash
-# List all artifacts
-poetry run research artifacts list
+poetry run research artifacts list [--type xgboost_model] [--name cs2_pre_map_win_prob]
+poetry run research artifacts get xgboost_model/cs2_pre_map_win_prob [-o ./model.xgb]
 
-# Filter by type or name
-poetry run research artifacts list --type xgboost_model
-poetry run research artifacts list --name cs2_fair_value
-
-# Publish a local file
-poetry run research artifacts publish /tmp/model.xgb \
-  --type xgboost_model --name cs2_fair_value \
-  --session cs2_xgb --description "Initial model"
-
-# Download an artifact (latest version)
-poetry run research artifacts get xgboost_model/cs2_fair_value
-
-# Download a specific version
-poetry run research artifacts get xgboost_model/cs2_fair_value:2 -o ./model_v2.xgb
-
-# List all datasets
 poetry run research datasets list
-
-# Publish a parquet file as a new dataset version
-poetry run research datasets publish features.parquet \
-  --name cs2_match_features --description "Initial dataset"
-
-# Download a dataset
-poetry run research datasets get cs2_match_features -o ./cs2_features.parquet
+poetry run research datasets get cs2_match_history [--as-of 2026-10-01T00:00:00+00:00] [-o ./history.parquet]
 ```
 
 ---
 
-## Web UI
+## Publishing
 
-The controller web UI has three pages under the **Research** section in the sidebar:
-
-- **Sessions** — existing session list and detail view
-- **Artifacts** — all artifacts across sessions, filterable by type and name
-- **Datasets** — all shared datasets
-
-The session detail page also shows a compact artifact table listing files produced by that session.
-
----
-
-## Artifact URI Reference
-
-| Format | Meaning |
-|--------|---------|
-| `artifact://type/name` | Latest version |
-| `artifact://type/name:N` | Specific version N |
-| `s3://bucket/key` | Direct S3 path |
-| `path/to/file.npz` | Local file (backward compatible) |
+Add or change the writer in gnome-pipelines: declare the table's `TableSpec` in
+`gnome_pipelines/datasets/`, and publish through `gnome_pipelines.stores`, which stamps rows with the
+build's code version and the run id.

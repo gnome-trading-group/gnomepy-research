@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.pipelines.hltv_cs2.sides import build_side_round_dataset
+from gnomepy_research.models.cs2.hltv.sides import build_side_round_dataset
 from gnomepy_research.sessions.cs2_win_probability.map_dp import logit
 
 logger = logging.getLogger(__name__)

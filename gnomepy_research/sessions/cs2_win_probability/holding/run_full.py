@@ -6,7 +6,7 @@ import sys
 
 import pandas as pd
 
-from gnomepy_research.pipelines.hltv_cs2.build_priors import build_priors
+from gnomepy_research.models.cs2.hltv.build_priors import build_priors
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")

@@ -21,9 +21,9 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from gnomepy_research.sessions.cfb_win_probability.features.ratings import FCS_TEAM, ridge_ratings
-from gnomepy_research.sessions.cfb_win_probability.models.data import season_periods
-from gnomepy_research.sessions.cfb_win_probability.models.inference import (
+from gnomepy_research.models.cfb.features.ratings import FCS_TEAM, ridge_ratings
+from gnomepy_research.models.cfb.efficiency.data import season_periods
+from gnomepy_research.models.cfb.efficiency.inference import (
     Inputs,
     fit_cutoff,
     load_hyperparameters,

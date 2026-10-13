@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gnomepy_research.sessions.cfb_win_probability.features.cutoffs import game_cutoffs, week_cutoffs
-from gnomepy_research.sessions.cfb_win_probability.features.ratings import FCS_TEAM, ridge_ratings
-from gnomepy_research.sessions.cfb_win_probability.features.source import SourceData, with_coach_availability
+from gnomepy_research.models.cfb.features.cutoffs import game_cutoffs, week_cutoffs
+from gnomepy_research.models.cfb.features.ratings import FCS_TEAM, ridge_ratings
+from gnomepy_research.models.cfb.features.source import SourceData, with_coach_availability
 
 UTC = "UTC"
 

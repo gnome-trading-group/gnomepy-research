@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import requests
 
-from gnomepy_research.sessions.cs2_win_probability.splits import temporal_split_by_series
+from gnomepy_research.models.cs2.win_probability.splits import temporal_split_by_series
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 
 D = str(DATA_DIR)

@@ -5,6 +5,7 @@
 ```bash
 poetry install          # install dev environment
 poetry run pytest       # run all tests
+scripts/release.sh patch|minor|major   # from main: bump, commit, tag vX.Y.Z, push; gnome-pipelines pins the tag
 ```
 
 ## Strategy Research Sessions
@@ -93,49 +94,63 @@ sweep:
         latency_nanos: [5000000, 10000000]   # profile sweep
 ```
 
+## Production code vs sessions
+
+gnome-pipelines and live strategies depend on this package (pinned by git tag) and import only from
+`gnomepy_research/models/`:
+
+```
+models/cs2/hltv/             HLTV point-in-time features and priors
+models/cs2/win_probability/  pre-map, round and series models
+models/cs2/prematch/         predictions table, Polymarket market lookup, HLTV team identity
+models/cfb/features/         CFB point-in-time features
+models/cfb/efficiency/       dynamic efficiency model and posteriors
+models/cfb/hyperparameters/  its fitted hyperparameters
+```
+
+Sessions build on `models/`, never the other way round: nothing in `models/` imports from
+`sessions/`. When session code goes to production, promote it into `models/` first, and treat
+changes there as production changes: tested, and released by tagging this repo.
+
 ## Artifacts and Datasets
 
-Trained models and tabular training data are stored in S3 (`gnome-research-{STAGE}`) and registered in DynamoDB. See `tutorials/04_artifacts_and_datasets.md` for full workflows.
+Datasets are append-only Iceberg tables on S3 Tables and models are versioned artifact files indexed
+beside them, both through `gnomepy.data`. Research only reads them: every writer (scrapers, ingestion,
+priors, feature snapshots, training) lives in gnome-pipelines with the table schemas. See
+`tutorials/04_artifacts_and_datasets.md`.
 
 **CLI:**
 ```bash
 poetry run research artifacts list [--type TYPE] [--name NAME]
-poetry run research artifacts publish <path> --type TYPE --name NAME [--session SESSION]
-poetry run research artifacts get <type/name[:version]>
+poetry run research artifacts get <type/name[:version|@alias]>
 
-poetry run research datasets list [--name NAME]
-poetry run research datasets publish <parquet_path> --name NAME
-poetry run research datasets get <name[:version]>
+poetry run research datasets list
+poetry run research datasets get <name> [--as-of 2026-10-01T00:00:00+00:00]
 ```
 
 **In Python:**
 ```python
-from gnomepy_research.artifacts import ArtifactStore, DatasetStore, resolve_artifact_path
+from gnomepy.data import DatasetStore, resolve_artifact_path
 
-# publish a model
-ArtifactStore().publish("model.xgb", artifact_type="xgboost_model", name="cs2_fair_value", session_name="cs2_xgb")
+df = DatasetStore().load("cs2_match_history")                     # newest row per key
+df = DatasetStore().load("cs2_match_history", as_of=some_datetime)  # as it was known then
 
-# load in a strategy (artifact://, s3://, or local path all work)
-local_path = resolve_artifact_path("artifact://xgboost_model/cs2_fair_value")
-
-# publish/load a dataset
-DatasetStore().publish(df, name="cs2_match_features")
-df = DatasetStore().load("cs2_match_features")
+local_path = resolve_artifact_path("artifact://xgboost_model/cs2_pre_map_win_prob")  # artifact://, s3:// or a local path
 ```
 
-**Artifact URI scheme in YAML configs:**
+**Artifact URIs in YAML configs:**
 ```yaml
-value_function_path: "artifact://value_function/kalshi_cal"    # latest
-value_function_path: "artifact://value_function/kalshi_cal:3"  # pinned
+model_path: "artifact://xgboost_model/cs2_pre_map_win_prob"                          # latest
+model_path: "artifact://xgboost_model/cs2_pre_map_win_prob:20261013T165937051464Z"   # pinned
+model_path: "artifact://xgboost_model/cs2_pre_map_win_prob@production"               # alias
 ```
-Old local paths continue to work — `resolve_artifact_path` passes them through unchanged.
 
 ## Tutorials
 
 - `tutorials/01_getting_started.md` — session creation through first backtest result
 - `tutorials/02_research_workflow.md` — evaluate → iterate → validate, and what the metrics mean
 - `tutorials/03_strategy_building.md` — signal catalog (generated) and strategy patterns
-- `tutorials/04_artifacts_and_datasets.md` — models and datasets in S3
+- `tutorials/04_artifacts_and_datasets.md` — reading models and datasets
 - `tutorials/05_analysis_toolkit.md` — `explore`, `analysis`, `validation`, `reporting.backtest`, `arb`
 
 The signal tables in `03` are generated: `poetry run python scripts/gen_signal_catalog.py`.

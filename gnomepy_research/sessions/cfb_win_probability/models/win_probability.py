@@ -19,8 +19,8 @@ import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
 
-from gnomepy_research.sessions.cfb_win_probability.features.ratings import FCS_TEAM
-from gnomepy_research.sessions.cfb_win_probability.models.posterior_snapshots import DRAWS_DIR
+from gnomepy_research.models.cfb.features.ratings import FCS_TEAM
+from gnomepy_research.models.cfb.efficiency.posterior_snapshots import DRAWS_DIR
 
 TERMS = ["off_diff", "def_diff", "venue", "bowl_net_diff"]
 N_FIT_DRAWS = 50

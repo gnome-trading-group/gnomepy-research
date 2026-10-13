@@ -23,20 +23,20 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import log_loss, roc_auc_score
 
-from gnomepy_research.pipelines.hltv_cs2.context_features import (
+from gnomepy_research.models.cs2.hltv.context_features import (
     EVENT_FEATURES,
     PAGE_H2H_FEATURES,
     RANK_FEATURES,
     SCHEDULE_FEATURES,
     VETO_FEATURES,
 )
-from gnomepy_research.pipelines.hltv_cs2.player_form import PLAYER_FORM_FEATURES
-from gnomepy_research.sessions.cs2_win_probability.pre_map_features import (
+from gnomepy_research.models.cs2.hltv.player_form import PLAYER_FORM_FEATURES
+from gnomepy_research.models.cs2.win_probability.pre_map_features import (
     HARVEST_FEATURE_NAMES,
     PRE_MAP_FEATURE_NAMES,
 )
-from gnomepy_research.sessions.cs2_win_probability.pre_map_model import train
-from gnomepy_research.sessions.cs2_win_probability.splits import clustered_bootstrap_delta
+from gnomepy_research.models.cs2.win_probability.pre_map_model import train
+from gnomepy_research.models.cs2.win_probability.splits import clustered_bootstrap_delta
 
 logger = logging.getLogger(__name__)
 

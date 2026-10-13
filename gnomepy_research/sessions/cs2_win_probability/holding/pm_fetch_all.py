@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import requests
 
-from gnomepy_research.artifacts import DatasetStore
+from gnomepy.data import DatasetStore
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 
 START = pd.Timestamp("2026-03-01")

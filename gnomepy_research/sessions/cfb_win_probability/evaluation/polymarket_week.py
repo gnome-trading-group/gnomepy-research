@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 import requests
 
-from gnomepy_research.artifacts import DatasetStore
+from gnomepy.data import DatasetStore
 from gnomepy_research.sessions.cfb_win_probability.evaluation.metrics import log_loss
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import N_FIT_DRAWS, fit, game_draws
 
@@ -133,7 +133,7 @@ def main() -> None:
     s = session()
     ml = fetch_moneylines(s, args.start, args.end)
     ml = market_snapshots(s, ml)
-    games = DatasetStore().load("cfb_games:1")
+    games = DatasetStore().load("cfb_games")
     ml = match_games(ml, games)
     season = int(pd.Timestamp(args.start).year)
     m = ml.dropna(subset=["game_id"]).merge(model_probabilities(games, season), on="game_id", how="left")

@@ -5,11 +5,11 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import log_loss
 
-from gnomepy_research.sessions.cs2_win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
-from gnomepy_research.sessions.cs2_win_probability.pre_map_model import CS2PreMapModel, _matrix, fit_calibrator
-from gnomepy_research.sessions.cs2_win_probability.series_dp import build_node_frame, series_win_prob
+from gnomepy_research.models.cs2.win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
+from gnomepy_research.models.cs2.win_probability.pre_map_model import CS2PreMapModel, _matrix, fit_calibrator
+from gnomepy_research.models.cs2.win_probability.series_dp import build_node_frame, series_win_prob
 from gnomepy_research.sessions.cs2_win_probability.series_model import load_series_frame
-from gnomepy_research.sessions.cs2_win_probability.splits import (
+from gnomepy_research.models.cs2.win_probability.splits import (
     calibration_slope, split_val_for_calibration, temporal_split_by_series,
 )
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR

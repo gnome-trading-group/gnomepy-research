@@ -20,7 +20,7 @@ import pandas as pd
 from scipy.stats import norm
 from sklearn.linear_model import LogisticRegression
 
-from gnomepy_research.artifacts import DatasetStore
+from gnomepy.data import DatasetStore
 from gnomepy_research.sessions.cfb_win_probability.evaluation.metrics import log_loss
 
 BACKTEST = Path(__file__).resolve().parent.parent / "results" / "backtest"
@@ -36,7 +36,7 @@ def logit(p: np.ndarray) -> np.ndarray:
 def load(tag: str) -> pd.DataFrame:
     p = pd.read_parquet(BACKTEST / f"predictions_{tag}.parquet")
     ds = DatasetStore()
-    lines, games, pregame = ds.load("cfb_lines:1"), ds.load("cfb_games:1"), ds.load("cfb_pregame_features:1")
+    lines, games, pregame = ds.load("cfb_lines"), ds.load("cfb_games"), ds.load("cfb_pregame_features")
     cons = lines.groupby("game_id").agg(open=("spread_open", "median"), close=("spread", "median"))
     p = p.merge(cons, left_on="game_id", right_index=True, how="left")
     p["p_open"] = norm.cdf(-p["open"] / SPREAD_SD)
@@ -125,7 +125,7 @@ def main() -> None:
         print(group_table(p, by).round(4).to_string(), "\n")
     print("big disagreements (>10 pts): who was right?\n", who_was_right(p).round(3).to_string(index=False), "\n")
     cols = ["season", "week", "away_team", "home_team", "p_bayes", "p_open", "home_win", "d", "line_move"]
-    g = DatasetStore().load("cfb_games:1").set_index("game_id")
+    g = DatasetStore().load("cfb_games").set_index("game_id")
     p["away_team"] = p["game_id"].map(g["away_team"])
     p["home_team"] = p["game_id"].map(g["home_team"])
     print("model's best calls vs market:\n", p.nsmallest(8, "d")[cols].round(3).to_string(index=False), "\n")

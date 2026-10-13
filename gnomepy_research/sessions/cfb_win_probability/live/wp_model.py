@@ -24,7 +24,7 @@ import xgboost as xgb
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
-from gnomepy_research.artifacts import DatasetStore
+from gnomepy.data import DatasetStore
 from gnomepy_research.sessions.cfb_win_probability.evaluation.metrics import paired_bootstrap, reliability, summarize
 from gnomepy_research.sessions.cfb_win_probability.live.wp_data import FEATURES, MONOTONE, build_states, pregame_prior
 
@@ -51,7 +51,7 @@ class WinProbModel:
 
 def load_states(seasons: list[int]) -> pd.DataFrame:
     ds = DatasetStore()
-    plays, games, lines = ds.load("cfb_plays:1"), ds.load("cfb_games:1"), ds.load("cfb_lines:1")
+    plays, games, lines = ds.load("cfb_plays"), ds.load("cfb_games"), ds.load("cfb_lines")
     s = build_states(plays[plays["season"].isin(seasons)], games, pregame_prior(lines))
     return s[(s["home_classification"] == "fbs") & (s["away_classification"] == "fbs")].reset_index(drop=True)
 

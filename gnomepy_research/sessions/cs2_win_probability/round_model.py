@@ -21,8 +21,8 @@ import logging
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.artifacts import DatasetStore
-from gnomepy_research.pipelines.hltv_cs2.config import MAP_POOL
+from gnomepy.data import DatasetStore
+from gnomepy_research.models.cs2.hltv.config import MAP_POOL
 
 logger = logging.getLogger(__name__)
 

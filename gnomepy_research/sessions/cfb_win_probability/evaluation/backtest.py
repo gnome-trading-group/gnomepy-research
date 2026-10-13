@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.artifacts import DatasetStore
+from gnomepy.data import DatasetStore
 from gnomepy_research.sessions.cfb_win_probability.evaluation import baselines
 from gnomepy_research.sessions.cfb_win_probability.evaluation.metrics import paired_bootstrap, reliability, summarize
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import N_FIT_DRAWS, fit, game_draws
@@ -127,7 +127,7 @@ def main() -> None:
     if HOLDOUT in args.seasons and not args.holdout:
         raise SystemExit(f"{HOLDOUT} is the holdout season; pass --holdout to score it")
     ds = DatasetStore()
-    games, pregame, lines = ds.load("cfb_games:1"), ds.load("cfb_pregame_features:1"), ds.load("cfb_lines:1")
+    games, pregame, lines = ds.load("cfb_games"), ds.load("cfb_pregame_features"), ds.load("cfb_lines")
     frames, metas = [], []
     for s in args.seasons:
         df, meta = run_season(s, games, pregame, lines)

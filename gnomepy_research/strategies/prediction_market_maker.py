@@ -33,7 +33,7 @@ from gnomepy import ExecutionReport, Intent, Strategy
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
-from gnomepy_research.artifacts import resolve_artifact_path
+from gnomepy.data import resolve_artifact_path
 from gnomepy_research.solvers.prediction_market_hjb import (
     HJBParams,
     load_solution,

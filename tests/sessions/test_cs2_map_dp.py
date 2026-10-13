@@ -16,7 +16,7 @@ from gnomepy_research.sessions.cs2_win_probability.map_dp import (
     solve_theta,
     _period_value,
 )
-from gnomepy_research.sessions.cs2_win_probability.pre_map_model import (
+from gnomepy_research.models.cs2.win_probability.pre_map_model import (
     _PROB_EPS,
     _calibrated,
     _fit_temperature,

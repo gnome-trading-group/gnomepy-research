@@ -20,16 +20,16 @@ import pandas as pd
 import requests
 from sklearn.metrics import log_loss
 
-from gnomepy_research.artifacts import DatasetStore
-from gnomepy_research.pipelines.hltv_cs2.build_priors import build_priors
+from gnomepy.data import DatasetStore
+from gnomepy_research.models.cs2.hltv.build_priors import build_priors
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
-from gnomepy_research.sessions.cs2_win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
-from gnomepy_research.sessions.cs2_win_probability.pre_map_model import _fit, _matrix, fit_calibrator
-from gnomepy_research.sessions.cs2_win_probability.series_dp import build_node_frame, series_win_prob
-from gnomepy_research.sessions.cs2_win_probability.splits import (
+from gnomepy_research.models.cs2.win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
+from gnomepy_research.models.cs2.win_probability.pre_map_model import _fit, _matrix, fit_calibrator
+from gnomepy_research.models.cs2.win_probability.series_dp import build_node_frame, series_win_prob
+from gnomepy_research.models.cs2.win_probability.splits import (
     clustered_bootstrap_delta, split_val_for_calibration, temporal_split_by_series,
 )
-from gnomepy_research.sessions.cs2_win_probability.symmetry import augment, build_swap_plan, symmetric_predict_proba
+from gnomepy_research.models.cs2.win_probability.symmetry import augment, build_swap_plan, symmetric_predict_proba
 
 CUTOFF = pd.Timestamp(sys.argv[1] if len(sys.argv) > 1 else "2026-09-30")
 END = pd.Timestamp(sys.argv[2] if len(sys.argv) > 2 else "2026-10-02")

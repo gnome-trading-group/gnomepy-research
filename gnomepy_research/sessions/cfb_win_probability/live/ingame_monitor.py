@@ -26,7 +26,7 @@ import requests
 import xgboost as xgb
 from scipy.stats import norm
 
-from gnomepy_research.artifacts import DatasetStore
+from gnomepy.data import DatasetStore
 from gnomepy_research.sessions.cfb_win_probability.evaluation.polymarket_week import match_games
 from gnomepy_research.sessions.cfb_win_probability.live.tracker import book_top, polymarket_moneylines
 from gnomepy_research.sessions.cfb_win_probability.live.tracker import session as pm_session
@@ -123,7 +123,7 @@ def run(interval: float) -> None:
     cfbd = requests.Session()
     cfbd.headers["Authorization"] = f"Bearer {os.environ['CFBD_API_KEY']}"
     model = LiveWinProb()
-    games = DatasetStore().load("cfb_games:1")
+    games = DatasetStore().load("cfb_games")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / f"ingame_{pd.Timestamp.now(tz='UTC'):%Y-%m-%d}.csv"
     new = not path.exists()

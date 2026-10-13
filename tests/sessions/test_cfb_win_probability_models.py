@@ -3,14 +3,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cfb_win_probability.features.ratings import FCS_TEAM
-from gnomepy_research.sessions.cfb_win_probability.models.data import DEF_FEATURES, OFF_FEATURES, build_model_data
-from gnomepy_research.sessions.cfb_win_probability.models.dynamic_efficiency import (
+from gnomepy_research.models.cfb.features.ratings import FCS_TEAM
+from gnomepy_research.models.cfb.efficiency.data import DEF_FEATURES, OFF_FEATURES, build_model_data
+from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
     Hyperparameters,
     build_model,
     sample,
 )
-from gnomepy_research.sessions.cfb_win_probability.models.gaussian_solver import _state_map, solve
+from gnomepy_research.models.cfb.efficiency.gaussian_solver import _state_map, solve
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import OutcomeModel
 
 SEASON = 2024

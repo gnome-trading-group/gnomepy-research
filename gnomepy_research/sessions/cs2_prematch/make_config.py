@@ -20,8 +20,8 @@ import yaml
 
 from gnomepy.registry import RegistryClient
 
-from gnomepy_research.artifacts import DatasetStore
-from gnomepy_research.sessions.cs2_prematch import polymarket, predictions
+from gnomepy.data import DatasetStore
+from gnomepy_research.models.cs2.prematch import polymarket, predictions
 from gnomepy_research.sessions.cs2_prematch.cs2_prematch import DEFAULT_WINDOWS
 
 logger = logging.getLogger(__name__)

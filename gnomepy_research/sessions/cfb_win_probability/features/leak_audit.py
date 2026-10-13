@@ -16,14 +16,14 @@ from dataclasses import replace
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cfb_win_probability.features.cutoffs import week_cutoffs
-from gnomepy_research.sessions.cfb_win_probability.features.source import (
+from gnomepy_research.models.cfb.features.cutoffs import week_cutoffs
+from gnomepy_research.models.cfb.features.source import (
     GAME_RESULT_COLUMNS,
     PREGAME_COLUMNS,
     RESULT_DELAY,
     SourceData,
 )
-from gnomepy_research.sessions.cfb_win_probability.features.team_features import (
+from gnomepy_research.models.cfb.features.team_features import (
     preseason_features,
     season_to_date_features,
 )

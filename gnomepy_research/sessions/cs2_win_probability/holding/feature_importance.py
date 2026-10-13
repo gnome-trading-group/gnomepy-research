@@ -16,15 +16,15 @@ import pandas as pd
 import xgboost as xgb
 from sklearn.metrics import log_loss
 
-from gnomepy_research.pipelines.hltv_cs2.context_features import (
+from gnomepy_research.models.cs2.hltv.context_features import (
     EVENT_FEATURES, PAGE_H2H_FEATURES, RANK_FEATURES, SCHEDULE_FEATURES, VETO_FEATURES,
 )
-from gnomepy_research.pipelines.hltv_cs2.player_form import PLAYER_FORM_FEATURES
+from gnomepy_research.models.cs2.hltv.player_form import PLAYER_FORM_FEATURES
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
-from gnomepy_research.sessions.cs2_win_probability.pre_map_features import _MAP_OHE_NAMES, PRE_MAP_FEATURE_NAMES
-from gnomepy_research.sessions.cs2_win_probability.pre_map_model import _fit, _matrix, fit_calibrator
-from gnomepy_research.sessions.cs2_win_probability.splits import split_val_for_calibration, temporal_split_by_series
-from gnomepy_research.sessions.cs2_win_probability.symmetry import augment, build_swap_plan, symmetric_predict_proba
+from gnomepy_research.models.cs2.win_probability.pre_map_features import _MAP_OHE_NAMES, PRE_MAP_FEATURE_NAMES
+from gnomepy_research.models.cs2.win_probability.pre_map_model import _fit, _matrix, fit_calibrator
+from gnomepy_research.models.cs2.win_probability.splits import split_val_for_calibration, temporal_split_by_series
+from gnomepy_research.models.cs2.win_probability.symmetry import augment, build_swap_plan, symmetric_predict_proba
 
 N_ORDERS = 3
 N_PERMS = 5

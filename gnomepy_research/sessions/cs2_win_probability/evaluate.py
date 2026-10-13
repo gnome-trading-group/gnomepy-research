@@ -23,7 +23,7 @@ from gnomepy_research.sessions.cs2_win_probability.map_dp import (
     map_win_prob_from_pre_map,
 )
 from gnomepy_research.sessions.cs2_win_probability.round_rate_model import MapSideBias
-from gnomepy_research.sessions.cs2_win_probability.splits import (
+from gnomepy_research.models.cs2.win_probability.splits import (
     calibration_slope,
     calibration_table,
     clustered_bootstrap_ci,

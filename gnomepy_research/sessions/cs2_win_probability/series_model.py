@@ -14,10 +14,10 @@ import pandas as pd
 from sklearn.isotonic import IsotonicRegression
 from xgboost import XGBClassifier
 
-from gnomepy_research.artifacts import DatasetStore
-from gnomepy_research.sessions.cs2_win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
-from gnomepy_research.sessions.cs2_win_probability.pre_map_model import _matrix
-from gnomepy_research.sessions.cs2_win_probability.symmetry import (
+from gnomepy.data import DatasetStore
+from gnomepy_research.models.cs2.win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
+from gnomepy_research.models.cs2.win_probability.pre_map_model import _matrix
+from gnomepy_research.models.cs2.win_probability.symmetry import (
     augment,
     build_swap_plan,
     symmetric_predict_proba,

@@ -8,8 +8,8 @@ runs. Compared with plain normalised-name matching (polymarket.match_market).
 """
 import pandas as pd
 
-from gnomepy_research.sessions.cs2_prematch.identity import empty_aliases, learn, resolve_match, settle
-from gnomepy_research.sessions.cs2_prematch.polymarket import fetch_markets, match_market
+from gnomepy_research.models.cs2.prematch.identity import empty_aliases, learn, resolve_match, settle
+from gnomepy_research.models.cs2.prematch.polymarket import fetch_markets, match_market
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 
 START, END = pd.Timestamp("2026-08-07"), pd.Timestamp("2026-09-30")

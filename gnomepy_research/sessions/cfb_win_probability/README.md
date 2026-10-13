@@ -9,17 +9,21 @@ moneylines on Kalshi, Polymarket US and Polymarket International.
 
 | Package | Contents |
 |---|---|
-| `ingestion/` | CFBD client (cached, budgeted), normalization, team-game efficiency, data-quality checks |
 | `features/` | point-in-time gate (`source.as_of`), weekly cutoffs, ridge ratings, talent/QB/coach features, snapshots, leak audit |
 | `models/` | priors, dynamic efficiency model, win-probability model (milestones 3–4) |
 | `evaluation/` | backtests, metrics, baselines (milestone 5) |
 | `live/` | **parked** drive-level Markov simulator for the future live engine, with tests |
 
 ```bash
-poetry run python -m gnomepy_research.sessions.cfb_win_probability.ingestion.ingest fetch 2018 2026 [--refresh-current 2026]
-poetry run python -m gnomepy_research.sessions.cfb_win_probability.ingestion.quality 2018 2026
-poetry run python -m gnomepy_research.sessions.cfb_win_probability.ingestion.ingest publish 2018 2026 [--only cfb_x ...]
-poetry run python -m gnomepy_research.sessions.cfb_win_probability.features.snapshots publish 2018 2026
+# in gnome-pipelines: CFBD ingestion (cached, budgeted), quality checks, and publishing
+poetry run python -m gnome_pipelines.cfb.ingest fetch 2018 2026 [--refresh-current 2026]
+poetry run python -m gnome_pipelines.cfb.quality 2018 2026
+poetry run python -m gnome_pipelines.cfb.ingest publish 2018 2026 [--only cfb_x ...]
+poetry run python -m gnome_pipelines.cfb.features 2018 2026
+poetry run python -m gnome_pipelines.cfb.posterior 2020 2026
+
+# here: build without publishing, and audits
+poetry run python -m gnomepy_research.models.cfb.features.snapshots 2018 2026
 poetry run python -m gnomepy_research.sessions.cfb_win_probability.features.leak_audit
 ```
 

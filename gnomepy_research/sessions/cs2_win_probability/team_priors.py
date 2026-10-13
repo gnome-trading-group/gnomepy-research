@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from gnomepy_research.artifacts import DatasetStore
-from gnomepy_research.pipelines.hltv_cs2.build_priors import (
+from gnomepy.data import DatasetStore
+from gnomepy_research.models.cs2.hltv.build_priors import (
     compute_live_priors,
     compute_live_priors_multi_map,
 )

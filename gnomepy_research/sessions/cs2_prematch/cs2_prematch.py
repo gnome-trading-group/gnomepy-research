@@ -31,7 +31,7 @@ from gnomepy import ExecutionReport, Intent, OrderStatus, OrderType, Scales, Sid
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
-from gnomepy_research.sessions.cs2_prematch import predictions as predictions_table
+from gnomepy_research.models.cs2.prematch import predictions as predictions_table
 from gnomepy_research.sessions.cs2_prematch.decision import Level, choose_entry, cost_per_share, shares_to_buy
 
 logger = logging.getLogger(__name__)

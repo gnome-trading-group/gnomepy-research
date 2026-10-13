@@ -17,15 +17,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cfb_win_probability.models.data import season_periods
-from gnomepy_research.sessions.cfb_win_probability.models.gaussian_solver import fit_cutoff_exact
-from gnomepy_research.sessions.cfb_win_probability.models.inference import (
+from gnomepy_research.models.cfb.efficiency.data import season_periods
+from gnomepy_research.models.cfb.efficiency.gaussian_solver import fit_cutoff_exact
+from gnomepy_research.models.cfb.efficiency.inference import (
     Inputs,
     load_hyperparameters,
     predictive_logpdf,
     week_observations,
 )
-from gnomepy_research.sessions.cfb_win_probability.models.posterior_snapshots import hyper_name
+from gnomepy_research.models.cfb.efficiency.posterior_snapshots import hyper_name
 
 MULTIPLIERS = (0.5, 1.0, 2.0, 3.0, 5.0, 8.0)
 RESULTS = Path(__file__).resolve().parent.parent / "results" / "tau_tuning"

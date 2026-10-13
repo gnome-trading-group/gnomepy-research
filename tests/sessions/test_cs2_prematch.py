@@ -15,7 +15,8 @@ import pytest
 
 from gnomepy import OrderStatus, OrderType, Scales, Side
 from gnomepy_research.sessions.cs2_prematch import cs2_prematch as mod
-from gnomepy_research.sessions.cs2_prematch import make_config, polymarket, predictions
+from gnomepy_research.models.cs2.prematch import polymarket, predictions
+from gnomepy_research.sessions.cs2_prematch import make_config
 from gnomepy_research.sessions.cs2_prematch.decision import (
     Level,
     choose_entry,

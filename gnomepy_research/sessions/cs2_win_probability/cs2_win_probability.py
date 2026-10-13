@@ -12,17 +12,17 @@ from gnomepy import ExecutionReport, Intent, OrderType, Scales, Side, Strategy
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
-from gnomepy_research.artifacts import resolve_artifact_path
-from gnomepy_research.sessions.cs2_win_probability.features import extract_features
-from gnomepy_research.sessions.cs2_win_probability.game_state import CS2GameState
+from gnomepy.data import DatasetStore, resolve_artifact_path
+from gnomepy_research.models.cs2.win_probability.features import extract_features
+from gnomepy_research.models.cs2.win_probability.game_state import CS2GameState
 from gnomepy_research.sessions.cs2_win_probability.map_model import (
     map_win_probs_to_series_win_prob,
     round_win_prob_to_map_win_prob,
     series_win_prob_per_map,
 )
-from gnomepy_research.sessions.cs2_win_probability.model import CS2RoundModel
-from gnomepy_research.sessions.cs2_win_probability.pre_map_features import extract_pre_map_features
-from gnomepy_research.sessions.cs2_win_probability.pre_map_model import CS2PreMapModel
+from gnomepy_research.models.cs2.win_probability.model import CS2RoundModel
+from gnomepy_research.models.cs2.win_probability.pre_map_features import extract_pre_map_features
+from gnomepy_research.models.cs2.win_probability.pre_map_model import CS2PreMapModel
 from gnomepy_research.sessions.cs2_win_probability.team_priors import (
     SeriesVetoInfo,
     load_series_priors,
@@ -279,7 +279,6 @@ class CS2WinProbability(Strategy):
         return probs
 
     def _load_fair_value_series(self, path: str) -> pd.DataFrame:
-        from gnomepy_research.artifacts import DatasetStore
         if path.endswith(".parquet") or path.startswith("/"):
             df = pd.read_parquet(path)
         else:
