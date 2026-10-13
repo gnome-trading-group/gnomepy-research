@@ -1,0 +1,52 @@
+overall:
+                                            n  log_loss   brier     ece  accuracy  calib_slope  calib_intercept
+p_bayes                                1590.0    0.5499  0.1869  0.0247    0.7006       1.0389           0.0120
+p_logistic                             1590.0    0.5590  0.1902  0.0198    0.7000       0.9342           0.0393
+p_elo                                  1590.0    0.5686  0.1938  0.0252    0.6943       1.0560           0.0169
+p_home_field                           1590.0    0.6786  0.2428  0.0085    0.5818       1.1218          -0.0012
+p_market_close (closing, post-cutoff)  1590.0    0.5229  0.1763  0.0364    0.7220       1.0762           0.0401
+
+log loss by season:
+                2023    2024
+p_bayes       0.5375  0.5622
+p_logistic    0.5465  0.5714
+p_elo         0.5581  0.5790
+p_home_field  0.6806  0.6765
+
+log loss by phase:
+                post   wk1-2   wk10+   wk3-5   wk6-9
+p_bayes       0.6820  0.5089  0.5625  0.4925  0.5687
+p_logistic    0.7585  0.5287  0.5657  0.4986  0.5691
+p_elo         0.7373  0.5682  0.5529  0.5310  0.5836
+p_home_field  0.6886  0.6603  0.6838  0.6765  0.6794
+
+paired log-loss differences (negative = Bayes better; game bootstrap):
+                        diff      se    lo95    hi95  p_a_worse
+bayes - logistic     -0.0091  0.0037 -0.0159 -0.0017      0.005
+bayes - elo          -0.0187  0.0071 -0.0327 -0.0048      0.005
+bayes - home_field   -0.1287  0.0104 -0.1494 -0.1082      0.000
+bayes - market_close  0.0270  0.0054  0.0166  0.0377      1.000
+
+refit noise (Bayes log loss across refits): 2023: [0.5375, 0.5372, 0.5373] (sd 0.0001); 2024: [0.5622, 0.5624, 0.5624] (sd 0.0001)
+
+log loss by market-favourite band:
+            (0.499, 0.6]  (0.6, 0.7]  (0.7, 0.8]  (0.8, 0.9]  (0.9, 1.0]
+p_bayes           0.7239      0.6477      0.6166      0.3751      0.1985
+p_logistic        0.7376      0.6635      0.6218      0.3808      0.1997
+p_elo             0.7161      0.6710      0.6254      0.4084      0.2562
+n               388.0000    331.0000    366.0000    301.0000    204.0000
+
+Bayes reliability:
+           n  mean_p  observed
+0.0-0.1   31   0.065     0.065
+0.1-0.2   64   0.152     0.141
+0.2-0.3  123   0.254     0.268
+0.3-0.4  174   0.349     0.339
+0.4-0.5  203   0.452     0.493
+0.5-0.6  226   0.551     0.491
+0.6-0.7  234   0.648     0.675
+0.7-0.8  202   0.751     0.748
+0.8-0.9  200   0.850     0.870
+0.9-1.0  133   0.946     0.962
+
+90% interval on P(home): median width 0.531; widest phase {'post': 0.392, 'wk1-2': 0.547, 'wk10+': 0.522, 'wk3-5': 0.559, 'wk6-9': 0.557}

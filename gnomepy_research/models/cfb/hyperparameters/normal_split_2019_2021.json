@@ -1,0 +1,140 @@
+{
+  "hyperparameters": {
+    "alpha": [
+      0.1736685054343851,
+      0.13298956403577827
+    ],
+    "sigma_alpha": 0.009725114887981995,
+    "hfa": 0.013996457697587034,
+    "beta_off": [
+      0.03855601014064852,
+      0.017656231339460426,
+      -0.010663029117356672,
+      0.0494894350072931,
+      0.04117802419990436,
+      -0.01305205902371473,
+      0.01855990165220192,
+      0.0053089784414807875,
+      0.00575099371410004,
+      -0.012038221442645524,
+      0.023191358897170465,
+      -0.035107606367676895,
+      -0.05757950458473987,
+      0.02935775614901609,
+      -0.014386061007337771,
+      0.009069701920906292,
+      0.02967502105826482,
+      0.007399477234615298,
+      0.006914940619485007,
+      -0.0011081026896923281,
+      -0.003813187819717698,
+      0.006719693426278506,
+      -0.010155463643026275,
+      -0.004089117972909926,
+      -0.019343939674147492,
+      -0.044399601994444565
+    ],
+    "beta_def": [
+      0.03077042645178798,
+      -0.003324788831335702,
+      0.05241847636929638,
+      0.023116440560494816,
+      -0.005324375227602982,
+      -0.016337383019410165,
+      -0.10493369273517471,
+      0.03500682755595979,
+      -0.016217357422133597,
+      0.05016756980955308,
+      0.005673065712429331,
+      -0.00870811367760673,
+      0.004599533656919049,
+      -0.06532412647839779
+    ],
+    "gamma": [
+      0.17363459133956025,
+      0.14142770751649172,
+      0.18319611133445698
+    ],
+    "s_off": 0.07579768871520386,
+    "s_def": 0.05220423249777291,
+    "tau_off": 0.006542058832482701,
+    "tau_def": 0.01050932366707247,
+    "sigma_game": 0.012852919304523215,
+    "sigma_play": 1.4221068704574769,
+    "nu": Infinity,
+    "off_names": [
+      "pass:prior_off_rating",
+      "pass:talent_offense",
+      "pass:talent_qb",
+      "pass:recruiting_points",
+      "pass:returning_pct_ppa",
+      "pass:returning_pct_passing_ppa",
+      "pass:qb_prior_ppa",
+      "pass:qb_returning_starter",
+      "pass:coach_srs_resid",
+      "pass:coach_new",
+      "pass:portal_in_stars",
+      "pass:prior_missing",
+      "pass:is_fcs",
+      "rush:prior_off_rating",
+      "rush:talent_offense",
+      "rush:talent_qb",
+      "rush:recruiting_points",
+      "rush:returning_pct_ppa",
+      "rush:returning_pct_passing_ppa",
+      "rush:qb_prior_ppa",
+      "rush:qb_returning_starter",
+      "rush:coach_srs_resid",
+      "rush:coach_new",
+      "rush:portal_in_stars",
+      "rush:prior_missing",
+      "rush:is_fcs"
+    ],
+    "def_names": [
+      "pass:prior_def_rating",
+      "pass:talent_defense",
+      "pass:recruiting_points",
+      "pass:coach_srs_resid",
+      "pass:coach_new",
+      "pass:portal_in_stars",
+      "pass:is_fcs",
+      "rush:prior_def_rating",
+      "rush:talent_defense",
+      "rush:recruiting_points",
+      "rush:coach_srs_resid",
+      "rush:coach_new",
+      "rush:portal_in_stars",
+      "rush:is_fcs"
+    ],
+    "likelihood": "normal",
+    "units": [
+      "pass",
+      "rush"
+    ]
+  },
+  "diagnostics": {
+    "hyper": {
+      "max_rhat": 1.036037538423985,
+      "worst_rhat_param": "tau_def",
+      "min_ess_bulk": 166.255305444632,
+      "worst_ess_param": "tau_def",
+      "min_ess_tail": 249.00255980017184,
+      "divergences": 0
+    },
+    "states": {
+      "max_rhat": 1.0074101131289968,
+      "worst_rhat_param": "z0_def[559]",
+      "min_ess_bulk": 2056.934665595158,
+      "worst_ess_param": "z0_off[387]",
+      "min_ess_tail": 2206.030453431675,
+      "divergences": 0
+    },
+    "seasons": [
+      2019,
+      2020,
+      2021
+    ],
+    "cutoff": "2022-08-27 16:00:00+00:00",
+    "n_obs": 9362
+  }
+}

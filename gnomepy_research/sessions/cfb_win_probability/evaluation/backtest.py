@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy.data import DatasetStore
+from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, UNITS_SPLIT
 from gnomepy_research.sessions.cfb_win_probability.evaluation import baselines
 from gnomepy_research.sessions.cfb_win_probability.evaluation.metrics import paired_bootstrap, reliability, summarize
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import N_FIT_DRAWS, fit, game_draws
@@ -28,6 +29,12 @@ FIRST_OUTCOME_SEASON = 2020
 HOLDOUT = 2025
 RESULTS = Path(__file__).resolve().parent.parent / "results" / "backtest"
 N_REFITS = 3
+MODEL_CONFIGS = {
+    "A": dict(units=UNITS_ALL, form=False, qb=False),
+    "B": dict(units=UNITS_SPLIT, form=False, qb=False),
+    "C": dict(units=UNITS_SPLIT, form=True, qb=False),
+    "D": dict(units=UNITS_SPLIT, form=True, qb=True),
+}
 
 
 def phase(df: pd.DataFrame) -> pd.Series:
@@ -36,19 +43,21 @@ def phase(df: pd.DataFrame) -> pd.Series:
                      index=df.index)
 
 
-def run_season(season: int, games: pd.DataFrame, pregame: pd.DataFrame, lines: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+def run_season(season: int, games: pd.DataFrame, pregame: pd.DataFrame, lines: pd.DataFrame,
+               units: tuple[str, ...] = UNITS_ALL) -> tuple[pd.DataFrame, dict]:
     train_seasons = list(range(FIRST_OUTCOME_SEASON, season))
-    train_gd = game_draws(games, train_seasons, n_draws=N_FIT_DRAWS)
-    test_gd = game_draws(games, [season])
+    train_gd = game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, units=units)
+    test_gd = game_draws(games, [season], units=units)
     test = test_gd.games.loc[test_gd.games["home_win"].notna()].copy()
     x_test = test_gd.x[test_gd.games["home_win"].notna().to_numpy()]
 
     refits = []
     for r in range(N_REFITS):
-        gd = train_gd if r == 0 else game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, seed=r)
+        gd = train_gd if r == 0 else game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, seed=r, units=units)
         refits.append(fit(gd, seed=r).predict(x_test))
     pred = refits[0]
     test["p_bayes"] = pred["p_home"].to_numpy()
+    test["p_home"] = test["p_bayes"]
     test["p_bayes_lo"] = pred["p_lo"].to_numpy()
     test["p_bayes_hi"] = pred["p_hi"].to_numpy()
 
@@ -122,21 +131,25 @@ def report(df: pd.DataFrame, metas: list[dict]) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("seasons", type=int, nargs="+")
+    ap.add_argument("--model", choices=sorted(MODEL_CONFIGS), default="A")
     ap.add_argument("--holdout", action="store_true")
     args = ap.parse_args()
     if HOLDOUT in args.seasons and not args.holdout:
         raise SystemExit(f"{HOLDOUT} is the holdout season; pass --holdout to score it")
+    cfg = MODEL_CONFIGS[args.model]
+    if cfg["form"] or cfg["qb"]:
+        raise NotImplementedError(f"model {args.model} is not wired yet")
     ds = DatasetStore()
     games, pregame, lines = ds.load("cfb_games"), ds.load("cfb_pregame_features"), ds.load("cfb_lines")
     frames, metas = [], []
     for s in args.seasons:
-        df, meta = run_season(s, games, pregame, lines)
+        df, meta = run_season(s, games, pregame, lines, units=cfg["units"])
         frames.append(df)
         metas.append(meta)
         print(f"{s}: {len(df)} games", json.dumps(meta, default=str), flush=True)
     out = pd.concat(frames, ignore_index=True)
     RESULTS.mkdir(parents=True, exist_ok=True)
-    tag = "_".join(map(str, args.seasons))
+    tag = "_".join(map(str, args.seasons)) + f"_{args.model}"
     out.to_parquet(RESULTS / f"predictions_{tag}.parquet", index=False)
     text = report(out, metas)
     (RESULTS / f"report_{tag}.txt").write_text(text)
