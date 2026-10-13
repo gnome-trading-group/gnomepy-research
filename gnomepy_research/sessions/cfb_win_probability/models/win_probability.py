@@ -20,25 +20,48 @@ import pymc as pm
 import pytensor.tensor as pt
 
 from gnomepy_research.models.cfb.features.ratings import FCS_TEAM
-from gnomepy_research.models.cfb.efficiency.posterior_snapshots import DRAWS_DIR
+from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL
+from gnomepy_research.models.cfb.efficiency.posterior_snapshots import DRAWS_DIR, draws_name
 
-TERMS = ["off_diff", "def_diff", "venue", "bowl_net_diff"]
+TERMS_ALL = ["off_diff", "def_diff", "venue", "bowl_net_diff"]
+TERMS_SPLIT = ["pass_edge", "rush_edge", "venue", "bowl_edge"]
+TERMS = TERMS_ALL
+# Ratings are in PPA/play; a 0.1 net edge is roughly a 10-point favourite.
+PRIORS: dict[str, tuple[float, float]] = {
+    "off_diff": (8.0, 5.0),
+    "def_diff": (8.0, 5.0),
+    "venue": (0.3, 0.5),
+    "bowl_net_diff": (0.0, 5.0),
+    "pass_edge": (8.0, 5.0),
+    "rush_edge": (8.0, 5.0),
+    "bowl_edge": (0.0, 5.0),
+    "qb_delta_diff": (4.0, 4.0),
+}
 N_FIT_DRAWS = 50
 
 
 @dataclass
 class GameDraws:
     games: pd.DataFrame        # one row per game: game_id, season, week, season_type, home/away ids, venue, label
-    x: np.ndarray              # (G, S, len(TERMS)) design per rating draw
+    x: np.ndarray              # (G, S, len(terms)) design per rating draw
+    terms: list[str]
 
 
-def load_season_draws(season: int, directory: Path = DRAWS_DIR) -> dict:
-    with np.load(directory / f"cfb_team_week_draws_{season}.npz") as z:
+def edge_terms(op, dp, orr, dr, share, hi, ai) -> tuple[np.ndarray, np.ndarray]:
+    """Rush-share-weighted pass and rush matchup edges, each (G, S). Inputs are (S, T) rating draws."""
+    sh, sa = share[hi][:, None], share[ai][:, None]
+    rush = sh * (orr[:, hi] - dr[:, ai]).T - sa * (orr[:, ai] - dr[:, hi]).T
+    pas = (1 - sh) * (op[:, hi] - dp[:, ai]).T - (1 - sa) * (op[:, ai] - dp[:, hi]).T
+    return pas, rush
+
+
+def load_season_draws(season: int, directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL) -> dict:
+    with np.load(directory / f"{draws_name(season, units)}.npz") as z:
         return {k: z[k] for k in z.files}
 
 
 def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = None, seed: int = 0,
-               directory: Path = DRAWS_DIR) -> GameDraws:
+               directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff)."""
     rng = np.random.default_rng(seed)
@@ -46,33 +69,44 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
               & (games["away_classification"] == "fbs")].copy()
     rows, xs = [], []
     for season in seasons:
-        draws = load_season_draws(season, directory)
+        draws = load_season_draws(season, directory, units)
         for (st, wk), gg in g[g["season"] == season].groupby(["season_type", "week"]):
             key = f"{st}_{wk}"
             if f"{key}__off" not in draws:
                 continue
             off, de, ids = draws[f"{key}__off"], draws[f"{key}__def"], draws[f"{key}__team_ids"]
-            col = {t: i for i, t in enumerate(ids)}
             s = off.shape[0]
             pick = np.arange(s) if n_draws is None else rng.choice(s, size=min(n_draws, s), replace=False)
-            fcs = col[FCS_TEAM]
-            hi = np.array([col.get(t, fcs) for t in gg["home_id"]])
-            ai = np.array([col.get(t, fcs) for t in gg["away_id"]])
-            od = (off[pick][:, hi] - off[pick][:, ai]).T
-            dd = (de[pick][:, hi] - de[pick][:, ai]).T
+            if units == UNITS_ALL:
+                col = {t: i for i, t in enumerate(ids)}
+                fcs = col[FCS_TEAM]
+                hi = np.array([col.get(t, fcs) for t in gg["home_id"]])
+                ai = np.array([col.get(t, fcs) for t in gg["away_id"]])
+                main = [(off[pick][:, hi] - off[pick][:, ai]).T, (de[pick][:, hi] - de[pick][:, ai]).T]
+            else:
+                u = draws[f"{key}__units"]
+                share_all = draws[f"{key}__rush_share"]
+                p_cols, r_cols = np.flatnonzero(u == "pass"), np.flatnonzero(u == "rush")
+                col = {t: i for i, t in enumerate(ids[p_cols])}
+                fcs = col[FCS_TEAM]
+                hi = np.array([col.get(t, fcs) for t in gg["home_id"]])
+                ai = np.array([col.get(t, fcs) for t in gg["away_id"]])
+                main = list(edge_terms(off[pick][:, p_cols], de[pick][:, p_cols], off[pick][:, r_cols],
+                                       de[pick][:, r_cols], share_all[p_cols], hi, ai))
             venue = np.where(gg["neutral_site"].to_numpy(bool), 0.0, 1.0)[:, None].repeat(len(pick), 1)
             post = float(st == "postseason")
-            xs.append(np.stack([od, dd, venue, post * (od + dd)], axis=-1))
+            xs.append(np.stack([*main, venue, post * (main[0] + main[1])], axis=-1))
             rows.append(gg)
     out = pd.concat(rows, ignore_index=True)
     out["venue"] = np.where(out["neutral_site"], 0, 1)
     out["home_win"] = np.where(out["completed"], (out["home_points"] > out["away_points"]).astype(float), np.nan)
-    return GameDraws(games=out, x=np.concatenate(xs, axis=0))
+    return GameDraws(games=out, x=np.concatenate(xs, axis=0),
+                     terms=TERMS_ALL if units == UNITS_ALL else TERMS_SPLIT)
 
 
 @dataclass
 class OutcomeModel:
-    gamma: np.ndarray          # (K, len(TERMS)) posterior draws of the coefficients
+    gamma: np.ndarray          # (K, len(terms)) posterior draws of the coefficients
 
     def predict(self, x: np.ndarray, interval: float = 0.9, n_gamma: int = 200, chunk: int = 100,
                 seed: int = 0) -> pd.DataFrame:
@@ -96,9 +130,9 @@ class OutcomeModel:
 def fit(gd: GameDraws, draws: int = 1000, tune: int = 1000, seed: int = 0) -> OutcomeModel:
     keep = gd.games["home_win"].notna().to_numpy()
     x, y = gd.x[keep], gd.games.loc[keep, "home_win"].to_numpy()
-    with pm.Model(coords={"term": TERMS}):
-        # Ratings are in PPA/play; a 0.1 net edge is roughly a 10-point favourite.
-        g = pm.Normal("gamma", mu=[8.0, 8.0, 0.3, 0.0], sigma=[5.0, 5.0, 0.5, 5.0], dims="term")
+    terms = gd.terms
+    with pm.Model(coords={"term": terms}):
+        g = pm.Normal("gamma", mu=[PRIORS[t][0] for t in terms], sigma=[PRIORS[t][1] for t in terms], dims="term")
         z = pt.tensordot(x, g, axes=[[2], [0]])
         p = pt.mean(pm.math.sigmoid(z), axis=1)
         pm.Bernoulli("y", p=pt.clip(p, 1e-6, 1 - 1e-6), observed=y)

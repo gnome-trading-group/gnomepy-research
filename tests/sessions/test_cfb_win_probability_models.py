@@ -16,7 +16,14 @@ from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
 from gnomepy_research.models.cfb.efficiency.inference import HYPER_DIR, Inputs
 from gnomepy_research.models.cfb.efficiency.gaussian_solver import _state_map, fit_cutoff_exact, solve
 from gnomepy_research.models.cfb.features.rush_share import league_rush_share, rush_share
-from gnomepy_research.sessions.cfb_win_probability.models.win_probability import OutcomeModel
+from gnomepy_research.sessions.cfb_win_probability.models.win_probability import (
+    PRIORS,
+    TERMS,
+    TERMS_ALL,
+    TERMS_SPLIT,
+    OutcomeModel,
+    edge_terms,
+)
 
 SEASON = 2024
 N_TEAMS = 10
@@ -263,3 +270,34 @@ def test_split_cutoff_posterior_shapes():
     assert post.alpha.shape == (200, 2)
     s = post.summary()
     assert set(s["unit"]) == {"pass", "rush"} and len(s) == 2 * (N_TEAMS + 1)
+
+
+class TestEdgeTerms:
+    @staticmethod
+    def draws(seed=0):
+        rng = np.random.default_rng(seed)
+        return [rng.normal(0, 0.1, (40, 6)) for _ in range(4)], rng.uniform(0.3, 0.7, 6)
+
+    def test_swap_negates_edges(self):
+        (op, dp, orr, dr), share = self.draws()
+        hi, ai = np.array([0, 2, 4]), np.array([1, 3, 5])
+        p1, r1 = edge_terms(op, dp, orr, dr, share, hi, ai)
+        p2, r2 = edge_terms(op, dp, orr, dr, share, ai, hi)
+        np.testing.assert_allclose(p1, -p2)
+        np.testing.assert_allclose(r1, -r2)
+
+    def test_run_heavy_team_gains_more_from_weak_run_defense(self):
+        z = np.zeros((1, 2))
+        orr = np.array([[0.1, 0.0]])
+        dr = np.array([[0.0, -0.1]])
+        _, light = edge_terms(z, z, orr, dr, np.array([0.3, 0.5]), np.array([0]), np.array([1]))
+        _, heavy = edge_terms(z, z, orr, dr, np.array([0.7, 0.5]), np.array([0]), np.array([1]))
+        assert heavy[0, 0] > light[0, 0] > 0
+
+
+class TestTermsAndPriors:
+    def test_all_terms_priors_match_legacy(self):
+        assert TERMS is TERMS_ALL
+        assert [PRIORS[t][0] for t in TERMS_ALL] == [8, 8, 0.3, 0]
+        assert [PRIORS[t][1] for t in TERMS_ALL] == [5, 5, 0.5, 5]
+        assert TERMS_SPLIT == ["pass_edge", "rush_edge", "venue", "bowl_edge"]
