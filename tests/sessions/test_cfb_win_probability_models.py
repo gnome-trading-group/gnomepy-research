@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from gnomepy_research.sessions.cfb_win_probability.features.ratings import FCS_TEAM
+from gnomepy_research.sessions.cfb_win_probability.models.data import DEF_FEATURES, OFF_FEATURES, build_model_data
+from gnomepy_research.sessions.cfb_win_probability.models.dynamic_efficiency import (
+    Hyperparameters,
+    build_model,
+    sample,
+)
+from gnomepy_research.sessions.cfb_win_probability.models.gaussian_solver import _state_map, solve
+from gnomepy_research.sessions.cfb_win_probability.models.win_probability import OutcomeModel
+
+SEASON = 2024
+N_TEAMS = 10
+N_WEEKS = 12
+
+
+def synthetic(seed: int = 0):
+    rng = np.random.default_rng(seed)
+    teams = np.arange(1, N_TEAMS + 1)
+    true_o = rng.normal(0, 0.12, N_TEAMS)
+    true_d = rng.normal(0, 0.12, N_TEAMS)
+    kick0 = pd.Timestamp("2024-08-31 16:00", tz="UTC")
+    games, eff, gid = [], [], 0
+    for w in range(1, N_WEEKS + 1):
+        order = rng.permutation(teams)
+        for a, b in zip(order[::2], order[1::2]):
+            gid += 1
+            kickoff = kick0 + pd.Timedelta(days=7 * (w - 1))
+            games.append({"game_id": gid, "season": SEASON, "week": w, "season_type": "regular", "kickoff": kickoff,
+                          "home_id": a, "away_id": b, "home_classification": "fbs", "away_classification": "fbs"})
+            for off, de, venue in ((a, b, 1), (b, a, -1)):
+                y = 0.1 + true_o[off - 1] - true_d[de - 1] + 0.015 * venue + rng.normal(0, 1.4 / np.sqrt(65))
+                eff.append({"game_id": gid, "season": SEASON, "week": w, "season_type": "regular", "team_id": off,
+                            "opponent_id": de, "team_classification": "fbs", "opponent_classification": "fbs",
+                            "venue": venue, "plays": 65, "off_ppa": y, "usable": True,
+                            "available_at": kickoff + pd.Timedelta(days=1)})
+    # One game against an FCS opponent.
+    games.append({"game_id": 999, "season": SEASON, "week": 1, "season_type": "regular", "kickoff": kick0,
+                  "home_id": 1, "away_id": 5000, "home_classification": "fbs", "away_classification": "fcs"})
+    eff.append({"game_id": 999, "season": SEASON, "week": 1, "season_type": "regular", "team_id": 1,
+                "opponent_id": 5000, "team_classification": "fbs", "opponent_classification": "fcs", "venue": 1,
+                "plays": 65, "off_ppa": 0.6, "usable": True, "available_at": kick0 + pd.Timedelta(days=1)})
+    pre = pd.DataFrame({"season": SEASON, "team_id": teams})
+    for col in set(OFF_FEATURES + DEF_FEATURES):
+        pre[col] = rng.normal(size=N_TEAMS)
+    pre["qb_returning_starter"] = True
+    pre["coach_new"] = False
+    return pd.DataFrame(games), pd.DataFrame(eff), pre, true_o, true_d
+
+
+def hypers(data) -> Hyperparameters:
+    return Hyperparameters(
+        alpha=0.1, sigma_alpha=0.02, hfa=0.015, beta_off=np.zeros(len(data.off_names)),
+        beta_def=np.zeros(len(data.def_names)), gamma=np.zeros(data.z_unc.shape[1]), s_off=0.12, s_def=0.12,
+        tau_off=0.005, tau_def=0.005, sigma_game=0.01, sigma_play=1.4, nu=30.0,
+        off_names=data.off_names, def_names=data.def_names, likelihood="studentt",
+    )
+
+
+class TestModelData:
+    def test_indices_periods_and_fcs_pooling(self):
+        games, eff, pre, _, _ = synthetic()
+        d = build_model_data(pre, eff, games, [SEASON])
+        assert len(d.ts_keys) == N_TEAMS + 1
+        assert d.ts_keys["team_id"].iloc[-1] == FCS_TEAM
+        assert d.n_periods == N_WEEKS
+        assert set(d.obs_period) == set(range(N_WEEKS))
+        fcs_row = np.flatnonzero(d.obs_game == 999)
+        assert d.obs_def[fcs_row[0]] == N_TEAMS
+        assert d.x_off[-1, -1] == 1.0 and d.x_off[:-1, -1].sum() == 0.0
+
+    def test_features_are_centred_within_season(self):
+        games, eff, pre, _, _ = synthetic()
+        d = build_model_data(pre, eff, games, [SEASON])
+        assert np.allclose(d.x_off[:-1, : len(OFF_FEATURES)].mean(0), 0.0, atol=1e-12)
+
+    def test_unusable_rows_are_excluded(self):
+        games, eff, pre, _, _ = synthetic()
+        eff.loc[0, "usable"] = False
+        d = build_model_data(pre, eff, games, [SEASON])
+        assert len(d.obs_y) == len(eff) - 1
+
+
+def test_recovers_rating_signs_and_order():
+    games, eff, pre, true_o, true_d = synthetic()
+    d = build_model_data(pre, eff, games, [SEASON])
+    idata = sample(build_model(d, hypers=hypers(d)), draws=300, tune=300, chains=2)
+    post = idata.posterior.to_dataset()
+    o = post["O"].mean(("chain", "draw")).values[:N_TEAMS, -1]
+    de = post["D"].mean(("chain", "draw")).values[:N_TEAMS, -1]
+    # Higher O = better offense, higher D = better defense.
+    assert np.corrcoef(o, true_o)[0, 1] > 0.8
+    assert np.corrcoef(de, true_d)[0, 1] > 0.8
+
+
+def test_exact_gaussian_solver_matches_mcmc():
+    games, eff, pre, _, _ = synthetic(seed=1)
+    d = build_model_data(pre, eff, games, [SEASON])
+    h = hypers(d)
+    h.likelihood = "normal"
+    mean, _, lay = solve(d, h)
+    ts = np.arange(len(d.ts_keys))
+    c_off, B_off = _state_map(d, h, lay, ts, np.full(len(ts), d.n_periods - 1), offense=True)
+    exact = c_off + B_off @ mean
+
+    idata = sample(build_model(d, hypers=h, likelihood="normal"), draws=1000, tune=500, chains=2)
+    mcmc = idata.posterior.to_dataset()["O"].mean(("chain", "draw")).values[:, -1]
+    assert layout_size_matches(lay, d)
+    np.testing.assert_allclose(exact, mcmc, atol=0.01)
+
+
+def layout_size_matches(lay: dict, d) -> bool:
+    n_ts = len(d.ts_keys)
+    return lay["size"] == len(d.seasons) + 2 * n_ts + 2 * n_ts * (d.n_periods - 1)
+
+
+class TestOutcomeModel:
+    @staticmethod
+    def model():
+        rng = np.random.default_rng(0)
+        return OutcomeModel(gamma=np.column_stack([rng.normal(8, 0.5, 200), rng.normal(7, 0.5, 200),
+                                                   rng.normal(0.3, 0.05, 200), rng.normal(-1, 0.5, 200)]))
+
+    def test_neutral_site_swap_gives_complement(self):
+        rng = np.random.default_rng(1)
+        od, dd = rng.normal(0, 0.1, (5, 40)), rng.normal(0, 0.1, (5, 40))
+        x = np.stack([od, dd, np.zeros_like(od), np.zeros_like(od)], axis=-1)
+        swapped = np.stack([-od, -dd, np.zeros_like(od), np.zeros_like(od)], axis=-1)
+        m = self.model()
+        np.testing.assert_allclose(m.predict(x)["p_home"] + m.predict(swapped)["p_home"], 1.0, atol=1e-12)
+
+    def test_probabilities_valid_and_interval_brackets_mean(self):
+        rng = np.random.default_rng(2)
+        x = np.stack([rng.normal(0, 0.2, (50, 40)), rng.normal(0, 0.2, (50, 40)),
+                      np.ones((50, 40)), np.zeros((50, 40))], axis=-1)
+        p = self.model().predict(x)
+        assert ((p["p_home"] > 0) & (p["p_home"] < 1)).all()
+        assert (p["p_lo"] <= p["p_home"]).all() and (p["p_home"] <= p["p_hi"]).all()
+
+    def test_home_field_raises_home_probability(self):
+        z = np.zeros((1, 10, 4))
+        home = z.copy()
+        home[..., 2] = 1.0
+        m = self.model()
+        assert m.predict(z)["p_home"].iloc[0] == 0.5
+        assert m.predict(home)["p_home"].iloc[0] > 0.5

@@ -1,0 +1,97 @@
+{
+  "hyperparameters": {
+    "alpha": 0.11155180410350095,
+    "sigma_alpha": 0.015753077172928797,
+    "hfa": 0.016160967290980353,
+    "beta_off": [
+      0.03092124735882703,
+      0.016097239651529788,
+      -0.009030560713185028,
+      0.031704539920501526,
+      0.01881745280407117,
+      0.000276552833089297,
+      0.006888089898316882,
+      -0.0002871239050816031,
+      0.01450891421196388,
+      -0.008743467195613235,
+      0.013017231493934155,
+      -0.015061248197680642,
+      -0.12035141614219626
+    ],
+    "beta_def": [
+      0.03313991942932959,
+      -0.010388360466211348,
+      0.0509479451335792,
+      0.0120493125652276,
+      -0.006195865651629178,
+      0.00196396306374667,
+      -0.14159595614817796
+    ],
+    "gamma": [
+      0.08560848860800986,
+      0.10866062370969252,
+      0.1775719781106835
+    ],
+    "s_off": 0.06251228572355226,
+    "s_def": 0.05350366907619488,
+    "tau_off": 0.008364027600285807,
+    "tau_def": 0.009812804227741192,
+    "sigma_game": 0.006624267801244055,
+    "sigma_play": 1.4320422475458476,
+    "nu": Infinity,
+    "off_names": [
+      "prior_off_rating",
+      "talent_offense",
+      "talent_qb",
+      "recruiting_points",
+      "returning_pct_ppa",
+      "returning_pct_passing_ppa",
+      "qb_prior_ppa",
+      "qb_returning_starter",
+      "coach_srs_resid",
+      "coach_new",
+      "portal_in_stars",
+      "prior_missing",
+      "is_fcs"
+    ],
+    "def_names": [
+      "prior_def_rating",
+      "talent_defense",
+      "recruiting_points",
+      "coach_srs_resid",
+      "coach_new",
+      "portal_in_stars",
+      "is_fcs"
+    ],
+    "likelihood": "normal"
+  },
+  "diagnostics": {
+    "hyper": {
+      "max_rhat": 1.0163155645050614,
+      "worst_rhat_param": "tau_def",
+      "min_ess_bulk": 285.6289495929875,
+      "worst_ess_param": "tau_def",
+      "min_ess_tail": 311.9453197047201,
+      "divergences": 0
+    },
+    "states": {
+      "max_rhat": 1.0043274847233516,
+      "worst_rhat_param": "z0_def[480]",
+      "min_ess_bulk": 1943.3646837559286,
+      "worst_ess_param": "z0_off[926]",
+      "min_ess_tail": 2901.893854847409,
+      "divergences": 0
+    },
+    "seasons": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ],
+    "cutoff": "2026-08-29 16:00:00+00:00",
+    "n_obs": 11993
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "hyperparameters": {
+    "alpha": 0.1201989919618409,
+    "sigma_alpha": 0.026414750581946474,
+    "hfa": 0.012400738277722196,
+    "beta_off": [
+      0.03300316239930663,
+      -0.010166253524681527,
+      0.005125026418616944,
+      0.04646440401450146,
+      0.025599052355950388,
+      -0.003818101667479278,
+      0.012113047161394308,
+      0.001603737302342107,
+      0.007146275394828884,
+      -0.011418830487883199,
+      0.00869582858681706,
+      -0.03734628381651974,
+      -0.06370602082457476
+    ],
+    "beta_def": [
+      0.033107736071285504,
+      -0.016452538595302428,
+      0.057149325723927856,
+      0.014253982957977578,
+      -0.007297618106705581,
+      -0.006449499940201918,
+      -0.0855380422630714
+    ],
+    "gamma": [
+      0.1610231872010007,
+      0.28546855955514355,
+      0.2584290634134783
+    ],
+    "s_off": 0.05464899634404752,
+    "s_def": 0.04452110846620749,
+    "tau_off": 0.008825991415412007,
+    "tau_def": 0.01289811540880307,
+    "sigma_game": 0.010915005182114194,
+    "sigma_play": 1.4055842148688094,
+    "nu": Infinity,
+    "off_names": [
+      "prior_off_rating",
+      "talent_offense",
+      "talent_qb",
+      "recruiting_points",
+      "returning_pct_ppa",
+      "returning_pct_passing_ppa",
+      "qb_prior_ppa",
+      "qb_returning_starter",
+      "coach_srs_resid",
+      "coach_new",
+      "portal_in_stars",
+      "prior_missing",
+      "is_fcs"
+    ],
+    "def_names": [
+      "prior_def_rating",
+      "talent_defense",
+      "recruiting_points",
+      "coach_srs_resid",
+      "coach_new",
+      "portal_in_stars",
+      "is_fcs"
+    ],
+    "likelihood": "normal"
+  },
+  "diagnostics": {
+    "hyper": {
+      "max_rhat": 1.058494525899844,
+      "min_ess_bulk": 72.2104479477494,
+      "min_ess_tail": 54.497263234645175,
+      "divergences": 0
+    },
+    "states": {
+      "max_rhat": 1.0096892849013075,
+      "min_ess_bulk": 712.6987885897414,
+      "min_ess_tail": 1089.7815858316526,
+      "divergences": 0
+    },
+    "seasons": [
+      2019,
+      2020,
+      2021
+    ],
+    "cutoff": "2022-08-27 16:00:00+00:00",
+    "n_obs": 4682
+  }
+}

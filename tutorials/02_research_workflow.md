@@ -211,7 +211,7 @@ scenarios:
       - listing_id: 217772
         profile: kalshi
       - listing_id: 229125
-        profile: polymarket
+        profile: polymarket_intl
     strategy_args:
       event_ids: [46259, 48600]
   football:
@@ -221,12 +221,12 @@ scenarios:
       - listing_id: 222852
         profile: kalshi
       - listing_id: 97202
-        profile: polymarket
+        profile: polymarket_intl
     strategy_args:
       event_ids: [47431, 18169]
 
 profiles:
-  polymarket: { ... }
+  polymarket_intl: { ... }
   kalshi: { ... }
 ```
 Scenarios compose with sweeps — total jobs = `len(scenarios) × product(sweep_lengths)`. Each scenario gets its own report and summary. Works for both local runs (`gnomepy backtest run`) and AWS Batch (`gnomepy backtest submit`). The hard cap of 100 jobs applies to the combined total.

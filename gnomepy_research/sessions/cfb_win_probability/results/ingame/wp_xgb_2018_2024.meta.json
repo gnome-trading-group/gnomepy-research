@@ -1,0 +1,47 @@
+{
+  "features": [
+    "prior_logit",
+    "score_diff",
+    "sec_game",
+    "sec_half",
+    "period",
+    "is_ot",
+    "home_has_ball",
+    "yards_to_goal",
+    "down",
+    "distance",
+    "home_timeouts",
+    "away_timeouts",
+    "home_receives_2h",
+    "prior_x_remaining",
+    "diff_per_sqrt_time"
+  ],
+  "monotone": {
+    "prior_logit": 1,
+    "score_diff": 1,
+    "prior_x_remaining": 1,
+    "diff_per_sqrt_time": 1
+  },
+  "params": {
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "max_depth": 6,
+    "eta": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.9,
+    "min_child_weight": 200,
+    "tree_method": "hist"
+  },
+  "seasons": [
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024
+  ],
+  "best_iteration": 167,
+  "calib_a": 0.031266141682863235,
+  "calib_b": 0.9684982895851135
+}

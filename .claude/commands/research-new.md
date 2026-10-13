@@ -42,7 +42,7 @@ Read the available saved profiles by listing `gnomepy_research/profiles/*.yaml`.
 Use `AskUserQuestion` with exactly these 3 questions in a single call:
 
 1. **header: "Profile(s)"** — Which exchange profile(s) does this strategy trade on? (multi-select from saved profiles + "Create new")
-   - List each saved profile by name (e.g., `hyperliquid`, `polymarket`, `kalshi`, `lighter`)
+   - List each saved profile by name (e.g., `hyperliquid`, `polymarket_intl`, `polymarket_us`, `kalshi`, `lighter`)
    - `Create new profile` — Use Other to type a new profile name
 
    If "Create new profile" is selected, run a sub-round (AskUserQuestion with 5 questions):

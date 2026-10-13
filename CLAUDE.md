@@ -66,7 +66,7 @@ For loop-driven sessions, state (iterations, notes, status) is stored in the API
 **Diagnostics:** `/research` Step 5 runs mandatory per-strategy-type diagnostic checks every iteration via `gnomepy_research.reporting.backtest` (`compute_mm_stats`, `compute_adverse_selection`, `compute_rolling_sharpe`) rather than hand-rolling them from parquet. Results are included in the iteration analysis and directly inform the next hypothesis.
 
 ### Exchange profiles
-Saved exchange profiles live in `gnomepy_research/profiles/`. Current profiles: `hyperliquid`, `lighter`, `polymarket`, `kalshi`. The `/research-new` wizard picks these up automatically so you don't re-specify fees and latency each time. New profiles created during `/research-new` are saved here for future reuse.
+Saved exchange profiles live in `gnomepy_research/profiles/`. Current profiles: `hyperliquid`, `lighter`, `polymarket_intl`, `polymarket_us`, `kalshi`. The `/research-new` wizard picks these up automatically so you don't re-specify fees and latency each time. New profiles created during `/research-new` are saved here for future reuse.
 
 ### Iteration modes
 - **Local run**: for logic changes — writes a config YAML, runs via `poetry run gnomepy backtest run --config <path>`
