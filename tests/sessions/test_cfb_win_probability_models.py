@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from gnomepy_research.models.cfb.features.ratings import FCS_TEAM
-from gnomepy_research.models.cfb.efficiency.data import DEF_FEATURES, OFF_FEATURES, UNITS_SPLIT, build_model_data
+from gnomepy_research.models.cfb.efficiency.data import DEF_FEATURES, OFF_FEATURES, UNITS_ALL, UNITS_SPLIT, build_model_data
 from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
     Hyperparameters,
     build_model,
@@ -18,7 +18,9 @@ from gnomepy_research.models.cfb.efficiency.posterior_snapshots import draws_nam
 from gnomepy_research.models.cfb.efficiency.gaussian_solver import _state_map, fit_cutoff_exact, solve
 from gnomepy_research.models.cfb.features.rush_share import league_rush_share, rush_share
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import (
+    FORM_TERMS,
     PRIORS,
+    form_terms,
     game_draws,
     TERMS,
     TERMS_ALL,
@@ -309,7 +311,7 @@ class TestSplitGameDraws:
     SEASON = 2024
 
     @staticmethod
-    def write(tmp_path, rush_ids):
+    def write(tmp_path, rush_ids, form=False):
         rng = np.random.default_rng(1)
         pass_ids = [1, 2, FCS_TEAM]
         arrays = {
@@ -319,6 +321,8 @@ class TestSplitGameDraws:
             "regular_1__units": np.array(["pass"] * 3 + ["rush"] * 3),
             "regular_1__rush_share": np.array([0.4, 0.6, 0.5] * 2, dtype="float32"),
         }
+        if form:
+            arrays["regular_1__form"] = np.random.default_rng(2).normal(size=(6, 5)).astype("float32")
         np.savez(tmp_path / f"{draws_name(TestSplitGameDraws.SEASON, UNITS_SPLIT)}.npz", **arrays)
         return arrays
 
@@ -342,6 +346,25 @@ class TestSplitGameDraws:
                             np.array([0, 1]), np.array([1, 2]))
         np.testing.assert_allclose(gd.x[..., 0], pe)
         np.testing.assert_allclose(gd.x[..., 1], re)
+
+    def test_form_terms_in_design(self, tmp_path):
+        a = self.write(tmp_path, [1, 2, FCS_TEAM], form=True)
+        gd = game_draws(self.games(), [self.SEASON], directory=tmp_path, units=UNITS_SPLIT, form=True)
+        assert gd.x.shape[-1] == 9
+        assert gd.terms == TERMS_SPLIT + FORM_TERMS
+        f = a["regular_1__form"][:3]
+        fh, fa = f[[0, 1]], f[[1, 2]]
+        np.testing.assert_allclose(gd.x[..., 4:], form_terms(fh, fa, gd.x[..., 0] + gd.x[..., 1]), rtol=1e-5)
+        np.testing.assert_allclose(gd.x[0, :, 4], f[0, 0] - f[1, 0], rtol=1e-5)
+
+    def test_form_requires_split_units(self, tmp_path):
+        with pytest.raises(ValueError, match="split"):
+            game_draws(self.games(), [self.SEASON], directory=tmp_path, units=UNITS_ALL, form=True)
+
+    def test_form_requires_snapshotted_form(self, tmp_path):
+        self.write(tmp_path, [1, 2, FCS_TEAM])
+        with pytest.raises(ValueError, match="--form"):
+            game_draws(self.games(), [self.SEASON], directory=tmp_path, units=UNITS_SPLIT, form=True)
 
     def test_misaligned_rush_ids_raise(self, tmp_path):
         self.write(tmp_path, [2, 1, FCS_TEAM])
@@ -375,3 +398,19 @@ class TestFormAt:
         assert (a[2] == 0).all()
         assert a[:2].std() > 0
         assert form_at(self.rows(0.0), 2024, pd.Timestamp("2024-01-01", tz="UTC"), ids).shape == (3, 5)
+
+
+def test_form_terms_antisymmetric_under_swap():
+    rng = np.random.default_rng(4)
+    fh, fa, edge = rng.normal(size=(6, 5)), rng.normal(size=(6, 5)), rng.normal(0, .1, (6, 30))
+    a = form_terms(fh, fa, edge)
+    b = form_terms(fa, fh, -edge)
+    np.testing.assert_allclose(a, -b)
+
+
+def test_pace_scales_edge():
+    fh = np.zeros((1, 5))
+    fa = np.zeros((1, 5))
+    fh[0, 4] = fa[0, 4] = 1.0
+    t = form_terms(fh, fa, np.full((1, 3), 0.1))
+    np.testing.assert_allclose(t[0, :, 4], 0.1)

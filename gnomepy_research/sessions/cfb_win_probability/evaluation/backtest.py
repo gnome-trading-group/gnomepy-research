@@ -44,17 +44,20 @@ def phase(df: pd.DataFrame) -> pd.Series:
 
 
 def run_season(season: int, games: pd.DataFrame, pregame: pd.DataFrame, lines: pd.DataFrame,
-               units: tuple[str, ...] = UNITS_ALL) -> tuple[pd.DataFrame, dict]:
+               units: tuple[str, ...] = UNITS_ALL, form: bool = False) -> tuple[pd.DataFrame, dict]:
     train_seasons = list(range(FIRST_OUTCOME_SEASON, season))
-    train_gd = game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, units=units)
-    test_gd = game_draws(games, [season], units=units)
+    train_gd = game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, units=units, form=form)
+    test_gd = game_draws(games, [season], units=units, form=form)
     test = test_gd.games.loc[test_gd.games["home_win"].notna()].copy()
     x_test = test_gd.x[test_gd.games["home_win"].notna().to_numpy()]
 
     refits = []
     for r in range(N_REFITS):
-        gd = train_gd if r == 0 else game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, seed=r, units=units)
-        refits.append(fit(gd, seed=r).predict(x_test))
+        gd = train_gd if r == 0 else game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, seed=r, units=units, form=form)
+        model = fit(gd, seed=r)
+        if r == 0:
+            coefs = model.gamma
+        refits.append(model.predict(x_test))
     pred = refits[0]
     test["p_bayes"] = pred["p_home"].to_numpy()
     test["p_home"] = test["p_bayes"]
@@ -79,7 +82,9 @@ def run_season(season: int, games: pd.DataFrame, pregame: pd.DataFrame, lines: p
     y = test["home_win"].to_numpy()
     refit_ll = [summarize(y, r["p_home"].to_numpy())["log_loss"] for r in refits]
     meta = {"season": season, "train_seasons": train_seasons, "elo": elo_params.__dict__, "spread_sd": sd,
-            "refit_log_loss": refit_ll, "refit_noise_sd": float(np.std(refit_ll))}
+            "refit_log_loss": refit_ll, "refit_noise_sd": float(np.std(refit_ll)),
+            "terms": train_gd.terms, "gamma_mean": coefs.mean(0).tolist(),
+            "gamma_lo": np.quantile(coefs, 0.05, axis=0).tolist(), "gamma_hi": np.quantile(coefs, 0.95, axis=0).tolist()}
     return test, meta
 
 
@@ -125,6 +130,10 @@ def report(df: pd.DataFrame, metas: list[dict]) -> str:
     width = (df["p_bayes_hi"] - df["p_bayes_lo"])
     lines.append(f"90% interval on P(home): median width {width.median():.3f}; widest phase "
                  f"{df.assign(w=width).groupby('phase')['w'].median().round(3).to_dict()}")
+    coef = [pd.DataFrame({"mean": m["gamma_mean"], "lo5": m["gamma_lo"], "hi95": m["gamma_hi"]}, index=m["terms"])
+            .round(3).to_string() for m in metas]
+    lines.append("outcome coefficients (posterior mean, 90% interval; first refit):\n"
+                 + "\n".join(f"{m['season']}:\n{c}" for m, c in zip(metas, coef)))
     return "\n\n".join(lines)
 
 
@@ -137,13 +146,13 @@ def main() -> None:
     if HOLDOUT in args.seasons and not args.holdout:
         raise SystemExit(f"{HOLDOUT} is the holdout season; pass --holdout to score it")
     cfg = MODEL_CONFIGS[args.model]
-    if cfg["form"] or cfg["qb"]:
+    if cfg["qb"]:
         raise NotImplementedError(f"model {args.model} is not wired yet")
     ds = DatasetStore()
     games, pregame, lines = ds.load("cfb_games"), ds.load("cfb_pregame_features"), ds.load("cfb_lines")
     frames, metas = [], []
     for s in args.seasons:
-        df, meta = run_season(s, games, pregame, lines, units=cfg["units"])
+        df, meta = run_season(s, games, pregame, lines, units=cfg["units"], form=cfg["form"])
         frames.append(df)
         metas.append(meta)
         print(f"{s}: {len(df)} games", json.dumps(meta, default=str), flush=True)

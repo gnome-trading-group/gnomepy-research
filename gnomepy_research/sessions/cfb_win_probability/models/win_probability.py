@@ -26,6 +26,7 @@ from gnomepy_research.models.cfb.efficiency.posterior_snapshots import DRAWS_DIR
 TERMS_ALL = ["off_diff", "def_diff", "venue", "bowl_net_diff"]
 TERMS_SPLIT = ["pass_edge", "rush_edge", "venue", "bowl_edge"]
 TERMS = TERMS_ALL
+FORM_TERMS = ["early_success_diff", "late_down_luck_diff", "finishing_luck_diff", "field_position_diff", "pace_x_edge"]
 # Ratings are in PPA/play; a 0.1 net edge is roughly a 10-point favourite.
 PRIORS: dict[str, tuple[float, float]] = {
     "off_diff": (8.0, 5.0),
@@ -35,6 +36,11 @@ PRIORS: dict[str, tuple[float, float]] = {
     "pass_edge": (8.0, 5.0),
     "rush_edge": (8.0, 5.0),
     "bowl_edge": (0.0, 5.0),
+    "early_success_diff": (0.0, 0.5),
+    "late_down_luck_diff": (0.0, 0.5),
+    "finishing_luck_diff": (0.0, 0.5),
+    "field_position_diff": (0.0, 0.5),
+    "pace_x_edge": (0.0, 3.0),
     "qb_delta_diff": (4.0, 4.0),
 }
 N_FIT_DRAWS = 50
@@ -55,15 +61,24 @@ def edge_terms(op, dp, orr, dr, share, hi, ai) -> tuple[np.ndarray, np.ndarray]:
     return pas, rush
 
 
+def form_terms(form_h: np.ndarray, form_a: np.ndarray, edge: np.ndarray) -> np.ndarray:
+    """(G, S, 5) form design: four home-minus-away z-score diffs, plus mean pace scaling the (G, S) edge."""
+    diff = (form_h[:, :4] - form_a[:, :4])[:, None, :].repeat(edge.shape[1], 1)
+    pace = ((form_h[:, 4] + form_a[:, 4]) / 2)[:, None] * edge
+    return np.concatenate([diff, pace[..., None]], axis=-1)
+
+
 def load_season_draws(season: int, directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL) -> dict:
     with np.load(directory / f"{draws_name(season, units)}.npz") as z:
         return {k: z[k] for k in z.files}
 
 
 def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = None, seed: int = 0,
-               directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL) -> GameDraws:
+               directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL, form: bool = False) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff)."""
+    if form and units == UNITS_ALL:
+        raise ValueError("form terms are defined on the split model only")
     rng = np.random.default_rng(seed)
     g = games[games["season"].isin(seasons) & (games["home_classification"] == "fbs")
               & (games["away_classification"] == "fbs")].copy()
@@ -95,15 +110,22 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                 ai = np.array([col.get(t, fcs) for t in gg["away_id"]])
                 main = list(edge_terms(off[pick][:, p_cols], de[pick][:, p_cols], off[pick][:, r_cols],
                                        de[pick][:, r_cols], share_all[p_cols], hi, ai))
+            extra = []
+            if form:
+                if f"{key}__form" not in draws:
+                    raise ValueError(f"{key}: draws have no form; snapshot with --form")
+                f = draws[f"{key}__form"][p_cols]
+                extra = [form_terms(f[hi], f[ai], main[0] + main[1])]
             venue = np.where(gg["neutral_site"].to_numpy(bool), 0.0, 1.0)[:, None].repeat(len(pick), 1)
             post = float(st == "postseason")
-            xs.append(np.stack([*main, venue, post * (main[0] + main[1])], axis=-1))
+            base = np.stack([*main, venue, post * (main[0] + main[1])], axis=-1)
+            xs.append(np.concatenate([base, *extra], axis=-1))
             rows.append(gg)
     out = pd.concat(rows, ignore_index=True)
     out["venue"] = np.where(out["neutral_site"], 0, 1)
     out["home_win"] = np.where(out["completed"], (out["home_points"] > out["away_points"]).astype(float), np.nan)
     return GameDraws(games=out, x=np.concatenate(xs, axis=0),
-                     terms=TERMS_ALL if units == UNITS_ALL else TERMS_SPLIT)
+                     terms=TERMS_ALL if units == UNITS_ALL else TERMS_SPLIT + (FORM_TERMS if form else []))
 
 
 @dataclass
