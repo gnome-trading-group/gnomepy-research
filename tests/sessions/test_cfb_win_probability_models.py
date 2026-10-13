@@ -197,6 +197,13 @@ def test_old_scalar_alpha_json_still_loads():
 
 def test_split_recovers_unit_baselines_and_ratings():
     games, eff, pre, true_o, true_d = synthetic()
+    rng_t = np.random.default_rng(7)
+    fbs = (eff["opponent_classification"] == "fbs").to_numpy()
+    oi = (eff["team_id"].to_numpy() - 1).clip(0, N_TEAMS - 1)
+    di = (eff["opponent_id"].to_numpy() - 1).clip(0, N_TEAMS - 1)
+    base = np.where(fbs, true_o[oi] - true_d[di], 0.0) + 0.015 * eff["venue"].to_numpy()
+    eff["off_pass_ppa"] = 0.15 + base + rng_t.normal(0, 0.03, len(eff))
+    eff["off_rush_ppa"] = 0.05 + base + rng_t.normal(0, 0.03, len(eff))
     d = build_model_data(pre, eff, games, [SEASON], units=UNITS_SPLIT)
     h = hypers(d)
     h.alpha = np.array([0.15, 0.05])
