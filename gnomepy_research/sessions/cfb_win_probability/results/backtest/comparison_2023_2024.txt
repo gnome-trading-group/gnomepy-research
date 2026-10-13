@@ -1,0 +1,51 @@
+SUMMARY
+- Best model by log loss: C (0.5457); open 0.5286; close 0.5229.
+- Gap to open (model - open, negative = model better): +0.0171  [+0.0063, +0.0272]  P(first worse)=1.00
+- Gap to close (model - close): +0.0227  [+0.0120, +0.0330]  P(first worse)=1.00
+- Blend weight a on the model vs the open (a > 0 = information beyond the open): A a=+0.09 [-0.19, +0.34], B a=+0.15 [-0.11, +0.38], C a=+0.23 [-0.05, +0.47]
+- No model's blend weight CI excludes 0 vs the open: no demonstrated information beyond the open.
+
+models: A B C; games scored: 1590; dropped 0 games present in every model but missing an opening or closing line
+sanity: 0 of 1590 games have |backtest p_market_close - p_close| > 0.02
+
+PER-SOURCE SCORES (calib_slope: 1 = calibrated)
+ source season    n  log_loss  brier  calib_slope
+model A    all 1590    0.5499 0.1869       1.0389
+model A   2023  792    0.5375 0.1823       1.1006
+model A   2024  798    0.5622 0.1914       0.9788
+model B    all 1590    0.5522 0.1879       1.0690
+model B   2023  792    0.5380 0.1826       1.1228
+model B   2024  798    0.5662 0.1932       1.0136
+model C    all 1590    0.5457 0.1849       1.0510
+model C   2023  792    0.5334 0.1800       1.0946
+model C   2024  798    0.5578 0.1898       1.0065
+   open    all 1590    0.5286 0.1786       1.0698
+   open   2023  792    0.5206 0.1751       1.1141
+   open   2024  798    0.5366 0.1821       1.0275
+  close    all 1590    0.5229 0.1763       1.0762
+  close   2023  792    0.5108 0.1710       1.1401
+  close   2024  798    0.5350 0.1816       1.0158
+
+PAIRED LOG-LOSS DIFFERENCES (first - second; negative = first better; game-bootstrap 95% CI)
+diff B - A  +0.0022  [-0.0020, +0.0064]  P(first worse)=0.86
+diff C - B  -0.0065  [-0.0122, -0.0007]  P(first worse)=0.02
+diff C - A  -0.0042  [-0.0101, +0.0018]  P(first worse)=0.09
+diff A - open  +0.0213  [+0.0110, +0.0311]  P(first worse)=1.00
+diff B - open  +0.0235  [+0.0119, +0.0345]  P(first worse)=1.00
+diff C - open  +0.0171  [+0.0063, +0.0272]  P(first worse)=1.00
+diff A - close  +0.0270  [+0.0165, +0.0366]  P(first worse)=1.00
+diff B - close  +0.0292  [+0.0180, +0.0402]  P(first worse)=1.00
+diff C - close  +0.0227  [+0.0120, +0.0330]  P(first worse)=1.00
+
+BLEND: logit(y) ~ a*logit(model) + b*logit(ref); a > 0 = model carries information the reference lacks
+A vs open:  a=+0.095 [-0.195, +0.335]  b=+0.992
+A vs close: a=-0.007 [-0.245, +0.242]  b=+1.089  (reference)
+B vs open:  a=+0.149 [-0.110, +0.380]  b=+0.954
+B vs close: a=+0.060 [-0.165, +0.291]  b=+1.036  (reference)
+C vs open:  a=+0.225 [-0.047, +0.472]  b=+0.881
+C vs close: a=+0.117 [-0.140, +0.362]  b=+0.986  (reference)
+
+BET-LIKE SUBSET: |p_model - p_open| > 0.05 (log loss; open scored on the same games)
+A: n=856  model=0.5980  open=0.5614
+B: n=914  model=0.5989  open=0.5575
+C: n=883  model=0.5897  open=0.5636
