@@ -121,7 +121,7 @@ def snapshot_seasons(inputs: Inputs, first: int, last: int, likelihood: str,
         frames.append(df)
         paths.append((season, path))
     table = pd.concat(frames, ignore_index=True)
-    table.to_parquet(out_dir / f"cfb_team_week_posterior_{first}_{last}.parquet", index=False)
+    table.to_parquet(out_dir / f"cfb_team_week_posterior{_suffix(units)}_{first}_{last}.parquet", index=False)
     return table, paths
 
 
