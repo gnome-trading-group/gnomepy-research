@@ -20,6 +20,7 @@ N_WEEKS = 12
 
 def synthetic(seed: int = 0):
     rng = np.random.default_rng(seed)
+    rng_unit = np.random.default_rng(seed + 1000)
     teams = np.arange(1, N_TEAMS + 1)
     true_o = rng.normal(0, 0.12, N_TEAMS)
     true_d = rng.normal(0, 0.12, N_TEAMS)
@@ -33,9 +34,9 @@ def synthetic(seed: int = 0):
             games.append({"game_id": gid, "season": SEASON, "week": w, "season_type": "regular", "kickoff": kickoff,
                           "home_id": a, "away_id": b, "home_classification": "fbs", "away_classification": "fbs"})
             for off, de, venue in ((a, b, 1), (b, a, -1)):
-                p_pass = 0.15 + true_o[off - 1] - true_d[de - 1] + 0.015 * venue + rng.normal(0, 1.6 / np.sqrt(30))
-                p_rush = 0.05 + true_o[off - 1] - true_d[de - 1] + 0.015 * venue + rng.normal(0, 1.2 / np.sqrt(35))
-                y = (30 * p_pass + 35 * p_rush) / 65
+                y = 0.1 + true_o[off - 1] - true_d[de - 1] + 0.015 * venue + rng.normal(0, 1.4 / np.sqrt(65))
+                p_pass = 0.15 + true_o[off - 1] - true_d[de - 1] + 0.015 * venue + rng_unit.normal(0, 1.6 / np.sqrt(30))
+                p_rush = (65 * y - 30 * p_pass) / 35
                 eff.append({"game_id": gid, "season": SEASON, "week": w, "season_type": "regular", "team_id": off,
                             "opponent_id": de, "team_classification": "fbs", "opponent_classification": "fbs",
                             "venue": venue, "plays": 65, "off_ppa": y, "pass_plays": 30, "rush_plays": 35,
@@ -128,7 +129,7 @@ def test_recovers_rating_signs_and_order():
     de = post["D"].mean(("chain", "draw")).values[:N_TEAMS, -1]
     # Higher O = better offense, higher D = better defense.
     assert np.corrcoef(o, true_o)[0, 1] > 0.8
-    assert np.corrcoef(de, true_d)[0, 1] > 0.7
+    assert np.corrcoef(de, true_d)[0, 1] > 0.8
 
 
 def test_exact_gaussian_solver_matches_mcmc():
