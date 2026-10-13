@@ -87,6 +87,8 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                 u = draws[f"{key}__units"]
                 share_all = draws[f"{key}__rush_share"]
                 p_cols, r_cols = np.flatnonzero(u == "pass"), np.flatnonzero(u == "rush")
+                if not np.array_equal(ids[p_cols], ids[r_cols]):
+                    raise ValueError(f"{key}: pass and rush team columns are not aligned")
                 col = {t: i for i, t in enumerate(ids[p_cols])}
                 fcs = col[FCS_TEAM]
                 hi = np.array([col.get(t, fcs) for t in gg["home_id"]])

@@ -14,10 +14,12 @@ from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
     sample,
 )
 from gnomepy_research.models.cfb.efficiency.inference import HYPER_DIR, Inputs
+from gnomepy_research.models.cfb.efficiency.posterior_snapshots import draws_name
 from gnomepy_research.models.cfb.efficiency.gaussian_solver import _state_map, fit_cutoff_exact, solve
 from gnomepy_research.models.cfb.features.rush_share import league_rush_share, rush_share
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import (
     PRIORS,
+    game_draws,
     TERMS,
     TERMS_ALL,
     TERMS_SPLIT,
@@ -301,3 +303,47 @@ class TestTermsAndPriors:
         assert [PRIORS[t][0] for t in TERMS_ALL] == [8, 8, 0.3, 0]
         assert [PRIORS[t][1] for t in TERMS_ALL] == [5, 5, 0.5, 5]
         assert TERMS_SPLIT == ["pass_edge", "rush_edge", "venue", "bowl_edge"]
+
+
+class TestSplitGameDraws:
+    SEASON = 2024
+
+    @staticmethod
+    def write(tmp_path, rush_ids):
+        rng = np.random.default_rng(1)
+        pass_ids = [1, 2, FCS_TEAM]
+        arrays = {
+            "regular_1__off": rng.normal(0, 0.1, (5, 6)).astype("float32"),
+            "regular_1__def": rng.normal(0, 0.1, (5, 6)).astype("float32"),
+            "regular_1__team_ids": np.array(pass_ids + rush_ids),
+            "regular_1__units": np.array(["pass"] * 3 + ["rush"] * 3),
+            "regular_1__rush_share": np.array([0.4, 0.6, 0.5] * 2, dtype="float32"),
+        }
+        np.savez(tmp_path / f"{draws_name(TestSplitGameDraws.SEASON, UNITS_SPLIT)}.npz", **arrays)
+        return arrays
+
+    @staticmethod
+    def games():
+        return pd.DataFrame({
+            "game_id": [10, 11], "season": 2024, "week": 1, "season_type": "regular",
+            "home_id": [1, 2], "away_id": [2, 99],
+            "home_classification": "fbs", "away_classification": "fbs",
+            "neutral_site": [False, True], "completed": True,
+            "home_points": [21, 14], "away_points": [17, 28],
+        })
+
+    def test_split_design_matches_hand_edges(self, tmp_path):
+        a = self.write(tmp_path, [1, 2, FCS_TEAM])
+        gd = game_draws(self.games(), [self.SEASON], directory=tmp_path, units=UNITS_SPLIT)
+        assert gd.x.shape == (2, 5, 4)
+        assert gd.terms == TERMS_SPLIT
+        off, de, share = a["regular_1__off"], a["regular_1__def"], a["regular_1__rush_share"][:3]
+        pe, re = edge_terms(off[:, :3], de[:, :3], off[:, 3:], de[:, 3:], share,
+                            np.array([0, 1]), np.array([1, 2]))
+        np.testing.assert_allclose(gd.x[..., 0], pe)
+        np.testing.assert_allclose(gd.x[..., 1], re)
+
+    def test_misaligned_rush_ids_raise(self, tmp_path):
+        self.write(tmp_path, [2, 1, FCS_TEAM])
+        with pytest.raises(ValueError, match="not aligned"):
+            game_draws(self.games(), [self.SEASON], directory=tmp_path, units=UNITS_SPLIT)
