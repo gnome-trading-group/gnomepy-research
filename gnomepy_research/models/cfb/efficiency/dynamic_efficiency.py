@@ -2,7 +2,7 @@
 
     y[g]   ~ StudentT(nu, mu[g], sigma[g])          (or Normal)
     mu[g]  = alpha[season] + O[off, k] - D[def, k] + h * venue
-    alpha[season] ~ Normal(alpha, sigma_alpha)    (PPA's league baseline drifts between seasons)
+    alpha[season, unit] ~ Normal(alpha[unit], sigma_alpha)    (PPA's league baseline drifts between seasons)
     sigma[g]^2 = sigma_game^2 + sigma_play^2 / plays
     O[i, 0] ~ Normal(x_off[i] @ beta_off, s_off * exp(z[i] @ gamma))
     O[i, k] = O[i, k-1] + tau_off * eps          (non-centered random walk)
@@ -19,7 +19,7 @@ Two uses:
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 import arviz as az
 import numpy as np
@@ -33,7 +33,7 @@ LIKELIHOODS = ("studentt", "normal")
 
 @dataclass
 class Hyperparameters:
-    alpha: float
+    alpha: np.ndarray
     sigma_alpha: float
     hfa: float
     beta_off: np.ndarray
@@ -49,6 +49,7 @@ class Hyperparameters:
     off_names: list[str]
     def_names: list[str]
     likelihood: str
+    units: list[str] = field(default_factory=lambda: ["all"])
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -62,6 +63,8 @@ class Hyperparameters:
         d = dict(d)
         for k in ("beta_off", "beta_def", "gamma"):
             d[k] = np.asarray(d[k], dtype=float)
+        d["alpha"] = np.atleast_1d(np.asarray(d["alpha"], dtype=float))
+        d.setdefault("units", ["all"])
         return cls(**d)
 
 
@@ -72,11 +75,12 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
     if likelihood not in LIKELIHOODS:
         raise ValueError(likelihood)
     n_ts, n_k = len(data.ts_keys), data.n_periods
-    coords = {"ts": np.arange(n_ts), "period": np.arange(n_k), "step": np.arange(n_k - 1), "season": data.seasons,
+    coords = {"ts": np.arange(n_ts), "period": np.arange(n_k), "step": np.arange(n_k - 1), "alpha_group": np.arange(len(data.alpha_keys)), "unit": list(data.units),
+              
               "f_off": data.off_names, "f_def": data.def_names, "unc": np.arange(data.z_unc.shape[1])}
     with pm.Model(coords=coords) as model:
         if hypers is None:
-            alpha = pm.Normal("alpha", 0.1, 0.1)
+            alpha = pm.Normal("alpha", 0.1, 0.1, dims="unit")
             sigma_alpha = pm.HalfNormal("sigma_alpha", 0.05)
             hfa = pm.Normal("hfa", 0.03, 0.03)
             beta_off = pm.Normal("beta_off", 0.0, 0.05, dims="f_off")
@@ -91,14 +95,15 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
             nu = pm.Gamma("nu", 2.0, 0.1) if likelihood == "studentt" else None
         else:
             h = hypers
-            alpha, sigma_alpha, hfa = h.alpha, h.sigma_alpha, h.hfa
+            alpha, sigma_alpha, hfa = pt.as_tensor_variable(np.asarray(h.alpha, dtype=float)), h.sigma_alpha, h.hfa
             beta_off, beta_def, gamma = (pt.as_tensor_variable(h.beta_off), pt.as_tensor_variable(h.beta_def),
                                          pt.as_tensor_variable(h.gamma))
             s_off, s_def, tau_off, tau_def = h.s_off, h.s_def, h.tau_off, h.tau_def
             sigma_game, sigma_play, nu = h.sigma_game, h.sigma_play, h.nu
 
-        z_alpha = pm.Normal("z_alpha", 0.0, 1.0, dims="season")
-        alpha_season = pm.Deterministic("alpha_season", alpha + sigma_alpha * z_alpha, dims="season")
+        group_unit = data.alpha_keys["unit"].map({u: i for i, u in enumerate(data.units)}).to_numpy(int)
+        z_alpha = pm.Normal("z_alpha", 0.0, 1.0, dims="alpha_group")
+        alpha_season = pm.Deterministic("alpha_season", alpha[group_unit] + sigma_alpha * z_alpha, dims="alpha_group")
         widen = pt.exp(pt.dot(data.z_unc, gamma))
         prior_off = pt.dot(data.x_off, beta_off)
         prior_def = pt.dot(data.x_def, beta_def)
@@ -118,7 +123,7 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
             off = pm.Deterministic("O", off, dims=("ts", "period"))
             de = pm.Deterministic("D", de, dims=("ts", "period"))
 
-        mu = (alpha_season[data.obs_season] + off[data.obs_off, data.obs_period] - de[data.obs_def, data.obs_period]
+        mu = (alpha_season[data.obs_alpha] + off[data.obs_off, data.obs_period] - de[data.obs_def, data.obs_period]
               + hfa * data.obs_venue)
         sigma = pt.sqrt(sigma_game ** 2 + sigma_play ** 2 / data.obs_plays)
         if likelihood == "studentt":
@@ -142,11 +147,12 @@ def hyperparameters_from(idata: az.InferenceData, data: ModelData, likelihood: s
         return post[name].mean(("chain", "draw")).values
 
     return Hyperparameters(
-        alpha=float(m("alpha")), sigma_alpha=float(m("sigma_alpha")), hfa=float(m("hfa")), beta_off=m("beta_off"), beta_def=m("beta_def"),
+        alpha=np.atleast_1d(m("alpha")), sigma_alpha=float(m("sigma_alpha")), hfa=float(m("hfa")), beta_off=m("beta_off"), beta_def=m("beta_def"),
         gamma=m("gamma"), s_off=float(m("s_off")), s_def=float(m("s_def")), tau_off=float(m("tau_off")),
         tau_def=float(m("tau_def")), sigma_game=float(m("sigma_game")), sigma_play=float(m("sigma_play")),
         nu=float(m("nu")) if likelihood == "studentt" else float("inf"),
         off_names=list(data.off_names), def_names=list(data.def_names), likelihood=likelihood,
+        units=list(data.units),
     )
 
 

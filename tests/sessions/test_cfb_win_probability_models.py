@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 
@@ -10,6 +12,7 @@ from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
     build_model,
     sample,
 )
+from gnomepy_research.models.cfb.efficiency.inference import HYPER_DIR
 from gnomepy_research.models.cfb.efficiency.gaussian_solver import _state_map, solve
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import OutcomeModel
 
@@ -59,10 +62,11 @@ def synthetic(seed: int = 0):
 
 def hypers(data) -> Hyperparameters:
     return Hyperparameters(
-        alpha=0.1, sigma_alpha=0.02, hfa=0.015, beta_off=np.zeros(len(data.off_names)),
+        alpha=np.full(len(data.units), 0.1), sigma_alpha=0.02, hfa=0.015, beta_off=np.zeros(len(data.off_names)),
         beta_def=np.zeros(len(data.def_names)), gamma=np.zeros(data.z_unc.shape[1]), s_off=0.12, s_def=0.12,
         tau_off=0.005, tau_def=0.005, sigma_game=0.01, sigma_play=1.4, nu=30.0,
         off_names=data.off_names, def_names=data.def_names, likelihood="studentt",
+        units=list(data.units),
     )
 
 
@@ -183,3 +187,24 @@ class TestOutcomeModel:
         m = self.model()
         assert m.predict(z)["p_home"].iloc[0] == 0.5
         assert m.predict(home)["p_home"].iloc[0] > 0.5
+
+
+def test_old_scalar_alpha_json_still_loads():
+    d = json.loads((HYPER_DIR / "normal_2019_2024.json").read_text())["hyperparameters"]
+    h = Hyperparameters.from_dict(d)
+    assert h.alpha.shape == (1,) and h.units == ["all"]
+
+
+def test_split_recovers_unit_baselines_and_ratings():
+    games, eff, pre, true_o, true_d = synthetic()
+    d = build_model_data(pre, eff, games, [SEASON], units=UNITS_SPLIT)
+    h = hypers(d)
+    h.alpha = np.array([0.15, 0.05])
+    idata = sample(build_model(d, hypers=h), draws=300, tune=300, chains=2)
+    post = idata.posterior.to_dataset()
+    o = post["O"].mean(("chain", "draw")).values[:, -1]
+    n = N_TEAMS + 1
+    assert np.corrcoef(o[:N_TEAMS], true_o)[0, 1] > 0.7
+    assert np.corrcoef(o[n:n + N_TEAMS], true_o)[0, 1] > 0.7
+    a = post["alpha_season"].mean(("chain", "draw")).values
+    assert a[0] > a[1]
