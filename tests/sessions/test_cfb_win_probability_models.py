@@ -152,9 +152,25 @@ def test_exact_gaussian_solver_matches_mcmc():
     np.testing.assert_allclose(exact, mcmc, atol=0.01)
 
 
+def test_exact_solver_matches_mcmc_split():
+    games, eff, pre, _, _ = synthetic(seed=1)
+    d = build_model_data(pre, eff, games, [SEASON], units=UNITS_SPLIT)
+    h = hypers(d)
+    h.likelihood = "normal"
+    h.alpha = np.array([0.15, 0.05])
+    mean, _, lay = solve(d, h)
+    ts = np.arange(len(d.ts_keys))
+    c_off, B_off = _state_map(d, h, lay, ts, np.full(len(ts), d.n_periods - 1), offense=True)
+    exact = c_off + B_off @ mean
+    idata = sample(build_model(d, hypers=h, likelihood="normal"), draws=1000, tune=500, chains=2)
+    mcmc = idata.posterior.to_dataset()["O"].mean(("chain", "draw")).values[:, -1]
+    assert layout_size_matches(lay, d)
+    np.testing.assert_allclose(exact, mcmc, atol=0.01)
+
+
 def layout_size_matches(lay: dict, d) -> bool:
     n_ts = len(d.ts_keys)
-    return lay["size"] == len(d.seasons) + 2 * n_ts + 2 * n_ts * (d.n_periods - 1)
+    return lay["size"] == len(d.alpha_keys) + 2 * n_ts + 2 * n_ts * (d.n_periods - 1)
 
 
 class TestOutcomeModel:

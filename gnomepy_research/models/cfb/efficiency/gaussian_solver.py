@@ -22,7 +22,7 @@ from gnomepy_research.models.cfb.efficiency.inference import CutoffPosterior, In
 
 def _layout(data: ModelData) -> dict[str, int]:
     n_ts, n_k = len(data.ts_keys), data.n_periods
-    lay = {"alpha": 0, "z0_off": len(data.seasons)}
+    lay = {"alpha": 0, "z0_off": len(data.alpha_keys)}
     lay["z0_def"] = lay["z0_off"] + n_ts
     lay["eps_off"] = lay["z0_def"] + n_ts
     lay["eps_def"] = lay["eps_off"] + n_ts * (n_k - 1)
@@ -46,13 +46,17 @@ def _state_map(data: ModelData, h: Hyperparameters, lay: dict[str, int], ts: np.
     return (x @ beta)[ts], B
 
 
+def _group_unit(data: ModelData) -> np.ndarray:
+    return data.alpha_keys["unit"].map({u: i for i, u in enumerate(data.units)}).to_numpy(int)
+
+
 def solve(data: ModelData, h: Hyperparameters) -> tuple[np.ndarray, tuple, dict[str, int]]:
     lay = _layout(data)
     c_off, A_off = _state_map(data, h, lay, data.obs_off, data.obs_period, offense=True)
     c_def, A_def = _state_map(data, h, lay, data.obs_def, data.obs_period, offense=False)
     A = A_off - A_def
-    A[np.arange(len(data.obs_y)), lay["alpha"] + data.obs_season] = h.sigma_alpha
-    c = h.alpha + c_off - c_def + h.hfa * data.obs_venue
+    A[np.arange(len(data.obs_y)), lay["alpha"] + data.obs_alpha] = h.sigma_alpha
+    c = np.asarray(h.alpha)[_group_unit(data)][data.obs_alpha] + c_off - c_def + h.hfa * data.obs_venue
     w = 1.0 / (h.sigma_game ** 2 + h.sigma_play ** 2 / data.obs_plays)
     P = np.eye(lay["size"]) + A.T @ (A * w[:, None])
     chol = cho_factor(P, lower=True)
@@ -64,7 +68,8 @@ def fit_cutoff_exact(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: 
                      n_draws: int = 2000, seed: int = 0) -> tuple[CutoffPosterior, ModelData]:
     if hypers.likelihood != "normal":
         raise ValueError("the exact solver is only valid for the Gaussian likelihood")
-    data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, [season])
+    data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, [season],
+                            units=tuple(hypers.units))
     mean, chol, lay = solve(data, hypers)
     rng = np.random.default_rng(seed)
     # theta = mean + L^-T z, with P = L L^T, gives draws with covariance P^-1.
@@ -78,9 +83,12 @@ def fit_cutoff_exact(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: 
     c_def, B_def = _state_map(data, hypers, lay, ts, k, offense=False)
     off = (c_off[:, None] + B_off @ theta).T
     de = (c_def[:, None] + B_def @ theta).T
-    alpha = hypers.alpha + hypers.sigma_alpha * theta[lay["alpha"]]
+    n_g = len(data.alpha_keys)
+    alpha = (np.asarray(hypers.alpha)[_group_unit(data)][:, None]
+             + hypers.sigma_alpha * theta[lay["alpha"]:lay["alpha"] + n_g]).T
     return CutoffPosterior(
         season=season, cutoff=cutoff, period=period, team_ids=data.ts_keys["team_id"].to_numpy(),
+        units=data.ts_keys["unit"].to_numpy(),
         off=off, de=de, alpha=alpha, hypers=hypers,
         diagnostics={"max_rhat": 1.0, "min_ess_bulk": float(n_draws), "min_ess_tail": float(n_draws),
                      "divergences": 0, "method": "exact_gaussian"},

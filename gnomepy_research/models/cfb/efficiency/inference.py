@@ -58,9 +58,10 @@ class CutoffPosterior:
     cutoff: pd.Timestamp
     period: int                    # state index a prediction at this cutoff uses
     team_ids: np.ndarray           # (T,) FBS team ids, then FCS_TEAM
+    units: np.ndarray              # (T,) unit of each column
     off: np.ndarray                # (S, T) draws of O at `period`
     de: np.ndarray                 # (S, T) draws of D at `period`
-    alpha: np.ndarray              # (S,)
+    alpha: np.ndarray              # (S, G)
     hypers: Hyperparameters
     diagnostics: dict
 
@@ -104,15 +105,17 @@ def load_hyperparameters(name: str) -> Hyperparameters:
 
 def fit_cutoff(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: Hyperparameters,
                draws: int = 500, tune: int = 500, seed: int = 0) -> tuple[CutoffPosterior, ModelData]:
-    data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, [season])
+    data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, [season],
+                            units=tuple(hypers.units))
     idata = sample(build_model(data, hypers=hypers, likelihood=hypers.likelihood), draws=draws, tune=tune, seed=seed)
     period = int(data.periods.loc[data.periods["cutoff"] == cutoff, "period"].iloc[0])
     post = idata.posterior.to_dataset().stack(sample=("chain", "draw"))
     off = post["O"].values[:, period, :].T
     de = post["D"].values[:, period, :].T
-    alpha = post["alpha_season"].values[0]
+    alpha = post["alpha_season"].values.T
     return CutoffPosterior(
         season=season, cutoff=cutoff, period=period, team_ids=data.ts_keys["team_id"].to_numpy(),
+        units=data.ts_keys["unit"].to_numpy(),
         off=off, de=de, alpha=alpha, hypers=hypers,
         diagnostics=diagnostics(idata, ["z0_off", "z0_def", "eps_off", "eps_def", "z_alpha"]),
     ), data
