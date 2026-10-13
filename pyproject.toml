@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "gnomepy-research"
-version = "0.1.0"
+version = "1.0.0"
 description = "Signal research, replay, metrics, and strategy modules for gnomepy"
 authors = ["mprey <masonprey7@gmail.com>"]
 readme = "README.md"
