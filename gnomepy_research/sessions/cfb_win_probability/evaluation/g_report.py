@@ -26,10 +26,12 @@ from gnomepy_research.sessions.cfb_win_probability.evaluation.metrics import log
 
 P4 = {"SEC", "Big Ten", "Big 12", "ACC", "Pac-12"}
 ACADEMIES = {"Army", "Navy", "Air Force"}
+INDEPENDENTS = "FBS Independents"
 Z95 = 1.96
 EXTRAS_MARKER = "\n\n==== EXTRAS (g_report) ====\n"
-CUT_MODELS = {"G": ["D", "G"], "H": ["D", "G", "H"], "I": ["G", "I0", "I"], "J": ["G", "J0", "J"]}
-CUT_PAIRS = {"I": [("I0", "G"), ("I", "G"), ("I", "I0")], "J": [("J", "G"), ("J", "J0")]}
+CUT_MODELS = {"G": ["D", "G"], "H": ["D", "G", "H"], "I": ["G", "I0", "I"], "J": ["G", "J0", "J"], "K": ["G", "J", "K"]}
+CUT_PAIRS = {"I": [("I0", "G"), ("I", "G"), ("I", "I0")], "J": [("J", "G"), ("J", "J0")],
+             "K": [("K", "G"), ("K", "J")]}
 
 
 def hyper_section(seasons: list[int], projection: bool = False) -> str:
@@ -71,6 +73,21 @@ def j_hyper_section(seasons: list[int]) -> str:
     return "\n".join(lines)
 
 
+def k_hyper_section(seasons: list[int]) -> str:
+    lines = ["K HYPERPARAMETERS (normal split conf, independents separate, drives; fitted on 2019..S-1)"]
+    for s in seasons:
+        raw = json.loads((HYPER_DIR / f"{hyper_name('normal', s, UNITS_SPLIT, True, drives=True, independents_separate=True)}.json").read_text())
+        h, diag = raw["hyperparameters"], raw["diagnostics"]
+        d = diag["hyper"]
+        core = ", ".join(f"{k}={h[k]:.4f}" for k in ("tau_off", "tau_def", "s_conf_off", "s_conf_def", "sigma_play"))
+        drv = ", ".join(f"{k}={h[k]:.4f}" for k in DRIVE_PARAMS if k in h)
+        lines.append(f"{s} K: {core}{'; ' + drv if drv else ''}  max_rhat={d['max_rhat']:.3f} ({d['worst_rhat_param']}) "
+                     f"min_ess_bulk={d['min_ess_bulk']:.0f} min_ess_tail={d['min_ess_tail']:.0f} "
+                     f"divergences={d['divergences']} n_obs={diag.get('n_obs')}"
+                     + (f" n_drive_obs={diag['n_drive_obs']}" if "n_drive_obs" in diag else ""))
+    return "\n".join(lines)
+
+
 def conference_effects(inputs: Inputs, season: int) -> pd.DataFrame:
     h = load_hyperparameters(hyper_name("normal", season, UNITS_SPLIT, True))
     per = season_periods(inputs.games, [season])
@@ -107,6 +124,7 @@ def cut_sides(g: pd.DataFrame) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     hp, ap = p4(g["home_conference"], g["home_team"]), p4(g["away_conference"], g["away_team"])
     reg = g["season_type"] == "regular"
     ha, aa = g["home_team"].isin(ACADEMIES), g["away_team"].isin(ACADEMIES)
+    hi, ai = g["home_conference"] == INDEPENDENTS, g["away_conference"] == INDEPENDENTS
     o = g["p_open"]
     none = np.zeros(len(g), bool)
     return {
@@ -118,6 +136,7 @@ def cut_sides(g: pd.DataFrame) -> dict[str, tuple[np.ndarray, np.ndarray]]:
         "weeks 5-9": ((reg & g["week"].between(5, 9)).to_numpy(), none),
         "service academies": ((ha | aa).to_numpy(), (~ha & aa).to_numpy()),
         "toss-ups": (o.between(0.4, 0.6).to_numpy(), none),
+        "FBS independents": ((hi | ai).to_numpy(), (~hi & ai).to_numpy()),
     }
 
 
@@ -195,7 +214,8 @@ def main() -> None:
     inputs = Inputs.load(with_form=False)
     models = CUT_MODELS[args.model]
     seasons = list(range(2020, max(args.seasons) + 1))
-    sections = [j_hyper_section(seasons) if args.model == "J" else hyper_section(seasons, projection=args.model == "H")]
+    hyper = {"J": j_hyper_section, "K": k_hyper_section}.get(args.model)
+    sections = [hyper(seasons) if hyper else hyper_section(seasons, projection=args.model == "H")]
     if args.model == "G":
         sections.append(effects_section(inputs, args.seasons))
     sections.append(cuts_section(tag, models, CUT_PAIRS.get(args.model)))
