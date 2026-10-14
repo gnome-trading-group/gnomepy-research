@@ -21,6 +21,8 @@ import pandas as pd
 
 from gnomepy.data import DatasetStore
 from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, UNITS_SPLIT
+from gnomepy_research.models.cfb.features.qb_status import apply_overrides, historical_starters, load_qb_status, qb_deltas
+from gnomepy_research.models.cfb.features.source import SourceData
 from gnomepy_research.sessions.cfb_win_probability.evaluation import baselines
 from gnomepy_research.sessions.cfb_win_probability.evaluation.metrics import paired_bootstrap, reliability, summarize
 from gnomepy_research.sessions.cfb_win_probability.models.catboost_wp import fit_catboost, game_features
@@ -30,6 +32,8 @@ FIRST_OUTCOME_SEASON = 2020
 HOLDOUT = 2025
 RESULTS = Path(__file__).resolve().parent.parent / "results" / "backtest"
 N_REFITS = 3
+QB_STATUS_CSV = Path(__file__).resolve().parent.parent / "data" / "qb_status.csv"
+QB_THRESHOLD = 0.05
 MODEL_CONFIGS = {
     "A": dict(units=UNITS_ALL, form=False, qb=False, learner="bayes"),
     "B": dict(units=UNITS_SPLIT, form=False, qb=False, learner="bayes"),
@@ -57,15 +61,15 @@ def _catboost_season(season, games, train_seasons):
     return train, test, {"importance": model.feature_importance().round(3).to_dict()}
 
 
-def _bayes_season(season, games, train_seasons, units, form):
-    train_gd = game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, units=units, form=form)
-    test_gd = game_draws(games, [season], units=units, form=form)
+def _bayes_season(season, games, train_seasons, units, form, qb=None):
+    train_gd = game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, units=units, form=form, qb=qb)
+    test_gd = game_draws(games, [season], units=units, form=form, qb=qb)
     test = test_gd.games.loc[test_gd.games["home_win"].notna()].copy()
     x_test = test_gd.x[test_gd.games["home_win"].notna().to_numpy()]
 
     refits = []
     for r in range(N_REFITS):
-        gd = train_gd if r == 0 else game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, seed=r, units=units, form=form)
+        gd = train_gd if r == 0 else game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, seed=r, units=units, form=form, qb=qb)
         model = fit(gd, seed=r)
         if r == 0:
             coefs = model.gamma
@@ -84,12 +88,13 @@ def _bayes_season(season, games, train_seasons, units, form):
 
 
 def run_season(season: int, games: pd.DataFrame, pregame: pd.DataFrame, lines: pd.DataFrame,
-               units: tuple[str, ...] = UNITS_ALL, form: bool = False, learner: str = "bayes") -> tuple[pd.DataFrame, dict]:
+               units: tuple[str, ...] = UNITS_ALL, form: bool = False, learner: str = "bayes",
+               qb: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
     train_seasons = list(range(FIRST_OUTCOME_SEASON, season))
     if learner == "catboost":
         train, test, extra = _catboost_season(season, games, train_seasons)
     else:
-        train, test, extra = _bayes_season(season, games, train_seasons, units, form)
+        train, test, extra = _bayes_season(season, games, train_seasons, units, form, qb)
     test["p_home_field"] = baselines.home_field(train, test)
 
     elo_params = baselines.tune_elo(games, set(train["game_id"]))
@@ -163,6 +168,22 @@ def report(df: pd.DataFrame, metas: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
+def qb_report(df: pd.DataFrame, qb: pd.DataFrame, base: str = "C") -> str:
+    d = df.merge(qb.assign(qb_delta_diff=qb["home_qb_delta"] - qb["away_qb_delta"])[["game_id", "qb_delta_diff"]],
+                 on="game_id", how="left").fillna({"qb_delta_diff": 0.0})
+    lines = ["qb_delta_diff distribution (test games):\n"
+             + d["qb_delta_diff"].quantile([0, .01, .05, .25, .5, .75, .95, .99, 1]).round(4).to_string()]
+    ref = pd.read_parquet(RESULTS / f"predictions_{'_'.join(map(str, sorted(d['season'].unique())))}_C.parquet")
+    sub = d[d["qb_delta_diff"].abs() > QB_THRESHOLD].merge(ref[["game_id", "p_home"]].rename(columns={"p_home": "p_c"}),
+                                                           on="game_id")
+    lines.append(f"games with |qb_delta_diff| > {QB_THRESHOLD}: {len(sub)} of {len(d)}")
+    if len(sub):
+        lines.append("D - C paired log loss on that subset (negative = D better): "
+                     + str({k: round(float(v), 4) for k, v in paired_bootstrap(
+                         sub["home_win"].to_numpy(), sub["p_home"].to_numpy(), sub["p_c"].to_numpy()).items()}))
+    return "\n\n".join(lines)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("seasons", type=int, nargs="+")
@@ -172,14 +193,17 @@ def main() -> None:
     if HOLDOUT in args.seasons and not args.holdout:
         raise SystemExit(f"{HOLDOUT} is the holdout season; pass --holdout to score it")
     cfg = MODEL_CONFIGS[args.model]
-    if cfg["qb"]:
-        raise NotImplementedError(f"model {args.model} is not wired yet")
     ds = DatasetStore()
     games, pregame, lines = ds.load("cfb_games"), ds.load("cfb_pregame_features"), ds.load("cfb_lines")
+    qb = None
+    if cfg["qb"]:
+        src_full = SourceData.load(ds)
+        starters = apply_overrides(historical_starters(src_full), load_qb_status(QB_STATUS_CSV, src_full))
+        qb = qb_deltas(src_full, games[games["season"].between(FIRST_OUTCOME_SEASON, max(args.seasons))], starters)
     frames, metas = [], []
     for s in args.seasons:
         df, meta = run_season(s, games, pregame, lines, units=cfg["units"], form=cfg["form"],
-                              learner=cfg["learner"])
+                              learner=cfg["learner"], qb=qb)
         frames.append(df)
         metas.append(meta)
         print(f"{s}: {len(df)} games", json.dumps(meta, default=str), flush=True)
@@ -188,6 +212,8 @@ def main() -> None:
     tag = "_".join(map(str, args.seasons)) + f"_{args.model}"
     out.to_parquet(RESULTS / f"predictions_{tag}.parquet", index=False)
     text = report(out, metas)
+    if cfg["qb"]:
+        text += "\n\n" + qb_report(out, qb, args.model)
     (RESULTS / f"report_{tag}.txt").write_text(text)
     print(text)
 

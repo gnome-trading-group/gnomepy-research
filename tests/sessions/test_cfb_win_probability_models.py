@@ -357,6 +357,21 @@ class TestSplitGameDraws:
         np.testing.assert_allclose(gd.x[..., 4:], form_terms(fh, fa, gd.x[..., 0] + gd.x[..., 1]), rtol=1e-5)
         np.testing.assert_allclose(gd.x[0, :, 4], f[0, 0] - f[1, 0], rtol=1e-5)
 
+    def test_qb_term_in_design(self, tmp_path):
+        self.write(tmp_path, [1, 2, FCS_TEAM])
+        qb = pd.DataFrame({"game_id": [10], "home_qb_delta": [0.07], "away_qb_delta": [-0.02]})
+        gd = game_draws(self.games(), [self.SEASON], directory=tmp_path, units=UNITS_SPLIT, qb=qb)
+        assert gd.terms == TERMS_SPLIT + ["qb_delta_diff"]
+        np.testing.assert_allclose(gd.x[0, :, -1], 0.09)
+        np.testing.assert_allclose(gd.x[1, :, -1], 0.0)
+
+    def test_qb_term_after_form_terms(self, tmp_path):
+        self.write(tmp_path, [1, 2, FCS_TEAM], form=True)
+        qb = pd.DataFrame({"game_id": [11], "home_qb_delta": [0.0], "away_qb_delta": [0.05]})
+        gd = game_draws(self.games(), [self.SEASON], directory=tmp_path, units=UNITS_SPLIT, form=True, qb=qb)
+        assert gd.terms == TERMS_SPLIT + FORM_TERMS + ["qb_delta_diff"]
+        np.testing.assert_allclose(gd.x[1, :, -1], -0.05)
+
     def test_form_requires_split_units(self, tmp_path):
         with pytest.raises(ValueError, match="split"):
             game_draws(self.games(), [self.SEASON], directory=tmp_path, units=UNITS_ALL, form=True)
@@ -414,3 +429,15 @@ def test_pace_scales_edge():
     fh[0, 4] = fa[0, 4] = 1.0
     t = form_terms(fh, fa, np.full((1, 3), 0.1))
     np.testing.assert_allclose(t[0, :, 4], 0.1)
+
+
+def test_qb_term_swap_symmetry():
+    rng = np.random.default_rng(3)
+    base = rng.normal(0, 0.1, (5, 40, 2))
+    qb = np.repeat(rng.normal(0, 0.05, (5, 1)), 40, axis=1)[..., None]
+    z = np.zeros((5, 40, 1))
+    x = np.concatenate([base, z, z, qb], axis=-1)
+    xs = np.concatenate([-base, z, z, -qb], axis=-1)
+    m = OutcomeModel(gamma=np.column_stack([rng.normal(8, .5, 200), rng.normal(7, .5, 200),
+                                            rng.normal(.3, .05, 200), rng.normal(-1, .5, 200), rng.normal(4, .5, 200)]))
+    np.testing.assert_allclose(m.predict(x)["p_home"] + m.predict(xs)["p_home"], 1.0, atol=1e-12)

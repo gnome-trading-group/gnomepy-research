@@ -90,7 +90,8 @@ def split_columns(key: str, draws: dict, gg: pd.DataFrame) -> tuple[np.ndarray, 
 
 
 def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = None, seed: int = 0,
-               directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL, form: bool = False) -> GameDraws:
+               directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL, form: bool = False,
+               qb: pd.DataFrame | None = None) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff)."""
     if form and units == UNITS_ALL:
@@ -130,8 +131,14 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
     out = pd.concat(rows, ignore_index=True)
     out["venue"] = np.where(out["neutral_site"], 0, 1)
     out["home_win"] = np.where(out["completed"], (out["home_points"] > out["away_points"]).astype(float), np.nan)
-    return GameDraws(games=out, x=np.concatenate(xs, axis=0),
-                     terms=TERMS_ALL if units == UNITS_ALL else TERMS_SPLIT + (FORM_TERMS if form else []))
+    x = np.concatenate(xs, axis=0)
+    terms = TERMS_ALL if units == UNITS_ALL else TERMS_SPLIT + (FORM_TERMS if form else [])
+    if qb is not None:
+        q = out[["game_id"]].merge(qb, on="game_id", how="left").fillna(0.0)
+        qd = (q["home_qb_delta"] - q["away_qb_delta"]).to_numpy()[:, None, None]
+        x = np.concatenate([x, np.broadcast_to(qd, (*x.shape[:2], 1))], axis=-1)
+        terms = [*terms, "qb_delta_diff"]
+    return GameDraws(games=out, x=x, terms=terms)
 
 
 @dataclass
