@@ -25,6 +25,8 @@ DEF_FEATURES = [
 ]
 # Flags that widen the preseason prior: less is known about a team that changed a lot.
 UNCERTAINTY_FLAGS = ["coach_new", "qb_not_returning", "prior_missing"]
+PROJECTION_FLAG = "low_continuity"
+LOW_CONTINUITY = 0.4
 CONF_OFF_FEATURES = ["conf_prior_off", "conf_talent_offense", "conf_recruiting"]
 CONF_DEF_FEATURES = ["conf_prior_def", "conf_talent_defense", "conf_recruiting"]
 CONF_SOURCES = {"conf_prior_off": "prior_off_rating", "conf_prior_def": "prior_def_rating",
@@ -66,6 +68,7 @@ class ModelData:
     obs_unit: np.ndarray           # (N,) index into `units`
     conf_keys: pd.DataFrame = field(default_factory=_empty_conf_keys)  # (season, conference, unit), unit-major
     ts_conf: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=int))  # (TS,) index into conf_keys
+    projection: bool = False
 
 
 def season_periods(games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
@@ -128,9 +131,22 @@ def _unit_names(names: list[str], units: tuple[str, ...]) -> list[str]:
     return names if units == UNITS_ALL else [f"{u}:{n}" for u in units for n in names]
 
 
+def _unit_projection(pre: pd.DataFrame, projection: pd.DataFrame, unit: str) -> pd.DataFrame:
+    """Per FBS row of `pre`: that unit's offense/defense projections and mean returning share."""
+    p = projection[projection["unit"] == unit].pivot_table(index=["season", "team_id"], columns="side",
+                                                          values=["proj", "returning_share"], dropna=False)
+    p.columns = [f"{v}_{side}" for v, side in p.columns]
+    return pre[["season", "team_id"]].merge(p.reset_index(), on=["season", "team_id"], how="left")
+
+
 def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: pd.DataFrame,
-                     seasons: list[int], units: tuple[str, ...] = UNITS_ALL, conference: bool = False) -> ModelData:
-    """`efficiency` must already be point-in-time filtered (as_of the fit's cutoff)."""
+                     seasons: list[int], units: tuple[str, ...] = UNITS_ALL, conference: bool = False,
+                     projection: pd.DataFrame | None = None) -> ModelData:
+    """`efficiency` must already be point-in-time filtered (as_of the fit's cutoff). `projection`
+    (projection.project output) adds each unit's projected rating to that unit's block only, plus
+    the low_continuity uncertainty flag."""
+    if projection is not None and tuple(units) == UNITS_ALL:
+        raise ValueError("the preseason projection is per pass/rush unit; use split units")
     pre = preseason[preseason["season"].isin(seasons)].sort_values(["season", "team_id"]).reset_index(drop=True)
     pre["qb_returning_starter"] = pre["qb_returning_starter"].astype(float)
     pre["coach_new"] = pre["coach_new"].astype(float)
@@ -162,7 +178,22 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
     ts_keys = pd.concat([base_keys.assign(unit=u) for u in units], ignore_index=True)
     x_off = np.vstack([_block(base_x_off, i, n_u) for i in range(n_u)])
     x_def = np.vstack([_block(base_x_def, i, n_u) for i in range(n_u)])
-    z_unc = np.vstack([base_z] * n_u)
+    if projection is None:
+        z_unc = np.vstack([base_z] * n_u)
+    else:
+        xo_u, xd_u, z_u = [], [], []
+        for u in units:
+            p = _unit_projection(pre, projection, u)
+            for side, x, out in (("off", xo, xo_u), ("def", xd, xd_u)):
+                z, _ = _standardize(p.assign(proj=p[f"proj_{side}"]), ["proj"])
+                out.append(with_fcs(x.assign(proj=z["proj"].to_numpy())))
+            share = p[["returning_share_off", "returning_share_def"]].mean(axis=1)
+            low = (~(share >= LOW_CONTINUITY)).astype(float).to_numpy()[:, None]
+            z_u.append(np.hstack([base_z, np.r_[low[:, 0], np.ones(len(seasons))][:, None]]))
+        x_off = np.vstack([_block(xo_u[i], i, n_u) for i in range(n_u)])
+        x_def = np.vstack([_block(xd_u[i], i, n_u) for i in range(n_u)])
+        z_unc = np.vstack(z_u)
+        off_names, def_names = [*off_names, "proj"], [*def_names, "proj"]
     alpha_keys = pd.DataFrame([(s, u) for u in units for s in seasons], columns=["season", "unit"])
     conf_keys = _empty_conf_keys()
     ts_conf = np.zeros(0, dtype=int)
@@ -210,5 +241,5 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
         obs_venue=obs["venue"].to_numpy(float), obs_plays=obs["plays"].to_numpy(float), obs_y=obs["y"].to_numpy(float),
         obs_game=obs["game"].to_numpy(), obs_season=obs["season"].to_numpy(int), seasons=list(seasons), periods=periods,
         units=tuple(units), alpha_keys=alpha_keys, obs_alpha=obs["alpha"].to_numpy(int), obs_unit=obs["unit"].to_numpy(int),
-        conf_keys=conf_keys, ts_conf=ts_conf,
+        conf_keys=conf_keys, ts_conf=ts_conf, projection=projection is not None,
     )

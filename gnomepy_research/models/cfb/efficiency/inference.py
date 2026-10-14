@@ -44,6 +44,7 @@ class Inputs:
     games: pd.DataFrame
     as_of: datetime
     form_rows: pd.DataFrame | None = None
+    projection: pd.DataFrame | None = None
 
     @classmethod
     def load(cls, ds: DatasetStore | None = None, as_of: datetime | None = None,
@@ -60,6 +61,13 @@ class Inputs:
 
     def visible(self, cutoff: pd.Timestamp) -> pd.DataFrame:
         return self.efficiency[self.efficiency["available_at"] < cutoff]
+
+    def projection_for(self, hypers: Hyperparameters) -> pd.DataFrame | None:
+        if not hypers.projection:
+            return None
+        if self.projection is None:
+            raise ValueError("these hyperparameters were fitted with the preseason projection; set Inputs.projection")
+        return self.projection
 
 
 @dataclass
@@ -99,10 +107,12 @@ def hyper_cutoff(inputs: Inputs, last_train_season: int) -> pd.Timestamp:
 def fit_hyperparameters(inputs: Inputs, seasons: list[int], likelihood: str, draws: int = 1000,
                         tune: int = 1500, seed: int = 0,
                         units: tuple[str, ...] = UNITS_ALL,
-                        conference: bool = False) -> tuple[Hyperparameters, dict]:
+                        conference: bool = False, projection: bool = False) -> tuple[Hyperparameters, dict]:
+    if projection and inputs.projection is None:
+        raise ValueError("projection=True needs Inputs.projection")
     cutoff = hyper_cutoff(inputs, max(seasons))
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, seasons, units=units,
-                            conference=conference)
+                            conference=conference, projection=inputs.projection if projection else None)
     idata = sample(build_model(data, likelihood=likelihood, store_states=False), draws=draws, tune=tune, seed=seed)
     hv = HYPER_VARS + (["nu"] if likelihood == "studentt" else []) + (CONF_HYPER_VARS if conference else [])
     diag = {"hyper": diagnostics(idata, hv), "states": diagnostics(idata, ["z0_off", "z0_def"]),
@@ -124,7 +134,8 @@ def load_hyperparameters(name: str) -> Hyperparameters:
 def fit_cutoff(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: Hyperparameters,
                draws: int = 500, tune: int = 500, seed: int = 0) -> tuple[CutoffPosterior, ModelData]:
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, [season],
-                            units=tuple(hypers.units), conference=hypers.conference)
+                            units=tuple(hypers.units), conference=hypers.conference,
+                            projection=inputs.projection_for(hypers))
     idata = sample(build_model(data, hypers=hypers, likelihood=hypers.likelihood), draws=draws, tune=tune, seed=seed)
     period = int(data.periods.loc[data.periods["cutoff"] == cutoff, "period"].iloc[0])
     post = idata.posterior.to_dataset().stack(sample=("chain", "draw"))

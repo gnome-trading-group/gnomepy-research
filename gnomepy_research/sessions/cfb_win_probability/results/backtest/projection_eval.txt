@@ -1,0 +1,91 @@
+Preseason projection: out-of-sample R^2 (rolling origin, Ridge alpha=1 on within-season z-scored features)
+
+unit side  season  n_train  n_test  r2_full  r2_last_only
+pass  off    2020      130     127    0.124         0.231
+pass  off    2021      257     127    0.180         0.135
+pass  off    2022      384     130    0.317         0.179
+pass  off    2023      514     131    0.333         0.154
+pass  off    2024      645     133    0.081         0.096
+pass  def    2020      130     127   -0.198         0.036
+pass  def    2021      257     127    0.189         0.118
+pass  def    2022      384     130    0.080         0.153
+pass  def    2023      514     131    0.241         0.128
+pass  def    2024      645     133    0.173         0.133
+rush  off    2020      130     127    0.082         0.075
+rush  off    2021      257     127    0.171         0.205
+rush  off    2022      384     130    0.207         0.203
+rush  off    2023      514     131    0.125         0.123
+rush  off    2024      645     133    0.183         0.131
+rush  def    2020      130     127    0.017         0.075
+rush  def    2021      257     127    0.215         0.137
+rush  def    2022      384     130    0.144         0.093
+rush  def    2023      514     131    0.229         0.194
+rush  def    2024      645     133    0.196         0.176
+
+Mean R^2 by unit:
+           r2_full  r2_last_only
+unit side                       
+pass def     0.097         0.114
+     off     0.207         0.159
+rush def     0.160         0.135
+     off     0.154         0.147
+
+Coefficients of the latest fit (target season 2024; per 1 sd of feature):
+
+pass_off
+  last_pass_off                                 +0.0076
+  returning_pct_passing_ppa                     +0.0114
+  returning_pct_receiving_ppa                   +0.0104
+  last_pass_off*returning_pct_passing_ppa       -0.0052
+  last_pass_off*returning_pct_receiving_ppa     +0.0161
+  qb_returning_starter                          -0.0000
+  last_pass_off*qb_returning_starter            +0.0016
+  coach_new                                     -0.0050
+  portal_in_stars                               +0.0087
+  portal_out_stars                              +0.0044
+  talent                                        +0.0080
+  blue_chip_ratio                               +0.0189
+  conf_recruiting                               -0.0187
+  qb_prior_ppa                                  +0.0041
+  conf_prior_off                                -0.0030
+  conf_talent_offense                           +0.0090
+
+pass_def
+  last_pass_def                                 +0.0119
+  def_continuity                                +0.0031
+  last_pass_def*def_continuity                  +0.0036
+  coach_new                                     -0.0027
+  portal_in_stars                               -0.0017
+  portal_out_stars                              -0.0047
+  talent                                        +0.0139
+  blue_chip_ratio                               +0.0054
+  conf_recruiting                               +0.0200
+  conf_prior_def                                -0.0028
+  conf_talent_defense                           -0.0252
+
+rush_off
+  last_rush_off                                 +0.0082
+  returning_pct_rushing_ppa                     +0.0051
+  last_rush_off*returning_pct_rushing_ppa       +0.0082
+  coach_new                                     -0.0023
+  portal_in_stars                               +0.0009
+  portal_out_stars                              +0.0037
+  talent                                        -0.0044
+  blue_chip_ratio                               +0.0116
+  conf_recruiting                               -0.0067
+  qb_prior_ppa                                  +0.0026
+  conf_prior_off                                +0.0015
+  conf_talent_offense                           +0.0036
+
+rush_def
+  last_rush_def                                 -0.0148
+  def_continuity                                -0.0015
+  last_rush_def*def_continuity                  +0.0281
+  coach_new                                     -0.0039
+  portal_in_stars                               -0.0022
+  portal_out_stars                              -0.0034
+  talent                                        +0.0088
+  blue_chip_ratio                               +0.0032
+  conf_recruiting                               +0.0157
+  conf_prior_def                                +0.0003
+  conf_talent_defense                           -0.0175

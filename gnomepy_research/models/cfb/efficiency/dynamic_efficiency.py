@@ -54,12 +54,15 @@ class Hyperparameters:
     s_conf_off: float = 0.0
     s_conf_def: float = 0.0
     conference: bool = False
+    projection: bool = False
 
     def to_dict(self) -> dict:
         d = asdict(self)
         if not self.conference:
             for k in CONFERENCE_FIELDS:
                 d.pop(k)
+        if not self.projection:
+            d.pop("projection")
         for k, v in d.items():
             if isinstance(v, np.ndarray):
                 d[k] = v.tolist()
@@ -171,7 +174,7 @@ def hyperparameters_from(idata: az.InferenceData, data: ModelData, likelihood: s
         tau_def=float(m("tau_def")), sigma_game=float(m("sigma_game")), sigma_play=float(m("sigma_play")),
         nu=float(m("nu")) if likelihood == "studentt" else float("inf"),
         off_names=list(data.off_names), def_names=list(data.def_names), likelihood=likelihood,
-        units=list(data.units),
+        units=list(data.units), projection=data.projection,
         **({"s_conf_off": float(m("s_conf_off")), "s_conf_def": float(m("s_conf_def")), "conference": True}
            if len(data.conf_keys) else {}),
     )
