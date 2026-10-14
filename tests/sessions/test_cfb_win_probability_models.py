@@ -14,7 +14,7 @@ from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
     sample,
 )
 from gnomepy_research.models.cfb.efficiency.inference import HYPER_DIR, Inputs, week_observations
-from gnomepy_research.models.cfb.efficiency.posterior_snapshots import draws_name, form_at
+from gnomepy_research.models.cfb.efficiency.posterior_snapshots import draws_name, form_at, hyper_name, model_version
 from gnomepy_research.models.cfb.efficiency.gaussian_solver import _state_map, fit_cutoff_exact, solve
 from gnomepy_research.models.cfb.features.rush_share import league_rush_share, rush_share
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import (
@@ -184,6 +184,153 @@ def test_exact_solver_matches_mcmc_split():
 def layout_size_matches(lay: dict, d) -> bool:
     n_ts = len(d.ts_keys)
     return lay["size"] == len(d.alpha_keys) + 2 * n_ts + 2 * n_ts * (d.n_periods - 1)
+
+
+CONF = {t: ("A" if t <= 5 else "B") for t in range(1, N_TEAMS + 1)}
+
+
+def with_conferences(games: pd.DataFrame) -> pd.DataFrame:
+    return games.assign(home_conference=games["home_id"].map(CONF), away_conference=games["away_id"].map(CONF))
+
+
+class TestConferenceModelData:
+    def test_default_matches_conference_false(self):
+        games, eff, pre, _, _ = synthetic()
+        games = with_conferences(games)
+        for units in (UNITS_ALL, UNITS_SPLIT):
+            a = build_model_data(pre, eff, games, [SEASON], units=units)
+            b = build_model_data(pre, eff, games, [SEASON], units=units, conference=False)
+            np.testing.assert_array_equal(a.x_off, b.x_off)
+            np.testing.assert_array_equal(a.x_def, b.x_def)
+            assert a.off_names == b.off_names and a.def_names == b.def_names
+            assert len(a.conf_keys) == 0 and len(a.ts_conf) == 0
+
+    def test_conference_index_and_fcs_none(self):
+        games, eff, pre, _, _ = synthetic()
+        d = build_model_data(pre, eff, with_conferences(games), [SEASON], conference=True)
+        assert list(d.conf_keys["conference"]) == ["A", "B", "none"]
+        ts_conf = d.conf_keys["conference"].to_numpy()[d.ts_conf]
+        teams = d.ts_keys["team_id"].to_numpy()
+        for t in range(1, N_TEAMS + 1):
+            assert ts_conf[teams == t][0] == CONF[t]
+        assert ts_conf[teams == FCS_TEAM][0] == "none"
+        assert len(set(d.ts_conf[(teams >= 1) & (teams <= 5)])) == 1
+
+    def test_split_conference_index_is_unit_major(self):
+        games, eff, pre, _, _ = synthetic()
+        d = build_model_data(pre, eff, with_conferences(games), [SEASON], units=UNITS_SPLIT, conference=True)
+        assert list(d.conf_keys["unit"]) == ["pass"] * 3 + ["rush"] * 3
+        assert (d.conf_keys["unit"].to_numpy()[d.ts_conf] == d.ts_keys["unit"].to_numpy()).all()
+        assert len(d.ts_conf) == len(d.ts_keys)
+
+    def test_most_frequent_conference_wins(self):
+        games, eff, pre, _, _ = synthetic()
+        games = with_conferences(games)
+        first = games.index[games["home_id"] == 1][0]
+        games.loc[first, "home_conference"] = "B"
+        d = build_model_data(pre, eff, games, [SEASON], conference=True)
+        assert d.conf_keys["conference"].to_numpy()[d.ts_conf[0]] == "A"
+
+    def test_conference_mean_features(self):
+        games, eff, pre, _, _ = synthetic()
+        pre.loc[pre["team_id"] == 2, "talent_offense"] = np.nan
+        d = build_model_data(pre, eff, with_conferences(games), [SEASON], conference=True)
+        a = pre["team_id"] <= 5
+        raw = np.where(a, np.nanmean(pre.loc[a, "talent_offense"]), np.nanmean(pre.loc[~a, "talent_offense"]))
+        z = (raw - raw.mean()) / raw.std(ddof=1)
+        np.testing.assert_allclose(d.x_off[:N_TEAMS, d.off_names.index("conf_talent_offense")], z)
+        for name in ("conf_prior_off", "conf_talent_offense", "conf_recruiting"):
+            assert name in d.off_names
+        for name in ("conf_prior_def", "conf_talent_defense", "conf_recruiting"):
+            assert name in d.def_names
+        assert d.x_off[N_TEAMS, d.off_names.index("conf_prior_off")] == 0.0
+
+
+def conf_hypers(d) -> Hyperparameters:
+    h = hypers(d)
+    h.likelihood, h.s_conf_off, h.s_conf_def, h.conference = "normal", 0.1, 0.1, True
+    return h
+
+
+def planted_conference(seed: int = 1):
+    games, eff, pre, _, _ = synthetic(seed=seed)
+    in_a = eff["team_id"].map(CONF).eq("A").to_numpy()
+    for col in ("off_ppa", "off_pass_ppa", "off_rush_ppa"):
+        eff.loc[in_a, col] += 0.1
+    return with_conferences(games), eff, pre
+
+
+@pytest.mark.parametrize("units", [UNITS_ALL, UNITS_SPLIT])
+def test_planted_conference_shift_recovered_and_solver_matches_mcmc(units):
+    games, eff, pre = planted_conference()
+    d = build_model_data(pre, eff, games, [SEASON], units=units, conference=True)
+    h = conf_hypers(d)
+    if units == UNITS_SPLIT:
+        h.alpha = np.array([0.15, 0.05])
+    mean, _, lay = solve(d, h)
+    n_c = len(d.conf_keys)
+    assert lay["size"] == len(d.alpha_keys) + 2 * len(d.ts_keys) * d.n_periods + 2 * n_c
+    z_conf = mean[lay["z_conf_off"]:lay["z_conf_off"] + n_c]
+    is_a = (d.conf_keys["conference"] == "A").to_numpy()
+    is_b = (d.conf_keys["conference"] == "B").to_numpy()
+    assert (z_conf[is_a] > z_conf[is_b]).all() and (z_conf[is_a] > 0).all()
+
+    ts = np.arange(len(d.ts_keys))
+    c_off, B_off = _state_map(d, h, lay, ts, np.full(len(ts), d.n_periods - 1), offense=True)
+    exact = c_off + B_off @ mean
+    idata = sample(build_model(d, hypers=h, likelihood="normal"), draws=1000, tune=500, chains=2)
+    post = idata.posterior.to_dataset()
+    np.testing.assert_allclose(exact, post["O"].mean(("chain", "draw")).values[:, -1], atol=0.01)
+    np.testing.assert_allclose(z_conf, post["z_conf_off"].mean(("chain", "draw")).values, atol=0.15)
+
+
+def test_conference_cutoff_fit_exact():
+    games, eff, pre = planted_conference(seed=2)
+    inputs = Inputs(preseason=pre, efficiency=eff, games=games, as_of=pd.Timestamp("2025-01-01", tz="UTC"))
+    d = build_model_data(pre, eff, games, [SEASON], conference=True)
+    post, data = fit_cutoff_exact(inputs, SEASON, d.periods["cutoff"].iloc[-1], conf_hypers(d), n_draws=50)
+    assert len(data.conf_keys) == 3 and post.off.shape == (50, N_TEAMS + 1)
+
+
+def test_default_model_has_no_conference_variables():
+    games, eff, pre, _, _ = synthetic()
+    d = build_model_data(pre, eff, with_conferences(games), [SEASON])
+    m = build_model(d, hypers=hypers(d), likelihood="normal")
+    assert "z_conf_off" not in m.named_vars and "conf" not in m.coords
+    free = build_model(d, likelihood="normal", store_states=False)
+    assert "s_conf_off" not in free.named_vars
+
+
+def test_free_conference_model_has_scale_hyperparameters():
+    games, eff, pre, _, _ = synthetic()
+    d = build_model_data(pre, eff, with_conferences(games), [SEASON], conference=True)
+    m = build_model(d, likelihood="normal", store_states=False)
+    assert {"s_conf_off", "s_conf_def", "z_conf_off", "z_conf_def"} <= set(m.named_vars)
+
+
+def test_conference_hyperparameters_round_trip_and_default_json_unchanged():
+    games, eff, pre, _, _ = synthetic()
+    d = build_model_data(pre, eff, with_conferences(games), [SEASON], conference=True)
+    h = conf_hypers(d)
+    back = Hyperparameters.from_dict(json.loads(json.dumps(h.to_dict())))
+    assert back.conference and back.s_conf_off == 0.1 and back.s_conf_def == 0.1
+    plain = hypers(build_model_data(pre, eff, games, [SEASON]))
+    assert not {"s_conf_off", "s_conf_def", "conference"} & set(plain.to_dict())
+
+
+def test_old_hyperparameter_jsons_load_without_conference():
+    for name in ("normal_2019_2024", "normal_split_2019_2023", "studentt_2019_2022"):
+        h = Hyperparameters.from_dict(json.loads((HYPER_DIR / f"{name}.json").read_text())["hyperparameters"])
+        assert h.conference is False and h.s_conf_off == 0.0 and h.s_conf_def == 0.0
+
+
+def test_conference_naming():
+    assert hyper_name("normal", 2023, UNITS_SPLIT, conference=True) == "normal_split_conf_2019_2022"
+    assert draws_name(2024, UNITS_SPLIT, conference=True) == "cfb_team_week_draws_split_conf_2024"
+    assert model_version(UNITS_SPLIT, conference=True) == "dyn-eff-split-conf-1"
+    assert model_version(UNITS_ALL, conference=True) == "dyn-eff-conf-1"
+    assert hyper_name("normal", 2023, UNITS_SPLIT) == "normal_split_2019_2022"
+    assert draws_name(2024) == "cfb_team_week_draws_2024" and model_version(UNITS_ALL) == "dyn-eff-1"
 
 
 class TestOutcomeModel:

@@ -38,34 +38,37 @@ from gnomepy_research.models.cfb.efficiency.inference import (
 )
 
 SPLIT_SUFFIX = "_split"
+CONF_SUFFIX = "_conf"
 FIRST_TRAIN_SEASON = 2019
 N_DRAWS_KEPT = 400
 DRAWS_DIR = Path(__file__).resolve().parents[3] / "sessions" / "cfb_win_probability" / "results" / "posterior_draws"
 
 
-def _suffix(units: tuple[str, ...]) -> str:
-    return "" if units == UNITS_ALL else SPLIT_SUFFIX
+def _suffix(units: tuple[str, ...], conference: bool = False) -> str:
+    return ("" if units == UNITS_ALL else SPLIT_SUFFIX) + (CONF_SUFFIX if conference else "")
 
 
-def model_version(units: tuple[str, ...]) -> str:
-    return "dyn-eff-1" if units == UNITS_ALL else "dyn-eff-split-1"
+def model_version(units: tuple[str, ...], conference: bool = False) -> str:
+    return f"dyn-eff{_suffix(units, conference).replace('_', '-')}-1"
 
 
 MODEL_VERSION = model_version(UNITS_ALL)
 
 
-def hyper_name(likelihood: str, season: int, units: tuple[str, ...] = UNITS_ALL) -> str:
-    return f"{likelihood}{_suffix(units)}_{FIRST_TRAIN_SEASON}_{season - 1}"
+def hyper_name(likelihood: str, season: int, units: tuple[str, ...] = UNITS_ALL, conference: bool = False) -> str:
+    return f"{likelihood}{_suffix(units, conference)}_{FIRST_TRAIN_SEASON}_{season - 1}"
 
 
-def draws_name(season: int, units: tuple[str, ...] = UNITS_ALL) -> str:
-    return f"cfb_team_week_draws{_suffix(units)}_{season}"
+def draws_name(season: int, units: tuple[str, ...] = UNITS_ALL, conference: bool = False) -> str:
+    return f"cfb_team_week_draws{_suffix(units, conference)}_{season}"
 
 
-def ensure_hyperparameters(inputs: Inputs, likelihood: str, season: int, units: tuple[str, ...] = UNITS_ALL) -> str:
-    name = hyper_name(likelihood, season, units)
+def ensure_hyperparameters(inputs: Inputs, likelihood: str, season: int, units: tuple[str, ...] = UNITS_ALL,
+                           conference: bool = False) -> str:
+    name = hyper_name(likelihood, season, units, conference)
     if not (HYPER_DIR / f"{name}.json").exists():
-        h, diag = fit_hyperparameters(inputs, list(range(FIRST_TRAIN_SEASON, season)), likelihood, units=units)
+        h, diag = fit_hyperparameters(inputs, list(range(FIRST_TRAIN_SEASON, season)), likelihood, units=units,
+                                      conference=conference)
         save_hyperparameters(h, diag, name)
         print(f"fitted {name}: {diag['hyper']}", flush=True)
     return name
@@ -78,8 +81,9 @@ def form_at(form_rows: pd.DataFrame, season: int, cutoff: pd.Timestamp, team_ids
 
 
 def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
-                    out_dir: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL) -> tuple[pd.DataFrame, Path]:
-    name = ensure_hyperparameters(inputs, likelihood, season, units)
+                    out_dir: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL,
+                    conference: bool = False) -> tuple[pd.DataFrame, Path]:
+    name = ensure_hyperparameters(inputs, likelihood, season, units, conference)
     h = load_hyperparameters(name)
     rng = np.random.default_rng(seed)
     summaries, draws = [], {}
@@ -110,10 +114,10 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
                                   divergences=post.diagnostics["divergences"]))
         print(f"{season} {key}: rhat {post.diagnostics['max_rhat']:.3f} div {post.diagnostics['divergences']}", flush=True)
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{draws_name(season, units)}.npz"
+    path = out_dir / f"{draws_name(season, units, conference)}.npz"
     np.savez_compressed(path, **draws)
     out = pd.concat(summaries, ignore_index=True).assign(
-        model_version=model_version(units), hyperparameters=name, likelihood=likelihood,
+        model_version=model_version(units, conference), hyperparameters=name, likelihood=likelihood,
         training_data_version=f"{PRESEASON_FEATURES},{EFFICIENCY}@{inputs.as_of.isoformat()}",
         created_at=datetime.now(timezone.utc).isoformat(),
     )
@@ -121,17 +125,18 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
 
 
 def snapshot_seasons(inputs: Inputs, first: int, last: int, likelihood: str,
-                     out_dir: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL) -> tuple[pd.DataFrame, list[tuple[int, Path]]]:
+                     out_dir: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL,
+                     conference: bool = False) -> tuple[pd.DataFrame, list[tuple[int, Path]]]:
     """The team-week table for seasons first..last, and each season's draws file under out_dir."""
     if first <= FIRST_TRAIN_SEASON:
         raise ValueError(f"first snapshot season must be after {FIRST_TRAIN_SEASON}")
     frames, paths = [], []
     for season in range(first, last + 1):
-        df, path = snapshot_season(inputs, season, likelihood, out_dir=out_dir, units=units)
+        df, path = snapshot_season(inputs, season, likelihood, out_dir=out_dir, units=units, conference=conference)
         frames.append(df)
         paths.append((season, path))
     table = pd.concat(frames, ignore_index=True)
-    table.to_parquet(out_dir / f"cfb_team_week_posterior{_suffix(units)}_{first}_{last}.parquet", index=False)
+    table.to_parquet(out_dir / f"cfb_team_week_posterior{_suffix(units, conference)}_{first}_{last}.parquet", index=False)
     return table, paths
 
 
@@ -142,9 +147,11 @@ def main() -> None:
     ap.add_argument("--likelihood", default="studentt")
     ap.add_argument("--units", choices=["all", "split"], default="all")
     ap.add_argument("--form", action="store_true")
+    ap.add_argument("--conference", action="store_true")
     args = ap.parse_args()
     units = UNITS_ALL if args.units == "all" else UNITS_SPLIT
-    table, _ = snapshot_seasons(Inputs.load(with_form=args.form), args.first, args.last, args.likelihood, units=units)
+    table, _ = snapshot_seasons(Inputs.load(with_form=args.form), args.first, args.last, args.likelihood, units=units,
+                                conference=args.conference)
     print(f"{len(table):,} team-week rows")
 
 

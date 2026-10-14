@@ -29,6 +29,7 @@ import pytensor.tensor as pt
 from gnomepy_research.models.cfb.efficiency.data import ModelData
 
 LIKELIHOODS = ("studentt", "normal")
+CONFERENCE_FIELDS = ("s_conf_off", "s_conf_def", "conference")
 
 
 @dataclass
@@ -50,9 +51,15 @@ class Hyperparameters:
     def_names: list[str]
     likelihood: str
     units: list[str] = field(default_factory=lambda: ["all"])
+    s_conf_off: float = 0.0
+    s_conf_def: float = 0.0
+    conference: bool = False
 
     def to_dict(self) -> dict:
         d = asdict(self)
+        if not self.conference:
+            for k in CONFERENCE_FIELDS:
+                d.pop(k)
         for k, v in d.items():
             if isinstance(v, np.ndarray):
                 d[k] = v.tolist()
@@ -75,9 +82,12 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
     if likelihood not in LIKELIHOODS:
         raise ValueError(likelihood)
     n_ts, n_k = len(data.ts_keys), data.n_periods
+    has_conf = len(data.conf_keys) > 0
     coords = {"ts": np.arange(n_ts), "period": np.arange(n_k), "step": np.arange(n_k - 1), "alpha_group": np.arange(len(data.alpha_keys)), "unit": list(data.units),
               
               "f_off": data.off_names, "f_def": data.def_names, "unc": np.arange(data.z_unc.shape[1])}
+    if has_conf:
+        coords["conf"] = np.arange(len(data.conf_keys))
     with pm.Model(coords=coords) as model:
         if hypers is None:
             alpha = pm.Normal("alpha", 0.1, 0.1, dims="unit")
@@ -93,6 +103,9 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
             sigma_game = pm.HalfNormal("sigma_game", 0.2)
             sigma_play = pm.HalfNormal("sigma_play", 1.5)
             nu = pm.Gamma("nu", 2.0, 0.1) if likelihood == "studentt" else None
+            if has_conf:
+                s_conf_off = pm.HalfNormal("s_conf_off", 0.05)
+                s_conf_def = pm.HalfNormal("s_conf_def", 0.05)
         else:
             h = hypers
             alpha, sigma_alpha, hfa = pt.as_tensor_variable(np.asarray(h.alpha, dtype=float)), h.sigma_alpha, h.hfa
@@ -100,6 +113,7 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
                                          pt.as_tensor_variable(h.gamma))
             s_off, s_def, tau_off, tau_def = h.s_off, h.s_def, h.tau_off, h.tau_def
             sigma_game, sigma_play, nu = h.sigma_game, h.sigma_play, h.nu
+            s_conf_off, s_conf_def = h.s_conf_off, h.s_conf_def
 
         group_unit = data.alpha_keys["unit"].map({u: i for i, u in enumerate(data.units)}).to_numpy(int)
         z_alpha = pm.Normal("z_alpha", 0.0, 1.0, dims="alpha_group")
@@ -115,6 +129,11 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
 
         start_off = prior_off + s_off * widen * z0_off
         start_def = prior_def + s_def * widen * z0_def
+        if has_conf:
+            z_conf_off = pm.Normal("z_conf_off", 0.0, 1.0, dims="conf")
+            z_conf_def = pm.Normal("z_conf_def", 0.0, 1.0, dims="conf")
+            start_off = start_off + s_conf_off * z_conf_off[data.ts_conf]
+            start_def = start_def + s_conf_def * z_conf_def[data.ts_conf]
         walk_off = pt.concatenate([pt.zeros((n_ts, 1)), pt.cumsum(tau_off * eps_off, axis=1)], axis=1)
         walk_def = pt.concatenate([pt.zeros((n_ts, 1)), pt.cumsum(tau_def * eps_def, axis=1)], axis=1)
         off = start_off[:, None] + walk_off
@@ -153,6 +172,8 @@ def hyperparameters_from(idata: az.InferenceData, data: ModelData, likelihood: s
         nu=float(m("nu")) if likelihood == "studentt" else float("inf"),
         off_names=list(data.off_names), def_names=list(data.def_names), likelihood=likelihood,
         units=list(data.units),
+        **({"s_conf_off": float(m("s_conf_off")), "s_conf_def": float(m("s_conf_def")), "conference": True}
+           if len(data.conf_keys) else {}),
     )
 
 

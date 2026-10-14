@@ -29,6 +29,7 @@ from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
 HYPER_DIR = Path(__file__).resolve().parent.parent / "hyperparameters"
 HYPER_VARS = ["alpha", "sigma_alpha", "hfa", "beta_off", "beta_def", "gamma", "s_off", "s_def", "tau_off",
               "tau_def", "sigma_game", "sigma_play"]
+CONF_HYPER_VARS = ["s_conf_off", "s_conf_def"]
 PRESEASON_FEATURES = "cfb_team_preseason_features"
 EFFICIENCY = "cfb_team_game_efficiency"
 GAMES = "cfb_games"
@@ -97,11 +98,13 @@ def hyper_cutoff(inputs: Inputs, last_train_season: int) -> pd.Timestamp:
 
 def fit_hyperparameters(inputs: Inputs, seasons: list[int], likelihood: str, draws: int = 1000,
                         tune: int = 1500, seed: int = 0,
-                        units: tuple[str, ...] = UNITS_ALL) -> tuple[Hyperparameters, dict]:
+                        units: tuple[str, ...] = UNITS_ALL,
+                        conference: bool = False) -> tuple[Hyperparameters, dict]:
     cutoff = hyper_cutoff(inputs, max(seasons))
-    data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, seasons, units=units)
+    data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, seasons, units=units,
+                            conference=conference)
     idata = sample(build_model(data, likelihood=likelihood, store_states=False), draws=draws, tune=tune, seed=seed)
-    hv = HYPER_VARS + (["nu"] if likelihood == "studentt" else [])
+    hv = HYPER_VARS + (["nu"] if likelihood == "studentt" else []) + (CONF_HYPER_VARS if conference else [])
     diag = {"hyper": diagnostics(idata, hv), "states": diagnostics(idata, ["z0_off", "z0_def"]),
             "seasons": seasons, "cutoff": str(cutoff), "n_obs": int(len(data.obs_y))}
     return hyperparameters_from(idata, data, likelihood), diag
@@ -121,7 +124,7 @@ def load_hyperparameters(name: str) -> Hyperparameters:
 def fit_cutoff(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: Hyperparameters,
                draws: int = 500, tune: int = 500, seed: int = 0) -> tuple[CutoffPosterior, ModelData]:
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, [season],
-                            units=tuple(hypers.units))
+                            units=tuple(hypers.units), conference=hypers.conference)
     idata = sample(build_model(data, hypers=hypers, likelihood=hypers.likelihood), draws=draws, tune=tune, seed=seed)
     period = int(data.periods.loc[data.periods["cutoff"] == cutoff, "period"].iloc[0])
     post = idata.posterior.to_dataset().stack(sample=("chain", "draw"))
@@ -132,7 +135,8 @@ def fit_cutoff(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: Hyperp
         season=season, cutoff=cutoff, period=period, team_ids=data.ts_keys["team_id"].to_numpy(),
         units=data.ts_keys["unit"].to_numpy(),
         off=off, de=de, alpha=alpha, hypers=hypers,
-        diagnostics=diagnostics(idata, ["z0_off", "z0_def", "eps_off", "eps_def", "z_alpha"]),
+        diagnostics=diagnostics(idata, ["z0_off", "z0_def", "eps_off", "eps_def", "z_alpha"]
+                                + (["z_conf_off", "z_conf_def"] if hypers.conference else [])),
     ), data
 
 

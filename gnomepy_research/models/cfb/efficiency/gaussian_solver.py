@@ -26,7 +26,9 @@ def _layout(data: ModelData) -> dict[str, int]:
     lay["z0_def"] = lay["z0_off"] + n_ts
     lay["eps_off"] = lay["z0_def"] + n_ts
     lay["eps_def"] = lay["eps_off"] + n_ts * (n_k - 1)
-    lay["size"] = lay["eps_def"] + n_ts * (n_k - 1)
+    lay["z_conf_off"] = lay["eps_def"] + n_ts * (n_k - 1)
+    lay["z_conf_def"] = lay["z_conf_off"] + len(data.conf_keys)
+    lay["size"] = lay["z_conf_def"] + len(data.conf_keys)
     return lay
 
 
@@ -34,12 +36,15 @@ def _state_map(data: ModelData, h: Hyperparameters, lay: dict[str, int], ts: np.
                offense: bool) -> tuple[np.ndarray, np.ndarray]:
     """Rows expressing O[ts, k] (or D) as prior mean + B @ theta."""
     n_ts, n_k = len(data.ts_keys), data.n_periods
-    x, beta, s, tau, z0, eps = ((data.x_off, h.beta_off, h.s_off, h.tau_off, "z0_off", "eps_off") if offense
-                                else (data.x_def, h.beta_def, h.s_def, h.tau_def, "z0_def", "eps_def"))
+    x, beta, s, tau, z0, eps, zc, s_conf = (
+        (data.x_off, h.beta_off, h.s_off, h.tau_off, "z0_off", "eps_off", "z_conf_off", h.s_conf_off) if offense
+        else (data.x_def, h.beta_def, h.s_def, h.tau_def, "z0_def", "eps_def", "z_conf_def", h.s_conf_def))
     widen = np.exp(data.z_unc @ h.gamma)
     B = np.zeros((len(ts), lay["size"]))
     rows = np.arange(len(ts))
     B[rows, lay[z0] + ts] = s * widen[ts]
+    if len(data.conf_keys):
+        B[rows, lay[zc] + data.ts_conf[ts]] = s_conf
     for r, (i, kk) in enumerate(zip(ts, k)):
         if kk > 0:
             B[r, lay[eps] + i * (n_k - 1): lay[eps] + i * (n_k - 1) + kk] = tau
@@ -69,7 +74,7 @@ def fit_cutoff_exact(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: 
     if hypers.likelihood != "normal":
         raise ValueError("the exact solver is only valid for the Gaussian likelihood")
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, [season],
-                            units=tuple(hypers.units))
+                            units=tuple(hypers.units), conference=hypers.conference)
     mean, chol, lay = solve(data, hypers)
     rng = np.random.default_rng(seed)
     # theta = mean + L^-T z, with P = L L^T, gives draws with covariance P^-1.

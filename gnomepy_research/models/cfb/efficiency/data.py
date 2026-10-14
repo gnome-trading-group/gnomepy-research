@@ -7,7 +7,7 @@ Index spaces:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -25,10 +25,20 @@ DEF_FEATURES = [
 ]
 # Flags that widen the preseason prior: less is known about a team that changed a lot.
 UNCERTAINTY_FLAGS = ["coach_new", "qb_not_returning", "prior_missing"]
+CONF_OFF_FEATURES = ["conf_prior_off", "conf_talent_offense", "conf_recruiting"]
+CONF_DEF_FEATURES = ["conf_prior_def", "conf_talent_defense", "conf_recruiting"]
+CONF_SOURCES = {"conf_prior_off": "prior_off_rating", "conf_prior_def": "prior_def_rating",
+                "conf_talent_offense": "talent_offense", "conf_talent_defense": "talent_defense",
+                "conf_recruiting": "recruiting_points"}
+NO_CONFERENCE = "none"
 UNITS_ALL = ("all",)
 UNITS_SPLIT = ("pass", "rush")
 UNIT_COLUMNS = {"all": ("plays", "off_ppa"), "pass": ("pass_plays", "off_pass_ppa"),
                 "rush": ("rush_plays", "off_rush_ppa")}
+
+
+def _empty_conf_keys() -> pd.DataFrame:
+    return pd.DataFrame(columns=["season", "conference", "unit"])
 
 
 @dataclass
@@ -54,6 +64,8 @@ class ModelData:
     alpha_keys: pd.DataFrame       # (season, unit) per intercept index
     obs_alpha: np.ndarray          # (N,) intercept index
     obs_unit: np.ndarray           # (N,) index into `units`
+    conf_keys: pd.DataFrame = field(default_factory=_empty_conf_keys)  # (season, conference, unit), unit-major
+    ts_conf: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=int))  # (TS,) index into conf_keys
 
 
 def season_periods(games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
@@ -83,6 +95,29 @@ def _standardize(pre: pd.DataFrame, cols: list[str]) -> tuple[pd.DataFrame, list
     return out, names
 
 
+def team_conferences(games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
+    """Each team-season's most frequent conference over that season's games (ties: alphabetical)."""
+    g = games[games["season"].isin(seasons)]
+    rows = pd.concat([
+        g[["season", "home_id", "home_conference"]].set_axis(["season", "team_id", "conference"], axis=1),
+        g[["season", "away_id", "away_conference"]].set_axis(["season", "team_id", "conference"], axis=1),
+    ]).dropna(subset=["conference"])
+    counts = rows.groupby(["season", "team_id", "conference"]).size().rename("n").reset_index()
+    counts = counts.sort_values(["season", "team_id", "n", "conference"], ascending=[True, True, False, True])
+    return counts.drop_duplicates(["season", "team_id"])[["season", "team_id", "conference"]]
+
+
+def _with_conference_means(pre: pd.DataFrame, games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
+    pre = pre.merge(team_conferences(games, seasons), on=["season", "team_id"], how="left")
+    pre["conference"] = pre["conference"].fillna(NO_CONFERENCE)
+    for col, src in CONF_SOURCES.items():
+        v = pre[src].astype(float)
+        conf_mean = v.groupby([pre["season"], pre["conference"]]).transform("mean")
+        season_mean = v.groupby(pre["season"]).transform("mean")
+        pre[col] = np.where(pre["conference"] == NO_CONFERENCE, season_mean, conf_mean)
+    return pre
+
+
 def _block(x: np.ndarray, u: int, n_units: int) -> np.ndarray:
     out = np.zeros((x.shape[0], x.shape[1] * n_units))
     out[:, u * x.shape[1]:(u + 1) * x.shape[1]] = x
@@ -94,13 +129,17 @@ def _unit_names(names: list[str], units: tuple[str, ...]) -> list[str]:
 
 
 def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: pd.DataFrame,
-                     seasons: list[int], units: tuple[str, ...] = UNITS_ALL) -> ModelData:
+                     seasons: list[int], units: tuple[str, ...] = UNITS_ALL, conference: bool = False) -> ModelData:
     """`efficiency` must already be point-in-time filtered (as_of the fit's cutoff)."""
     pre = preseason[preseason["season"].isin(seasons)].sort_values(["season", "team_id"]).reset_index(drop=True)
     pre["qb_returning_starter"] = pre["qb_returning_starter"].astype(float)
     pre["coach_new"] = pre["coach_new"].astype(float)
-    xo, off_names = _standardize(pre, OFF_FEATURES)
-    xd, def_names = _standardize(pre, DEF_FEATURES)
+    off_cols, def_cols = OFF_FEATURES, DEF_FEATURES
+    if conference:
+        pre = _with_conference_means(pre, games, seasons)
+        off_cols, def_cols = OFF_FEATURES + CONF_OFF_FEATURES, DEF_FEATURES + CONF_DEF_FEATURES
+    xo, off_names = _standardize(pre, off_cols)
+    xd, def_names = _standardize(pre, def_cols)
 
     fcs = pd.DataFrame({"season": seasons, "team_id": FCS_TEAM})
     base_keys = pd.concat([pre[["season", "team_id"]], fcs], ignore_index=True)
@@ -125,6 +164,16 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
     x_def = np.vstack([_block(base_x_def, i, n_u) for i in range(n_u)])
     z_unc = np.vstack([base_z] * n_u)
     alpha_keys = pd.DataFrame([(s, u) for u in units for s in seasons], columns=["season", "unit"])
+    conf_keys = _empty_conf_keys()
+    ts_conf = np.zeros(0, dtype=int)
+    if conference:
+        base_conf = np.r_[pre["conference"].to_numpy(object), np.full(len(seasons), NO_CONFERENCE, dtype=object)]
+        sc = pd.DataFrame({"season": base_keys["season"], "conference": base_conf})
+        uniq = sc.drop_duplicates().sort_values(["season", "conference"]).reset_index(drop=True)
+        conf_keys = pd.concat([uniq.assign(unit=u) for u in units], ignore_index=True)
+        c_idx = {k: i for i, k in enumerate(zip(uniq["season"], uniq["conference"]))}
+        base_ts_conf = np.array([c_idx[k] for k in zip(sc["season"], sc["conference"])], dtype=int)
+        ts_conf = np.concatenate([base_ts_conf + i * len(uniq) for i in range(n_u)])
     a_idx = {(s, u): i for i, (s, u) in enumerate(zip(alpha_keys["season"], alpha_keys["unit"]))}
 
     periods = season_periods(games, seasons)
@@ -161,4 +210,5 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
         obs_venue=obs["venue"].to_numpy(float), obs_plays=obs["plays"].to_numpy(float), obs_y=obs["y"].to_numpy(float),
         obs_game=obs["game"].to_numpy(), obs_season=obs["season"].to_numpy(int), seasons=list(seasons), periods=periods,
         units=tuple(units), alpha_keys=alpha_keys, obs_alpha=obs["alpha"].to_numpy(int), obs_unit=obs["unit"].to_numpy(int),
+        conf_keys=conf_keys, ts_conf=ts_conf,
     )
