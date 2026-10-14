@@ -91,3 +91,5 @@ qb_delta_diff distribution (test games):
 games with |qb_delta_diff| > 0.05: 448 of 1590
 
 D - C paired log loss on that subset (negative = D better): {'diff': -0.0014, 'se': 0.0048, 'lo95': -0.0114, 'hi95': 0.0079, 'p_a_worse': 0.3785}
+
+Starters are the actual first passer of each game (ex-post); this is an upper bound on what pregame QB news can deliver.

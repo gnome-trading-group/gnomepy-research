@@ -75,8 +75,16 @@ def qb_deltas(src_full: SourceData, games: pd.DataFrame, starters: pd.DataFrame)
 OVERRIDE_COLUMNS = ["game_id", "team_id", "qb_id", "recorded_at"]
 
 
+def _blank(v) -> bool:
+    return pd.isna(v) or not str(v).strip()
+
+
+def _truthy(v) -> bool:
+    return not pd.isna(v) and str(v).strip().lower() in {"1", "true", "yes"}
+
+
 def load_qb_status(path: Path, src_full: SourceData) -> pd.DataFrame:
-    raw = pd.read_csv(path, dtype={"season_type": str, "team": str, "passer_key": str})
+    raw = pd.read_csv(path, dtype={"season_type": str, "team": str, "passer_key": str, "allow_unknown": str})
     if raw.empty:
         return pd.DataFrame({"game_id": pd.Series(dtype="int64"), "team_id": pd.Series(dtype="int64"),
                              "qb_id": pd.Series(dtype="string"),
@@ -90,6 +98,8 @@ def load_qb_status(path: Path, src_full: SourceData) -> pd.DataFrame:
         if team not in ids:
             raise ValueError(f"qb_status row {n}: unknown team {team!r}")
         team_id = int(ids[team])
+        if _blank(r.passer_key) or _blank(r.season_type):
+            raise ValueError(f"qb_status row {n}: passer_key and season_type must be non-blank (team {team!r})")
         hit = games[(games["season"] == r.season) & (games["season_type"] == r.season_type.strip())
                     & (games["week"] == r.week) & ((games["home_id"] == team_id) | (games["away_id"] == team_id))]
         if len(hit) != 1:
@@ -97,7 +107,13 @@ def load_qb_status(path: Path, src_full: SourceData) -> pd.DataFrame:
                              f"{r.season} {r.season_type} week {r.week}, expected 1")
         key = r.passer_key.strip().lower()
         match = keys[(keys["season"] == r.season) & (keys["team_id"] == team_id) & (keys["passer_key"] == key)]
-        qb_id = str(match["player_id"].iloc[0]) if len(match) else f"t{team_id}:{key}"
+        if len(match):
+            qb_id = str(match["player_id"].iloc[0])
+        elif _truthy(getattr(r, "allow_unknown", None)):
+            qb_id = f"t{team_id}:{key}"
+        else:
+            raise ValueError(f"qb_status row {n}: passer_key {key!r} is not on the {r.season} roster of {team!r}; "
+                             f"set allow_unknown=1 to use a synthetic id")
         rows.append({"game_id": int(hit["game_id"].iloc[0]), "team_id": team_id, "qb_id": qb_id,
                      "recorded_at": pd.Timestamp(r.recorded_at, tz="UTC") if pd.Timestamp(r.recorded_at).tzinfo is None
                      else pd.Timestamp(r.recorded_at).tz_convert("UTC")})

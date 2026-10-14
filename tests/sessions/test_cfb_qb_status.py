@@ -112,7 +112,7 @@ def test_historical_starters_are_first_passers():
     assert s[(1, 10)] == "1"
 
 
-HEADER = "season,season_type,week,team,passer_key,recorded_at\n"
+HEADER = "season,season_type,week,team,passer_key,recorded_at,allow_unknown\n"
 
 
 def write_csv(tmp_path: Path, body: str) -> Path:
@@ -122,19 +122,45 @@ def write_csv(tmp_path: Path, body: str) -> Path:
 
 
 def test_unknown_team_raises_with_name(tmp_path):
-    p = write_csv(tmp_path, "2024,regular,3,Nowhere St,j.doe,2024-09-13T12:00Z\n")
+    p = write_csv(tmp_path, "2024,regular,3,Nowhere St,j.doe,2024-09-13T12:00Z,\n")
     with pytest.raises(ValueError, match="Nowhere St"):
         load_qb_status(p, make_source())
 
 
 def test_rostered_passer_gets_player_id_and_unknown_gets_synthetic(tmp_path):
-    p = write_csv(tmp_path, "2024,regular,3,T10, A.Bee ,2024-09-13T12:00Z\n2024,regular,3,T40,j.doe,2024-09-13T12:00Z\n")
+    p = write_csv(tmp_path, "2024,regular,3,T10, A.Bee ,2024-09-13T12:00Z,\n2024,regular,3,T40,j.doe,2024-09-13T12:00Z,1\n")
     out = load_qb_status(p, make_source()).set_index("team_id")["qb_id"]
     assert out[10] == "1" and out[40] == "t40:j.doe"
 
 
+def test_csv_without_allow_unknown_column_still_loads(tmp_path):
+    p = tmp_path / "qb.csv"
+    p.write_text("season,season_type,week,team,passer_key,recorded_at\n2024,regular,3,T10,a.bee,2024-09-13T12:00Z\n")
+    assert load_qb_status(p, make_source())["qb_id"].tolist() == ["1"]
+
+
+def test_blank_passer_key_raises_with_row_number(tmp_path):
+    p = write_csv(tmp_path, "2024,regular,3,T10,a.bee,2024-09-13T12:00Z,\n2024,regular,3,T10, ,2024-09-13T12:00Z,\n")
+    with pytest.raises(ValueError, match=r"row 2.*T10"):
+        load_qb_status(p, make_source())
+
+
+def test_nan_season_type_raises_with_row_number(tmp_path):
+    p = write_csv(tmp_path, "2024,,3,T10,a.bee,2024-09-13T12:00Z,\n")
+    with pytest.raises(ValueError, match=r"row 1.*T10"):
+        load_qb_status(p, make_source())
+
+
+def test_unknown_key_raises_unless_allowed(tmp_path):
+    p = write_csv(tmp_path, "2024,regular,3,T10,a.beee,2024-09-13T12:00Z,\n")
+    with pytest.raises(ValueError, match=r"row 1.*a.beee"):
+        load_qb_status(p, make_source())
+    p = write_csv(tmp_path, "2024,regular,3,T10,a.beee,2024-09-13T12:00Z,1\n")
+    assert load_qb_status(p, make_source())["qb_id"].tolist() == ["t10:a.beee"]
+
+
 def test_override_for_upcoming_game_has_game_id_and_utc_time(tmp_path):
-    p = write_csv(tmp_path, "2024,regular,3,T10,a.bee,2024-09-13T12:00Z\n")
+    p = write_csv(tmp_path, "2024,regular,3,T10,a.bee,2024-09-13T12:00Z,\n")
     out = load_qb_status(p, make_source())
     assert list(out.columns) == ["game_id", "team_id", "qb_id", "recorded_at"]
     assert out.loc[0, "game_id"] == 3 and out.loc[0, "recorded_at"] == ts("2024-09-13 12:00")
@@ -146,13 +172,13 @@ def test_empty_csv_loads_empty_frame(tmp_path):
 
 
 def test_duplicate_game_team_keeps_latest_recorded(tmp_path):
-    p = write_csv(tmp_path, "2024,regular,3,T10,x.old,2024-09-10T12:00Z\n2024,regular,3,T10,y.new,2024-09-12T12:00Z\n")
+    p = write_csv(tmp_path, "2024,regular,3,T10,x.old,2024-09-10T12:00Z,1\n2024,regular,3,T10,y.new,2024-09-12T12:00Z,1\n")
     out = load_qb_status(p, make_source())
     assert out["qb_id"].tolist() == ["t10:y.new"]
 
 
 def test_missing_game_raises_with_row_number(tmp_path):
-    p = write_csv(tmp_path, "2024,regular,3,T10,a.bee,2024-09-13T12:00Z\n2024,regular,9,T10,a.bee,2024-09-13T12:00Z\n")
+    p = write_csv(tmp_path, "2024,regular,3,T10,a.bee,2024-09-13T12:00Z,\n2024,regular,9,T10,a.bee,2024-09-13T12:00Z,\n")
     with pytest.raises(ValueError, match=r"row 2.*T10"):
         load_qb_status(p, make_source())
 
@@ -161,7 +187,7 @@ def test_ambiguous_game_raises_with_row_number(tmp_path):
     src = make_source()
     dup = src.games[src.games["game_id"] == 3].assign(game_id=99, away_id=50, away_team="T50")
     src = replace(src, games=pd.concat([src.games, dup], ignore_index=True))
-    p = write_csv(tmp_path, "2024,regular,3,T10,a.bee,2024-09-13T12:00Z\n")
+    p = write_csv(tmp_path, "2024,regular,3,T10,a.bee,2024-09-13T12:00Z,\n")
     with pytest.raises(ValueError, match=r"row 1.*T10"):
         load_qb_status(p, src)
 

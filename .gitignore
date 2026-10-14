@@ -110,3 +110,4 @@ cython_debug/
 *.html
 *.npz
 .superpowers/
+catboost_info/

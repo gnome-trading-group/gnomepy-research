@@ -74,7 +74,7 @@ def ensure_hyperparameters(inputs: Inputs, likelihood: str, season: int, units: 
 def form_at(form_rows: pd.DataFrame, season: int, cutoff: pd.Timestamp, team_ids: np.ndarray) -> np.ndarray:
     visible = form_rows[(form_rows["available_at"] < cutoff) & (form_rows["season"] == season)]
     f = team_form(with_luck(visible), season) if len(visible) else pd.DataFrame(columns=FORM_FEATURES)
-    return f.reindex(team_ids).fillna(0.0)[FORM_FEATURES].to_numpy(np.float32)
+    return f.reindex(team_ids)[FORM_FEATURES].astype(float).fillna(0.0).to_numpy(np.float32)
 
 
 def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,

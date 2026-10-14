@@ -43,7 +43,7 @@ def run(seasons: list[int], multipliers: tuple[float, ...] = MULTIPLIERS) -> pd.
                 obs = week_observations(inputs, post, data)
                 if obs.empty:
                     continue
-                mu = (post.alpha[:, None] + post.off[:, obs["off_idx"].to_numpy()]
+                mu = (post.alpha[:, obs["alpha_idx"].to_numpy()] + post.off[:, obs["off_idx"].to_numpy()]
                       - post.de[:, obs["def_idx"].to_numpy()] + h.hfa * obs["venue"].to_numpy()[None, :]).mean(0)
                 rows.append(pd.DataFrame({
                     "season": season, "season_type": p.season_type, "week": p.week, "multiplier": m,

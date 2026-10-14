@@ -76,13 +76,16 @@ class CutoffPosterior:
 
     def summary(self) -> pd.DataFrame:
         units = list(pd.unique(self.units))
-        return pd.DataFrame({
-            "season": self.season, "cutoff": self.cutoff, "team_id": self.team_ids, "unit": self.units,
+        out = pd.DataFrame({
+            "season": self.season, "cutoff": self.cutoff, "team_id": self.team_ids,
             "offense_mean": self.off.mean(0), "offense_sd": self.off.std(0),
             "defense_mean": self.de.mean(0), "defense_sd": self.de.std(0),
             "od_corr": [np.corrcoef(self.off[:, i], self.de[:, i])[0, 1] for i in range(len(self.team_ids))],
             "alpha_mean": [float(self.alpha[:, units.index(u)].mean()) for u in self.units],
         })
+        if units != ["all"]:
+            out.insert(3, "unit", self.units)
+        return out
 
 
 def hyper_cutoff(inputs: Inputs, last_train_season: int) -> pd.Timestamp:

@@ -36,7 +36,7 @@ RESULTS = Path(__file__).resolve().parent.parent / "results" / "efficiency_valid
 
 def pit(post, obs: pd.DataFrame) -> np.ndarray:
     h = post.hypers
-    mu = (post.alpha[:, None] + post.off[:, obs["off_idx"].to_numpy()] - post.de[:, obs["def_idx"].to_numpy()]
+    mu = (post.alpha[:, obs["alpha_idx"].to_numpy()] + post.off[:, obs["off_idx"].to_numpy()] - post.de[:, obs["def_idx"].to_numpy()]
           + h.hfa * obs["venue"].to_numpy()[None, :])
     sigma = np.sqrt(h.sigma_game ** 2 + h.sigma_play ** 2 / obs["plays"].to_numpy())[None, :]
     y = obs["off_ppa"].to_numpy()[None, :]

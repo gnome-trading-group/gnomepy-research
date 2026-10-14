@@ -168,10 +168,14 @@ def report(df: pd.DataFrame, metas: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
+QB_CAVEAT = ("Starters are the actual first passer of each game (ex-post); "
+             "this is an upper bound on what pregame QB news can deliver.")
+
+
 def qb_report(df: pd.DataFrame, qb: pd.DataFrame, base: str = "C") -> str:
     d = df.merge(qb.assign(qb_delta_diff=qb["home_qb_delta"] - qb["away_qb_delta"])[["game_id", "qb_delta_diff"]],
                  on="game_id", how="left").fillna({"qb_delta_diff": 0.0})
-    lines = ["qb_delta_diff distribution (test games):\n"
+    lines = [QB_CAVEAT, "qb_delta_diff distribution (test games):\n"
              + d["qb_delta_diff"].quantile([0, .01, .05, .25, .5, .75, .95, .99, 1]).round(4).to_string()]
     ref = pd.read_parquet(RESULTS / f"predictions_{'_'.join(map(str, sorted(d['season'].unique())))}_C.parquet")
     sub = d[d["qb_delta_diff"].abs() > QB_THRESHOLD].merge(ref[["game_id", "p_home"]].rename(columns={"p_home": "p_c"}),

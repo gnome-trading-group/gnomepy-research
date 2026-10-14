@@ -13,7 +13,7 @@ from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
     build_model,
     sample,
 )
-from gnomepy_research.models.cfb.efficiency.inference import HYPER_DIR, Inputs
+from gnomepy_research.models.cfb.efficiency.inference import HYPER_DIR, Inputs, week_observations
 from gnomepy_research.models.cfb.efficiency.posterior_snapshots import draws_name, form_at
 from gnomepy_research.models.cfb.efficiency.gaussian_solver import _state_map, fit_cutoff_exact, solve
 from gnomepy_research.models.cfb.features.rush_share import league_rush_share, rush_share
@@ -274,6 +274,38 @@ def test_split_cutoff_posterior_shapes():
     assert post.alpha.shape == (200, 2)
     s = post.summary()
     assert set(s["unit"]) == {"pass", "rush"} and len(s) == 2 * (N_TEAMS + 1)
+
+
+MAIN_SUMMARY_COLUMNS = ["season", "cutoff", "team_id", "offense_mean", "offense_sd", "defense_mean", "defense_sd", "od_corr"]
+MAIN_SNAPSHOT_ASSIGNED = ["games_observed", "plays_observed", "season_type", "week", "period", "alpha_mean",
+                          "max_rhat", "divergences"]
+
+
+def test_default_units_summary_columns_match_main():
+    games, eff, pre, _, _ = synthetic(seed=2)
+    inputs = Inputs(preseason=pre, efficiency=eff, games=games, as_of=pd.Timestamp("2025-01-01", tz="UTC"))
+    d = build_model_data(pre, eff, games, [SEASON])
+    h = hypers(d)
+    h.likelihood = "normal"
+    post, _ = fit_cutoff_exact(inputs, SEASON, d.periods["cutoff"].iloc[-1], h, n_draws=50)
+    cols = list(post.summary().columns)
+    assert "unit" not in cols
+    assert set(cols) == set(MAIN_SUMMARY_COLUMNS) | {"alpha_mean"}
+    assert set(cols) | {"games_observed", "plays_observed", "season_type", "week", "period", "max_rhat",
+                        "divergences"} == set(MAIN_SUMMARY_COLUMNS) | set(MAIN_SNAPSHOT_ASSIGNED)
+
+
+def test_week_observation_alpha_indexing_is_per_observation():
+    games, eff, pre, _, _ = synthetic(seed=2)
+    inputs = Inputs(preseason=pre, efficiency=eff, games=games, as_of=pd.Timestamp("2025-01-01", tz="UTC"))
+    d = build_model_data(pre, eff, games, [SEASON], units=UNITS_SPLIT)
+    h = hypers(d)
+    h.likelihood = "normal"
+    h.alpha = np.array([0.15, 0.05])
+    post, data = fit_cutoff_exact(inputs, SEASON, d.periods["cutoff"].iloc[-2], h, n_draws=20)
+    obs = week_observations(inputs, post, data)
+    mu = post.alpha[:, obs["alpha_idx"].to_numpy()] + post.off[:, obs["off_idx"].to_numpy()]
+    assert mu.shape == (20, len(obs))
 
 
 class TestEdgeTerms:

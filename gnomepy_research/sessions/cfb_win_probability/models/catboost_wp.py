@@ -21,7 +21,8 @@ from gnomepy_research.sessions.cfb_win_probability.models.win_probability import
 RATINGS = ["o_pass", "o_rush", "d_pass", "d_rush"]
 TEAM_FEATURES = [*RATINGS, *(f"{r}_sd" for r in RATINGS), "rush_share", *FORM_FEATURES]
 MATCHUPS = ["pass_matchup_h", "rush_matchup_h", "pass_matchup_a", "rush_matchup_a"]
-PARAMS = dict(loss_function="Logloss", depth=4, learning_rate=0.03, l2_leaf_reg=10, iterations=3000, verbose=False)
+PARAMS = dict(loss_function="Logloss", depth=4, learning_rate=0.03, l2_leaf_reg=10, iterations=3000, verbose=False,
+              allow_writing_files=False)
 
 
 def game_features(games: pd.DataFrame, seasons: list[int], directory: Path = DRAWS_DIR) -> pd.DataFrame:
