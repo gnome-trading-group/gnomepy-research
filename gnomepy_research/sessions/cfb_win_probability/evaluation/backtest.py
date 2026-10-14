@@ -29,6 +29,8 @@ from gnomepy_research.sessions.cfb_win_probability.evaluation.metrics import pai
 from gnomepy_research.sessions.cfb_win_probability.models.catboost_wp import fit_catboost, game_features
 from gnomepy_research.sessions.cfb_win_probability.models.residual_wp import (
     FEATURE_SETS, GRID_DEPTHS, GRID_PARAMS, attach_baseline, c_baseline, fit_residual, sigmoid)
+from gnomepy_research.sessions.cfb_win_probability.models.tail_calibrator import (
+    TailCalibrator, bootstrap_ci, fit_tail_calibrator)
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import (
     N_FIT_DRAWS, apply_recal, cross_fitted_recal, fit, fit_margin, game_draws, physical_match_rate)
 
@@ -55,11 +57,15 @@ MODEL_CONFIGS["J0"] = {**MODEL_CONFIGS["G"], "j_features": True}
 MODEL_CONFIGS["J"] = {**MODEL_CONFIGS["G"], "j_features": True, "drives": True}
 MODEL_CONFIGS["K"] = {**MODEL_CONFIGS["G"], "drives": True, "independents_separate": True, "phase": True}
 MODEL_CONFIGS["L"] = {**MODEL_CONFIGS["K"], "tau_phases": True, "exclude_terms": ["bowl_edge"]}
+MODEL_CONFIGS["Kc"] = {**MODEL_CONFIGS["K"], "calibrator": "tail", "calibrator_base": "K"}
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
                 "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails")
 VALIDATION_SEASON = 2022
 F_CONFIG = RESULTS / "F_config.json"
 J_FEATURES = RESULTS / "J_features.json"
+CALIBRATOR_SEASONS = [2021, 2022]
+CALIBRATOR_BOOT = 500
+PROB_COLUMNS = ("p_home", "p_bayes", "p_bayes_lo", "p_bayes_hi")
 
 
 def resolve_config(model: str, features_path: Path = J_FEATURES) -> dict:
@@ -69,6 +75,41 @@ def resolve_config(model: str, features_path: Path = J_FEATURES) -> dict:
         return cfg
     feats = json.loads(Path(features_path).read_text())
     return {**cfg, "keep_terms": list(feats["keep_terms"]), "drop_features": tuple(feats["drop_features"])}
+
+
+def load_calibrator(cfg: dict, seasons: list[int], results: Path = RESULTS,
+                    n_boot: int = CALIBRATOR_BOOT) -> tuple[TailCalibrator | None, dict | None]:
+    """Fit the tail calibrator on the base model's out-of-sample 2021-22 predictions; never on test seasons."""
+    if cfg.get("calibrator") != "tail":
+        return None, None
+    if any(s <= max(CALIBRATOR_SEASONS) for s in seasons):
+        raise SystemExit(f"the calibrator is fitted on {CALIBRATOR_SEASONS}; score only later seasons")
+    name = f"predictions_{'_'.join(map(str, CALIBRATOR_SEASONS))}_{cfg['calibrator_base']}.parquet"
+    path = Path(results) / name
+    if not path.exists():
+        raise SystemExit(f"{path} is missing; run backtest {' '.join(map(str, CALIBRATOR_SEASONS))} "
+                         f"--model {cfg['calibrator_base']} first")
+    df = pd.read_parquet(path).dropna(subset=["home_win", "p_home"])
+    if sorted(df["season"].unique()) != CALIBRATOR_SEASONS:
+        raise SystemExit(f"{name} holds seasons {sorted(df['season'].unique())}, expected {CALIBRATOR_SEASONS}")
+    p, y, post = df["p_home"].to_numpy(), df["home_win"].to_numpy(), (df["season_type"] == "postseason").to_numpy()
+    cal = fit_tail_calibrator(p, y, post)
+    return cal, {"source": name, "n": len(df), "n_post": int(post.sum()), "ci": bootstrap_ci(p, y, post, n=n_boot)}
+
+
+def apply_calibrator(df: pd.DataFrame, cal: TailCalibrator) -> pd.DataFrame:
+    out = df.copy()
+    post = (out["season_type"] == "postseason").to_numpy()
+    for col in PROB_COLUMNS:
+        out[col] = cal.apply(out[col].to_numpy(), post)
+    return out
+
+
+def calibrator_report(cal: TailCalibrator, info: dict) -> str:
+    rows = [f"  {k} {getattr(cal, k):+.4f}  [{info['ci'][k][0]:+.4f}, {info['ci'][k][1]:+.4f}]" for k in "abc"]
+    return (f"tail calibrator logit(p') = a z + b z|z| + c post z, fitted on {info['source']} "
+            f"({info['n']} games, {info['n_post']} postseason); 95% game-bootstrap CI:\n" + "\n".join(rows)
+            + "\n(refit log losses above are before calibration)")
 
 
 def phase(df: pd.DataFrame) -> pd.Series:
@@ -277,7 +318,10 @@ def qb_report(df: pd.DataFrame, qb: pd.DataFrame, base: str = "C") -> str:
                  on="game_id", how="left").fillna({"qb_delta_diff": 0.0})
     lines = [QB_CAVEAT, "qb_delta_diff distribution (test games):\n"
              + d["qb_delta_diff"].quantile([0, .01, .05, .25, .5, .75, .95, .99, 1]).round(4).to_string()]
-    ref = pd.read_parquet(RESULTS / f"predictions_{'_'.join(map(str, sorted(d['season'].unique())))}_C.parquet")
+    ref_path = RESULTS / f"predictions_{'_'.join(map(str, sorted(d['season'].unique())))}_C.parquet"
+    if not ref_path.exists():
+        return "\n\n".join(lines + [f"{ref_path.name} missing; D - C subset comparison skipped"])
+    ref = pd.read_parquet(ref_path)
     sub = d[d["qb_delta_diff"].abs() > QB_THRESHOLD].merge(ref[["game_id", "p_home"]].rename(columns={"p_home": "p_c"}),
                                                            on="game_id")
     lines.append(f"games with |qb_delta_diff| > {QB_THRESHOLD}: {len(sub)} of {len(d)}")
@@ -300,6 +344,7 @@ def main() -> None:
     if args.validate and (args.model != "F" or args.seasons != [VALIDATION_SEASON]):
         raise SystemExit(f"--validate is only for model F on {VALIDATION_SEASON}")
     cfg = resolve_config(args.model)
+    cal, cal_info = load_calibrator(cfg, args.seasons)
     f_config = None
     if cfg["learner"] == "residual" and not args.validate:
         if not F_CONFIG.exists():
@@ -339,12 +384,16 @@ def main() -> None:
         metas.append(meta)
         print(f"{s}: {len(df)} games", json.dumps(meta, default=str), flush=True)
     out = pd.concat(frames, ignore_index=True)
+    if cal is not None:
+        out = apply_calibrator(out, cal)
     RESULTS.mkdir(parents=True, exist_ok=True)
     tag = "_".join(map(str, args.seasons)) + f"_{args.model}"
     out.to_parquet(RESULTS / f"predictions_{tag}.parquet", index=False)
     text = report(out, metas)
     if cfg["qb"]:
         text += "\n\n" + qb_report(out, qb, args.model)
+    if cal is not None:
+        text += "\n\n" + calibrator_report(cal, cal_info)
     (RESULTS / f"report_{tag}.txt").write_text(text)
     print(text)
 
