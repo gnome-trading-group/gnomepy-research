@@ -1271,6 +1271,84 @@ Report, in addition to the updated comparison table:
 
 ---
 
+## Phase 5: Residual CatBoost on top of C (model F)
+
+Added 2026-10-13 at the user's request after reviewing E's feature importances.
+- About 57% of E's importance sat on the four matchup features. The signal is mostly an additive sum (home matchups − away matchups), and trees approximate a sum poorly with about 3k games a season.
+- F keeps C's linear predictor exact by passing C's log-odds as CatBoost's starting value (`baseline`). The trees then learn only corrections, from engineered linear and non-linear interaction features.
+
+### Task 15: Residual CatBoost model F with engineered interactions
+
+**Files:**
+- Create: `gnomepy_research/sessions/cfb_win_probability/models/residual_wp.py`
+- Modify: `gnomepy_research/sessions/cfb_win_probability/evaluation/backtest.py` (`--model F`, plus the `--validate` mode below)
+- Modify: `gnomepy_research/sessions/cfb_win_probability/evaluation/compare_models.py` (pair `F - C`)
+- Test: `tests/sessions/test_cfb_residual_wp.py`
+- Output: `results/backtest/validation_2022_F.txt`, `report_2023_2024_F.txt`, updated `comparison_2023_2024.txt`
+
+**Interfaces:**
+- Consumes:
+  - From `catboost_wp.py`: `game_features(games, seasons, directory)`, `swap(df)`, `PARAMS`.
+  - From `win_probability.py`: `game_draws(..., units=UNITS_SPLIT, form=True)`, `fit(gd)`, `OutcomeModel.predict(x) -> DataFrame[p_home, p_lo, p_hi]`.
+- Produces:
+  - `engineer(df: pd.DataFrame) -> pd.DataFrame`. It adds the columns below to a `game_features` frame. Every column must be antisymmetric or symmetric under `swap`; the test checks this.
+    - **Linear edges (antisymmetric):**
+      - `pass_edge = pass_matchup_h − pass_matchup_a`
+      - `rush_edge = rush_matchup_h − rush_matchup_a`
+      - `net_edge = pass_edge + rush_edge`
+      - `fp_diff = h_field_position − a_field_position`
+      - `early_diff = h_early_success − a_early_success`
+      - `finish_diff = h_finishing_luck − a_finishing_luck`
+      - `late_diff = h_late_down_luck − a_late_down_luck`
+    - **Uncertainty:** `unc = sqrt(mean of the 8 h_/a_ *_sd squared)` (symmetric), and `edge_x_unc = net_edge * unc` (antisymmetric).
+    - **Season phase:** `edge_x_week = net_edge * week` (antisymmetric).
+    - **Blowout:** `abs_edge = |net_edge|` (symmetric).
+    - **Pace:**
+      - `pace_sum = h_pace + a_pace` (symmetric)
+      - `edge_x_pace = net_edge * pace_sum` (antisymmetric)
+    - **Style clash:**
+      - `style_diff = h_rush_share − a_rush_share` (antisymmetric)
+      - `run_heavy_vs_run_d = h_rush_share * rush_matchup_h − a_rush_share * rush_matchup_a` (antisymmetric)
+    - **Finishing × field position:** `finish_x_fp = h_finishing_luck * h_field_position − a_finishing_luck * a_field_position` (antisymmetric).
+  - Extend `swap()` (or wrap it in `residual_wp`) so that it negates antisymmetric engineered columns and leaves symmetric ones, or simply recompute `engineer(swap(raw))`. Prefer recomputing; it can't drift.
+  - `FEATURE_SETS: dict[str, list[str]]`:
+    - `"linear"`: the 7 linear edges + venue;
+    - `"interactions"`: linear + all the interaction columns above;
+    - `"full"`: interactions + every raw `game_features` column.
+  - `fit_residual(train: pd.DataFrame, baseline: np.ndarray, features: list[str], params: dict, seed: int = 0) -> ResidualWP`.
+    - `baseline` is C's log-odds for the train rows.
+    - Swap augmentation: swapped rows get `-baseline`. C has no intercept and venue is negated on swap, so C's log-odds flip sign exactly.
+    - Early stopping uses the last training season, then a refit at the best iteration count, as in `fit_catboost`.
+    - CatBoost gets `Pool(..., baseline=...)` for both fit and eval.
+  - `ResidualWP.predict(df, baseline) -> np.ndarray`: `0.5 * (sigmoid(baseline + raw(df)) + 1 − sigmoid(−baseline + raw(swap(df))))`. Use `prediction_type="RawFormulaVal"` for the raw tree output, since CatBoost doesn't add the baseline at predict time.
+  - **C's baseline for a season set:** fit C (`game_draws(..., units=UNITS_SPLIT, form=True)`, then `fit`) on the training seasons. `baseline = logit(clip(p_home, 1e-4, 1 − 1e-4))` for both train rows (in-sample: C has only 9 coefficients, so in-sample bias is small) and test rows. Join to `game_features` rows by `game_id`; raise if any row has no baseline.
+
+**Selection protocol (prevents tuning on the scoring seasons):**
+- [ ] `backtest --validate F` runs **only** train 2020–2021 → validate on 2022 for this grid:
+  - feature sets `linear`, `interactions`, `full`;
+  - `depth` ∈ {2, 3, 4};
+  - fixed `learning_rate=0.03`, `l2_leaf_reg=10`.
+
+  That's 9 configs. It writes `validation_2022_F.txt`, which reports log loss on 2022 for each config, C's 2022 log loss, and the chosen config (lowest 2022 log loss).
+  - Write the chosen config to `results/backtest/F_config.json` and commit it.
+  - Draws for 2020–2022 exist (split+form).
+- [ ] `backtest 2023 2024 --model F` reads `F_config.json` and runs once, rolling-origin as usual: train 2020..S−1, early stop on S−1, test S.
+  - `MODEL_CONFIGS["F"] = dict(units=UNITS_SPLIT, form=True, qb=False, learner="residual")`.
+  - The report includes top-15 feature importances and the chosen config.
+- [ ] `compare_models 2023_2024 A B C D E F C+E`, with a pair for `F − C`.
+- **Never** change features or parameters after seeing 2023–24 results.
+
+**Tests (TDD):**
+- `engineer` symmetry: for each engineered column, `engineer(swap(raw))[col]` equals `−engineer(raw)[col]` for the antisymmetric ones and `+` for the symmetric ones.
+- Residual zero-signal: when y is generated exactly from `sigmoid(baseline)`, F's held-out log loss is within 0.005 of the baseline's log loss. The trees shouldn't add noise.
+- Residual finds a planted interaction: y ~ `sigmoid(baseline + 2·edge_x_unc)`, and F beats the baseline by > 0.01 log loss on held-out rows.
+- `predict` is exactly antisymmetric at a neutral site.
+- A missing baseline raises.
+
+Commit messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+
+---
+
 ## Weekly operating procedure (after this ships)
 
 1. Before each slate, add one row per known QB change to `sessions/cfb_win_probability/data/qb_status.csv`, with `recorded_at` set to when you learned it.
