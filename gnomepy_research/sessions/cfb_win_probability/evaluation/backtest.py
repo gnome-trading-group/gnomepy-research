@@ -29,7 +29,8 @@ from gnomepy_research.sessions.cfb_win_probability.evaluation.metrics import pai
 from gnomepy_research.sessions.cfb_win_probability.models.catboost_wp import fit_catboost, game_features
 from gnomepy_research.sessions.cfb_win_probability.models.residual_wp import (
     FEATURE_SETS, GRID_DEPTHS, GRID_PARAMS, attach_baseline, c_baseline, fit_residual, sigmoid)
-from gnomepy_research.sessions.cfb_win_probability.models.win_probability import N_FIT_DRAWS, fit, game_draws
+from gnomepy_research.sessions.cfb_win_probability.models.win_probability import (
+    N_FIT_DRAWS, fit, game_draws, physical_match_rate)
 
 FIRST_OUTCOME_SEASON = 2020
 HOLDOUT = 2025
@@ -280,13 +281,17 @@ def main() -> None:
         F_CONFIG.write_text(json.dumps(config, indent=2) + "\n")
         print(text)
         return
-    if cfg.get("projection"):
-        raise NotImplementedError("projection lands in Task 20")
     qb = None
     src_full = SourceData.load(ds) if cfg["qb"] or cfg.get("physical") else None
     flags = {k: cfg[k] for k in OUTCOME_FLAGS if k in cfg}
     if cfg.get("physical"):
         flags["physical"] = physical_table(src_full, list(range(FIRST_OUTCOME_SEASON, max(args.seasons) + 1)))
+        fbs = games[games["season"].between(FIRST_OUTCOME_SEASON, max(args.seasons))
+                    & (games["home_classification"] == "fbs") & (games["away_classification"] == "fbs")]
+        print(f"physical table match rate (FBS games {FIRST_OUTCOME_SEASON}-{max(args.seasons)}): "
+              f"{physical_match_rate(fbs, flags['physical']):.2%}", flush=True)
+    if cfg.get("projection"):
+        flags["projection"] = True
     if cfg["qb"]:
         starters = apply_overrides(historical_starters(src_full), load_qb_status(QB_STATUS_CSV, src_full))
         qb = qb_deltas(src_full, games[games["season"].between(FIRST_OUTCOME_SEASON, max(args.seasons))], starters)

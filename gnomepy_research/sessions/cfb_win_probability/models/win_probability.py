@@ -54,6 +54,7 @@ PRIORS: dict[str, tuple[float, float]] = {
     "gap_x_edge": (0.0, 10.0),
 }
 N_FIT_DRAWS = 50
+PHYSICAL_MIN_MATCH = 0.95
 
 
 @dataclass
@@ -79,8 +80,8 @@ def form_terms(form_h: np.ndarray, form_a: np.ndarray, edge: np.ndarray) -> np.n
 
 
 def load_season_draws(season: int, directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL,
-                      conference: bool = False) -> dict:
-    with np.load(directory / f"{draws_name(season, units, conference)}.npz") as z:
+                      conference: bool = False, projection: bool = False) -> dict:
+    with np.load(directory / f"{draws_name(season, units, conference, projection)}.npz") as z:
         return {k: z[k] for k in z.files}
 
 
@@ -100,12 +101,27 @@ def split_columns(key: str, draws: dict, gg: pd.DataFrame) -> tuple[np.ndarray, 
     return p_cols, r_cols, hi, ai
 
 
-def physical_diffs(games: pd.DataFrame, physical: pd.DataFrame) -> np.ndarray:
+def _team_ids(s: pd.Series) -> pd.Series:
+    return pd.to_numeric(s).astype("int64")
+
+
+def physical_match_rate(games: pd.DataFrame, physical: pd.DataFrame) -> float:
+    """Share of the games' home and away (season, team) pairs that have a row in the physical table."""
+    have = pd.MultiIndex.from_arrays([physical["season"].astype("int64"), _team_ids(physical["team_id"])])
+    sides = [pd.MultiIndex.from_arrays([games["season"].astype("int64"), _team_ids(games[c])]) for c in ("home_id", "away_id")]
+    hits = sum(int(idx.isin(have).sum()) for idx in sides)
+    return hits / (2 * len(games)) if len(games) else 1.0
+
+
+def physical_diffs(games: pd.DataFrame, physical: pd.DataFrame, min_match: float = 0.0) -> np.ndarray:
     """(G, 3) talent, blue-chip and trench differences, home minus away; teams without a row score 0."""
-    z = zscore_by_season(physical).set_index(["season", "team_id"])
+    rate = physical_match_rate(games, physical)
+    if rate < min_match:
+        raise ValueError(f"physical table match rate {rate:.1%} < {min_match:.0%} of game team ids; check id dtypes/seasons")
+    z = zscore_by_season(physical.assign(team_id=_team_ids(physical["team_id"]))).set_index(["season", "team_id"])
 
     def side(team_col: str) -> pd.DataFrame:
-        idx = pd.MultiIndex.from_arrays([games["season"], games[team_col]])
+        idx = pd.MultiIndex.from_arrays([games["season"].astype("int64"), _team_ids(games[team_col])])
         return z.reindex(idx).fillna(0.0).reset_index(drop=True)
 
     h, a = side("home_id"), side("away_id")
@@ -116,7 +132,7 @@ def physical_diffs(games: pd.DataFrame, physical: pd.DataFrame) -> np.ndarray:
 def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = None, seed: int = 0,
                directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL, form: bool = False,
                qb: pd.DataFrame | None = None, conference: bool = False, stretch: bool = False,
-               option: bool = False, physical: pd.DataFrame | None = None) -> GameDraws:
+               option: bool = False, physical: pd.DataFrame | None = None, projection: bool = False) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff)."""
     if form and units == UNITS_ALL:
@@ -128,7 +144,7 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
               & (games["away_classification"] == "fbs")].copy()
     rows, xs, tails = [], [], []
     for season in seasons:
-        draws = load_season_draws(season, directory, units, conference)
+        draws = load_season_draws(season, directory, units, conference, projection)
         for (st, wk), gg in g[g["season"] == season].groupby(["season_type", "week"]):
             key = f"{st}_{wk}"
             if f"{key}__off" not in draws:
@@ -177,7 +193,7 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
     x = np.concatenate([x, np.concatenate(tails, axis=0)], axis=-1)
     terms = terms + [STRETCH_TERM] * stretch + [OPTION_TERM] * option
     if physical is not None:
-        d = physical_diffs(out, physical)[:, None, :]
+        d = physical_diffs(out, physical, min_match=PHYSICAL_MIN_MATCH)[:, None, :]
         net = x[..., 0] + x[..., 1]
         x = np.concatenate([x, np.broadcast_to(d, (*x.shape[:2], 3)), (d[..., 0] * net)[..., None]], axis=-1)
         terms = terms + PHYSICAL_TERMS

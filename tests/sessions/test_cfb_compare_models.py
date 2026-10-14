@@ -3,7 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cfb_win_probability.evaluation.compare_models import blend_frames, compare, market_probs
+from gnomepy_research.sessions.cfb_win_probability.evaluation.compare_models import PAIRS, blend_frames, compare, market_probs
+from gnomepy_research.sessions.cfb_win_probability.evaluation.g_report import append_extras, cut_rows
 
 
 def test_market_probs_drops_missing_open():
@@ -40,3 +41,24 @@ def test_blend_label_is_mean_of_components_on_shared_games():
     out = blend_frames({"C": a, "E": b}, ["C", "E", "C+E"])
     assert out["C+E"]["game_id"].tolist() == [2, 3]
     np.testing.assert_allclose(out["C+E"]["p_home"], [0.5, 0.7])
+
+
+def test_append_extras_replaces_earlier_extras(tmp_path):
+    path = tmp_path / "report.txt"
+    path.write_text("base report\n")
+    append_extras(path, "first")
+    append_extras(path, "second")
+    text = path.read_text()
+    assert text.startswith("base report") and "second" in text and "first" not in text
+
+
+def test_cut_rows_adds_paired_difference_of_last_two_models():
+    g = pd.DataFrame({"home_win": [1.0, 0.0, 1.0, 0.0], "p_open": 0.5, "p_D": 0.5, "p_G": [0.6, 0.4, 0.6, 0.4],
+                      "p_H": [0.7, 0.3, 0.7, 0.3]})
+    rows = cut_rows(g, {"all": (np.ones(4, bool), np.zeros(4, bool))}, ["D", "G", "H"])
+    assert [r["model"] for r in rows] == ["D", "G", "H", "H-G"]
+    assert rows[-1]["ll - open"].startswith("-")
+
+
+def test_h_minus_g_pair():
+    assert ("H", "G") in PAIRS

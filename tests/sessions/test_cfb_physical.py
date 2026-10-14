@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from gnomepy_research.models.cfb.features.physical import (
     blue_chip_ratio,
@@ -10,7 +11,7 @@ from gnomepy_research.models.cfb.features.physical import (
     top_weight,
 )
 from gnomepy_research.models.cfb.features.source import SourceData
-from gnomepy_research.sessions.cfb_win_probability.models.win_probability import physical_diffs
+from gnomepy_research.sessions.cfb_win_probability.models.win_probability import physical_diffs, physical_match_rate
 
 
 def ts(s: str) -> pd.Timestamp:
@@ -109,3 +110,15 @@ def test_physical_table_one_row_per_team_season():
     t = physical_table(src, [2024])
     assert list(t.columns) == ["season", "team_id", "talent", "blue_chip_ratio", "ol_weight", "dl_weight"]
     assert t["team_id"].is_unique
+
+
+def test_float_and_string_team_ids_still_match():
+    t = table().assign(team_id=lambda d: d["team_id"].astype(float))
+    g = games([(1, 2), (2, 3)]).astype({"home_id": str, "away_id": str})
+    assert physical_match_rate(g, t) == 1.0
+    np.testing.assert_allclose(physical_diffs(g, t, min_match=0.95), physical_diffs(games([(1, 2), (2, 3)]), table()))
+
+
+def test_low_match_rate_raises():
+    with pytest.raises(ValueError, match="match rate"):
+        physical_diffs(games([(1, 99), (98, 99)]), table(), min_match=0.95)
