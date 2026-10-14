@@ -32,6 +32,7 @@ import pymc as pm
 import pytensor.tensor as pt
 
 from gnomepy_research.models.cfb.efficiency.data import TAU_PHASES, ModelData, step_phases
+from gnomepy_research.models.cfb.features.drives import GARBAGE_WEIGHT
 
 LIKELIHOODS = ("studentt", "normal")
 CONFERENCE_FIELDS = ("s_conf_off", "s_conf_def", "conference")
@@ -74,6 +75,7 @@ class Hyperparameters:
     tau_phases: bool = False
     heavy_tails: bool = False
     nu_team: float = float("inf")
+    garbage_weight: float = GARBAGE_WEIGHT
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -94,6 +96,8 @@ class Hyperparameters:
         if not self.heavy_tails:
             d.pop("heavy_tails")
             d.pop("nu_team")
+        if self.garbage_weight == GARBAGE_WEIGHT:
+            d.pop("garbage_weight")
         for k, v in d.items():
             if isinstance(v, np.ndarray):
                 d[k] = v.tolist()
@@ -238,7 +242,8 @@ def sample(model: pm.Model, draws: int = 500, tune: int = 1000, chains: int = 4,
 
 
 def hyperparameters_from(idata: az.InferenceData, data: ModelData, likelihood: str,
-                         tau_phases: bool = False, heavy_tails: bool = False) -> Hyperparameters:
+                         tau_phases: bool = False, heavy_tails: bool = False,
+                         garbage_weight: float = GARBAGE_WEIGHT) -> Hyperparameters:
     post = idata.posterior
 
     def m(name: str):
@@ -256,6 +261,7 @@ def hyperparameters_from(idata: az.InferenceData, data: ModelData, likelihood: s
         **({k: float(m(k)) for k in DRIVE_FIELDS[:-1]} | {"drives": True} if data.drives else {}),
         independents_separate=data.independents_separate, tau_phases=tau_phases,
         **({"heavy_tails": True, "nu_team": float(m("nu_team"))} if heavy_tails else {}),
+        garbage_weight=garbage_weight,
     )
 
 

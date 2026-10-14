@@ -59,7 +59,7 @@ MODEL_CONFIGS["K"] = {**MODEL_CONFIGS["G"], "drives": True, "independents_separa
 MODEL_CONFIGS["L"] = {**MODEL_CONFIGS["K"], "tau_phases": True, "exclude_terms": ["bowl_edge"]}
 MODEL_CONFIGS["Kc"] = {**MODEL_CONFIGS["K"], "calibrator": "tail", "calibrator_base": "K"}
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
-                "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails")
+                "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails", "garbage_weight")
 VALIDATION_SEASON = 2022
 F_CONFIG = RESULTS / "F_config.json"
 J_FEATURES = RESULTS / "J_features.json"

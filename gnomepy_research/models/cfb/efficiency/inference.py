@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,7 +16,7 @@ from scipy import stats
 
 from gnomepy.data import DatasetStore
 from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, ModelData, build_model_data
-from gnomepy_research.models.cfb.features.drives import team_game_drives
+from gnomepy_research.models.cfb.features.drives import GARBAGE_WEIGHT, team_game_drives
 from gnomepy_research.models.cfb.features.team_form import team_game_form
 from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
     Hyperparameters,
@@ -48,11 +48,16 @@ class Inputs:
     form_rows: pd.DataFrame | None = None
     projection: pd.DataFrame | None = None
     drives: pd.DataFrame | None = None
+    raw_drives: pd.DataFrame | None = None
+    garbage_weight: float = GARBAGE_WEIGHT
+    _reweighted: dict = field(default_factory=dict, repr=False)
 
     @classmethod
     def load(cls, ds: DatasetStore | None = None, as_of: datetime | None = None,
-             with_form: bool = False, with_drives: bool = False) -> Inputs:
-        """The model inputs as known at as_of (default now); ds records the loads for lineage."""
+             with_form: bool = False, with_drives: bool = False,
+             garbage_weight: float = GARBAGE_WEIGHT) -> Inputs:
+        """The model inputs as known at as_of (default now); ds records the loads for lineage.
+        drives are built with garbage_weight; raw_drives lets fits at other weights rebuild them."""
         ds = ds or DatasetStore()
         as_of = as_of or datetime.now(timezone.utc)
         games = ds.load(GAMES, as_of=as_of)
@@ -60,20 +65,32 @@ class Inputs:
         form_rows = None
         if with_form:
             form_rows = team_game_form(ds.load(PLAYS, as_of=as_of), raw_drives, games)
-        drives = team_game_drives(raw_drives, games) if with_drives else None
+        drives = team_game_drives(raw_drives, games, garbage_weight) if with_drives else None
         return cls(ds.load(PRESEASON_FEATURES, as_of=as_of), ds.load(EFFICIENCY, as_of=as_of), games, as_of,
-                   form_rows, drives=drives)
+                   form_rows, drives=drives, raw_drives=raw_drives if with_drives else None,
+                   garbage_weight=garbage_weight)
 
     def visible(self, cutoff: pd.Timestamp) -> pd.DataFrame:
         return self.efficiency[self.efficiency["available_at"] < cutoff]
 
-    def visible_drives(self, cutoff: pd.Timestamp) -> pd.DataFrame:
+    def _drives_at(self, garbage_weight: float) -> pd.DataFrame:
         if self.drives is None:
             raise ValueError("drive observations need Inputs.drives (Inputs.load(with_drives=True))")
-        return self.drives[self.drives["available_at"] < cutoff]
+        if garbage_weight == self.garbage_weight:
+            return self.drives
+        if self.raw_drives is None:
+            raise ValueError(f"garbage weight {garbage_weight} differs from the loaded {self.garbage_weight} "
+                             "and Inputs.raw_drives is not set to rebuild the drives")
+        if garbage_weight not in self._reweighted:
+            self._reweighted[garbage_weight] = team_game_drives(self.raw_drives, self.games, garbage_weight)
+        return self._reweighted[garbage_weight]
+
+    def visible_drives(self, cutoff: pd.Timestamp, garbage_weight: float | None = None) -> pd.DataFrame:
+        d = self._drives_at(self.garbage_weight if garbage_weight is None else garbage_weight)
+        return d[d["available_at"] < cutoff]
 
     def drives_for(self, hypers: Hyperparameters, cutoff: pd.Timestamp) -> pd.DataFrame | None:
-        return self.visible_drives(cutoff) if hypers.drives else None
+        return self.visible_drives(cutoff, hypers.garbage_weight) if hypers.drives else None
 
     def projection_for(self, hypers: Hyperparameters) -> pd.DataFrame | None:
         if not hypers.projection:
@@ -123,13 +140,14 @@ def fit_hyperparameters(inputs: Inputs, seasons: list[int], likelihood: str, dra
                         conference: bool = False, projection: bool = False,
                         drop_features: tuple[str, ...] = (), drives: bool = False,
                         independents_separate: bool = False, tau_phases: bool = False,
-                        heavy_tails: bool = False) -> tuple[Hyperparameters, dict]:
+                        heavy_tails: bool = False,
+                        garbage_weight: float = GARBAGE_WEIGHT) -> tuple[Hyperparameters, dict]:
     if projection and inputs.projection is None:
         raise ValueError("projection=True needs Inputs.projection")
     cutoff = hyper_cutoff(inputs, max(seasons))
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, seasons, units=units,
                             conference=conference, projection=inputs.projection if projection else None,
-                            drop_features=drop_features, drives=inputs.visible_drives(cutoff) if drives else None,
+                            drop_features=drop_features, drives=inputs.visible_drives(cutoff, garbage_weight) if drives else None,
                             independents_separate=independents_separate)
     idata = sample(build_model(data, likelihood=likelihood, store_states=False, tau_phases=tau_phases,
                                heavy_tails=heavy_tails), draws=draws, tune=tune, seed=seed)
@@ -140,7 +158,9 @@ def fit_hyperparameters(inputs: Inputs, seasons: list[int], likelihood: str, dra
             "seasons": seasons, "cutoff": str(cutoff), "n_obs": int(len(data.obs_y))}
     if drives:
         diag["n_drive_obs"] = int(len(data.drv_y))
-    return hyperparameters_from(idata, data, likelihood, tau_phases=tau_phases, heavy_tails=heavy_tails), diag
+        diag["garbage_weight"] = garbage_weight
+    return hyperparameters_from(idata, data, likelihood, tau_phases=tau_phases, heavy_tails=heavy_tails,
+                                garbage_weight=garbage_weight), diag
 
 
 def save_hyperparameters(h: Hyperparameters, diag: dict, name: str) -> Path:

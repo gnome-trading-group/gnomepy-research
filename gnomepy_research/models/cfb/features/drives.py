@@ -19,13 +19,13 @@ DRIVE_COLUMNS = ["game_id", "season", "season_type", "week", "team_id", "opponen
                  "opponent_classification", "venue", "ppd", "n_eff", "available_at"]
 
 
-def team_game_drives(drives: pd.DataFrame, games: pd.DataFrame) -> pd.DataFrame:
+def team_game_drives(drives: pd.DataFrame, games: pd.DataFrame, garbage_weight: float = GARBAGE_WEIGHT) -> pd.DataFrame:
     d = drives.dropna(subset=["offense_id", "defense_id"])
     kneel = d["drive_result"].isin(KNEEL_RESULTS) & (d["n_plays"] <= KNEEL_MAX_PLAYS)
     d = d[~kneel & d["start_period"].isin(REGULATION_PERIODS)]
     garbage = is_garbage(d["start_period"].to_numpy(), d["start_offense_score"].to_numpy(),
                          d["start_defense_score"].to_numpy())
-    d = d.assign(w=np.where(garbage, GARBAGE_WEIGHT, 1.0))
+    d = d.assign(w=np.where(garbage, garbage_weight, 1.0))
     d = d.assign(wp=d["w"] * d["off_points"].astype(float))
     agg = d.groupby(["game_id", "offense_id", "defense_id"], as_index=False).agg(n_eff=("w", "sum"), wp=("wp", "sum"))
     agg = agg.rename(columns={"offense_id": "team_id", "defense_id": "opponent_id"})
