@@ -27,6 +27,7 @@ from gnomepy_research.sessions.cfb_win_probability.models.win_probability import
     TERMS_SPLIT,
     OutcomeModel,
     edge_terms,
+    load_season_draws,
 )
 
 SEASON = 2024
@@ -490,7 +491,7 @@ class TestSplitGameDraws:
     SEASON = 2024
 
     @staticmethod
-    def write(tmp_path, rush_ids, form=False):
+    def write(tmp_path, rush_ids, form=False, conference=False, option=None):
         rng = np.random.default_rng(1)
         pass_ids = [1, 2, FCS_TEAM]
         arrays = {
@@ -502,7 +503,9 @@ class TestSplitGameDraws:
         }
         if form:
             arrays["regular_1__form"] = np.random.default_rng(2).normal(size=(6, 5)).astype("float32")
-        np.savez(tmp_path / f"{draws_name(TestSplitGameDraws.SEASON, UNITS_SPLIT)}.npz", **arrays)
+        if option is not None:
+            arrays["regular_1__option"] = np.array(option * 2, dtype="float32")
+        np.savez(tmp_path / f"{draws_name(TestSplitGameDraws.SEASON, UNITS_SPLIT, conference)}.npz", **arrays)
         return arrays
 
     @staticmethod
@@ -550,6 +553,42 @@ class TestSplitGameDraws:
         gd = game_draws(self.games(), [self.SEASON], directory=tmp_path, units=UNITS_SPLIT, form=True, qb=qb)
         assert gd.terms == TERMS_SPLIT + FORM_TERMS + ["qb_delta_diff"]
         np.testing.assert_allclose(gd.x[1, :, -1], -0.05)
+
+    def g_draws(self, tmp_path, games=None):
+        self.write(tmp_path, [1, 2, FCS_TEAM], form=True, conference=True, option=[1.0, 0.0, 0.0])
+        qb = pd.DataFrame({"game_id": [10], "home_qb_delta": [0.07], "away_qb_delta": [-0.02]})
+        return game_draws(self.games() if games is None else games, [self.SEASON], directory=tmp_path,
+                          units=UNITS_SPLIT, form=True, qb=qb, conference=True, stretch=True, option=True)
+
+    def test_g_terms_shape_and_order(self, tmp_path):
+        gd = self.g_draws(tmp_path)
+        assert gd.terms == TERMS_SPLIT + FORM_TERMS + ["qb_delta_diff", "edge_abs_edge", "option_diff"]
+        assert gd.x.shape == (2, 5, 12)
+        net = gd.x[..., 0] + gd.x[..., 1]
+        np.testing.assert_allclose(gd.x[..., 10], net * np.abs(net), rtol=1e-6)
+        np.testing.assert_allclose(gd.x[:, :, 11], [[1.0] * 5, [0.0] * 5])
+        np.testing.assert_allclose(gd.x[0, :, 9], 0.09)
+
+    def test_g_terms_antisymmetric_under_swap(self, tmp_path):
+        g = self.games().assign(neutral_site=True)
+        sw = g.assign(home_id=g["away_id"], away_id=g["home_id"])
+        a, b = self.g_draws(tmp_path, g), self.g_draws(tmp_path, sw)
+        for t in ["pass_edge", "rush_edge", "edge_abs_edge", "option_diff"]:
+            i = a.terms.index(t)
+            np.testing.assert_allclose(a.x[..., i], -b.x[..., i], rtol=1e-5, atol=1e-7)
+
+    def test_option_requires_snapshotted_option(self, tmp_path):
+        self.write(tmp_path, [1, 2, FCS_TEAM], form=True, conference=True)
+        with pytest.raises(ValueError, match="option"):
+            game_draws(self.games(), [self.SEASON], directory=tmp_path, units=UNITS_SPLIT, form=True,
+                       conference=True, option=True)
+
+    def test_load_season_draws_conference_name(self, tmp_path):
+        self.write(tmp_path, [1, 2, FCS_TEAM], conference=True, option=[1.0, 0.0, 0.0])
+        d = load_season_draws(self.SEASON, tmp_path, UNITS_SPLIT, conference=True)
+        assert "regular_1__option" in d
+        with pytest.raises(FileNotFoundError):
+            load_season_draws(self.SEASON, tmp_path, UNITS_SPLIT)
 
     def test_form_requires_split_units(self, tmp_path):
         with pytest.raises(ValueError, match="split"):

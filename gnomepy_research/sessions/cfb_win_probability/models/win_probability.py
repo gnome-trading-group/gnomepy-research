@@ -26,6 +26,8 @@ from gnomepy_research.models.cfb.efficiency.posterior_snapshots import DRAWS_DIR
 TERMS_ALL = ["off_diff", "def_diff", "venue", "bowl_net_diff"]
 TERMS_SPLIT = ["pass_edge", "rush_edge", "venue", "bowl_edge"]
 TERMS = TERMS_ALL
+STRETCH_TERM = "edge_abs_edge"
+OPTION_TERM = "option_diff"
 FORM_TERMS = ["early_success_diff", "late_down_luck_diff", "finishing_luck_diff", "field_position_diff", "pace_x_edge"]
 # Ratings are in PPA/play; a 0.1 net edge is roughly a 10-point favourite.
 PRIORS: dict[str, tuple[float, float]] = {
@@ -42,6 +44,8 @@ PRIORS: dict[str, tuple[float, float]] = {
     "field_position_diff": (0.0, 0.5),
     "pace_x_edge": (0.0, 3.0),
     "qb_delta_diff": (4.0, 4.0),
+    "edge_abs_edge": (0.0, 30.0),
+    "option_diff": (0.0, 0.5),
 }
 N_FIT_DRAWS = 50
 
@@ -68,8 +72,9 @@ def form_terms(form_h: np.ndarray, form_a: np.ndarray, edge: np.ndarray) -> np.n
     return np.concatenate([diff, pace[..., None]], axis=-1)
 
 
-def load_season_draws(season: int, directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL) -> dict:
-    with np.load(directory / f"{draws_name(season, units)}.npz") as z:
+def load_season_draws(season: int, directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL,
+                      conference: bool = False) -> dict:
+    with np.load(directory / f"{draws_name(season, units, conference)}.npz") as z:
         return {k: z[k] for k in z.files}
 
 
@@ -91,17 +96,20 @@ def split_columns(key: str, draws: dict, gg: pd.DataFrame) -> tuple[np.ndarray, 
 
 def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = None, seed: int = 0,
                directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL, form: bool = False,
-               qb: pd.DataFrame | None = None) -> GameDraws:
+               qb: pd.DataFrame | None = None, conference: bool = False, stretch: bool = False,
+               option: bool = False) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff)."""
     if form and units == UNITS_ALL:
         raise ValueError("form terms are defined on the split model only")
+    if (stretch or option) and units == UNITS_ALL:
+        raise ValueError("stretch and option terms are defined on the split model only")
     rng = np.random.default_rng(seed)
     g = games[games["season"].isin(seasons) & (games["home_classification"] == "fbs")
               & (games["away_classification"] == "fbs")].copy()
-    rows, xs = [], []
+    rows, xs, tails = [], [], []
     for season in seasons:
-        draws = load_season_draws(season, directory, units)
+        draws = load_season_draws(season, directory, units, conference)
         for (st, wk), gg in g[g["season"] == season].groupby(["season_type", "week"]):
             key = f"{st}_{wk}"
             if f"{key}__off" not in draws:
@@ -117,7 +125,15 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                 p_cols, r_cols, hi, ai = split_columns(key, draws, gg)
                 main = list(edge_terms(off[pick][:, p_cols], de[pick][:, p_cols], off[pick][:, r_cols],
                                        de[pick][:, r_cols], share_all[p_cols], hi, ai))
-            extra = []
+            extra, tail = [], []
+            if stretch:
+                net = main[0] + main[1]
+                tail.append((net * np.abs(net))[..., None])
+            if option:
+                if f"{key}__option" not in draws:
+                    raise ValueError(f"{key}: draws have no option flag; snapshot with --conference")
+                o = draws[f"{key}__option"][p_cols]
+                tail.append(np.broadcast_to((o[hi] - o[ai])[:, None, None], (len(gg), len(pick), 1)))
             if form:
                 if f"{key}__form" not in draws:
                     raise ValueError(f"{key}: draws have no form; snapshot with --form")
@@ -127,6 +143,7 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
             post = float(st == "postseason")
             base = np.stack([*main, venue, post * (main[0] + main[1])], axis=-1)
             xs.append(np.concatenate([base, *extra], axis=-1))
+            tails.append(np.concatenate(tail, axis=-1) if tail else np.empty((len(gg), len(pick), 0)))
             rows.append(gg)
     out = pd.concat(rows, ignore_index=True)
     out["venue"] = np.where(out["neutral_site"], 0, 1)
@@ -138,6 +155,8 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
         qd = (q["home_qb_delta"] - q["away_qb_delta"]).to_numpy()[:, None, None]
         x = np.concatenate([x, np.broadcast_to(qd, (*x.shape[:2], 1))], axis=-1)
         terms = [*terms, "qb_delta_diff"]
+    x = np.concatenate([x, np.concatenate(tails, axis=0)], axis=-1)
+    terms = terms + [STRETCH_TERM] * stretch + [OPTION_TERM] * option
     return GameDraws(games=out, x=x, terms=terms)
 
 

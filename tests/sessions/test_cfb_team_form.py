@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from gnomepy_research.models.cfb.features.style import OPTION_RUSH_SHARE, option_offense
 from gnomepy_research.models.cfb.features.team_form import (
     FORM_FEATURES,
     is_garbage,
@@ -92,3 +93,27 @@ def test_team_game_form_hand_computed():
     assert out.loc[20, "field_position"] == pytest.approx(-5.0)
     assert out.loc[10, "available_at"] == pd.Timestamp("2024-09-02 12:00")
     assert (out["season"] == 2024).all()
+
+
+def style_rows(season, team_id, rush, pas, n=4, available="2023-10-01"):
+    return pd.DataFrame({"season": season, "team_id": team_id, "game_id": range(n),
+                         "rush_plays": rush, "pass_plays": pas, "available_at": pd.Timestamp(available, tz="UTC")})
+
+
+def test_option_offense_uses_previous_season_threshold():
+    e = pd.concat([style_rows(2023, 1, 66, 34), style_rows(2023, 2, 64, 36), style_rows(2024, 2, 90, 10)])
+    o = option_offense(e, 2024)
+    assert OPTION_RUSH_SHARE == 0.65
+    assert o[1] == 1 and o[2] == 0
+
+
+def test_option_offense_falls_back_to_season_to_date_with_three_games():
+    e = pd.concat([style_rows(2024, 3, 80, 20, n=3), style_rows(2024, 4, 80, 20, n=2)])
+    o = option_offense(e, 2024)
+    assert o[3] == 1 and o.get(4, 0) == 0
+
+
+def test_option_offense_is_point_in_time_on_caller_rows():
+    e = style_rows(2023, 5, 80, 20)
+    assert option_offense(e[e["available_at"] < pd.Timestamp("2023-01-01", tz="UTC")], 2024).get(5, 0) == 0
+    assert option_offense(e, 2024)[5] == 1

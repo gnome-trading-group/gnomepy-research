@@ -43,7 +43,9 @@ MODEL_CONFIGS = {
     "D": dict(units=UNITS_SPLIT, form=True, qb=True, learner="bayes"),
     "E": dict(units=UNITS_SPLIT, form=True, qb=False, learner="catboost"),
     "F": dict(units=UNITS_SPLIT, form=True, qb=False, learner="residual"),
+    "G": dict(units=UNITS_SPLIT, form=True, qb=True, learner="bayes", conference=True, stretch=True, option=True),
 }
+OUTCOME_FLAGS = ("conference", "stretch", "option")
 VALIDATION_SEASON = 2022
 F_CONFIG = RESULTS / "F_config.json"
 
@@ -112,15 +114,17 @@ def validate_residual(games: pd.DataFrame) -> tuple[str, dict]:
     return text, config
 
 
-def _bayes_season(season, games, train_seasons, units, form, qb=None):
-    train_gd = game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, units=units, form=form, qb=qb)
-    test_gd = game_draws(games, [season], units=units, form=form, qb=qb)
+def _bayes_season(season, games, train_seasons, units, form, qb=None, flags=None):
+    flags = flags or {}
+    train_gd = game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, units=units, form=form, qb=qb, **flags)
+    test_gd = game_draws(games, [season], units=units, form=form, qb=qb, **flags)
     test = test_gd.games.loc[test_gd.games["home_win"].notna()].copy()
     x_test = test_gd.x[test_gd.games["home_win"].notna().to_numpy()]
 
     refits = []
     for r in range(N_REFITS):
-        gd = train_gd if r == 0 else game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, seed=r, units=units, form=form, qb=qb)
+        gd = train_gd if r == 0 else game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, seed=r, units=units, form=form, qb=qb,
+                                                  **flags)
         model = fit(gd, seed=r)
         if r == 0:
             coefs = model.gamma
@@ -140,14 +144,15 @@ def _bayes_season(season, games, train_seasons, units, form, qb=None):
 
 def run_season(season: int, games: pd.DataFrame, pregame: pd.DataFrame, lines: pd.DataFrame,
                units: tuple[str, ...] = UNITS_ALL, form: bool = False, learner: str = "bayes",
-               qb: pd.DataFrame | None = None, config: dict | None = None) -> tuple[pd.DataFrame, dict]:
+               qb: pd.DataFrame | None = None, config: dict | None = None,
+               flags: dict | None = None) -> tuple[pd.DataFrame, dict]:
     train_seasons = list(range(FIRST_OUTCOME_SEASON, season))
     if learner == "catboost":
         train, test, extra = _catboost_season(season, games, train_seasons)
     elif learner == "residual":
         train, test, extra = _residual_season(season, games, train_seasons, config)
     else:
-        train, test, extra = _bayes_season(season, games, train_seasons, units, form, qb)
+        train, test, extra = _bayes_season(season, games, train_seasons, units, form, qb, flags)
     test["p_home_field"] = baselines.home_field(train, test)
 
     elo_params = baselines.tune_elo(games, set(train["game_id"]))
@@ -280,7 +285,8 @@ def main() -> None:
     frames, metas = [], []
     for s in args.seasons:
         df, meta = run_season(s, games, pregame, lines, units=cfg["units"], form=cfg["form"],
-                              learner=cfg["learner"], qb=qb, config=f_config)
+                              learner=cfg["learner"], qb=qb, config=f_config,
+                              flags={k: cfg[k] for k in OUTCOME_FLAGS if k in cfg})
         frames.append(df)
         metas.append(meta)
         print(f"{s}: {len(df)} games", json.dumps(meta, default=str), flush=True)

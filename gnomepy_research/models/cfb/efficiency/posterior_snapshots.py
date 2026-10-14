@@ -26,6 +26,7 @@ from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, UNITS_SPLIT, 
 from gnomepy_research.models.cfb.efficiency.gaussian_solver import fit_cutoff_exact
 from gnomepy_research.models.cfb.features.team_form import FORM_FEATURES, team_form, with_luck
 from gnomepy_research.models.cfb.features.rush_share import league_rush_share, rush_share
+from gnomepy_research.models.cfb.features.style import option_offense
 from gnomepy_research.models.cfb.efficiency.inference import (
     EFFICIENCY,
     HYPER_DIR,
@@ -103,6 +104,9 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
         lg = league_rush_share(seen, season)
         draws[f"{key}__units"] = post.units.astype("U8")
         draws[f"{key}__rush_share"] = shares.reindex(post.team_ids).fillna(lg).to_numpy(np.float32)
+        if conference:
+            style_rows = e[(e["available_at"] < p.cutoff) & e["season"].isin([season - 1, season]) & e["usable"]]
+            draws[f"{key}__option"] = option_offense(style_rows, season).reindex(post.team_ids).fillna(0).to_numpy(np.float32)
         if inputs.form_rows is not None:
             draws[f"{key}__form"] = form_at(inputs.form_rows, season, p.cutoff, post.team_ids)
             draws[f"{key}__form_names"] = np.array(FORM_FEATURES)
