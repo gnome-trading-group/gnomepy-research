@@ -58,9 +58,9 @@ def bootstrap_diff(y, pa, pb, n_boot: int = N_BOOT, seed: int = 0) -> tuple[floa
 
 
 def cut_table(g: pd.DataFrame, models: list[str] = MODELS, pairs: list[tuple[str, str]] = PAIRS,
-              n_boot: int = N_BOOT) -> pd.DataFrame:
+              n_boot: int = N_BOOT, cuts: dict[str, tuple[np.ndarray, np.ndarray]] | None = None) -> pd.DataFrame:
     rows = []
-    for name, (mask, flip) in l_cuts(g).items():
+    for name, (mask, flip) in (l_cuts(g) if cuts is None else cuts).items():
         s, fl = g[mask], flip[mask]
         y = np.where(fl, 1 - s["home_win"], s["home_win"]).astype(float)
         side = {m: np.where(fl, 1 - s[f"p_{m}"], s[f"p_{m}"]) for m in models + ["open"]}

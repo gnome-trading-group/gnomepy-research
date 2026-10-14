@@ -196,7 +196,8 @@ def snapshot_seasons(inputs: Inputs, first: int, last: int, likelihood: str,
                      drop_features: tuple[str, ...] = (), drives: bool = False,
                      independents_separate: bool = False,
                      tau_phases: bool = False, heavy_tails: bool = False,
-                     garbage_weight: float = GARBAGE_WEIGHT) -> tuple[pd.DataFrame, list[tuple[int, Path]]]:
+                     garbage_weight: float = GARBAGE_WEIGHT,
+                     mcmc: dict | None = None) -> tuple[pd.DataFrame, list[tuple[int, Path]]]:
     """The team-week table for seasons first..last, and each season's draws file under out_dir."""
     if first <= FIRST_TRAIN_SEASON:
         raise ValueError(f"first snapshot season must be after {FIRST_TRAIN_SEASON}")
@@ -207,7 +208,7 @@ def snapshot_seasons(inputs: Inputs, first: int, last: int, likelihood: str,
         df, path = snapshot_season(inputs, season, likelihood, out_dir=out_dir, units=units, conference=conference,
                                      projection=projection, drop_features=drop_features, drives=drives,
                                      independents_separate=independents_separate, tau_phases=tau_phases,
-                                     heavy_tails=heavy_tails, garbage_weight=garbage_weight)
+                                     heavy_tails=heavy_tails, garbage_weight=garbage_weight, mcmc=mcmc)
         frames.append(df)
         paths.append((season, path))
     table = pd.concat(frames, ignore_index=True)
@@ -235,6 +236,9 @@ def snapshot_options(argv: list[str] | None = None) -> dict:
     ap.add_argument("--tau-phases", action="store_true")
     ap.add_argument("--heavy-tails", action="store_true")
     ap.add_argument("--garbage-weight", type=float, default=GARBAGE_WEIGHT)
+    ap.add_argument("--mcmc-draws", type=int, default=HEAVY_TAILS_MCMC["draws"])
+    ap.add_argument("--mcmc-tune", type=int, default=HEAVY_TAILS_MCMC["tune"])
+    ap.add_argument("--mcmc-chains", type=int, default=HEAVY_TAILS_MCMC["chains"])
     ap.add_argument("--drop-features-from", type=Path, default=None)
     args = ap.parse_args(argv)
     return {"first": args.first, "last": args.last, "likelihood": args.likelihood,
@@ -242,6 +246,7 @@ def snapshot_options(argv: list[str] | None = None) -> dict:
             "conference": args.conference, "projection": args.projection, "drives": args.drives,
             "independents_separate": args.independents_separate, "tau_phases": args.tau_phases,
             "heavy_tails": args.heavy_tails, "garbage_weight": args.garbage_weight,
+            "mcmc": {"draws": args.mcmc_draws, "tune": args.mcmc_tune, "chains": args.mcmc_chains},
             "drop_features": read_drop_features(args.drop_features_from) if args.drop_features_from else ()}
 
 
@@ -256,7 +261,7 @@ def main() -> None:
                                 conference=o["conference"], projection=o["projection"],
                                 drop_features=o["drop_features"], drives=o["drives"],
                                 independents_separate=o["independents_separate"], tau_phases=o["tau_phases"],
-                                heavy_tails=o["heavy_tails"], garbage_weight=o["garbage_weight"])
+                                heavy_tails=o["heavy_tails"], garbage_weight=o["garbage_weight"], mcmc=o["mcmc"])
     print(f"{len(table):,} team-week rows")
 
 
