@@ -111,3 +111,4 @@ cython_debug/
 *.npz
 .superpowers/
 catboost_info/
+!gnomepy_research/sessions/cfb_win_probability/evaluation/error_lab/template.html

@@ -27,6 +27,22 @@ poetry run python -m gnomepy_research.models.cfb.features.snapshots 2018 2026
 poetry run python -m gnomepy_research.sessions.cfb_win_probability.features.leak_audit
 ```
 
+## Error Lab: compare error distributions interactively
+
+`evaluation/error_lab/build.py` writes a single HTML page with:
+- overlaid error distributions for any set of models plus the opening and closing lines;
+- 30+ cuts (rankings, conferences, service academies, season phase, game context);
+- a lean-across-every-cut panel.
+
+```bash
+poetry run python -m gnomepy_research.sessions.cfb_win_probability.evaluation.error_lab.build 2023_2024 \
+    "K:Full priors + drives" "G:Conference-aware" "MINE:My model=path/to/predictions.parquet"
+```
+
+Each model is `LABEL[:Name][=path]`. Without a path it reads `results/backtest/predictions_<tag>_<LABEL>.parquet`.
+A predictions file needs one row per game with `game_id`, `home_win` and `p_home`. The output goes to
+`results/error_lab/` and is gitignored, because it embeds per-game market lines from CFBD.
+
 ## Data source: CollegeFootballData (CFBD)
 
 - **Key:** `CFBD_API_KEY` (exported in `~/.zshrc`). Free tier.

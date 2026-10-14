@@ -1,0 +1,388 @@
+<title>CFB Error Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a press-box instrument panel - control rail on the left, the overlay chart as the field, bias-by-cut ledger beneath. */
+:root {
+  color-scheme: light;
+  --ground: #f6f7f4;
+  --panel: #ffffff;
+  --ink: #15201b;
+  --ink-2: #4d5a53;
+  --ink-3: #7c8781;
+  --rule: #dfe3de;
+  --grid: #eceee9;
+  --accent: #1d6b4f;
+  --accent-soft: #e2efe8;
+  --h1: #2a78d6; --h2: #eb6834; --h3: #1baf7a; --h4: #eda100;
+  --h5: #e87ba4; --h6: #008300; --s-Open: #4a3aa7; --s-Close: #e34948;
+  --f-display: "Familjen Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --f-data: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #111613; --panel: #18201c; --ink: #eef2ee; --ink-2: #b6c0b9; --ink-3: #85918a;
+    --rule: #2a352f; --grid: #222b26; --accent: #5cc79a; --accent-soft: #1d3329;
+    --h1: #3987e5; --h2: #d95926; --h3: #199e70; --h4: #c98500;
+    --h5: #d55181; --h6: #2f9a2f; --s-Open: #9085e9; --s-Close: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #111613; --panel: #18201c; --ink: #eef2ee; --ink-2: #b6c0b9; --ink-3: #85918a;
+  --rule: #2a352f; --grid: #222b26; --accent: #5cc79a; --accent-soft: #1d3329;
+  --h1: #3987e5; --h2: #d95926; --h3: #199e70; --h4: #c98500;
+    --h5: #d55181; --h6: #2f9a2f; --s-Open: #9085e9; --s-Close: #e66767;
+}
+* { box-sizing: border-box; }
+body { background: var(--ground); color: var(--ink); font: 15px/1.5 var(--f-body); padding: 28px 20px 48px; }
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 22px; }
+header { display: grid; gap: 6px; }
+.eyebrow { font: 500 11px/1 var(--f-data); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+h1 { font: 700 34px/1.1 var(--f-display); margin: 0; letter-spacing: -.01em; text-wrap: balance; }
+.lede { color: var(--ink-2); max-width: 72ch; margin: 0; }
+.main { display: grid; grid-template-columns: 272px 1fr; gap: 22px; align-items: start; }
+@media (max-width: 860px) { .main { grid-template-columns: 1fr; } }
+.rail { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; display: grid; gap: 20px; }
+.group { display: grid; gap: 8px; }
+.glabel { font: 500 11px/1 var(--f-data); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.models { display: grid; grid-template-columns: 1fr; gap: 5px; }
+.chip { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid var(--rule); border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--ink-2); background: transparent; text-align: left; }
+svg.swl { display: inline-block; width: 22px; height: 10px; flex: none; vertical-align: middle; overflow: visible; }
+.chip { opacity: .75; }
+.chip[aria-pressed="true"] { opacity: 1; }
+.chip[aria-pressed="true"] { color: var(--ink); border-color: var(--ink-3); background: var(--accent-soft); }
+
+.chip:disabled { opacity: .4; cursor: not-allowed; }
+.chip small { color: var(--ink-3); font: 11px var(--f-data); margin-left: auto; }
+select, .seg button { font: 14px var(--f-body); color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: 7px; padding: 8px 10px; width: 100%; }
+.seg { display: grid; gap: 6px; }
+.seg button { text-align: left; cursor: pointer; display: grid; gap: 2px; }
+.seg button span { font-size: 12px; color: var(--ink-3); }
+.seg button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.note { font-size: 12px; color: var(--ink-3); margin: 0; }
+.stage { display: grid; gap: 14px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; min-width: 0; }
+.chead { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 16px; }
+.ctitle { font: 700 19px/1.25 var(--f-display); margin: 0; text-wrap: balance; }
+.csub { font-size: 13px; color: var(--ink-2); margin: 2px 0 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--ink-2); }
+.legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+.chartbox { position: relative; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { font: 11px var(--f-data); fill: var(--ink-3); }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; font: 12px/1.45 var(--f-data); color: var(--ink); box-shadow: 0 6px 18px rgb(0 0 0 / .12); min-width: 150px; z-index: 2; }
+.tip b { font-weight: 500; }
+.tip .r { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.tip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+th { font: 500 11px var(--f-data); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+td { padding: 8px 10px; border-bottom: 1px solid var(--grid); text-align: right; font-family: var(--f-data); white-space: nowrap; }
+td .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 8px; vertical-align: middle; }
+.pill { display: inline-block; font: 500 11px var(--f-data); padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.lean-pos { color: var(--accent); }
+.lean-neg { color: var(--s-Close); }
+.lean-none { color: var(--ink-3); }
+.ledger-row { cursor: pointer; }
+.ledger-row:hover rect.bg { fill: var(--accent-soft); }
+@media (prefers-reduced-motion: no-preference) { path.dens { transition: opacity .15s; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow" id="eyebrow"></span>
+    <h1>CFB Error Lab</h1>
+    <p class="lede">Overlay each model's error distribution and check whether it leans one way. Every cut is read from one team's side: a positive mean error means that side won more often than the model expected, so the model underrated it.</p>
+  </header>
+
+  <div class="main">
+    <aside class="rail" aria-label="Controls">
+      <div class="group">
+        <span class="glabel">Models to overlay</span>
+        <div class="models" id="models"></div>
+      </div>
+      <div class="group">
+        <span class="glabel">Error measure</span>
+        <div class="seg" id="metric"></div>
+      </div>
+      <div class="group">
+        <label class="glabel" for="cut">Cut</label>
+        <select id="cut"></select>
+        <p class="note" id="cutnote"></p>
+      </div>
+      <p class="note">Ranked means the team's preseason AP rank (top 25). The datasets have no weekly poll, so a team that rose into the rankings mid-season counts as unranked.</p>
+    </aside>
+
+    <section class="stage">
+      <div class="card">
+        <div class="chead">
+          <div>
+            <h2 class="ctitle" id="ctitle"></h2>
+            <p class="csub" id="csub"></p>
+          </div>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div class="chartbox" id="distbox"><svg id="dist" viewBox="0 0 860 340" role="img" aria-label="Error distribution overlay"></svg><div class="tip" id="tip1" hidden></div></div>
+      </div>
+
+      <div class="card">
+        <div class="chead"><h2 class="ctitle">Summary for this cut</h2><p class="csub">Mean with 95% interval. A lean is flagged only when the interval excludes zero.</p></div>
+        <div class="tablewrap"><table id="stats"></table></div>
+      </div>
+
+      <div class="card">
+        <div class="chead">
+          <div><h2 class="ctitle">Lean across every cut</h2><p class="csub" id="ledsub"></p></div>
+        </div>
+        <div class="chartbox" id="ledbox"><svg id="ledger" role="img" aria-label="Mean error by cut"></svg><div class="tip" id="tip2" hidden></div></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script type="application/json" id="data">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById("data").textContent);
+const ROWS = D.rows;
+const P4 = new Set(D.p4);
+const MODELS = D.models.map(m => m.label);
+const SERIES = [...MODELS, "Open", "Close"];
+const NAMES = Object.fromEntries([...D.models.map(m => [m.label, m.name]), ["Open", "Opening line"], ["Close", "Closing line"]]);
+const DASHES = ["", "7 4", "2 3"];
+const STYLE = Object.fromEntries(MODELS.map((m, i) => [m, [(i % 6) + 1, DASHES[Math.floor(i / 6) % 3]]]));
+document.getElementById("eyebrow").textContent = `Pregame win probability · ${D.tag} backtest · ${ROWS.length.toLocaleString()} games`;
+const DASH = s => (STYLE[s] || [0, ""])[1];
+const cvar = s => STYLE[s] ? `var(--h${STYLE[s][0]})` : `var(--s-${s})`;
+const swatch = s => `<svg class="swl" width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><line x1="1" y1="5" x2="21" y2="5" stroke="${cvar(s)}" stroke-width="3" stroke-dasharray="${DASH(s)}" stroke-linecap="round"/></svg>`;
+const ACADEMIES = new Set(["Army", "Navy", "Air Force"]);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const col = s => STYLE[s] ? css(`--h${STYLE[s][0]}`) : css("--s-" + s);
+const fmt = (v, d = 3) => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(d);
+
+const METRICS = {
+  signed: { label: "Result − probability", desc: "Signed error from the cut's side. Two humps: wins near +, losses near −.", lo: -1, hi: 1, fn: (y, p) => y - p, lean: true },
+  open: { label: "Probability − opening line", desc: "How far each source sits from the opening line, from the cut's side.", lo: -0.5, hi: 0.5, fn: (y, p, o) => p - o, lean: true, noOpen: true },
+  logloss: { label: "Log loss per game", desc: "Per-game log loss. A longer right tail means more confident misses.", lo: 0, hi: 3, fn: (y, p) => -(y * Math.log(Math.max(p, 1e-4)) + (1 - y) * Math.log(Math.max(1 - p, 1e-4))), lean: false }
+};
+
+const isP4 = (conf, team) => P4.has(conf) || team === "Notre Dame";
+const better = (r) => (r.hr ?? 99) <= (r.ar ?? 99);
+const CUTS = [];
+const add = (group, name, desc, pick) => CUTS.push({ group, name, desc, pick });
+add("Overall", "All games", "Home team's side (listed home at neutral sites).", r => "h");
+add("Overall", "Favorites", "Favorite by the opening line, every game.", r => r.p.Open >= 0.5 ? "h" : "a");
+add("Overall", "Big favorites (open ≥ 80%)", "Favorite's side in games the opening line made 80% or more.", r => Math.max(r.p.Open, 1 - r.p.Open) >= 0.8 ? (r.p.Open >= 0.5 ? "h" : "a") : null);
+add("Overall", "Toss-ups (open 40–60%)", "Home team's side.", r => r.p.Open >= 0.4 && r.p.Open <= 0.6 ? "h" : null);
+add("Rankings", "Any ranked team", "Ranked team's side; the better-ranked team when both are ranked.", r => r.hr == null && r.ar == null ? null : (r.hr != null && (r.ar == null || better(r)) ? "h" : "a"));
+add("Rankings", "Ranked vs unranked", "Ranked team's side.", r => (r.hr == null) === (r.ar == null) ? null : (r.hr != null ? "h" : "a"));
+add("Rankings", "Ranked vs ranked", "Better-ranked team's side.", r => r.hr != null && r.ar != null ? (better(r) ? "h" : "a") : null);
+add("Rankings", "Unranked vs unranked", "Home team's side.", r => r.hr == null && r.ar == null ? "h" : null);
+add("Rankings", "Top 10 teams", "Top-10 team's side.", r => (r.hr ?? 99) <= 10 && (r.hr ?? 99) <= (r.ar ?? 99) ? "h" : (r.ar ?? 99) <= 10 ? "a" : null);
+add("Program type", "Service academies", "Army, Navy or Air Force side; home team in academy-vs-academy games.", r => ACADEMIES.has(r.h) ? "h" : ACADEMIES.has(r.a) ? "a" : null);
+add("Program type", "Power 4 vs Group of 5", "Power 4 side (Notre Dame counts as Power 4).", r => { const h = isP4(r.hc, r.h), a = isP4(r.ac, r.a); return h === a ? null : (h ? "h" : "a"); });
+add("Program type", "Group of 5 vs Group of 5", "Home team's side.", r => !isP4(r.hc, r.h) && !isP4(r.ac, r.a) ? "h" : null);
+const confs = [...new Set(ROWS.flatMap(r => [r.hc, r.ac]))].filter(Boolean).sort();
+confs.forEach(c => add("Conference", c, `${c} team's side; home team when both are ${c}.`, r => r.hc === c ? "h" : r.ac === c ? "a" : null));
+add("Game context", "Conference games", "Home team's side.", r => r.conf ? "h" : null);
+add("Game context", "Non-conference games", "Home team's side.", r => !r.conf ? "h" : null);
+add("Game context", "True home games", "Home team's side, neutral sites excluded.", r => !r.neu ? "h" : null);
+add("Game context", "Neutral sites", "Listed home team's side.", r => r.neu ? "h" : null);
+add("Calendar", "2023 season", "Home team's side.", r => r.s === 2023 ? "h" : null);
+add("Calendar", "2024 season", "Home team's side.", r => r.s === 2024 ? "h" : null);
+add("Calendar", "Weeks 1–4", "Home team's side. Ratings lean most on priors here.", r => !r.post && r.w <= 4 ? "h" : null);
+add("Calendar", "Weeks 5–9", "Home team's side.", r => !r.post && r.w >= 5 && r.w <= 9 ? "h" : null);
+add("Calendar", "Weeks 10+", "Home team's side.", r => !r.post && r.w >= 10 ? "h" : null);
+add("Calendar", "Postseason", "Listed home team's side.", r => r.post ? "h" : null);
+
+function values(cut, metric, s) {
+  const m = METRICS[metric], out = [];
+  for (const r of ROWS) {
+    const side = cut.pick(r);
+    if (!side) continue;
+    const ph = r.p[s], oh = r.p.Open;
+    const [y, p, o] = side === "h" ? [r.y, ph, oh] : [1 - r.y, 1 - ph, 1 - oh];
+    out.push(m.fn(y, p, o));
+  }
+  return out;
+}
+function stats(v) {
+  const n = v.length, mean = v.reduce((a, b) => a + b, 0) / n;
+  const sd = Math.sqrt(v.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(n - 1, 1));
+  const se = sd / Math.sqrt(n);
+  const sk = n > 2 ? v.reduce((a, b) => a + ((b - mean) / sd) ** 3, 0) / n : 0;
+  const sorted = [...v].sort((a, b) => a - b), med = sorted[Math.floor(n / 2)];
+  return { n, mean, lo: mean - 1.96 * se, hi: mean + 1.96 * se, sd, sk, med };
+}
+function kde(v, lo, hi, pts = 160) {
+  const n = v.length, sd = Math.sqrt(v.reduce((a, b) => a + b * b, 0) / n - (v.reduce((a, b) => a + b, 0) / n) ** 2) || 0.05;
+  const h = Math.max(1.06 * sd * Math.pow(n, -0.2), (hi - lo) / 120);
+  const xs = Array.from({ length: pts }, (_, i) => lo + (hi - lo) * i / (pts - 1));
+  const k = u => Math.exp(-0.5 * u * u);
+  return xs.map(x => {
+    let s = 0;
+    for (const t of v) s += k((x - t) / h) + k((x - (2 * lo - t)) / h) + k((x - (2 * hi - t)) / h);
+    return [x, s / (n * h * Math.sqrt(2 * Math.PI))];
+  });
+}
+
+const state = { models: new Set([...MODELS.slice(0, 2), "Open"]), metric: "signed", cut: 0 };
+try { const s = JSON.parse(localStorage.getItem("cfb-error-lab-" + D.tag) || "null"); if (s) { state.models = new Set(s.models.filter(x => SERIES.includes(x))); state.metric = METRICS[s.metric] ? s.metric : "signed"; state.cut = Math.min(s.cut ?? 0, CUTS.length - 1); } } catch (e) {}
+const save = () => { try { localStorage.setItem("cfb-error-lab-" + D.tag, JSON.stringify({ models: [...state.models], metric: state.metric, cut: state.cut })); } catch (e) {} };
+const active = () => SERIES.filter(s => state.models.has(s) && !(METRICS[state.metric].noOpen && s === "Open"));
+
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs = {}, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+
+function buildControls() {
+  const mbox = document.getElementById("models");
+  SERIES.forEach(s => {
+    const b = document.createElement("button");
+    b.className = "chip"; b.id = "m-" + s; b.type = "button";
+    b.style.setProperty("--sc", cvar(s));
+    b.innerHTML = `${swatch(s)}${NAMES[s]}<small>${s === "Open" || s === "Close" ? "" : s}</small>`;
+    b.onclick = () => { state.models.has(s) ? state.models.delete(s) : state.models.add(s); render(); };
+    mbox.appendChild(b);
+  });
+  const seg = document.getElementById("metric");
+  Object.entries(METRICS).forEach(([k, m]) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.id = "metric-" + k;
+    b.innerHTML = `${m.label}<span>${m.desc}</span>`;
+    b.onclick = () => { state.metric = k; render(); };
+    seg.appendChild(b);
+  });
+  const sel = document.getElementById("cut");
+  let og;
+  CUTS.forEach((c, i) => {
+    if (!og || og.label !== c.group) { og = document.createElement("optgroup"); og.label = c.group; sel.appendChild(og); }
+    const o = document.createElement("option"); o.value = i; o.textContent = c.name; og.appendChild(o);
+  });
+  sel.onchange = () => { state.cut = +sel.value; render(); };
+}
+
+function renderDist() {
+  const m = METRICS[state.metric], cut = CUTS[state.cut], svg = document.getElementById("dist");
+  svg.innerHTML = "";
+  const W = 860, H = 340, L = 46, R = 18, T = 14, B = 40;
+  const series = active().map(s => ({ s, v: values(cut, state.metric, s) }));
+  const n = series[0]?.v.length ?? 0;
+  document.getElementById("ctitle").textContent = `${cut.name}: ${m.label.toLowerCase()}`;
+  document.getElementById("csub").textContent = `${n.toLocaleString()} games · ${cut.desc}`;
+  const leg = document.getElementById("legend");
+  leg.innerHTML = series.map(d => `<span>${swatch(d.s)} ${NAMES[d.s]}</span>`).join("");
+  if (!series.length || n < 5) { el("text", { x: W / 2, y: H / 2, "text-anchor": "middle" }, svg).textContent = !series.length ? "Pick at least one model to overlay." : "Too few games in this cut to draw a distribution."; return; }
+  const curves = series.map(d => ({ ...d, k: kde(d.v, m.lo, m.hi), st: stats(d.v) }));
+  const ymax = Math.max(...curves.flatMap(c => c.k.map(p => p[1]))) * 1.08;
+  const x = v => L + (v - m.lo) / (m.hi - m.lo) * (W - L - R);
+  const y = v => H - B - v / ymax * (H - T - B);
+  const ticks = state.metric === "logloss" ? [0, 0.5, 1, 1.5, 2, 2.5, 3] : state.metric === "open" ? [-0.5, -0.25, 0, 0.25, 0.5] : [-1, -0.5, 0, 0.5, 1];
+  ticks.forEach(t => {
+    el("line", { x1: x(t), x2: x(t), y1: T, y2: H - B, stroke: css("--grid"), "stroke-width": 1 }, svg);
+    el("text", { x: x(t), y: H - B + 18, "text-anchor": "middle" }, svg).textContent = state.metric === "logloss" ? t.toFixed(1) : (t > 0 ? "+" : t < 0 ? "−" : "") + Math.abs(t);
+  });
+  el("line", { x1: L, x2: W - R, y1: H - B, y2: H - B, stroke: css("--rule"), "stroke-width": 1 }, svg);
+  if (m.lean) el("line", { x1: x(0), x2: x(0), y1: T, y2: H - B, stroke: css("--ink-3"), "stroke-width": 1, "stroke-dasharray": "3 3" }, svg);
+  el("text", { x: (L + W - R) / 2, y: H - 6, "text-anchor": "middle" }, svg).textContent = state.metric === "logloss" ? "log loss (lower is better)" : m.lean ? "← model overrated this side · underrated this side →" : "";
+  el("text", { x: 4, y: T + 4 }, svg).textContent = "density";
+  curves.forEach(c => {
+    const d = c.k.map((p, i) => `${i ? "L" : "M"}${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join("");
+    el("path", { d: d + `L${x(m.hi)},${y(0)}L${x(m.lo)},${y(0)}Z`, fill: col(c.s), "fill-opacity": 0.07, stroke: "none" }, svg);
+    el("path", { class: "dens", d, fill: "none", stroke: col(c.s), "stroke-width": 2, "stroke-linejoin": "round", "stroke-dasharray": DASH(c.s) }, svg);
+    if (m.lean || state.metric === "logloss") {
+      const mx = x(Math.max(m.lo, Math.min(m.hi, c.st.mean)));
+      el("line", { x1: mx, x2: mx, y1: T + 2, y2: H - B, stroke: col(c.s), "stroke-width": 1.5, "stroke-dasharray": "1 3" }, svg);
+    }
+  });
+  const hair = el("line", { y1: T, y2: H - B, stroke: css("--ink-3"), "stroke-width": 1, opacity: 0 }, svg);
+  const hit = el("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent" }, svg);
+  const tip = document.getElementById("tip1"), box = document.getElementById("distbox");
+  hit.addEventListener("mousemove", e => {
+    const rect = svg.getBoundingClientRect(), sx = (e.clientX - rect.left) * W / rect.width;
+    const xv = m.lo + (sx - L) / (W - L - R) * (m.hi - m.lo);
+    const i = Math.round((xv - m.lo) / (m.hi - m.lo) * (curves[0].k.length - 1));
+    hair.setAttribute("x1", sx); hair.setAttribute("x2", sx); hair.setAttribute("opacity", 1);
+    tip.hidden = false;
+    tip.innerHTML = `<b>${state.metric === "logloss" ? xv.toFixed(2) : fmt(xv, 2)}</b>` + curves.map(c => `<div class="r"><span><i style="background:${col(c.s)}"></i>${NAMES[c.s]}</span><span>${c.k[i][1].toFixed(2)}</span></div>`).join("");
+    const bx = e.clientX - box.getBoundingClientRect().left;
+    tip.style.left = Math.min(bx + 14, box.clientWidth - tip.offsetWidth - 4) + "px";
+    tip.style.top = "12px";
+  });
+  hit.addEventListener("mouseleave", () => { tip.hidden = true; hair.setAttribute("opacity", 0); });
+}
+
+function renderStats() {
+  const m = METRICS[state.metric], cut = CUTS[state.cut], t = document.getElementById("stats");
+  const rows = active().map(s => {
+    const st = stats(values(cut, state.metric, s));
+    const ll = stats(values(cut, "logloss", s)).mean;
+    let lean = `<span class="pill lean-none">no lean</span>`;
+    if (m.lean && st.lo > 0) lean = `<span class="pill lean-pos">underrates this side</span>`;
+    if (m.lean && st.hi < 0) lean = `<span class="pill lean-neg">overrates this side</span>`;
+    if (!m.lean) lean = "";
+    return `<tr><td>${swatch(s)} ${NAMES[s]}</td><td>${st.n}</td><td>${m.lean ? fmt(st.mean) : st.mean.toFixed(3)}</td><td>${m.lean ? `${fmt(st.lo)} to ${fmt(st.hi)}` : `${st.lo.toFixed(3)} to ${st.hi.toFixed(3)}`}</td><td>${m.lean ? fmt(st.med) : st.med.toFixed(3)}</td><td>${st.sk.toFixed(2)}</td><td>${ll.toFixed(4)}</td><td>${lean}</td></tr>`;
+  }).join("");
+  t.innerHTML = `<thead><tr><th>Source</th><th>Games</th><th>Mean</th><th>95% interval</th><th>Median</th><th>Skew</th><th>Log loss</th><th>${m.lean ? "Lean" : ""}</th></tr></thead><tbody>${rows || `<tr><td colspan="8">Pick at least one model.</td></tr>`}</tbody>`;
+}
+
+function renderLedger() {
+  const svg = document.getElementById("ledger"), metric = METRICS[state.metric].lean ? state.metric : "signed";
+  const m = METRICS[metric];
+  document.getElementById("ledsub").textContent = `Mean ${m.label.toLowerCase()} with 95% interval, from each cut's side. Right of zero means the model underrated that side. Click a row to open it above.`;
+  svg.innerHTML = "";
+  const S = active(), rowH = 22, groupGap = 18, L = 190, R = 70, T = 24, W = 860;
+  const data = CUTS.map(c => ({ c, st: S.map(s => ({ s, ...stats(values(c, metric, s)) })) })).filter(d => d.st.length && d.st[0].n >= 15);
+  let yy = T, last = null;
+  const pos = data.map(d => { if (last && last !== d.c.group) yy += groupGap; last = d.c.group; const p = yy; yy += rowH; return p; });
+  const H = yy + 30;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const ext = Math.max(0.05, ...data.flatMap(d => d.st.map(z => Math.max(Math.abs(z.lo), Math.abs(z.hi)))));
+  const lim = Math.ceil(ext * 20) / 20;
+  const x = v => L + (v + lim) / (2 * lim) * (W - L - R);
+  const ticks = [-lim, -lim / 2, 0, lim / 2, lim];
+  ticks.forEach(t => { el("line", { x1: x(t), x2: x(t), y1: T - 6, y2: H - 26, stroke: css(t === 0 ? "--ink-3" : "--grid"), "stroke-width": 1, "stroke-dasharray": t === 0 ? "3 3" : "" }, svg); el("text", { x: x(t), y: H - 10, "text-anchor": "middle" }, svg).textContent = (t > 0 ? "+" : t < 0 ? "−" : "") + Math.abs(t).toFixed(3); });
+  let lastG = null;
+  const tip = document.getElementById("tip2"), box = document.getElementById("ledbox");
+  data.forEach((d, i) => {
+    const y0 = pos[i];
+    if (d.c.group !== lastG) { el("text", { x: 0, y: y0 - 6, style: `font:500 10px var(--f-data);letter-spacing:.1em;fill:var(--accent)` }, svg).textContent = d.c.group.toUpperCase(); lastG = d.c.group; }
+    const g = el("g", { class: "ledger-row", tabindex: 0, role: "button", "aria-label": d.c.name }, svg);
+    const idx = CUTS.indexOf(d.c);
+    el("rect", { class: "bg", x: 0, y: y0, width: W, height: rowH, rx: 4, fill: idx === state.cut ? css("--accent-soft") : "transparent" }, g);
+    el("text", { x: 6, y: y0 + 15, style: `fill:${css(idx === state.cut ? "--ink" : "--ink-2")};font:12px var(--f-body)` }, g).textContent = d.c.name;
+    el("text", { x: W - 4, y: y0 + 15, "text-anchor": "end" }, g).textContent = `${d.st[0].n} g`;
+    d.st.forEach((z, j) => {
+      const yc = y0 + rowH / 2 + (j - (d.st.length - 1) / 2) * Math.min(4, 14 / d.st.length);
+      el("line", { x1: x(z.lo), x2: x(z.hi), y1: yc, y2: yc, stroke: col(z.s), "stroke-width": 2, "stroke-linecap": "round", opacity: 0.55, "stroke-dasharray": DASH(z.s) }, g);
+      el("circle", { cx: x(z.mean), cy: yc, r: 4, fill: col(z.s), stroke: css("--panel"), "stroke-width": 2 }, g);
+    });
+    const open = () => { state.cut = idx; render(); };
+    g.addEventListener("click", open);
+    g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    g.addEventListener("mousemove", e => {
+      tip.hidden = false;
+      tip.innerHTML = `<b>${d.c.name}</b> · ${d.st[0].n} games` + d.st.map(z => `<div class="r"><span><i style="background:${col(z.s)}"></i>${NAMES[z.s]}</span><span>${fmt(z.mean)} [${fmt(z.lo, 2)}, ${fmt(z.hi, 2)}]</span></div>`).join("");
+      const r = box.getBoundingClientRect();
+      tip.style.left = Math.min(e.clientX - r.left + 14, box.clientWidth - tip.offsetWidth - 4) + "px";
+      tip.style.top = (e.clientY - r.top + 14) + "px";
+    });
+    g.addEventListener("mouseleave", () => { tip.hidden = true; });
+  });
+}
+
+function render() {
+  SERIES.forEach(s => { const b = document.getElementById("m-" + s); b.setAttribute("aria-pressed", state.models.has(s)); b.disabled = METRICS[state.metric].noOpen && s === "Open"; });
+  Object.keys(METRICS).forEach(k => document.getElementById("metric-" + k).setAttribute("aria-pressed", k === state.metric));
+  document.getElementById("cut").value = state.cut;
+  document.getElementById("cutnote").textContent = CUTS[state.cut].desc;
+  renderDist(); renderStats(); renderLedger(); save();
+}
+buildControls(); render();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+new MutationObserver(render).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+</script>
