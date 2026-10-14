@@ -934,6 +934,81 @@ poetry run python -m gnomepy_research.sessions.cfb_win_probability.evaluation.co
 
 ---
 
+## Phase 3b: CatBoost (model E)
+
+### Task 10E: CatBoost win-probability model (model E) and C+E blend
+
+Added 2026-10-13 at the user's request after the Task 10 checkpoint. It uses the same point-in-time inputs as model C, but a gradient-boosted classifier replaces the linear logistic layer, so it can learn interactions (rush O × opponent rush D, uncertainty × edge, week × edge).
+
+**Files:**
+- Modify: `pyproject.toml` (add `catboost`; run `poetry add catboost`)
+- Create: `gnomepy_research/sessions/cfb_win_probability/models/catboost_wp.py`
+- Modify: `gnomepy_research/sessions/cfb_win_probability/evaluation/backtest.py` (`--model E`)
+- Modify: `gnomepy_research/sessions/cfb_win_probability/evaluation/compare_models.py` (blend labels like `C+E`)
+- Test: `tests/sessions/test_cfb_catboost_wp.py`
+- Output: `results/backtest/report_2023_2024_E.txt`, `predictions_2023_2024_E.parquet`, updated `comparison_2023_2024.txt`
+
+**Interfaces:**
+- Consumes:
+  - `load_season_draws(season, directory, units)` from `win_probability.py`, on split+form draws files with keys `__off`, `__def`, `__team_ids`, `__units`, `__rush_share`, `__form`.
+  - `FORM_FEATURES` from `models/cfb/features/team_form.py`.
+  - The predictions parquet contract from Task 6.
+- Produces:
+  - `TEAM_FEATURES = ["o_pass", "o_rush", "d_pass", "d_rush", "o_pass_sd", "o_rush_sd", "d_pass_sd", "d_rush_sd", "rush_share", *FORM_FEATURES]`.
+    - The first 8 are posterior **mean and sd over draws** at the game's weekly cutoff.
+    - `rush_share` comes from `__rush_share`, and the form features from `__form`, all indexed on the pass columns. Reuse the same `p_cols`/`hi`/`ai` mapping and the same alignment `ValueError` as `game_draws`, via a shared helper; don't duplicate the logic.
+  - `game_features(games, seasons, directory=DRAWS_DIR) -> pd.DataFrame`: one row per FBS-vs-FBS game. Columns:
+    - `game_id, season, week, season_type, home_win`;
+    - `h_<f>` and `a_<f>` for every f in TEAM_FEATURES;
+    - matchup columns `pass_matchup_h = h_o_pass - a_d_pass`, `rush_matchup_h = h_o_rush - a_d_rush`, `pass_matchup_a = a_o_pass - h_d_pass`, `rush_matchup_a = a_o_rush - h_d_rush`;
+    - `venue` (1 home, 0 neutral), `postseason` (0/1), `week`.
+  - `swap(df) -> pd.DataFrame`: exchanges every `h_`/`a_` pair and every `_h`/`_a` matchup pair, sets `home_win = 1 - home_win`, and negates `venue`. At a neutral site, venue stays 0.
+  - `fit_catboost(train: pd.DataFrame, seed: int = 0) -> CatBoostWP`:
+    - Training data is `pd.concat([train, swap(train)])`. Augmenting with swapped copies teaches the model team-order symmetry.
+    - Early stopping is evaluated on the last training season (also augmented). The model is then refit on all training seasons with the best iteration count.
+    - Params: `loss_function="Logloss", depth=4, learning_rate=0.03, l2_leaf_reg=10, iterations=3000, random_seed=seed, verbose=False`.
+  - `CatBoostWP.predict(df) -> np.ndarray`: `0.5 * (p(df) + (1 - p(swap(df))))`, so swapping teams at a neutral site gives exactly 1 − p.
+  - `CatBoostWP.feature_importance() -> pd.Series`.
+  - Backtest `MODEL_CONFIGS["E"] = dict(units=UNITS_SPLIT, form=True, qb=False, learner="catboost")`.
+    - Existing entries get `learner="bayes"`.
+    - For E, `run_season` trains on `game_features(games, 2020..S-1)` rows with a known `home_win` and predicts season S.
+    - `p_home` and `p_bayes` are both set to the CatBoost probability, so `report()` works unchanged.
+    - Baselines are computed as for the other models.
+    - The report adds a top-15 feature-importance section.
+  - `compare_models` accepts a label containing `+` (e.g. `C+E`) and scores the mean of those models' `p_home` on the shared game set.
+
+- [ ] **Step 1: Failing tests** (synthetic frames, no npz needed for most):
+
+```python
+def test_swap_is_an_involution_and_flips_label(): ...
+    # swap(swap(df)) equals df; swap flips home_win and exchanges h_/a_ columns
+def test_predict_is_antisymmetric_at_neutral_site(): ...
+    # fit on a small synthetic frame where home_win depends on h_o_pass - a_d_pass; at venue 0,
+    # predict(df) + predict(swap(df)) == 1 (atol 1e-9)
+def test_learns_obvious_signal(): ...
+    # 2000 synthetic games, home_win ~ Bernoulli(sigmoid(10*(pass_matchup_h - pass_matchup_a)))
+    # held-out log loss < 0.6 and AUC > 0.75
+def test_game_features_from_npz(tmp_path): ...
+    # reuse the TestSplitGameDraws npz pattern + __form; check h_o_pass equals the mean over draws of the
+    # home team's pass offense column, and h_early_success equals its __form row
+```
+
+- [ ] **Step 2: Run, expect FAIL.**
+- [ ] **Step 3: Implement** `catboost_wp.py`, the backtest wiring and the blend labels.
+- [ ] **Step 4: Run tests, expect PASS. Then run:**
+
+```bash
+AWS_PROFILE=AWSAdministratorAccess-241533121172 poetry run python -m gnomepy_research.sessions.cfb_win_probability.evaluation.backtest 2023 2024 --model E
+AWS_PROFILE=AWSAdministratorAccess-241533121172 poetry run python -m gnomepy_research.sessions.cfb_win_probability.evaluation.compare_models 2023_2024 A B C E C+E
+```
+
+No tuning of CatBoost parameters against 2023–2024. If E is badly calibrated (slope outside [0.8, 1.2]), report it; don't fix it.
+
+- [ ] **Step 5: Commit** code, tests, `report_2023_2024_E.txt` and the updated comparison.
+- [ ] **Step 6:** Model D's base is the best of C, E and C+E by 2023–24 log loss. Record the choice in the ledger.
+
+---
+
 ## Phase 4: QB status (model D)
 
 ### Task 11: QB quality, baseline, and per-game QB delta
@@ -1160,7 +1235,7 @@ In `backtest.py`, when `MODELS[model]["qb"]` is true, build `src_full = SourceDa
 
 - [ ] **Step 4: Run tests, expect PASS.** Then run:
 
-Wire `MODELS["D"]` = the base model the user chose at the Task 10 checkpoint, plus `qb=True` (edit the `MODELS` entry accordingly). Then:
+Wire `MODEL_CONFIGS["D"]` = the base chosen in Task 10E Step 6 (C, E, or C+E), plus `qb=True`. If the base is E or C+E, add `h_qb_delta`/`a_qb_delta` as CatBoost features (and the `qb_delta_diff` term for the C side of a blend) (edit the `MODELS` entry accordingly). Then:
 
 ```bash
 poetry run python -m gnomepy_research.sessions.cfb_win_probability.evaluation.backtest 2023 2024 --model D
