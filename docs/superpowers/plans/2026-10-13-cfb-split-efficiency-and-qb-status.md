@@ -1349,6 +1349,93 @@ Commit messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com
 
 ---
 
+## Phase 6: Model G, "Conference-aware"
+
+Added 2026-10-13 after the error-lab analysis of model D on 2023–24. That analysis found:
+- D compresses the gap between strong and weak teams. Favorites win 3.4 pts more than D expects (6.7 pts for open ≥ 80% favorites; calibration slope 1.33).
+- Power 4 teams beat Group of 5 teams 5.5 pts more than expected (D minus open log loss +0.034).
+- Non-conference games are the weakest context (+0.030).
+- Weeks 1–9 trail the open by about 0.025.
+- Service academies lean 5.5 pts toward the academy vs the open.
+
+G = D + four fixes:
+1. A hierarchical conference effect in the efficiency model.
+2. Conference-mean preseason features.
+3. A stretch term in the outcome layer.
+4. An option-offense style flag.
+
+Everything is opt-in. With `conference=False` (the default), every existing model and production path is byte-identical.
+
+### Task 16: Conference effect and conference-mean priors in the efficiency model
+
+**Files:**
+- Modify: `gnomepy_research/models/cfb/efficiency/data.py`, `dynamic_efficiency.py`, `gaussian_solver.py`, `inference.py`, `posterior_snapshots.py`
+- Test: `tests/sessions/test_cfb_win_probability_models.py`
+
+**Interfaces:**
+- `build_model_data(..., units=UNITS_ALL, conference: bool = False)`. When `conference=True`:
+  - **Conference index:** each FBS team-season gets a conference index from that season's `cfb_games` (`home_conference` / `away_conference`; the most frequent value per team-season). The pooled FCS entity and teams with no conference get their own index per season, named `"none"`. New `ModelData` fields: `conf_keys: pd.DataFrame` (season, conference), and `ts_conf: np.ndarray` (one conference index per ts row, the same across units).
+  - **Conference-mean features (fix 2):**
+    - Append `conf_prior_off`, `conf_prior_def`, `conf_talent` and `conf_recruiting` to the base features before standardizing: off gets `conf_prior_off`, `conf_talent`, `conf_recruiting`; def gets `conf_prior_def`, `conf_talent`, `conf_recruiting`.
+    - Each is the mean, over the team-season's conference members in the same season, of `prior_off_rating`, `prior_def_rating`, `talent_offense` / `talent_defense`, and `recruiting_points`.
+    - All of these are preseason features, so point-in-time is unchanged.
+    - Standardize within season, as the other features are.
+  - With `conference=False`, `conf_keys` is empty, `ts_conf` has length 0, and features are unchanged.
+- `build_model`: when `len(data.conf_keys) > 0`, add non-centered conference effects:
+  - `z_conf_off ~ N(0,1)` and `z_conf_def ~ N(0,1)`, dims `conf`;
+  - `start_off += s_conf_off * z_conf_off[ts_conf]`, and the same for def.
+  - New hyperparameters: `s_conf_off` and `s_conf_def` ~ HalfNormal(0.05). In `Hyperparameters` they default to 0.0, and `from_dict` tolerates their absence.
+  - `units` and the conference effect compose: in split mode, each unit gets its own conference effect. Index `conf × unit` the same way ts is unit-major.
+- `gaussian_solver`: add the `z_conf_off` and `z_conf_def` blocks to `_layout` (size 0 when there are no conferences) and fill `B[row, lay["z_conf_off"] + conf_of_ts] = s_conf_off` in `_state_map`. The default layout size is unchanged.
+- `Hyperparameters.conference: bool = False`. The fit and cutoff functions read it, as they read `units`.
+- Naming: `hyper_name(..., units, conference)` appends `_conf`, and so does `draws_name`. `model_version` becomes `dyn-eff-split-conf-1`. Snapshot CLI flag `--conference`.
+- Defaults are byte-identical. Existing tests must pass unchanged.
+
+**Tests (TDD):**
+- With `conference=False`, `ModelData` has the same arrays as before.
+- With `conference=True`:
+  - `ts_conf` maps every team in a conference to the same index;
+  - FCS gets `"none"`;
+  - the conference-mean feature equals the hand-computed mean.
+- Synthetic recovery: a planted conference shift (+0.1 to every team in conf X) is recovered as the `z_conf` mean sign, with the exact solver matching MCMC (atol 0.01).
+- Old hyperparameter JSONs still load.
+
+### Task 17: Stretch and option terms in the outcome layer; snapshots and backtest for G
+
+**Files:**
+- Modify: `gnomepy_research/models/cfb/features/team_form.py` or a new `features/style.py`
+- Modify: `posterior_snapshots.py`, `sessions/cfb_win_probability/models/win_probability.py`, `evaluation/backtest.py`
+- Test: `tests/sessions/test_cfb_win_probability_models.py`, `tests/sessions/test_cfb_team_form.py`
+
+**Interfaces:**
+- **Option flag (fix 4):** `option_offense(efficiency, season) -> pd.Series[team_id → 0/1]`.
+  - 1 when the team's **previous season** rush share (`rush_plays / (rush_plays + pass_plays)`) is ≥ 0.65.
+  - With no previous season, it uses season-to-date rows with at least 3 games before the cutoff.
+  - It must be point-in-time: the caller passes visible rows only.
+  - Saved in snapshots as `{key}__option` (T,), aligned with team_ids, when the snapshot is built with `--conference`. (G snapshots are always split + form + conference.)
+- Outcome terms added by `game_draws(..., stretch: bool = False, option: bool = False)`:
+  - `edge_abs_edge = net * |net|`, where `net = pass_edge + rush_edge` (antisymmetric). It lets big edges stretch toward 0 and 1 (fix 3). Prior N(0, 30), since `net` is in PPA/play units of about ±0.3.
+  - `option_diff = option_h − option_a` (antisymmetric). Prior N(0, 0.5).
+- `MODEL_CONFIGS["G"] = dict(units=UNITS_SPLIT, form=True, qb=True, learner="bayes", conference=True, stretch=True, option=True)`. Thread the new keys through `_bayes_season` and `game_draws`. G reads draws named with the `_conf` suffix.
+- Data runs (prefix `AWS_PROFILE=AWSAdministratorAccess-241533121172`):
+  1. `posterior_snapshots 2020 2024 --likelihood normal --units split --form --conference`. This fits `normal_split_conf_2019_*` hyperparameters (NUTS; expect minutes per season).
+  2. `backtest 2023 2024 --model G`
+  3. `compare_models 2023_2024 A B C D E F G C+E`
+- The G report must include:
+  - every coefficient with its 90% interval;
+  - the fitted `s_conf_off` and `s_conf_def`;
+  - the top and bottom 3 conference effects per season at the final regular-season cutoff;
+  - D vs G on the error-lab cuts that motivated G: favorites, big favorites, P4 vs G5, non-conference, weeks 1–4, weeks 5–9, service academies, toss-ups. For each, give bias, lean vs open and log-loss minus open, with 95% intervals.
+- **No tuning against 2023–24.** If a term comes out wrong-signed, report it; don't fix it.
+
+### Task 18: Add G to the CFB Error Lab artifact
+
+- Rebuild the error lab's data with G included (`build_dist_data.py`, `MODELS += ["G"]`).
+- In the page, add G as a selectable series named "Conference-aware". It needs its own categorical slot. The palette has 8 slots and E/F are the weakest, so drop F ("Residual CatBoost", identical to C) from the page to stay within 8 validated hues.
+- Republish to the same artifact URL.
+
+---
+
 ## Weekly operating procedure (after this ships)
 
 1. Before each slate, add one row per known QB change to `sessions/cfb_win_probability/data/qb_status.csv`, with `recorded_at` set to when you learned it.
