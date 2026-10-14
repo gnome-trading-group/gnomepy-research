@@ -1623,6 +1623,49 @@ J = G, pruned (Task 24), + a drive-level observation channel in the efficiency m
 
 ---
 
+## Phase 10: Model K, "Full priors + drives"
+
+Added 2026-10-14. J's pruning (selected on 2022 alone) hurt early-season (+0.012), P4 vs G5 (+0.019) and non-conference (+0.022) vs G. J's drive channel helped mid-season (weeks 5–9 J−J0 −0.018) and was the first model whose blend weight vs the open excluded 0.
+
+K = G (no pruning, full priors) + drive channel + independents as separate conference groups + season-phase edge weights.
+
+### Task 27: Independents as separate groups, and season-phase edge terms
+
+**Independents:**
+- `build_model_data(..., independents_separate: bool = False)`. When True, each team whose conference is "FBS Independents" gets its own conference group per season, named `"FBS Independents:<team_id>"`, instead of one shared group.
+- Default False keeps G/H/J byte-identical.
+- `Hyperparameters.independents_separate` defaults to False and is dropped from to_dict when off.
+- Naming suffix `_ind`, ordered after `_conf`.
+- Snapshot flag `--independents-separate`.
+
+**Phase terms:**
+- `game_draws(..., phase: bool = False)` appends `pass_edge_early = pass_edge × early` and `rush_edge_early = rush_edge × early`, where `early = 1` for regular-season weeks 1–4 and 0 otherwise.
+- Both are antisymmetric under swap. Priors N(0, 5).
+- They're appended after the existing terms.
+
+**Tests:**
+- Independents map to distinct groups.
+- The default is unchanged.
+- Phase terms are zero outside weeks 1–4, antisymmetric under swap, and in the right column order.
+
+### Task 28: Snapshots, backtest K, comparison, closing-line value
+
+- Snapshots 2020–2024: `--likelihood normal --units split --form --conference --independents-separate --drives`. No drop features.
+- `MODEL_CONFIGS["K"]` = G flags + `drives=True`, `independents_separate=True`, `phase=True`. No keep_terms or drop_features.
+- `backtest 2023 2024 --model K`.
+- `compare_models 2023_2024 C D G H I J0 J K`, with pairs K−G, K−J.
+- `compression_diag` for G/J/K.
+- `g_report` cut table G/J/K with paired K−G and K−J. Cuts: big favorites, favorites, P4 vs G5, non-conference, weeks 1–4, weeks 5–9, toss-ups, service academies, FBS independents.
+- **New, the closing-line value check** (`evaluation/clv.py`): for each model, regress (p_close − p_open) on (p_model − p_open) across games, with a game-bootstrap 95% CI on the slope, plus the correlation.
+  - A positive slope means the market moves toward the model between open and kickoff.
+  - Report it overall and for |p_model − p_open| > 0.05.
+  - Run it for G, J and K.
+- Report per-season (2023, 2024) log loss for K, so we can check the gain isn't one season only.
+- Error Lab: add K. To keep 8 hues, drop C.
+- No tuning on 2023–24.
+
+---
+
 ## Weekly operating procedure (after this ships)
 
 1. Before each slate, add one row per known QB change to `sessions/cfb_win_probability/data/qb_status.csv`, with `recorded_at` set to when you learned it.
