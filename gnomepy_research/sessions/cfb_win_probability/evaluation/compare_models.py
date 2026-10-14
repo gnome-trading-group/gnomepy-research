@@ -20,7 +20,7 @@ BACKTEST = Path(__file__).resolve().parent.parent / "results" / "backtest"
 SPREAD_SD = 15.5
 BET_THRESHOLD = 0.05
 N_BLEND_BOOT = 200
-PAIRS = [("B", "A"), ("C", "B"), ("C", "A"), ("D", "C"), ("E", "C"), ("C+E", "C"), ("C+E", "E"), ("F", "C"), ("F", "E"), ("G", "D"), ("G", "C"), ("H", "G"), ("H", "D")]
+PAIRS = [("B", "A"), ("C", "B"), ("C", "A"), ("D", "C"), ("E", "C"), ("C+E", "C"), ("C+E", "E"), ("F", "C"), ("F", "E"), ("G", "D"), ("G", "C"), ("H", "G"), ("H", "D"), ("I", "G"), ("I0", "G"), ("I", "I0")]
 
 
 def logit(p: np.ndarray) -> np.ndarray:

@@ -28,7 +28,8 @@ P4 = {"SEC", "Big Ten", "Big 12", "ACC", "Pac-12"}
 ACADEMIES = {"Army", "Navy", "Air Force"}
 Z95 = 1.96
 EXTRAS_MARKER = "\n\n==== EXTRAS (g_report) ====\n"
-CUT_MODELS = {"G": ["D", "G"], "H": ["D", "G", "H"]}
+CUT_MODELS = {"G": ["D", "G"], "H": ["D", "G", "H"], "I": ["G", "I0", "I"]}
+CUT_PAIRS = {"I": [("I0", "G"), ("I", "G"), ("I", "I0")]}
 
 
 def hyper_section(seasons: list[int], projection: bool = False) -> str:
@@ -110,7 +111,8 @@ def cut_frame(tag: str, models: list[str]) -> pd.DataFrame:
     return g.merge(market_probs(DatasetStore().load("cfb_lines")).dropna(subset=["p_open"]), on="game_id")
 
 
-def cut_rows(g: pd.DataFrame, cuts: dict[str, tuple[np.ndarray, np.ndarray]], models: list[str]) -> list[dict]:
+def cut_rows(g: pd.DataFrame, cuts: dict[str, tuple[np.ndarray, np.ndarray]], models: list[str],
+             pairs: list[tuple[str, str]] | None = None) -> list[dict]:
     rows = []
     for name, (mask, flip) in cuts.items():
         s = g[mask]
@@ -124,18 +126,18 @@ def cut_rows(g: pd.DataFrame, cuts: dict[str, tuple[np.ndarray, np.ndarray]], mo
             ll[m] = log_loss(y, p)
             rows.append({"cut": name, "model": m, "n": len(s), "bias y-p": _ci(y - p), "lean p-open": _ci(p - o),
                          "ll - open": _ci(ll[m] - ll_o), "calib_slope": round(summarize(y, p)["calib_slope"], 3)})
-        if len(models) > 2:
-            a, b = models[-1], models[-2]
+        for a, b in pairs if pairs is not None else ([(models[-1], models[-2])] if len(models) > 2 else []):
             rows.append({"cut": name, "model": f"{a}-{b}", "n": len(s), "bias y-p": "", "lean p-open": "",
                          "ll - open": _ci(ll[a] - ll[b]), "calib_slope": np.nan})
     return rows
 
 
-def cuts_section(tag: str, models: list[str]) -> str:
+def cuts_section(tag: str, models: list[str], pairs: list[tuple[str, str]] | None = None) -> str:
     g = cut_frame(tag, models)
-    pair = f"; {models[-1]}-{models[-2]} row is the paired log-loss difference" if len(models) > 2 else ""
+    pl = pairs if pairs is not None else ([(models[-1], models[-2])] if len(models) > 2 else [])
+    pair = f"; {', '.join(f'{a}-{b}' for a, b in pl)} rows are paired log-loss differences" if pl else ""
     return (f"{' vs '.join(models)} ON THE MOTIVATING CUTS (side-oriented; mean with 95% normal CI; "
-            f"ll - open is paired per game{pair})\n" + pd.DataFrame(cut_rows(g, cut_sides(g), models)).to_string(index=False))
+            f"ll - open is paired per game{pair})\n" + pd.DataFrame(cut_rows(g, cut_sides(g), models, pairs)).to_string(index=False))
 
 
 def home_returning_share(inputs: Inputs, seasons: list[int]) -> pd.DataFrame:
@@ -176,7 +178,7 @@ def main() -> None:
     sections = [hyper_section(list(range(2020, max(args.seasons) + 1)), projection=args.model == "H")]
     if args.model == "G":
         sections.append(effects_section(inputs, args.seasons))
-    sections.append(cuts_section(tag, models))
+    sections.append(cuts_section(tag, models, CUT_PAIRS.get(args.model)))
     if args.model == "H":
         sections.append(returning_section(inputs, tag, args.seasons, models))
     text = "\n\n".join(sections)
