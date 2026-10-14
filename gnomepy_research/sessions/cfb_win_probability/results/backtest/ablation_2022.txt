@@ -1,0 +1,218 @@
+model J ablation: train [2020, 2021], validate 2022; threshold 0.0005; 3 seeds averaged
+
+outcome-term elimination:
+ round           candidate  log_loss    delta dropped
+     1           pass_edge   0.56590 -0.00032        
+     1           rush_edge   0.56579 -0.00043        
+     1               venue   0.57271  0.00649        
+     1           bowl_edge   0.56514 -0.00108        
+     1  early_success_diff   0.56725  0.00104        
+     1 late_down_luck_diff   0.56632  0.00010        
+     1 finishing_luck_diff   0.56412 -0.00209    DROP
+     1 field_position_diff   0.57138  0.00517        
+     1         pace_x_edge   0.56639  0.00017        
+     1       qb_delta_diff   0.56743  0.00122        
+     1       edge_abs_edge   0.56645  0.00024        
+     1         option_diff   0.56594 -0.00028        
+     2           pass_edge   0.56288 -0.00125        
+     2           rush_edge   0.56357 -0.00055        
+     2               venue   0.57017  0.00604        
+     2           bowl_edge   0.56290 -0.00123        
+     2  early_success_diff   0.56473  0.00061        
+     2 late_down_luck_diff   0.56268 -0.00144    DROP
+     2 field_position_diff   0.56915  0.00503        
+     2         pace_x_edge   0.56359 -0.00053        
+     2       qb_delta_diff   0.56506  0.00093        
+     2       edge_abs_edge   0.56440  0.00028        
+     2         option_diff   0.56363 -0.00050        
+     3           pass_edge   0.56108 -0.00160    DROP
+     3           rush_edge   0.56259 -0.00010        
+     3               venue   0.56911  0.00643        
+     3           bowl_edge   0.56162 -0.00106        
+     3  early_success_diff   0.56385  0.00117        
+     3 field_position_diff   0.56795  0.00527        
+     3         pace_x_edge   0.56246 -0.00023        
+     3       qb_delta_diff   0.56366  0.00098        
+     3       edge_abs_edge   0.56311  0.00042        
+     3         option_diff   0.56246 -0.00023        
+     4           rush_edge   0.56141  0.00034        
+     4               venue   0.56780  0.00672        
+     4           bowl_edge   0.56052 -0.00056    DROP
+     4  early_success_diff   0.56248  0.00140        
+     4 field_position_diff   0.56652  0.00544        
+     4         pace_x_edge   0.56095 -0.00013        
+     4       qb_delta_diff   0.56238  0.00130        
+     4       edge_abs_edge   0.57200  0.01093        
+     4         option_diff   0.56099 -0.00009        
+     5           rush_edge   0.56070  0.00019        
+     5               venue   0.56722  0.00671        
+     5  early_success_diff   0.56175  0.00123        
+     5 field_position_diff   0.56590  0.00539        
+     5         pace_x_edge   0.56030 -0.00022    DROP
+     5       qb_delta_diff   0.56184  0.00132        
+     5       edge_abs_edge   0.57177  0.01126        
+     5         option_diff   0.56040 -0.00012        
+     6           rush_edge   0.56044  0.00015        
+     6               venue   0.56704  0.00675        
+     6  early_success_diff   0.56163  0.00133        
+     6 field_position_diff   0.56564  0.00535        
+     6       qb_delta_diff   0.56156  0.00127        
+     6       edge_abs_edge   0.57164  0.01135        
+     6         option_diff   0.56028 -0.00002    DROP
+     7           rush_edge   0.56037  0.00009    DROP
+     7               venue   0.56703  0.00675        
+     7  early_success_diff   0.56153  0.00125        
+     7 field_position_diff   0.56548  0.00520        
+     7       qb_delta_diff   0.56151  0.00123        
+     7       edge_abs_edge   0.57190  0.01162        
+     8               venue   0.56722  0.00684        
+     8  early_success_diff   0.56202  0.00164        
+     8 field_position_diff   0.56553  0.00516        
+     8       qb_delta_diff   0.56183  0.00146        
+     8       edge_abs_edge   0.61796  0.05759        
+
+prior-group elimination:
+ round         candidate  log_loss    delta dropped
+     1                qb   0.56028 -0.00010        
+     1             coach   0.56281  0.00244        
+     1 recruiting_talent   0.55927 -0.00110    DROP
+     1            portal   0.56107  0.00069        
+     1         returning   0.56189  0.00152        
+     1  conference_means   0.56267  0.00230        
+     2                qb   0.55834 -0.00094    DROP
+     2             coach   0.56144  0.00216        
+     2            portal   0.55925 -0.00003        
+     2         returning   0.56098  0.00171        
+     2  conference_means   0.57024  0.01097        
+     3             coach   0.55992  0.00158        
+     3            portal   0.55848  0.00014    DROP
+     3         returning   0.56236  0.00403        
+     3  conference_means   0.56937  0.01103        
+     4             coach   0.55958  0.00111        
+     4         returning   0.56216  0.00368        
+     4  conference_means   0.56934  0.01087        
+
+
+G full 2022 log loss 0.56622; reduced terms 0.56037; reduced terms + prior drops 0.55848
+kept terms ['venue', 'early_success_diff', 'field_position_diff', 'qb_delta_diff', 'edge_abs_edge']
+dropped groups ['qb', 'recruiting_talent', 'portal']
+drop_features ['portal_in_stars', 'qb_prior_ppa', 'qb_returning_starter', 'recruiting_points', 'talent_defense', 'talent_offense', 'talent_qb']
+
+log:
+G full: 12 terms ['pass_edge', 'rush_edge', 'venue', 'bowl_edge', 'early_success_diff', 'late_down_luck_diff', 'finishing_luck_diff', 'field_position_diff', 'pace_x_edge', 'qb_delta_diff', 'edge_abs_edge', 'option_diff']; 2022 log loss 0.56622 (mean of 3 seeds)
+start: 12 items, log loss 0.56622
+round 1: -pass_edge: 0.56590 (delta -0.00032)
+round 1: -rush_edge: 0.56579 (delta -0.00043)
+round 1: -venue: 0.57271 (delta +0.00649)
+round 1: -bowl_edge: 0.56514 (delta -0.00108)
+round 1: -early_success_diff: 0.56725 (delta +0.00104)
+round 1: -late_down_luck_diff: 0.56632 (delta +0.00010)
+round 1: -finishing_luck_diff: 0.56412 (delta -0.00209)
+round 1: -field_position_diff: 0.57138 (delta +0.00517)
+round 1: -pace_x_edge: 0.56639 (delta +0.00017)
+round 1: -qb_delta_diff: 0.56743 (delta +0.00122)
+round 1: -edge_abs_edge: 0.56645 (delta +0.00024)
+round 1: -option_diff: 0.56594 (delta -0.00028)
+round 1: dropped finishing_luck_diff; log loss now 0.56412
+round 2: -pass_edge: 0.56288 (delta -0.00125)
+round 2: -rush_edge: 0.56357 (delta -0.00055)
+round 2: -venue: 0.57017 (delta +0.00604)
+round 2: -bowl_edge: 0.56290 (delta -0.00123)
+round 2: -early_success_diff: 0.56473 (delta +0.00061)
+round 2: -late_down_luck_diff: 0.56268 (delta -0.00144)
+round 2: -field_position_diff: 0.56915 (delta +0.00503)
+round 2: -pace_x_edge: 0.56359 (delta -0.00053)
+round 2: -qb_delta_diff: 0.56506 (delta +0.00093)
+round 2: -edge_abs_edge: 0.56440 (delta +0.00028)
+round 2: -option_diff: 0.56363 (delta -0.00050)
+round 2: dropped late_down_luck_diff; log loss now 0.56268
+round 3: -pass_edge: 0.56108 (delta -0.00160)
+round 3: -rush_edge: 0.56259 (delta -0.00010)
+round 3: -venue: 0.56911 (delta +0.00643)
+round 3: -bowl_edge: 0.56162 (delta -0.00106)
+round 3: -early_success_diff: 0.56385 (delta +0.00117)
+round 3: -field_position_diff: 0.56795 (delta +0.00527)
+round 3: -pace_x_edge: 0.56246 (delta -0.00023)
+round 3: -qb_delta_diff: 0.56366 (delta +0.00098)
+round 3: -edge_abs_edge: 0.56311 (delta +0.00042)
+round 3: -option_diff: 0.56246 (delta -0.00023)
+round 3: dropped pass_edge; log loss now 0.56108
+round 4: -rush_edge: 0.56141 (delta +0.00034)
+round 4: -venue: 0.56780 (delta +0.00672)
+round 4: -bowl_edge: 0.56052 (delta -0.00056)
+round 4: -early_success_diff: 0.56248 (delta +0.00140)
+round 4: -field_position_diff: 0.56652 (delta +0.00544)
+round 4: -pace_x_edge: 0.56095 (delta -0.00013)
+round 4: -qb_delta_diff: 0.56238 (delta +0.00130)
+round 4: -edge_abs_edge: 0.57200 (delta +0.01093)
+round 4: -option_diff: 0.56099 (delta -0.00009)
+round 4: dropped bowl_edge; log loss now 0.56052
+round 5: -rush_edge: 0.56070 (delta +0.00019)
+round 5: -venue: 0.56722 (delta +0.00671)
+round 5: -early_success_diff: 0.56175 (delta +0.00123)
+round 5: -field_position_diff: 0.56590 (delta +0.00539)
+round 5: -pace_x_edge: 0.56030 (delta -0.00022)
+round 5: -qb_delta_diff: 0.56184 (delta +0.00132)
+round 5: -edge_abs_edge: 0.57177 (delta +0.01126)
+round 5: -option_diff: 0.56040 (delta -0.00012)
+round 5: dropped pace_x_edge; log loss now 0.56030
+round 6: -rush_edge: 0.56044 (delta +0.00015)
+round 6: -venue: 0.56704 (delta +0.00675)
+round 6: -early_success_diff: 0.56163 (delta +0.00133)
+round 6: -field_position_diff: 0.56564 (delta +0.00535)
+round 6: -qb_delta_diff: 0.56156 (delta +0.00127)
+round 6: -edge_abs_edge: 0.57164 (delta +0.01135)
+round 6: -option_diff: 0.56028 (delta -0.00002)
+round 6: dropped option_diff; log loss now 0.56028
+round 7: -rush_edge: 0.56037 (delta +0.00009)
+round 7: -venue: 0.56703 (delta +0.00675)
+round 7: -early_success_diff: 0.56153 (delta +0.00125)
+round 7: -field_position_diff: 0.56548 (delta +0.00520)
+round 7: -qb_delta_diff: 0.56151 (delta +0.00123)
+round 7: -edge_abs_edge: 0.57190 (delta +0.01162)
+round 7: dropped rush_edge; log loss now 0.56037
+round 8: -venue: 0.56722 (delta +0.00684)
+round 8: -early_success_diff: 0.56202 (delta +0.00164)
+round 8: -field_position_diff: 0.56553 (delta +0.00516)
+round 8: -qb_delta_diff: 0.56183 (delta +0.00146)
+round 8: -edge_abs_edge: 0.61796 (delta +0.05759)
+start: 6 items, log loss 0.56037
+variant drop ['qb_prior_ppa', 'qb_returning_starter']: ensuring snapshots
+round 1: -qb: 0.56028 (delta -0.00010)
+variant drop ['coach_new', 'coach_srs_resid']: ensuring snapshots
+round 1: -coach: 0.56281 (delta +0.00244)
+variant drop ['recruiting_points', 'talent_defense', 'talent_offense', 'talent_qb']: ensuring snapshots
+round 1: -recruiting_talent: 0.55927 (delta -0.00110)
+variant drop ['portal_in_stars']: ensuring snapshots
+round 1: -portal: 0.56107 (delta +0.00069)
+variant drop ['returning_pct_passing_ppa', 'returning_pct_ppa']: ensuring snapshots
+round 1: -returning: 0.56189 (delta +0.00152)
+variant drop ['conf_prior_def', 'conf_prior_off', 'conf_recruiting', 'conf_talent_defense', 'conf_talent_offense']: ensuring snapshots
+round 1: -conference_means: 0.56267 (delta +0.00230)
+round 1: dropped recruiting_talent; log loss now 0.55927
+variant drop ['qb_prior_ppa', 'qb_returning_starter', 'recruiting_points', 'talent_defense', 'talent_offense', 'talent_qb']: ensuring snapshots
+round 2: -qb: 0.55834 (delta -0.00094)
+variant drop ['coach_new', 'coach_srs_resid', 'recruiting_points', 'talent_defense', 'talent_offense', 'talent_qb']: ensuring snapshots
+round 2: -coach: 0.56144 (delta +0.00216)
+variant drop ['portal_in_stars', 'recruiting_points', 'talent_defense', 'talent_offense', 'talent_qb']: ensuring snapshots
+round 2: -portal: 0.55925 (delta -0.00003)
+variant drop ['recruiting_points', 'returning_pct_passing_ppa', 'returning_pct_ppa', 'talent_defense', 'talent_offense', 'talent_qb']: ensuring snapshots
+round 2: -returning: 0.56098 (delta +0.00171)
+variant drop ['conf_prior_def', 'conf_prior_off', 'conf_recruiting', 'conf_talent_defense', 'conf_talent_offense', 'recruiting_points', 'talent_defense', 'talent_offense', 'talent_qb']: ensuring snapshots
+round 2: -conference_means: 0.57024 (delta +0.01097)
+round 2: dropped qb; log loss now 0.55834
+variant drop ['coach_new', 'coach_srs_resid', 'qb_prior_ppa', 'qb_returning_starter', 'recruiting_points', 'talent_defense', 'talent_offense', 'talent_qb']: ensuring snapshots
+round 3: -coach: 0.55992 (delta +0.00158)
+variant drop ['portal_in_stars', 'qb_prior_ppa', 'qb_returning_starter', 'recruiting_points', 'talent_defense', 'talent_offense', 'talent_qb']: ensuring snapshots
+round 3: -portal: 0.55848 (delta +0.00014)
+variant drop ['qb_prior_ppa', 'qb_returning_starter', 'recruiting_points', 'returning_pct_passing_ppa', 'returning_pct_ppa', 'talent_defense', 'talent_offense', 'talent_qb']: ensuring snapshots
+round 3: -returning: 0.56236 (delta +0.00403)
+variant drop ['conf_prior_def', 'conf_prior_off', 'conf_recruiting', 'conf_talent_defense', 'conf_talent_offense', 'qb_prior_ppa', 'qb_returning_starter', 'recruiting_points', 'talent_defense', 'talent_offense', 'talent_qb']: ensuring snapshots
+round 3: -conference_means: 0.56937 (delta +0.01103)
+round 3: dropped portal; log loss now 0.55848
+variant drop ['coach_new', 'coach_srs_resid', 'portal_in_stars', 'qb_prior_ppa', 'qb_returning_starter', 'recruiting_points', 'talent_defense', 'talent_offense', 'talent_qb']: ensuring snapshots
+round 4: -coach: 0.55958 (delta +0.00111)
+variant drop ['portal_in_stars', 'qb_prior_ppa', 'qb_returning_starter', 'recruiting_points', 'returning_pct_passing_ppa', 'returning_pct_ppa', 'talent_defense', 'talent_offense', 'talent_qb']: ensuring snapshots
+round 4: -returning: 0.56216 (delta +0.00368)
+variant drop ['conf_prior_def', 'conf_prior_off', 'conf_recruiting', 'conf_talent_defense', 'conf_talent_offense', 'portal_in_stars', 'qb_prior_ppa', 'qb_returning_starter', 'recruiting_points', 'talent_defense', 'talent_offense', 'talent_qb']: ensuring snapshots
+round 4: -conference_means: 0.56934 (delta +0.01087)

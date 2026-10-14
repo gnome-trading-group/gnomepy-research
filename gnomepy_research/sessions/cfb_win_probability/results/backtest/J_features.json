@@ -1,0 +1,18 @@
+{
+  "keep_terms": [
+    "venue",
+    "early_success_diff",
+    "field_position_diff",
+    "qb_delta_diff",
+    "edge_abs_edge"
+  ],
+  "drop_features": [
+    "portal_in_stars",
+    "qb_prior_ppa",
+    "qb_returning_starter",
+    "recruiting_points",
+    "talent_defense",
+    "talent_offense",
+    "talent_qb"
+  ]
+}
