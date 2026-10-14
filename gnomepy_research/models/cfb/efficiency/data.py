@@ -69,6 +69,7 @@ class ModelData:
     conf_keys: pd.DataFrame = field(default_factory=_empty_conf_keys)  # (season, conference, unit), unit-major
     ts_conf: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=int))  # (TS,) index into conf_keys
     projection: bool = False
+    drop_features: tuple[str, ...] = ()
 
 
 def season_periods(games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
@@ -141,7 +142,7 @@ def _unit_projection(pre: pd.DataFrame, projection: pd.DataFrame, unit: str) -> 
 
 def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: pd.DataFrame,
                      seasons: list[int], units: tuple[str, ...] = UNITS_ALL, conference: bool = False,
-                     projection: pd.DataFrame | None = None) -> ModelData:
+                     projection: pd.DataFrame | None = None, drop_features: tuple[str, ...] = ()) -> ModelData:
     """`efficiency` must already be point-in-time filtered (as_of the fit's cutoff). `projection`
     (projection.project output) adds each unit's projected rating to that unit's block only, plus
     the low_continuity uncertainty flag."""
@@ -154,6 +155,11 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
     if conference:
         pre = with_conference_means(pre, games, seasons)
         off_cols, def_cols = OFF_FEATURES + CONF_OFF_FEATURES, DEF_FEATURES + CONF_DEF_FEATURES
+    unknown = set(drop_features) - set(off_cols) - set(def_cols)
+    if unknown:
+        raise ValueError(f"unknown drop_features: {sorted(unknown)}")
+    off_cols = [c for c in off_cols if c not in drop_features]
+    def_cols = [c for c in def_cols if c not in drop_features]
     xo, off_names = _standardize(pre, off_cols)
     xd, def_names = _standardize(pre, def_cols)
 
@@ -243,4 +249,5 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
         obs_game=obs["game"].to_numpy(), obs_season=obs["season"].to_numpy(int), seasons=list(seasons), periods=periods,
         units=tuple(units), alpha_keys=alpha_keys, obs_alpha=obs["alpha"].to_numpy(int), obs_unit=obs["unit"].to_numpy(int),
         conf_keys=conf_keys, ts_conf=ts_conf, projection=projection is not None,
+        drop_features=tuple(sorted(drop_features)),
     )

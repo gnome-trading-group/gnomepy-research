@@ -107,12 +107,14 @@ def hyper_cutoff(inputs: Inputs, last_train_season: int) -> pd.Timestamp:
 def fit_hyperparameters(inputs: Inputs, seasons: list[int], likelihood: str, draws: int = 1000,
                         tune: int = 1500, seed: int = 0,
                         units: tuple[str, ...] = UNITS_ALL,
-                        conference: bool = False, projection: bool = False) -> tuple[Hyperparameters, dict]:
+                        conference: bool = False, projection: bool = False,
+                        drop_features: tuple[str, ...] = ()) -> tuple[Hyperparameters, dict]:
     if projection and inputs.projection is None:
         raise ValueError("projection=True needs Inputs.projection")
     cutoff = hyper_cutoff(inputs, max(seasons))
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, seasons, units=units,
-                            conference=conference, projection=inputs.projection if projection else None)
+                            conference=conference, projection=inputs.projection if projection else None,
+                            drop_features=drop_features)
     idata = sample(build_model(data, likelihood=likelihood, store_states=False), draws=draws, tune=tune, seed=seed)
     hv = HYPER_VARS + (["nu"] if likelihood == "studentt" else []) + (CONF_HYPER_VARS if conference else [])
     diag = {"hyper": diagnostics(idata, hv), "states": diagnostics(idata, ["z0_off", "z0_def"]),
@@ -135,7 +137,7 @@ def fit_cutoff(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: Hyperp
                draws: int = 500, tune: int = 500, seed: int = 0) -> tuple[CutoffPosterior, ModelData]:
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, [season],
                             units=tuple(hypers.units), conference=hypers.conference,
-                            projection=inputs.projection_for(hypers))
+                            projection=inputs.projection_for(hypers), drop_features=tuple(hypers.drop_features))
     idata = sample(build_model(data, hypers=hypers, likelihood=hypers.likelihood), draws=draws, tune=tune, seed=seed)
     period = int(data.periods.loc[data.periods["cutoff"] == cutoff, "period"].iloc[0])
     post = idata.posterior.to_dataset().stack(sample=("chain", "draw"))

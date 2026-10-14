@@ -75,7 +75,7 @@ def fit_cutoff_exact(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: 
         raise ValueError("the exact solver is only valid for the Gaussian likelihood")
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, [season],
                             units=tuple(hypers.units), conference=hypers.conference,
-                            projection=inputs.projection_for(hypers))
+                            projection=inputs.projection_for(hypers), drop_features=tuple(hypers.drop_features))
     mean, chol, lay = solve(data, hypers)
     rng = np.random.default_rng(seed)
     # theta = mean + L^-T z, with P = L L^T, gives draws with covariance P^-1.

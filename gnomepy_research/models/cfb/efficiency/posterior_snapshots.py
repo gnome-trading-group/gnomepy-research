@@ -16,6 +16,7 @@ Outputs:
 from __future__ import annotations
 
 import argparse
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -48,9 +49,16 @@ N_DRAWS_KEPT = 400
 DRAWS_DIR = Path(__file__).resolve().parents[3] / "sessions" / "cfb_win_probability" / "results" / "posterior_draws"
 
 
-def _suffix(units: tuple[str, ...], conference: bool = False, projection: bool = False) -> str:
+def drop_suffix(drop_features: tuple[str, ...] = ()) -> str:
+    if not drop_features:
+        return ""
+    return "_drop-" + hashlib.sha1(",".join(sorted(drop_features)).encode()).hexdigest()[:8]
+
+
+def _suffix(units: tuple[str, ...], conference: bool = False, projection: bool = False,
+            drop_features: tuple[str, ...] = ()) -> str:
     return (("" if units == UNITS_ALL else SPLIT_SUFFIX) + (CONF_SUFFIX if conference else "")
-            + (PROJ_SUFFIX if projection else ""))
+            + (PROJ_SUFFIX if projection else "") + drop_suffix(drop_features))
 
 
 def model_version(units: tuple[str, ...], conference: bool = False, projection: bool = False) -> str:
@@ -61,21 +69,22 @@ MODEL_VERSION = model_version(UNITS_ALL)
 
 
 def hyper_name(likelihood: str, season: int, units: tuple[str, ...] = UNITS_ALL, conference: bool = False,
-               projection: bool = False) -> str:
-    return f"{likelihood}{_suffix(units, conference, projection)}_{FIRST_TRAIN_SEASON}_{season - 1}"
+               projection: bool = False, drop_features: tuple[str, ...] = ()) -> str:
+    return f"{likelihood}{_suffix(units, conference, projection, drop_features)}_{FIRST_TRAIN_SEASON}_{season - 1}"
 
 
 def draws_name(season: int, units: tuple[str, ...] = UNITS_ALL, conference: bool = False,
-               projection: bool = False) -> str:
-    return f"cfb_team_week_draws{_suffix(units, conference, projection)}_{season}"
+               projection: bool = False, drop_features: tuple[str, ...] = ()) -> str:
+    return f"cfb_team_week_draws{_suffix(units, conference, projection, drop_features)}_{season}"
 
 
 def ensure_hyperparameters(inputs: Inputs, likelihood: str, season: int, units: tuple[str, ...] = UNITS_ALL,
-                           conference: bool = False, projection: bool = False) -> str:
-    name = hyper_name(likelihood, season, units, conference, projection)
+                           conference: bool = False, projection: bool = False,
+                           drop_features: tuple[str, ...] = ()) -> str:
+    name = hyper_name(likelihood, season, units, conference, projection, drop_features)
     if not (HYPER_DIR / f"{name}.json").exists():
         h, diag = fit_hyperparameters(inputs, list(range(FIRST_TRAIN_SEASON, season)), likelihood, units=units,
-                                      conference=conference, projection=projection)
+                                      conference=conference, projection=projection, drop_features=drop_features)
         save_hyperparameters(h, diag, name)
         print(f"fitted {name}: {diag['hyper']}", flush=True)
     return name
@@ -89,8 +98,9 @@ def form_at(form_rows: pd.DataFrame, season: int, cutoff: pd.Timestamp, team_ids
 
 def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
                     out_dir: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL,
-                    conference: bool = False, projection: bool = False) -> tuple[pd.DataFrame, Path]:
-    name = ensure_hyperparameters(inputs, likelihood, season, units, conference, projection)
+                    conference: bool = False, projection: bool = False,
+                    drop_features: tuple[str, ...] = ()) -> tuple[pd.DataFrame, Path]:
+    name = ensure_hyperparameters(inputs, likelihood, season, units, conference, projection, drop_features)
     h = load_hyperparameters(name)
     rng = np.random.default_rng(seed)
     summaries, draws = [], {}
@@ -124,7 +134,7 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
                                   divergences=post.diagnostics["divergences"]))
         print(f"{season} {key}: rhat {post.diagnostics['max_rhat']:.3f} div {post.diagnostics['divergences']}", flush=True)
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{draws_name(season, units, conference, projection)}.npz"
+    path = out_dir / f"{draws_name(season, units, conference, projection, drop_features)}.npz"
     np.savez_compressed(path, **draws)
     out = pd.concat(summaries, ignore_index=True).assign(
         model_version=model_version(units, conference, projection), hyperparameters=name, likelihood=likelihood,
@@ -136,7 +146,8 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
 
 def snapshot_seasons(inputs: Inputs, first: int, last: int, likelihood: str,
                      out_dir: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL,
-                     conference: bool = False, projection: bool = False) -> tuple[pd.DataFrame, list[tuple[int, Path]]]:
+                     conference: bool = False, projection: bool = False,
+                     drop_features: tuple[str, ...] = ()) -> tuple[pd.DataFrame, list[tuple[int, Path]]]:
     """The team-week table for seasons first..last, and each season's draws file under out_dir."""
     if first <= FIRST_TRAIN_SEASON:
         raise ValueError(f"first snapshot season must be after {FIRST_TRAIN_SEASON}")
@@ -145,11 +156,11 @@ def snapshot_seasons(inputs: Inputs, first: int, last: int, likelihood: str,
     frames, paths = [], []
     for season in range(first, last + 1):
         df, path = snapshot_season(inputs, season, likelihood, out_dir=out_dir, units=units, conference=conference,
-                                     projection=projection)
+                                     projection=projection, drop_features=drop_features)
         frames.append(df)
         paths.append((season, path))
     table = pd.concat(frames, ignore_index=True)
-    table.to_parquet(out_dir / f"cfb_team_week_posterior{_suffix(units, conference, projection)}_{first}_{last}.parquet", index=False)
+    table.to_parquet(out_dir / f"cfb_team_week_posterior{_suffix(units, conference, projection, drop_features)}_{first}_{last}.parquet", index=False)
     return table, paths
 
 
