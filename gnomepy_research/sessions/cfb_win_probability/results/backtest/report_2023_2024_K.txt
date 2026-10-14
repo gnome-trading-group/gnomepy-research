@@ -1,0 +1,159 @@
+overall:
+                                            n  log_loss   brier     ece  accuracy  calib_slope  calib_intercept
+p_bayes                                1590.0    0.5387  0.1822  0.0140    0.7201       1.0405           0.0294
+p_logistic                             1590.0    0.5590  0.1902  0.0198    0.7000       0.9342           0.0393
+p_elo                                  1590.0    0.5686  0.1938  0.0252    0.6943       1.0560           0.0169
+p_home_field                           1590.0    0.6786  0.2428  0.0085    0.5818       1.1218          -0.0012
+p_market_close (closing, post-cutoff)  1590.0    0.5229  0.1763  0.0364    0.7220       1.0762           0.0401
+
+log loss by season:
+                2023    2024
+p_bayes       0.5304  0.5469
+p_logistic    0.5465  0.5714
+p_elo         0.5581  0.5790
+p_home_field  0.6806  0.6765
+
+log loss by phase:
+                post   wk1-2   wk10+   wk3-5   wk6-9
+p_bayes       0.6882  0.4937  0.5563  0.4738  0.5548
+p_logistic    0.7585  0.5287  0.5657  0.4986  0.5691
+p_elo         0.7373  0.5682  0.5529  0.5310  0.5836
+p_home_field  0.6886  0.6603  0.6838  0.6765  0.6794
+
+paired log-loss differences (negative = Bayes better; game bootstrap):
+                        diff      se    lo95    hi95  p_a_worse
+bayes - logistic     -0.0203  0.0061 -0.0323 -0.0081      0.000
+bayes - elo          -0.0299  0.0069 -0.0438 -0.0164      0.000
+bayes - home_field   -0.1399  0.0108 -0.1612 -0.1189      0.000
+bayes - market_close  0.0157  0.0051  0.0057  0.0255      0.999
+
+refit noise (Bayes log loss across refits): 2023: [0.5304, 0.5314, 0.5306] (sd 0.0004); 2024: [0.5469, 0.547, 0.5472] (sd 0.0001)
+
+log loss by market-favourite band:
+            (0.499, 0.6]  (0.6, 0.7]  (0.7, 0.8]  (0.8, 0.9]  (0.9, 1.0]
+p_bayes           0.7088      0.6284      0.6222      0.3657      0.1748
+p_logistic        0.7376      0.6635      0.6218      0.3808      0.1997
+p_elo             0.7161      0.6710      0.6254      0.4084      0.2562
+n               388.0000    331.0000    366.0000    301.0000    204.0000
+
+Bayes reliability:
+           n  mean_p  observed
+0.0-0.1   32   0.058     0.062
+0.1-0.2   79   0.153     0.152
+0.2-0.3  142   0.252     0.239
+0.3-0.4  158   0.351     0.354
+0.4-0.5  211   0.452     0.460
+0.5-0.6  207   0.555     0.536
+0.6-0.7  232   0.653     0.703
+0.7-0.8  179   0.748     0.754
+0.8-0.9  184   0.847     0.848
+0.9-1.0  166   0.948     0.958
+
+90% interval on P(home): median width 0.503; widest phase {'post': 0.496, 'wk1-2': 0.481, 'wk10+': 0.503, 'wk3-5': 0.509, 'wk6-9': 0.503}
+
+outcome coefficients (log-odds; posterior mean, 90% interval; first refit):
+2023:
+                      mean    lo5    hi95
+pass_edge            4.099  1.056   6.914
+rush_edge            6.450  3.276   9.504
+venue                0.311  0.210   0.409
+bowl_edge            0.930 -3.175   5.878
+early_success_diff   0.094 -0.002   0.188
+late_down_luck_diff  0.035 -0.045   0.114
+finishing_luck_diff -0.018 -0.120   0.079
+field_position_diff  0.090  0.004   0.176
+pace_x_edge          0.359 -0.952   1.712
+qb_delta_diff        1.747  0.331   3.194
+edge_abs_edge        5.522 -3.839  16.970
+option_diff         -0.046 -0.397   0.301
+pass_edge_early      3.481  0.260   6.880
+rush_edge_early      2.125 -2.759   7.374
+2024:
+                      mean    lo5    hi95
+pass_edge            4.194  1.063   6.860
+rush_edge            6.098  2.898   8.941
+venue                0.318  0.233   0.408
+bowl_edge           -2.606 -5.537   0.671
+early_success_diff   0.087  0.004   0.170
+late_down_luck_diff -0.003 -0.070   0.065
+finishing_luck_diff  0.014 -0.066   0.095
+field_position_diff  0.098  0.026   0.170
+pace_x_edge          0.497 -0.723   1.744
+qb_delta_diff        1.800  0.648   2.975
+edge_abs_edge        7.116 -2.538  19.270
+option_diff         -0.007 -0.326   0.312
+pass_edge_early      2.472 -0.159   5.271
+rush_edge_early      4.716 -0.001   9.942
+
+Starters are the actual first passer of each game (ex-post); this is an upper bound on what pregame QB news can deliver.
+
+qb_delta_diff distribution (test games):
+0.00   -0.4026
+0.01   -0.2188
+0.05   -0.1218
+0.25   -0.0232
+0.50    0.0000
+0.75    0.0205
+0.95    0.1058
+0.99    0.1977
+1.00    0.4061
+
+games with |qb_delta_diff| > 0.05: 448 of 1590
+
+D - C paired log loss on that subset (negative = D better): {'diff': -0.0101, 'se': 0.0094, 'lo95': -0.0291, 'hi95': 0.007, 'p_a_worse': 0.1395}
+
+==== EXTRAS (g_report) ====
+K HYPERPARAMETERS (normal split conf, independents separate, drives; fitted on 2019..S-1)
+2020 K: tau_off=0.0396, tau_def=0.0333, s_conf_off=0.0105, s_conf_def=0.0354, sigma_play=1.2955; alpha_ppd=2.1339, sigma_alpha_ppd=0.2126, lam_ppd=5.8157, hfa_ppd=0.1143, s_game_ppd=0.0928, s_drive_ppd=2.6121  max_rhat=1.015 (s_def) min_ess_bulk=350 min_ess_tail=326 divergences=0 n_obs=3547 n_drive_obs=1774
+2021 K: tau_off=0.0368, tau_def=0.0356, s_conf_off=0.0099, s_conf_def=0.0244, sigma_play=1.3024; alpha_ppd=2.1538, sigma_alpha_ppd=0.1333, lam_ppd=5.9372, hfa_ppd=0.0816, s_game_ppd=0.0731, s_drive_ppd=2.6430  max_rhat=1.019 (beta_def[pass:talent_defense]) min_ess_bulk=222 min_ess_tail=252 divergences=0 n_obs=5819 n_drive_obs=2910
+2022 K: tau_off=0.0340, tau_def=0.0355, s_conf_off=0.0137, s_conf_def=0.0154, sigma_play=1.3240; alpha_ppd=2.1572, sigma_alpha_ppd=0.0734, lam_ppd=6.0998, hfa_ppd=0.0752, s_game_ppd=0.0567, s_drive_ppd=2.7941  max_rhat=1.033 (beta_off[pass:conf_recruiting]) min_ess_bulk=251 min_ess_tail=290 divergences=0 n_obs=9362 n_drive_obs=4684
+2023 K: tau_off=0.0340, tau_def=0.0308, s_conf_off=0.0143, s_conf_def=0.0185, sigma_play=1.3395; alpha_ppd=2.1766, sigma_alpha_ppd=0.0941, lam_ppd=6.1978, hfa_ppd=0.0797, s_game_ppd=0.0545, s_drive_ppd=2.9676  max_rhat=1.032 (s_conf_off) min_ess_bulk=161 min_ess_tail=160 divergences=0 n_obs=12946 n_drive_obs=6476
+2024 K: tau_off=0.0344, tau_def=0.0301, s_conf_off=0.0113, s_conf_def=0.0169, sigma_play=1.3420; alpha_ppd=2.1656, sigma_alpha_ppd=0.0757, lam_ppd=6.1738, hfa_ppd=0.0844, s_game_ppd=0.0469, s_drive_ppd=2.9312  max_rhat=1.032 (beta_off[pass:recruiting_points]) min_ess_bulk=165 min_ess_tail=232 divergences=0 n_obs=16586 n_drive_obs=8296
+
+G vs J vs K ON THE MOTIVATING CUTS (side-oriented; mean with 95% normal CI; ll - open is paired per game; K-G, K-J rows are paired log-loss differences)
+              cut model    n                   bias y-p                lean p-open                  ll - open  calib_slope
+        favorites     G 1590 +0.0359 [+0.0149, +0.0569] -0.0289 [-0.0334, -0.0244] +0.0151 [+0.0047, +0.0256]        0.856
+        favorites     J 1590 +0.0319 [+0.0108, +0.0529] -0.0249 [-0.0296, -0.0201] +0.0155 [+0.0048, +0.0263]        0.881
+        favorites     K 1590 +0.0285 [+0.0076, +0.0495] -0.0215 [-0.0260, -0.0171] +0.0101 [-0.0002, +0.0203]        0.884
+        favorites   K-G 1590                                                       -0.0051 [-0.0133, +0.0031]          NaN
+        favorites   K-J 1590                                                       -0.0055 [-0.0102, -0.0008]          NaN
+    big favorites     G  477 +0.0616 [+0.0368, +0.0864] -0.0360 [-0.0419, -0.0301] +0.0261 [+0.0095, +0.0427]        0.478
+    big favorites     J  477 +0.0700 [+0.0449, +0.0951] -0.0444 [-0.0510, -0.0378] +0.0308 [+0.0130, +0.0487]        0.504
+    big favorites     K  477 +0.0537 [+0.0290, +0.0784] -0.0281 [-0.0339, -0.0223] +0.0168 [+0.0016, +0.0321]        0.593
+    big favorites   K-G  477                                                       -0.0093 [-0.0211, +0.0025]          NaN
+    big favorites   K-J  477                                                       -0.0140 [-0.0226, -0.0055]          NaN
+         P4 vs G5     G  231 +0.0352 [-0.0087, +0.0790] -0.0257 [-0.0363, -0.0152] +0.0239 [-0.0006, +0.0484]        1.083
+         P4 vs G5     J  231 +0.0552 [+0.0104, +0.1000] -0.0458 [-0.0568, -0.0347] +0.0428 [+0.0134, +0.0723]        1.005
+         P4 vs G5     K  231 +0.0231 [-0.0213, +0.0674] -0.0136 [-0.0241, -0.0031] +0.0248 [-0.0010, +0.0506]        0.926
+         P4 vs G5   K-G  231                                                       +0.0010 [-0.0186, +0.0205]          NaN
+         P4 vs G5   K-J  231                                                       -0.0180 [-0.0363, +0.0003]          NaN
+   non-conference     G  503 -0.0037 [-0.0394, +0.0320] -0.0054 [-0.0138, +0.0030] +0.0271 [+0.0089, +0.0452]        1.129
+   non-conference     J  503 +0.0010 [-0.0356, +0.0377] -0.0101 [-0.0197, -0.0006] +0.0495 [+0.0285, +0.0706]        1.022
+   non-conference     K  503 -0.0034 [-0.0392, +0.0324] -0.0057 [-0.0145, +0.0030] +0.0287 [+0.0085, +0.0488]        0.975
+   non-conference   K-G  503                                                       +0.0016 [-0.0124, +0.0156]          NaN
+   non-conference   K-J  503                                                       -0.0208 [-0.0327, -0.0089]          NaN
+        weeks 1-4     G  410 -0.0104 [-0.0493, +0.0284] -0.0057 [-0.0151, +0.0037] +0.0218 [+0.0010, +0.0427]        1.189
+        weeks 1-4     J  410 -0.0093 [-0.0487, +0.0300] -0.0068 [-0.0177, +0.0042] +0.0342 [+0.0098, +0.0586]        1.234
+        weeks 1-4     K  410 -0.0120 [-0.0503, +0.0263] -0.0041 [-0.0140, +0.0058] +0.0106 [-0.0122, +0.0334]        1.057
+        weeks 1-4   K-G  410                                                       -0.0112 [-0.0227, +0.0003]          NaN
+        weeks 1-4   K-J  410                                                       -0.0236 [-0.0389, -0.0083]          NaN
+        weeks 5-9     G  536 +0.0177 [-0.0191, +0.0545] -0.0002 [-0.0081, +0.0078] +0.0260 [+0.0089, +0.0432]        1.003
+        weeks 5-9     J  536 +0.0149 [-0.0216, +0.0513] +0.0026 [-0.0052, +0.0104] +0.0137 [-0.0027, +0.0301]        1.074
+        weeks 5-9     K  536 +0.0166 [-0.0198, +0.0529] +0.0009 [-0.0064, +0.0083] +0.0125 [-0.0027, +0.0277]        1.130
+        weeks 5-9   K-G  536                                                       -0.0135 [-0.0266, -0.0004]          NaN
+        weeks 5-9   K-J  536                                                       -0.0012 [-0.0071, +0.0046]          NaN
+service academies     G   63 +0.0776 [-0.0382, +0.1935] -0.0361 [-0.0602, -0.0120] +0.0052 [-0.0545, +0.0649]        0.686
+service academies     J   63 +0.0191 [-0.0964, +0.1346] +0.0225 [-0.0051, +0.0500] -0.0201 [-0.0812, +0.0409]        0.680
+service academies     K   63 +0.0619 [-0.0524, +0.1762] -0.0203 [-0.0465, +0.0059] -0.0178 [-0.0829, +0.0472]        0.679
+service academies   K-G   63                                                       -0.0230 [-0.0866, +0.0406]          NaN
+service academies   K-J   63                                                       +0.0023 [-0.0439, +0.0485]          NaN
+         toss-ups     G  420 -0.0313 [-0.0796, +0.0170] +0.0074 [-0.0024, +0.0172] +0.0181 [-0.0025, +0.0387]        0.303
+         toss-ups     J  420 -0.0260 [-0.0741, +0.0220] +0.0021 [-0.0081, +0.0123] +0.0121 [-0.0095, +0.0337]        0.407
+         toss-ups     K  420 -0.0223 [-0.0703, +0.0256] -0.0016 [-0.0113, +0.0081] +0.0091 [-0.0114, +0.0296]        0.444
+         toss-ups   K-G  420                                                       -0.0090 [-0.0268, +0.0088]          NaN
+         toss-ups   K-J  420                                                       -0.0030 [-0.0117, +0.0057]          NaN
+ FBS independents     G   79 -0.0210 [-0.1105, +0.0685] +0.0129 [-0.0089, +0.0346] +0.0108 [-0.0339, +0.0555]        1.074
+ FBS independents     J   79 -0.0406 [-0.1369, +0.0557] +0.0325 [+0.0032, +0.0617] +0.0682 [-0.0032, +0.1396]        0.909
+ FBS independents     K   79 -0.0213 [-0.1107, +0.0681] +0.0132 [-0.0096, +0.0359] +0.0163 [-0.0311, +0.0637]        0.967
+ FBS independents   K-G   79                                                       +0.0056 [-0.0299, +0.0410]          NaN
+ FBS independents   K-J   79                                                       -0.0519 [-0.1048, +0.0010]          NaN
