@@ -26,6 +26,8 @@ from gnomepy_research.models.cfb.features.source import SourceData
 from gnomepy_research.sessions.cfb_win_probability.evaluation import baselines
 from gnomepy_research.sessions.cfb_win_probability.evaluation.metrics import paired_bootstrap, reliability, summarize
 from gnomepy_research.sessions.cfb_win_probability.models.catboost_wp import fit_catboost, game_features
+from gnomepy_research.sessions.cfb_win_probability.models.residual_wp import (
+    FEATURE_SETS, GRID_DEPTHS, GRID_PARAMS, attach_baseline, c_baseline, fit_residual, sigmoid)
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import N_FIT_DRAWS, fit, game_draws
 
 FIRST_OUTCOME_SEASON = 2020
@@ -40,7 +42,10 @@ MODEL_CONFIGS = {
     "C": dict(units=UNITS_SPLIT, form=True, qb=False, learner="bayes"),
     "D": dict(units=UNITS_SPLIT, form=True, qb=True, learner="bayes"),
     "E": dict(units=UNITS_SPLIT, form=True, qb=False, learner="catboost"),
+    "F": dict(units=UNITS_SPLIT, form=True, qb=False, learner="residual"),
 }
+VALIDATION_SEASON = 2022
+F_CONFIG = RESULTS / "F_config.json"
 
 
 def phase(df: pd.DataFrame) -> pd.Series:
@@ -59,6 +64,52 @@ def _catboost_season(season, games, train_seasons):
     test["p_bayes_lo"] = test["p_bayes_hi"] = test["p_bayes"]
     train = train.merge(games[["game_id", "home_points", "away_points"]], on="game_id")
     return train, test, {"importance": model.feature_importance().round(3).to_dict()}
+
+
+def _residual_data(season, games, train_seasons):
+    feats = game_features(games, train_seasons + [season])
+    base = c_baseline(games, train_seasons, [season])
+    train = feats[feats["season"].isin(train_seasons) & feats["home_win"].notna()].reset_index(drop=True)
+    test = feats[(feats["season"] == season) & feats["home_win"].notna()].reset_index(drop=True)
+    return train, test, attach_baseline(train, base), attach_baseline(test, base)
+
+
+def _residual_season(season, games, train_seasons, config):
+    train, test, b_train, b_test = _residual_data(season, games, train_seasons)
+    model = fit_residual(train, b_train, FEATURE_SETS[config["features"]], config["params"])
+    test["p_bayes"] = model.predict(test, b_test)
+    test["p_home"] = test["p_bayes"]
+    test["p_bayes_lo"] = test["p_bayes_hi"] = test["p_bayes"]
+    test["p_c_baseline"] = sigmoid(b_test)
+    train = train.merge(games[["game_id", "home_points", "away_points"]], on="game_id")
+    return train, test, {"importance": model.feature_importance().round(3).to_dict(), "config": config,
+                         "iterations": int(model.model.tree_count_)}
+
+
+def validate_residual(games: pd.DataFrame) -> tuple[str, dict]:
+    train_seasons = list(range(FIRST_OUTCOME_SEASON, VALIDATION_SEASON))
+    train, test, b_train, b_test = _residual_data(VALIDATION_SEASON, games, train_seasons)
+    y = test["home_win"].to_numpy()
+    rows = []
+    for name in FEATURE_SETS:
+        for depth in GRID_DEPTHS:
+            params = {**GRID_PARAMS, "depth": depth}
+            model = fit_residual(train, b_train, FEATURE_SETS[name], params)
+            ll = summarize(y, model.predict(test, b_test))["log_loss"]
+            rows.append({"features": name, "depth": depth, "iterations": int(model.model.tree_count_), "log_loss": ll})
+            print(rows[-1], flush=True)
+    grid = pd.DataFrame(rows)
+    best = grid.loc[grid["log_loss"].idxmin()]
+    config = {"features": best["features"], "params": {**GRID_PARAMS, "depth": int(best["depth"])},
+              "chosen_on": f"train {train_seasons[0]}-{train_seasons[-1]}, validate {VALIDATION_SEASON}",
+              "validation_log_loss": float(best["log_loss"])}
+    c_ll = summarize(y, sigmoid(b_test))["log_loss"]
+    text = "\n\n".join([
+        f"model F validation: train {train_seasons}, score {VALIDATION_SEASON} ({len(test)} games)",
+        "log loss by config:\n" + grid.round(4).to_string(index=False),
+        f"C (baseline) {VALIDATION_SEASON} log loss: {c_ll:.4f}",
+        f"chosen: {json.dumps(config)}"])
+    return text, config
 
 
 def _bayes_season(season, games, train_seasons, units, form, qb=None):
@@ -89,10 +140,12 @@ def _bayes_season(season, games, train_seasons, units, form, qb=None):
 
 def run_season(season: int, games: pd.DataFrame, pregame: pd.DataFrame, lines: pd.DataFrame,
                units: tuple[str, ...] = UNITS_ALL, form: bool = False, learner: str = "bayes",
-               qb: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
+               qb: pd.DataFrame | None = None, config: dict | None = None) -> tuple[pd.DataFrame, dict]:
     train_seasons = list(range(FIRST_OUTCOME_SEASON, season))
     if learner == "catboost":
         train, test, extra = _catboost_season(season, games, train_seasons)
+    elif learner == "residual":
+        train, test, extra = _residual_season(season, games, train_seasons, config)
     else:
         train, test, extra = _bayes_season(season, games, train_seasons, units, form, qb)
     test["p_home_field"] = baselines.home_field(train, test)
@@ -162,6 +215,9 @@ def report(df: pd.DataFrame, metas: list[dict]) -> str:
         lines.append("outcome coefficients (posterior mean, 90% interval; first refit):\n"
                      + "\n".join(f"{m['season']}:\n{c}" for m, c in zip(metas, coef)))
     else:
+        if "config" in metas[0]:
+            lines.append("F config (chosen on validation): " + json.dumps(metas[0]["config"])
+                         + "; trees per season: " + str({m["season"]: m["iterations"] for m in metas}))
         imp = [pd.Series(m["importance"]).head(15).round(2).to_string() for m in metas]
         lines.append("top-15 feature importances (CatBoost):\n"
                      + "\n".join(f"{m['season']}:\n{c}" for m, c in zip(metas, imp)))
@@ -193,12 +249,29 @@ def main() -> None:
     ap.add_argument("seasons", type=int, nargs="+")
     ap.add_argument("--model", choices=sorted(MODEL_CONFIGS), default="A")
     ap.add_argument("--holdout", action="store_true")
+    ap.add_argument("--validate", action="store_true")
     args = ap.parse_args()
     if HOLDOUT in args.seasons and not args.holdout:
         raise SystemExit(f"{HOLDOUT} is the holdout season; pass --holdout to score it")
+    if args.validate and (args.model != "F" or args.seasons != [VALIDATION_SEASON]):
+        raise SystemExit(f"--validate is only for model F on {VALIDATION_SEASON}")
     cfg = MODEL_CONFIGS[args.model]
+    f_config = None
+    if cfg["learner"] == "residual" and not args.validate:
+        if not F_CONFIG.exists():
+            raise SystemExit(f"{F_CONFIG} is missing; run with --validate on {VALIDATION_SEASON} first")
+        if any(s <= VALIDATION_SEASON for s in args.seasons):
+            raise SystemExit(f"F config was chosen on {VALIDATION_SEASON}; score only later seasons")
+        f_config = json.loads(F_CONFIG.read_text())
     ds = DatasetStore()
     games, pregame, lines = ds.load("cfb_games"), ds.load("cfb_pregame_features"), ds.load("cfb_lines")
+    if args.validate:
+        RESULTS.mkdir(parents=True, exist_ok=True)
+        text, config = validate_residual(games)
+        (RESULTS / f"validation_{VALIDATION_SEASON}_F.txt").write_text(text + "\n")
+        F_CONFIG.write_text(json.dumps(config, indent=2) + "\n")
+        print(text)
+        return
     qb = None
     if cfg["qb"]:
         src_full = SourceData.load(ds)
@@ -207,7 +280,7 @@ def main() -> None:
     frames, metas = [], []
     for s in args.seasons:
         df, meta = run_season(s, games, pregame, lines, units=cfg["units"], form=cfg["form"],
-                              learner=cfg["learner"], qb=qb)
+                              learner=cfg["learner"], qb=qb, config=f_config)
         frames.append(df)
         metas.append(meta)
         print(f"{s}: {len(df)} games", json.dumps(meta, default=str), flush=True)

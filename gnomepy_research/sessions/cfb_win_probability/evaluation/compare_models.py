@@ -1,6 +1,6 @@
 """Score backtested models against each other and against the opening and closing lines.
 
-Usage: python -m gnomepy_research.sessions.cfb_win_probability.evaluation.compare_models 2023_2024 A B C [D] [E] [C+E]
+Usage: python -m gnomepy_research.sessions.cfb_win_probability.evaluation.compare_models 2023_2024 A B C [D] [E] [F] [C+E]
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ BACKTEST = Path(__file__).resolve().parent.parent / "results" / "backtest"
 SPREAD_SD = 15.5
 BET_THRESHOLD = 0.05
 N_BLEND_BOOT = 200
-PAIRS = [("B", "A"), ("C", "B"), ("C", "A"), ("D", "C"), ("E", "C"), ("C+E", "C"), ("C+E", "E")]
+PAIRS = [("B", "A"), ("C", "B"), ("C", "A"), ("D", "C"), ("E", "C"), ("C+E", "C"), ("C+E", "E"), ("F", "C"), ("F", "E")]
 
 
 def logit(p: np.ndarray) -> np.ndarray:

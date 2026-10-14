@@ -1,0 +1,86 @@
+overall:
+                                            n  log_loss   brier     ece  accuracy  calib_slope  calib_intercept
+p_bayes                                1590.0    0.5458  0.1849  0.0316    0.7057       1.0542           0.0127
+p_logistic                             1590.0    0.5590  0.1902  0.0198    0.7000       0.9342           0.0393
+p_elo                                  1590.0    0.5686  0.1938  0.0252    0.6943       1.0560           0.0169
+p_home_field                           1590.0    0.6786  0.2428  0.0085    0.5818       1.1218          -0.0012
+p_market_close (closing, post-cutoff)  1590.0    0.5229  0.1763  0.0364    0.7220       1.0762           0.0401
+
+log loss by season:
+                2023    2024
+p_bayes       0.5334  0.5580
+p_logistic    0.5465  0.5714
+p_elo         0.5581  0.5790
+p_home_field  0.6806  0.6765
+
+log loss by phase:
+                post   wk1-2   wk10+   wk3-5   wk6-9
+p_bayes       0.6656  0.5068  0.5592  0.4865  0.5665
+p_logistic    0.7585  0.5287  0.5657  0.4986  0.5691
+p_elo         0.7373  0.5682  0.5529  0.5310  0.5836
+p_home_field  0.6886  0.6603  0.6838  0.6765  0.6794
+
+paired log-loss differences (negative = Bayes better; game bootstrap):
+                        diff      se    lo95    hi95  p_a_worse
+bayes - logistic     -0.0132  0.0044 -0.0218 -0.0046     0.0015
+bayes - elo          -0.0228  0.0069 -0.0362 -0.0098     0.0005
+bayes - home_field   -0.1328  0.0105 -0.1534 -0.1115     0.0000
+bayes - market_close  0.0228  0.0055  0.0122  0.0329     1.0000
+
+log loss by market-favourite band:
+            (0.499, 0.6]  (0.6, 0.7]  (0.7, 0.8]  (0.8, 0.9]  (0.9, 1.0]
+p_bayes           0.7199      0.6424      0.6048      0.3805      0.1959
+p_logistic        0.7376      0.6635      0.6218      0.3808      0.1997
+p_elo             0.7161      0.6710      0.6254      0.4084      0.2562
+n               388.0000    331.0000    366.0000    301.0000    204.0000
+
+Bayes reliability:
+           n  mean_p  observed
+0.0-0.1   30   0.064     0.100
+0.1-0.2   68   0.154     0.088
+0.2-0.3  136   0.253     0.287
+0.3-0.4  172   0.351     0.320
+0.4-0.5  189   0.452     0.508
+0.5-0.6  215   0.547     0.507
+0.6-0.7  236   0.649     0.665
+0.7-0.8  208   0.752     0.740
+0.8-0.9  206   0.851     0.893
+0.9-1.0  130   0.943     0.938
+
+90% interval on P(home): median width 0.000; widest phase {'post': 0.0, 'wk1-2': 0.0, 'wk10+': 0.0, 'wk3-5': 0.0, 'wk6-9': 0.0}
+
+F config (chosen on validation): {"features": "full", "params": {"learning_rate": 0.03, "l2_leaf_reg": 10, "depth": 4}, "chosen_on": "train 2020-2021, validate 2022", "validation_log_loss": 0.5695485943436099}; trees per season: {2023: 7, 2024: 5}
+
+top-15 feature importances (CatBoost):
+2023:
+pass_edge           15.10
+h_o_rush_sd          9.31
+rush_matchup_h       8.37
+h_early_success      6.68
+a_o_rush_sd          6.18
+h_o_pass_sd          6.17
+abs_edge             5.62
+net_edge             5.16
+early_diff           4.60
+a_late_down_luck     4.47
+h_late_down_luck     4.28
+a_field_position     4.17
+h_o_rush             4.10
+edge_x_pace          3.18
+a_o_rush             2.79
+2024:
+a_late_down_luck    13.64
+h_pace              10.31
+a_field_position     9.97
+h_o_rush_sd          8.80
+h_d_rush_sd          6.80
+a_finishing_luck     6.51
+h_late_down_luck     5.78
+a_o_pass_sd          4.69
+edge_x_week          3.96
+pass_edge            3.94
+a_d_rush             3.94
+rush_matchup_h       3.78
+a_o_rush_sd          3.27
+early_diff           3.18
+a_o_rush             3.17

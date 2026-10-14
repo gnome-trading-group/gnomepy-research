@@ -1,0 +1,10 @@
+{
+  "features": "full",
+  "params": {
+    "learning_rate": 0.03,
+    "l2_leaf_reg": 10,
+    "depth": 4
+  },
+  "chosen_on": "train 2020-2021, validate 2022",
+  "validation_log_loss": 0.5695485943436099
+}

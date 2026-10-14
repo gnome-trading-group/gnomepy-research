@@ -1,0 +1,17 @@
+model F validation: train [2020, 2021], score 2022 (776 games)
+
+log loss by config:
+    features  depth  iterations  log_loss
+      linear      2           1    0.5699
+      linear      3           1    0.5699
+      linear      4           3    0.5698
+interactions      2          16    0.5696
+interactions      3          17    0.5697
+interactions      4          18    0.5696
+        full      2          53    0.5698
+        full      3          80    0.5704
+        full      4          32    0.5695
+
+C (baseline) 2022 log loss: 0.5700
+
+chosen: {"features": "full", "params": {"learning_rate": 0.03, "l2_leaf_reg": 10, "depth": 4}, "chosen_on": "train 2020-2021, validate 2022", "validation_log_loss": 0.5695485943436099}
