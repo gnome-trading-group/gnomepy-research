@@ -10,7 +10,7 @@ from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
 from gnomepy_research.models.cfb.efficiency.gaussian_solver import _state_map, fit_cutoff_exact, solve
 from gnomepy_research.models.cfb.efficiency.inference import Inputs
 from gnomepy_research.models.cfb.efficiency.posterior_snapshots import draws_name, hyper_name, model_version, snapshot_options
-from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import OUTCOME_FLAGS
+from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import MODEL_CONFIGS, OUTCOME_FLAGS, resolve_config
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import PRIORS, TERMS_SPLIT, game_draws
 from tests.sessions.test_cfb_model_k import TestPhaseTerms
 from tests.sessions.test_cfb_win_probability_models import SEASON, hypers, synthetic
@@ -232,3 +232,15 @@ def test_naming_cli_and_flags():
     assert snapshot_options(["2020", "2024", "--tau-phases"])["tau_phases"]
     assert not snapshot_options(["2020", "2024"])["tau_phases"]
     assert {"tau_phases", "exclude_terms"} <= set(OUTCOME_FLAGS)
+
+
+def test_model_l_config(tmp_path):
+    l_cfg = MODEL_CONFIGS["L"]
+    k = MODEL_CONFIGS["K"]
+    assert {kk: v for kk, v in l_cfg.items() if kk in k} == k
+    assert l_cfg["tau_phases"] is True
+    assert l_cfg["exclude_terms"] == ["bowl_edge"]
+    assert set(l_cfg) - set(k) == {"tau_phases", "exclude_terms"}
+    assert resolve_config("L", tmp_path / "nope.json") == l_cfg
+    name = draws_name(SEASON, UNITS_SPLIT, True, drives=True, independents_separate=True, tau_phases=True)
+    assert name == f"cfb_team_week_draws_split_conf_ind_drv_tph_{SEASON}"

@@ -54,6 +54,7 @@ MODEL_CONFIGS["I"] = {**MODEL_CONFIGS["G"], "learner": "margin", "recal": True}
 MODEL_CONFIGS["J0"] = {**MODEL_CONFIGS["G"], "j_features": True}
 MODEL_CONFIGS["J"] = {**MODEL_CONFIGS["G"], "j_features": True, "drives": True}
 MODEL_CONFIGS["K"] = {**MODEL_CONFIGS["G"], "drives": True, "independents_separate": True, "phase": True}
+MODEL_CONFIGS["L"] = {**MODEL_CONFIGS["K"], "tau_phases": True, "exclude_terms": ["bowl_edge"]}
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
                 "independents_separate", "phase", "tau_phases", "exclude_terms")
 VALIDATION_SEASON = 2022
