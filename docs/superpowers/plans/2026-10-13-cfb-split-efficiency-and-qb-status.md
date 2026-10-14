@@ -1436,6 +1436,95 @@ Everything is opt-in. With `conference=False` (the default), every existing mode
 
 ---
 
+## Phase 7: Model H, "Talent & continuity"
+
+Added 2026-10-13 after model G's cut analysis:
+- Big favorites are still underpriced (G leans 3.6 pts toward the underdog vs the open; log loss minus open +0.026).
+- Weeks 1–4 still trail the open by 0.022.
+
+H = G + two components:
+1. **Physical/talent gap terms** in the win-probability layer: talent composite, **blue-chip ratio**, and trench size from roster weights, plus a gap × edge interaction.
+2. **A preseason projection regression** per unit that predicts this season's efficiency from last season's efficiency, weighted by how much of the production returns. Its projection feeds the efficiency model's preseason prior.
+
+Everything is opt-in. Defaults and models A–G stay byte-identical.
+
+### Task 19: Physical and talent-gap features and outcome terms
+
+**Files:**
+- Create: `gnomepy_research/models/cfb/features/physical.py`
+- Modify: `sessions/cfb_win_probability/models/win_probability.py`, `evaluation/backtest.py`
+- Test: `tests/sessions/test_cfb_physical.py`
+
+**Interfaces:**
+- `physical_features(src: SourceData, season: int) -> pd.DataFrame`, one row per FBS team_id. It is computed from `src.as_of(season start)` so it's point-in-time. Columns:
+  - `talent`: the 247 talent composite (`cfb_talent`).
+  - `blue_chip_ratio`: 4- and 5-star signees ÷ all rated signees over the last four high-school classes, `class_year` in [season−3, season]. Uses `cfb_recruits` (`recruit_type == "HighSchool"`, `committed_to`/`team_id` = team) with `available_at` before the cutoff. NaN if there are fewer than 20 signees.
+  - `ol_weight`: mean weight of the 5 heaviest players listed at OL (positions OL, OT, OG, C) on that season's roster.
+  - `dl_weight`: mean weight of the 4 heaviest DL (DL, DT, DE, NT).
+  - Missing weights are NaN. Callers z-score within season and fill NaN with 0.
+- `physical_table(src, seasons) -> pd.DataFrame[season, team_id, ...]`.
+- Outcome terms via `game_draws(..., physical: pd.DataFrame | None = None)`. Merge home and away rows by (season, team_id); FCS or missing → 0 after z-scoring. All terms are antisymmetric:
+  - `talent_diff = z_talent_h − z_talent_a`
+  - `bluechip_diff = z_bcr_h − z_bcr_a`
+  - `trench_diff = (z_ol_h − z_dl_a) − (z_ol_a − z_dl_h)`
+  - `gap_x_edge = talent_diff * net`, where `net = pass_edge + rush_edge`
+  - Priors: N(0, 0.5) for the first three and N(0, 10) for `gap_x_edge`. They're appended after G's terms.
+- `MODEL_CONFIGS["H"]` = G's config plus `physical=True` and `projection=True` (projection wiring comes in Task 20; until then H raises NotImplementedError).
+
+**Tests:**
+- Blue-chip ratio on a hand-built recruits frame.
+- OL/DL top-k weights.
+- Point-in-time: a recruit class with `available_at` after the season start is excluded.
+- Antisymmetry of the outcome terms under a home/away swap.
+- Missing → 0.
+
+### Task 20: Preseason projection regression and projection-informed priors
+
+**Files:**
+- Create: `gnomepy_research/models/cfb/efficiency/projection.py`
+- Modify: `efficiency/data.py`, `inference.py`, `posterior_snapshots.py`
+- Test: `tests/sessions/test_cfb_projection.py`
+
+**Design:**
+- **Target.** For each (season s, team, unit ∈ pass/rush × off/def), the target is the team's posterior mean rating at the **last regular-season cutoff of season s**, from the split+conference draws. Season-end rating is roughly 12 games of data, so the preseason prior barely affects it.
+- **Features for projecting season s+1**, all public before s+1 starts:
+  - `last_rating` for that unit: season s's final rating.
+  - **Returning share** for that unit:
+    - pass offense: `pct_passing_ppa` and `pct_receiving_ppa` (cfb_returning for season s+1);
+    - rush offense: `pct_rushing_ppa`;
+    - defense (no CFBD data): `def_continuity` = recruiting-rating-weighted share of season s's defensive roster players (positions DL, DT, DE, NT, LB, ILB, OLB, DB, CB, S, FS, SS) whose player_id is on the s+1 roster.
+  - **The key interactions:** `last_rating × returning_share`, one per share for that unit.
+  - Also `qb_returning_starter × last_pass_rating`, `qb_prior_ppa`, portal in/out stars, `coach_new`, `talent`, `blue_chip_ratio` (from Task 19), and the conference means from G.
+- **Model:** one ridge regression per unit (sklearn `Ridge`, alpha fixed at 1.0 on standardized features). Rolling origin: the projection for season S is fitted only on pairs whose target season is < S. Pairs start at s = 2019 → 2020 (2018 has no prior-season rating). For S = 2020 there is a single pair season, so fit on it.
+- **Output:** `project(preseason_inputs, season) -> DataFrame[season, team_id, unit, proj, proj_sd]`. `proj_sd` is the fit's residual sd, scaled per team by `1 + (1 − returning_share)`, so teams with low continuity get a wider starting range.
+- **Integration**, opt-in via `build_model_data(..., projection: pd.DataFrame | None = None)`:
+  - Append `proj` as an extra feature in **that unit's block only**, standardized like the others, so its beta is learned per unit.
+  - Add the uncertainty flag `low_continuity` (returning share < 0.4) to `z_unc` only when projection is on.
+- Naming: `_proj` suffix, chained as `normal_split_conf_proj_...` / `draws_split_conf_proj_...`. Snapshot CLI flag `--projection`. The projection table is built inside the snapshot run from the existing split+conf draws (2019–2023 seasons), which must exist first; raise a clear error if they don't.
+- The report prints each unit's ridge coefficients (most recent fit) and the out-of-sample projection R² for each target season.
+
+**Tests:**
+- Rolling-origin: the projection for S doesn't change when season S's target rows are perturbed.
+- The interaction is present and the sign is recovered on a planted synthetic relationship.
+- `def_continuity` on a hand-built roster pair.
+- Default `build_model_data` is unchanged.
+
+### Task 21: Backtest H, cut table, Error Lab
+
+- Snapshots:
+  `posterior_snapshots 2020 2024 --likelihood normal --units split --form --conference --projection`
+- Then:
+  - `backtest 2023 2024 --model H`
+  - `compare_models 2023_2024 A B C D E F G H C+E`
+  - Add a pair for H − G.
+- The H report adds the D/G/H motivating-cut table: big favorites, favorites, P4 vs G5, non-conference, weeks 1–4, weeks 5–9, toss-ups, service academies.
+  - Each cut gets a lean vs the open and log loss minus open, with 95% CIs, and a paired H − G per cut.
+  - Also break weeks 1–4 down by returning-share tercile.
+- Error Lab: add H as a series named "Talent & continuity". To stay within 8 validated hues, drop B ("Pass/rush split"). Republish to the same URL.
+- No tuning on 2023–24. Wrong-signed terms are findings.
+
+---
+
 ## Weekly operating procedure (after this ships)
 
 1. Before each slate, add one row per known QB change to `sessions/cfb_win_probability/data/qb_status.csv`, with `recorded_at` set to when you learned it.
