@@ -1,10 +1,11 @@
 {
   "keep_terms": [
+    "pass_edge",
+    "rush_edge",
     "venue",
     "early_success_diff",
     "field_position_diff",
-    "qb_delta_diff",
-    "edge_abs_edge"
+    "qb_delta_diff"
   ],
   "drop_features": [
     "portal_in_stars",

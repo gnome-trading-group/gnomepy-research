@@ -122,6 +122,11 @@ class TestElimination:
         kept, _ = backward_eliminate(["a", "b"], lambda k: 0.6, min_items=0)
         assert kept == []
 
+    def test_protected_never_dropped(self):
+        kept, steps = backward_eliminate(["a", "b", "c"], lambda k: 0.6, protected=("a", "b"), min_items=0)
+        assert kept == ["a", "b"]
+        assert {s["candidate"] for s in steps} == {"c"}
+
     def test_groups_expand(self):
         assert set(expand_groups(["qb", "portal"])) == {"qb_prior_ppa", "qb_returning_starter", "portal_in_stars"}
         assert {"talent_offense", "talent_defense", "talent_qb", "recruiting_points"} == set(GROUPS["recruiting_talent"])

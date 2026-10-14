@@ -30,6 +30,8 @@ from gnomepy_research.sessions.cfb_win_probability.models.win_probability import
 THRESHOLD = 0.0005
 N_SEEDS = 3
 LIKELIHOOD = "normal"
+PROTECTED_TERMS = ("pass_edge", "rush_edge", "venue")
+J_DROPPED_GROUPS = ("recruiting_talent", "qb", "portal")
 GROUPS: dict[str, tuple[str, ...]] = {
     "qb": ("qb_prior_ppa", "qb_returning_starter"),
     "coach": ("coach_srs_resid", "coach_new"),
@@ -54,7 +56,8 @@ def pick_removal(current: float, scores: dict[str, float], threshold: float = TH
 
 
 def backward_eliminate(items: list[str], score: Callable[[tuple[str, ...]], float], threshold: float = THRESHOLD,
-                       min_items: int = 1, log: Callable[[str], None] = lambda s: None) -> tuple[list[str], list[dict]]:
+                       min_items: int = 1, log: Callable[[str], None] = lambda s: None,
+                       protected: tuple[str, ...] = ()) -> tuple[list[str], list[dict]]:
     kept = list(items)
     current = score(tuple(kept))
     log(f"start: {len(kept)} items, log loss {current:.5f}")
@@ -62,9 +65,11 @@ def backward_eliminate(items: list[str], score: Callable[[tuple[str, ...]], floa
     while len(kept) > min_items:
         rnd += 1
         scores = {}
-        for c in kept:
+        for c in [k for k in kept if k not in protected]:
             scores[c] = score(tuple(k for k in kept if k != c))
             log(f"round {rnd}: -{c}: {scores[c]:.5f} (delta {scores[c] - current:+.5f})")
+        if not scores:
+            break
         drop = pick_removal(current, scores, threshold)
         steps += [{"round": rnd, "candidate": c, "log_loss": v, "delta": v - current, "dropped": c == drop}
                   for c, v in scores.items()]
@@ -124,9 +129,28 @@ def format_steps(title: str, steps: list[dict]) -> str:
     return f"{title}:\n" + t.round({"log_loss": 5, "delta": 5}).to_string(index=False)
 
 
+def protected_rerun(scorer: Scorer, log: Callable[[str], None]) -> None:
+    drop = expand_groups(list(J_DROPPED_GROUPS))
+    terms = scorer.all_terms()
+    full_ll = scorer(tuple(terms))
+    log(f"G full: {VALIDATION_SEASON} log loss {full_ll:.5f}; prior drops {list(drop)}; protected {list(PROTECTED_TERMS)}")
+    kept, steps = backward_eliminate(terms, lambda k: scorer(k, drop), log=log, protected=PROTECTED_TERMS)
+    final_ll = scorer(tuple(kept), drop)
+    summary = (f"G full {VALIDATION_SEASON} log loss {full_ll:.5f}; final J {final_ll:.5f}\nkept terms {kept}\n"
+               f"drop_features {list(drop)}")
+    old = ABLATION_TXT.read_text()
+    ABLATION_TXT.write_text("superseded: unprotected run\n\n" + old + "\n\n" + "\n\n".join([
+        f"protected run (current J): outcome-term elimination with prior groups {list(J_DROPPED_GROUPS)} dropped; "
+        f"protected {list(PROTECTED_TERMS)}; threshold {THRESHOLD}; {N_SEEDS} seeds",
+        format_steps("outcome-term elimination (protected)", steps), summary]) + "\n")
+    J_FEATURES.write_text(json.dumps({"keep_terms": kept, "drop_features": list(drop)}, indent=2) + "\n")
+    print(summary)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--validate", type=int, required=True)
+    ap.add_argument("--protected", action="store_true")
     args = ap.parse_args()
     if args.validate != VALIDATION_SEASON:
         raise SystemExit(f"ablation only runs on the {VALIDATION_SEASON} validation season")
@@ -144,6 +168,9 @@ def main() -> None:
         print(s, flush=True)
         lines.append(s)
 
+    if args.protected:
+        protected_rerun(scorer, log)
+        return
     terms = scorer.all_terms()
     full_ll = scorer(tuple(terms))
     log(f"G full: {len(terms)} terms {terms}; {VALIDATION_SEASON} log loss {full_ll:.5f} (mean of {N_SEEDS} seeds)")
