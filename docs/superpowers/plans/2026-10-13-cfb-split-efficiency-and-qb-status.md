@@ -1715,6 +1715,64 @@ L = K + phase-varying drift rates (with a postseason phase) − the unstable bow
 
 ---
 
+## Phase 12: Model M, "Confident favorites"
+
+Added 2026-10-14.
+- **The miss:** on open ≥ 80% favorites, K says about 85% but they win about 90.5%, an under-rating of 5.4 points. The open itself under-rates them by 2.6. K's log loss on this cut is 0.287 vs the open's 0.270.
+- **The diagnosis:** Normal team-strength priors shrink true outliers as hard as lucky teams, and garbage-time evidence of dominance is discarded or down-weighted.
+- **The constraint:** bowls need less confidence, not more.
+
+### Task 31: Heavy-tailed team strengths (opt-in `heavy_tails=True`)
+
+- **Prior:** the start states use `z0_off, z0_def ~ StudentT(nu_team, 0, 1)` instead of Normal(0, 1). The random-walk innovations stay Normal.
+  - In the hyper fit, `nu_team ~ Gamma(2, 0.2)` (mean 10, which allows heavy tails), shared by off/def.
+  - `Hyperparameters.heavy_tails` defaults to False; `nu_team` defaults to inf and is omitted from to_dict when off.
+- **Fitting:** the exact Gaussian solver no longer applies. Cutoff fits with heavy_tails use MCMC (nutpie; fewer draws are fine, e.g. 300 draws and 300 tune, 2 chains). `fit_cutoff_exact` must raise when heavy_tails is on, so it can't be silently misused.
+- Naming suffix `_ht`, after `_tph` in the order split, conf, ind, proj, drv, tph, ht, drop. Snapshot flag `--heavy-tails`.
+- **Tests:**
+  - Default unchanged.
+  - Synthetic recovery: with one planted extreme team (+4 sd), the heavy-tailed fit leaves it closer to truth than the Normal fit, while ordinary teams are recovered equally well.
+  - fit_cutoff_exact raises with heavy_tails.
+  - Naming.
+
+### Task 32: Out-of-sample tail calibrator with a postseason switch
+
+- **Out-of-sample predictions:** run `backtest 2021 2022 --model K` (outcome layer trained on 2020..S−1, draws already exist).
+- **Calibrator** (`models/` is not needed; a session module `models/tail_calibrator.py`):
+  - With z = logit(p): `logit(p') = a·z + b·z·|z| + post·(c·z)`, where post is 1 for postseason games. No intercept, so swap symmetry holds.
+  - Fit (a, b, c) by maximum likelihood on the pooled 2021–22 out-of-sample predictions. Report the coefficients with a bootstrap CI.
+  - Apply to 2023–24 predictions. The calibrator must never be fitted on 2023–24.
+- **Model K+cal:** add `MODEL_CONFIGS["Kc"]` = K + `calibrator="tail"`. The backtest loads the calibrator fitted from that model's own 2021–22 out-of-sample predictions; raise if they're missing.
+- **Tests:** symmetry (p(swap) = 1 − p); a calibrator fitted on synthetic data with known under-confidence in the tails recovers b > 0; the postseason term is applied only to postseason rows.
+
+### Task 33: Garbage-time weight, chosen on 2022 only
+
+- `team_game_drives(..., garbage_weight=0.3)` becomes a parameter, threaded through `Inputs` and snapshot naming (suffix `_gw<value>` when ≠ 0.3) and the CLI flag `--garbage-weight`.
+- **Validation:** for the weights {0.3, 0.5, 1.0}, build K-config snapshots for 2020–2022, train the outcome layer on 2020–2021, and score 2022.
+  - Choose the lowest 2022 log loss. Also report the 2022 big-favorites log loss for each weight.
+  - Freeze the choice in `results/backtest/M_garbage.json`.
+- **Tests:** the weight is applied (a hand-built drive frame); default naming unchanged.
+
+### Task 34: Model M, backtest and comparison
+
+- **Config:** `MODEL_CONFIGS["M"]` = K + `heavy_tails=True` + the frozen garbage weight + `calibrator="tail"`. The calibrator is fitted on M's own 2021–22 out-of-sample predictions.
+- **Runs:**
+  - snapshots for 2020–2024;
+  - `backtest 2021 2022 --model M` (for the calibrator);
+  - `backtest 2023 2024 --model Kc` and `--model M`;
+  - `compare_models 2023_2024 G K L Kc M`, with pairs M−K, Kc−K, M−Kc;
+  - `clv` for K, Kc, M.
+- **Report:**
+  - The cut table K/Kc/M with paired differences vs K: big favorites, favorites, toss-ups, postseason, regular neutral, weeks 1–4, weeks 10+, P4 vs G5.
+  - Big-favorite bias: mean(result − p) for K/Kc/M/open.
+  - Postseason confident wrong picks.
+  - Fitted nu_team per season.
+  - Per-season log loss.
+- **Error Lab:** rebuild with M and Kc added.
+- No tuning on 2023–24.
+
+---
+
 ## Weekly operating procedure (after this ships)
 
 1. Before each slate, add one row per known QB change to `sessions/cfb_win_probability/data/qb_status.csv`, with `recorded_at` set to when you learned it.
