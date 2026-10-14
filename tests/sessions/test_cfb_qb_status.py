@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from gnomepy_research.models.cfb.features.qb_status import (
-    REPLACEMENT_DROPBACKS, historical_starters, qb_deltas, qb_quality, replacement_ppa, team_qb_baseline,
+    REPLACEMENT_DROPBACKS, apply_overrides, historical_starters, load_qb_status, qb_deltas, qb_quality,
+    replacement_ppa, team_qb_baseline,
 )
 from gnomepy_research.models.cfb.features.source import SourceData
 
@@ -106,3 +110,64 @@ def test_historical_starters_are_first_passers():
     src = make_source()
     s = historical_starters(src).set_index(["game_id", "team_id"])["qb_id"]
     assert s[(1, 10)] == "1"
+
+
+HEADER = "season,season_type,week,team,passer_key,recorded_at\n"
+
+
+def write_csv(tmp_path: Path, body: str) -> Path:
+    p = tmp_path / "qb.csv"
+    p.write_text(HEADER + body)
+    return p
+
+
+def test_unknown_team_raises_with_name(tmp_path):
+    p = write_csv(tmp_path, "2024,regular,3,Nowhere St,j.doe,2024-09-13T12:00Z\n")
+    with pytest.raises(ValueError, match="Nowhere St"):
+        load_qb_status(p, make_source())
+
+
+def test_rostered_passer_gets_player_id_and_unknown_gets_synthetic(tmp_path):
+    p = write_csv(tmp_path, "2024,regular,3,T10, A.Bee ,2024-09-13T12:00Z\n2024,regular,3,T40,j.doe,2024-09-13T12:00Z\n")
+    out = load_qb_status(p, make_source()).set_index("team_id")["qb_id"]
+    assert out[10] == "1" and out[40] == "t40:j.doe"
+
+
+def test_override_for_upcoming_game_has_game_id_and_utc_time(tmp_path):
+    p = write_csv(tmp_path, "2024,regular,3,T10,a.bee,2024-09-13T12:00Z\n")
+    out = load_qb_status(p, make_source())
+    assert list(out.columns) == ["game_id", "team_id", "qb_id", "recorded_at"]
+    assert out.loc[0, "game_id"] == 3 and out.loc[0, "recorded_at"] == ts("2024-09-13 12:00")
+
+
+def test_empty_csv_loads_empty_frame(tmp_path):
+    out = load_qb_status(write_csv(tmp_path, ""), make_source())
+    assert out.empty and list(out.columns) == ["game_id", "team_id", "qb_id", "recorded_at"]
+
+
+def test_duplicate_game_team_keeps_latest_recorded(tmp_path):
+    p = write_csv(tmp_path, "2024,regular,3,T10,x.old,2024-09-10T12:00Z\n2024,regular,3,T10,y.new,2024-09-12T12:00Z\n")
+    out = load_qb_status(p, make_source())
+    assert out["qb_id"].tolist() == ["t10:y.new"]
+
+
+def test_missing_game_raises_with_row_number(tmp_path):
+    p = write_csv(tmp_path, "2024,regular,3,T10,a.bee,2024-09-13T12:00Z\n2024,regular,9,T10,a.bee,2024-09-13T12:00Z\n")
+    with pytest.raises(ValueError, match=r"row 2.*T10"):
+        load_qb_status(p, make_source())
+
+
+def test_ambiguous_game_raises_with_row_number(tmp_path):
+    src = make_source()
+    dup = src.games[src.games["game_id"] == 3].assign(game_id=99, away_id=50, away_team="T50")
+    src = replace(src, games=pd.concat([src.games, dup], ignore_index=True))
+    p = write_csv(tmp_path, "2024,regular,3,T10,a.bee,2024-09-13T12:00Z\n")
+    with pytest.raises(ValueError, match=r"row 1.*T10"):
+        load_qb_status(p, src)
+
+
+def test_override_replaces_starter():
+    starters = pd.DataFrame({"game_id": [1, 1], "team_id": [10, 20], "qb_id": ["a", "b"]})
+    over = pd.DataFrame({"game_id": [1, 2], "team_id": [10, 10], "qb_id": ["backup", "backup"]})
+    out = apply_overrides(starters, over).set_index(["game_id", "team_id"])["qb_id"]
+    assert out[(1, 10)] == "backup" and out[(1, 20)] == "b" and out[(2, 10)] == "backup"
