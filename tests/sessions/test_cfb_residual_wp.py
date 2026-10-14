@@ -1,9 +1,13 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
 from sklearn.metrics import log_loss
 
 from gnomepy_research.sessions.cfb_win_probability.models.catboost_wp import TEAM_FEATURES, swap
+from gnomepy_research.sessions.cfb_win_probability.models import residual_wp
+from gnomepy_research.sessions.cfb_win_probability.models.win_probability import GameDraws
 from gnomepy_research.sessions.cfb_win_probability.models.residual_wp import (
     FEATURE_SETS, INTERACTIONS, LINEAR, SYMMETRIC, attach_baseline, engineer, fit_residual, sigmoid)
 
@@ -88,3 +92,26 @@ def test_missing_baseline_raises():
     df = raw_frame(10)
     with pytest.raises(ValueError, match="no C baseline"):
         attach_baseline(df, pd.Series(np.zeros(9), index=np.arange(9)))
+
+
+def test_cross_fitted_baseline_ignores_own_season_labels(monkeypatch):
+    def stub_draws(games, seasons, n_draws=None, **kw):
+        g = games[games["season"].isin(seasons)].reset_index(drop=True)
+        return GameDraws(games=g, x=np.zeros((len(g), 1, 1)), terms=["t"])
+
+    def stub_fit(gd, seed=0):
+        p = gd.games["home_win"].mean()
+        return SimpleNamespace(predict=lambda x: pd.DataFrame({"p_home": np.full(len(x), p)}))
+
+    monkeypatch.setattr(residual_wp, "game_draws", stub_draws)
+    monkeypatch.setattr(residual_wp, "fit", stub_fit)
+    rng = np.random.default_rng(0)
+    games = pd.DataFrame({"game_id": np.arange(300), "season": np.repeat([2020, 2021, 2022], 100),
+                          "home_win": rng.integers(0, 2, 300).astype(float)})
+    before = residual_wp.c_baseline(games, [2020, 2021], [2022])
+    flipped = games.assign(home_win=np.where(games["season"] == 2020, 1 - games["home_win"], games["home_win"]))
+    after = residual_wp.c_baseline(flipped, [2020, 2021], [2022])
+    rows = games.loc[games["season"] == 2020, "game_id"]
+    np.testing.assert_array_equal(before[rows], after[rows])
+    assert not np.allclose(before[games.loc[games["season"] == 2021, "game_id"]],
+                           after[games.loc[games["season"] == 2021, "game_id"]])

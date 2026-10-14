@@ -111,13 +111,21 @@ def fit_residual(train: pd.DataFrame, baseline: np.ndarray, features: list[str],
     return ResidualWP(final, features)
 
 
+def _c_logodds(games: pd.DataFrame, fit_seasons: list[int], predict_seasons: list[int],
+               n_draws: int | None) -> pd.Series:
+    model = fit(game_draws(games, fit_seasons, n_draws=N_FIT_DRAWS, units=UNITS_SPLIT, form=True), seed=0)
+    gd = game_draws(games, predict_seasons, n_draws=n_draws, units=UNITS_SPLIT, form=True)
+    return pd.Series(logit(model.predict(gd.x)["p_home"].to_numpy()), index=gd.games["game_id"].to_numpy())
+
+
 def c_baseline(games: pd.DataFrame, train_seasons: list[int], test_seasons: list[int]) -> pd.Series:
-    """Model C's log-odds by game_id: fitted on train_seasons, predicted for train (in-sample) and test seasons."""
-    train_gd = game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, units=UNITS_SPLIT, form=True)
-    model = fit(train_gd, seed=0)
-    parts = []
-    for gd in (train_gd, game_draws(games, test_seasons, units=UNITS_SPLIT, form=True)):
-        p = model.predict(gd.x)["p_home"].to_numpy()
-        parts.append(pd.Series(logit(p), index=gd.games["game_id"].to_numpy()))
+    """Model C's log-odds by game_id. Each training season is cross-fitted (C fitted on the other training
+    seasons) so its residuals are out-of-sample like the test rows'; test seasons use C fitted on all of them."""
+    if len(train_seasons) < 2:
+        raise ValueError("cross-fitted baselines need at least two training seasons")
+    parts = [_c_logodds(games, [o for o in train_seasons if o != s], [s], N_FIT_DRAWS) for s in train_seasons]
+    parts.append(_c_logodds(games, train_seasons, test_seasons, None))
     out = pd.concat(parts)
-    return out[~out.index.duplicated()]
+    if out.index.duplicated().any():
+        raise ValueError("a game_id has more than one C baseline")
+    return out

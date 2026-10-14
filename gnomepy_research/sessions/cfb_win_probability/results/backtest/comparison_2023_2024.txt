@@ -2,7 +2,7 @@ SUMMARY
 - Best model by log loss: D (0.5452); open 0.5286; close 0.5229.
 - Gap to open (model - open, negative = model better): +0.0166  [+0.0053, +0.0267]  P(first worse)=1.00
 - Gap to close (model - close): +0.0223  [+0.0118, +0.0327]  P(first worse)=1.00
-- Blend weight a on the model vs the open (a > 0 = information beyond the open): A a=+0.09 [-0.19, +0.34], B a=+0.15 [-0.11, +0.38], C a=+0.23 [-0.05, +0.47], D a=+0.23 [-0.02, +0.44], E a=+0.09 [-0.15, +0.32], F a=+0.22 [-0.05, +0.47], C+E a=+0.17 [-0.09, +0.41]
+- Blend weight a on the model vs the open (a > 0 = information beyond the open): A a=+0.09 [-0.19, +0.34], B a=+0.15 [-0.11, +0.38], C a=+0.23 [-0.05, +0.47], D a=+0.23 [-0.02, +0.44], E a=+0.09 [-0.15, +0.32], F a=+0.23 [-0.05, +0.47], C+E a=+0.17 [-0.09, +0.41]
 - No model's blend weight CI excludes 0 vs the open: no demonstrated information beyond the open.
 
 models: A B C D E F C+E; games scored: 1590; dropped 0 games present in every model but missing an opening or closing line
@@ -25,9 +25,9 @@ PER-SOURCE SCORES (calib_slope: 1 = calibrated)
   model E    all 1590    0.5552 0.1883       1.0576
   model E   2023  792    0.5459 0.1838       1.1308
   model E   2024  798    0.5644 0.1927       0.9875
-  model F    all 1590    0.5458 0.1849       1.0542
-  model F   2023  792    0.5334 0.1799       1.1019
-  model F   2024  798    0.5580 0.1899       1.0059
+  model F    all 1590    0.5457 0.1849       1.0535
+  model F   2023  792    0.5335 0.1800       1.0975
+  model F   2024  798    0.5578 0.1898       1.0086
 model C+E    all 1590    0.5489 0.1860       1.0738
 model C+E   2023  792    0.5382 0.1813       1.1325
 model C+E   2024  798    0.5596 0.1906       1.0151
@@ -46,21 +46,21 @@ diff D - C  -0.0005  [-0.0033, +0.0023]  P(first worse)=0.40
 diff E - C  +0.0095  [+0.0045, +0.0151]  P(first worse)=1.00
 diff C+E - C  +0.0033  [+0.0008, +0.0060]  P(first worse)=0.99
 diff C+E - E  -0.0063  [-0.0090, -0.0037]  P(first worse)=0.00
-diff F - C  +0.0001  [-0.0002, +0.0003]  P(first worse)=0.69
-diff F - E  -0.0094  [-0.0150, -0.0044]  P(first worse)=0.00
+diff F - C  -0.0000  [-0.0001, +0.0001]  P(first worse)=0.40
+diff F - E  -0.0095  [-0.0151, -0.0045]  P(first worse)=0.00
 diff A - open  +0.0213  [+0.0110, +0.0311]  P(first worse)=1.00
 diff B - open  +0.0235  [+0.0119, +0.0345]  P(first worse)=1.00
 diff C - open  +0.0171  [+0.0063, +0.0272]  P(first worse)=1.00
 diff D - open  +0.0166  [+0.0053, +0.0267]  P(first worse)=1.00
 diff E - open  +0.0266  [+0.0155, +0.0380]  P(first worse)=1.00
-diff F - open  +0.0171  [+0.0064, +0.0272]  P(first worse)=1.00
+diff F - open  +0.0170  [+0.0063, +0.0272]  P(first worse)=1.00
 diff C+E - open  +0.0203  [+0.0099, +0.0307]  P(first worse)=1.00
 diff A - close  +0.0270  [+0.0165, +0.0366]  P(first worse)=1.00
 diff B - close  +0.0292  [+0.0180, +0.0402]  P(first worse)=1.00
 diff C - close  +0.0227  [+0.0120, +0.0330]  P(first worse)=1.00
 diff D - close  +0.0223  [+0.0118, +0.0327]  P(first worse)=1.00
 diff E - close  +0.0322  [+0.0215, +0.0433]  P(first worse)=1.00
-diff F - close  +0.0228  [+0.0122, +0.0332]  P(first worse)=1.00
+diff F - close  +0.0227  [+0.0120, +0.0330]  P(first worse)=1.00
 diff C+E - close  +0.0260  [+0.0157, +0.0364]  P(first worse)=1.00
 
 BLEND: logit(y) ~ a*logit(model) + b*logit(ref); a > 0 = model carries information the reference lacks
@@ -74,8 +74,8 @@ D vs open:  a=+0.229 [-0.023, +0.444]  b=+0.876
 D vs close: a=+0.100 [-0.138, +0.347]  b=+0.998  (reference)
 E vs open:  a=+0.092 [-0.151, +0.325]  b=+0.998
 E vs close: a=-0.004 [-0.239, +0.220]  b=+1.086  (reference)
-F vs open:  a=+0.223 [-0.049, +0.472]  b=+0.883
-F vs close: a=+0.114 [-0.140, +0.367]  b=+0.988  (reference)
+F vs open:  a=+0.225 [-0.047, +0.473]  b=+0.881
+F vs close: a=+0.116 [-0.140, +0.364]  b=+0.986  (reference)
 C+E vs open:  a=+0.170 [-0.090, +0.411]  b=+0.933
 C+E vs close: a=+0.060 [-0.213, +0.295]  b=+1.035  (reference)
 
@@ -85,5 +85,5 @@ B: n=914  model=0.5989  open=0.5575
 C: n=883  model=0.5897  open=0.5636
 D: n=876  model=0.5962  open=0.5685
 E: n=935  model=0.5874  open=0.5437
-F: n=882  model=0.5879  open=0.5610
+F: n=882  model=0.5900  open=0.5639
 C+E: n=894  model=0.5874  open=0.5543
