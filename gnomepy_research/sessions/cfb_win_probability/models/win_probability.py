@@ -19,6 +19,7 @@ import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
 
+from gnomepy_research.models.cfb.features.physical import zscore_by_season
 from gnomepy_research.models.cfb.features.ratings import FCS_TEAM
 from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL
 from gnomepy_research.models.cfb.efficiency.posterior_snapshots import DRAWS_DIR, draws_name
@@ -28,6 +29,7 @@ TERMS_SPLIT = ["pass_edge", "rush_edge", "venue", "bowl_edge"]
 TERMS = TERMS_ALL
 STRETCH_TERM = "edge_abs_edge"
 OPTION_TERM = "option_diff"
+PHYSICAL_TERMS = ["talent_diff", "bluechip_diff", "trench_diff", "gap_x_edge"]
 FORM_TERMS = ["early_success_diff", "late_down_luck_diff", "finishing_luck_diff", "field_position_diff", "pace_x_edge"]
 # Ratings are in PPA/play; a 0.1 net edge is roughly a 10-point favourite.
 PRIORS: dict[str, tuple[float, float]] = {
@@ -46,6 +48,10 @@ PRIORS: dict[str, tuple[float, float]] = {
     "qb_delta_diff": (4.0, 4.0),
     "edge_abs_edge": (0.0, 30.0),
     "option_diff": (0.0, 0.5),
+    "talent_diff": (0.0, 0.5),
+    "bluechip_diff": (0.0, 0.5),
+    "trench_diff": (0.0, 0.5),
+    "gap_x_edge": (0.0, 10.0),
 }
 N_FIT_DRAWS = 50
 
@@ -94,16 +100,29 @@ def split_columns(key: str, draws: dict, gg: pd.DataFrame) -> tuple[np.ndarray, 
     return p_cols, r_cols, hi, ai
 
 
+def physical_diffs(games: pd.DataFrame, physical: pd.DataFrame) -> np.ndarray:
+    """(G, 3) talent, blue-chip and trench differences, home minus away; teams without a row score 0."""
+    z = zscore_by_season(physical).set_index(["season", "team_id"])
+
+    def side(team_col: str) -> pd.DataFrame:
+        idx = pd.MultiIndex.from_arrays([games["season"], games[team_col]])
+        return z.reindex(idx).fillna(0.0).reset_index(drop=True)
+
+    h, a = side("home_id"), side("away_id")
+    return np.column_stack([h["talent"] - a["talent"], h["blue_chip_ratio"] - a["blue_chip_ratio"],
+                            (h["ol_weight"] - a["dl_weight"]) - (a["ol_weight"] - h["dl_weight"])])
+
+
 def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = None, seed: int = 0,
                directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL, form: bool = False,
                qb: pd.DataFrame | None = None, conference: bool = False, stretch: bool = False,
-               option: bool = False) -> GameDraws:
+               option: bool = False, physical: pd.DataFrame | None = None) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff)."""
     if form and units == UNITS_ALL:
         raise ValueError("form terms are defined on the split model only")
-    if (stretch or option) and units == UNITS_ALL:
-        raise ValueError("stretch and option terms are defined on the split model only")
+    if (stretch or option or physical is not None) and units == UNITS_ALL:
+        raise ValueError("stretch, option and physical terms are defined on the split model only")
     rng = np.random.default_rng(seed)
     g = games[games["season"].isin(seasons) & (games["home_classification"] == "fbs")
               & (games["away_classification"] == "fbs")].copy()
@@ -157,6 +176,11 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
         terms = [*terms, "qb_delta_diff"]
     x = np.concatenate([x, np.concatenate(tails, axis=0)], axis=-1)
     terms = terms + [STRETCH_TERM] * stretch + [OPTION_TERM] * option
+    if physical is not None:
+        d = physical_diffs(out, physical)[:, None, :]
+        net = x[..., 0] + x[..., 1]
+        x = np.concatenate([x, np.broadcast_to(d, (*x.shape[:2], 3)), (d[..., 0] * net)[..., None]], axis=-1)
+        terms = terms + PHYSICAL_TERMS
     return GameDraws(games=out, x=x, terms=terms)
 
 

@@ -21,6 +21,7 @@ import pandas as pd
 
 from gnomepy.data import DatasetStore
 from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, UNITS_SPLIT
+from gnomepy_research.models.cfb.features.physical import physical_table
 from gnomepy_research.models.cfb.features.qb_status import apply_overrides, historical_starters, load_qb_status, qb_deltas
 from gnomepy_research.models.cfb.features.source import SourceData
 from gnomepy_research.sessions.cfb_win_probability.evaluation import baselines
@@ -44,6 +45,8 @@ MODEL_CONFIGS = {
     "E": dict(units=UNITS_SPLIT, form=True, qb=False, learner="catboost"),
     "F": dict(units=UNITS_SPLIT, form=True, qb=False, learner="residual"),
     "G": dict(units=UNITS_SPLIT, form=True, qb=True, learner="bayes", conference=True, stretch=True, option=True),
+    "H": dict(units=UNITS_SPLIT, form=True, qb=True, learner="bayes", conference=True, stretch=True, option=True,
+              physical=True, projection=True),
 }
 OUTCOME_FLAGS = ("conference", "stretch", "option")
 VALIDATION_SEASON = 2022
@@ -277,16 +280,21 @@ def main() -> None:
         F_CONFIG.write_text(json.dumps(config, indent=2) + "\n")
         print(text)
         return
+    if cfg.get("projection"):
+        raise NotImplementedError("projection lands in Task 20")
     qb = None
+    src_full = SourceData.load(ds) if cfg["qb"] or cfg.get("physical") else None
+    flags = {k: cfg[k] for k in OUTCOME_FLAGS if k in cfg}
+    if cfg.get("physical"):
+        flags["physical"] = physical_table(src_full, list(range(FIRST_OUTCOME_SEASON, max(args.seasons) + 1)))
     if cfg["qb"]:
-        src_full = SourceData.load(ds)
         starters = apply_overrides(historical_starters(src_full), load_qb_status(QB_STATUS_CSV, src_full))
         qb = qb_deltas(src_full, games[games["season"].between(FIRST_OUTCOME_SEASON, max(args.seasons))], starters)
     frames, metas = [], []
     for s in args.seasons:
         df, meta = run_season(s, games, pregame, lines, units=cfg["units"], form=cfg["form"],
                               learner=cfg["learner"], qb=qb, config=f_config,
-                              flags={k: cfg[k] for k in OUTCOME_FLAGS if k in cfg})
+                              flags=flags)
         frames.append(df)
         metas.append(meta)
         print(f"{s}: {len(df)} games", json.dumps(meta, default=str), flush=True)
