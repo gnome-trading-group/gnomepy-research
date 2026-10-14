@@ -16,6 +16,7 @@ from scipy import stats
 
 from gnomepy.data import DatasetStore
 from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, ModelData, build_model_data
+from gnomepy_research.models.cfb.features.drives import team_game_drives
 from gnomepy_research.models.cfb.features.team_form import team_game_form
 from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
     Hyperparameters,
@@ -30,6 +31,7 @@ HYPER_DIR = Path(__file__).resolve().parent.parent / "hyperparameters"
 HYPER_VARS = ["alpha", "sigma_alpha", "hfa", "beta_off", "beta_def", "gamma", "s_off", "s_def", "tau_off",
               "tau_def", "sigma_game", "sigma_play"]
 CONF_HYPER_VARS = ["s_conf_off", "s_conf_def"]
+DRIVE_HYPER_VARS = ["alpha_ppd", "sigma_alpha_ppd", "lam_ppd", "hfa_ppd", "s_game_ppd", "s_drive_ppd"]
 PRESEASON_FEATURES = "cfb_team_preseason_features"
 EFFICIENCY = "cfb_team_game_efficiency"
 GAMES = "cfb_games"
@@ -45,22 +47,33 @@ class Inputs:
     as_of: datetime
     form_rows: pd.DataFrame | None = None
     projection: pd.DataFrame | None = None
+    drives: pd.DataFrame | None = None
 
     @classmethod
     def load(cls, ds: DatasetStore | None = None, as_of: datetime | None = None,
-             with_form: bool = False) -> Inputs:
+             with_form: bool = False, with_drives: bool = False) -> Inputs:
         """The model inputs as known at as_of (default now); ds records the loads for lineage."""
         ds = ds or DatasetStore()
         as_of = as_of or datetime.now(timezone.utc)
         games = ds.load(GAMES, as_of=as_of)
+        raw_drives = ds.load(DRIVES, as_of=as_of) if with_form or with_drives else None
         form_rows = None
         if with_form:
-            form_rows = team_game_form(ds.load(PLAYS, as_of=as_of), ds.load(DRIVES, as_of=as_of), games)
+            form_rows = team_game_form(ds.load(PLAYS, as_of=as_of), raw_drives, games)
+        drives = team_game_drives(raw_drives, games) if with_drives else None
         return cls(ds.load(PRESEASON_FEATURES, as_of=as_of), ds.load(EFFICIENCY, as_of=as_of), games, as_of,
-                   form_rows)
+                   form_rows, drives=drives)
 
     def visible(self, cutoff: pd.Timestamp) -> pd.DataFrame:
         return self.efficiency[self.efficiency["available_at"] < cutoff]
+
+    def visible_drives(self, cutoff: pd.Timestamp) -> pd.DataFrame:
+        if self.drives is None:
+            raise ValueError("drive observations need Inputs.drives (Inputs.load(with_drives=True))")
+        return self.drives[self.drives["available_at"] < cutoff]
+
+    def drives_for(self, hypers: Hyperparameters, cutoff: pd.Timestamp) -> pd.DataFrame | None:
+        return self.visible_drives(cutoff) if hypers.drives else None
 
     def projection_for(self, hypers: Hyperparameters) -> pd.DataFrame | None:
         if not hypers.projection:
@@ -108,17 +121,20 @@ def fit_hyperparameters(inputs: Inputs, seasons: list[int], likelihood: str, dra
                         tune: int = 1500, seed: int = 0,
                         units: tuple[str, ...] = UNITS_ALL,
                         conference: bool = False, projection: bool = False,
-                        drop_features: tuple[str, ...] = ()) -> tuple[Hyperparameters, dict]:
+                        drop_features: tuple[str, ...] = (), drives: bool = False) -> tuple[Hyperparameters, dict]:
     if projection and inputs.projection is None:
         raise ValueError("projection=True needs Inputs.projection")
     cutoff = hyper_cutoff(inputs, max(seasons))
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, seasons, units=units,
                             conference=conference, projection=inputs.projection if projection else None,
-                            drop_features=drop_features)
+                            drop_features=drop_features, drives=inputs.visible_drives(cutoff) if drives else None)
     idata = sample(build_model(data, likelihood=likelihood, store_states=False), draws=draws, tune=tune, seed=seed)
     hv = HYPER_VARS + (["nu"] if likelihood == "studentt" else []) + (CONF_HYPER_VARS if conference else [])
+    hv += DRIVE_HYPER_VARS if drives else []
     diag = {"hyper": diagnostics(idata, hv), "states": diagnostics(idata, ["z0_off", "z0_def"]),
             "seasons": seasons, "cutoff": str(cutoff), "n_obs": int(len(data.obs_y))}
+    if drives:
+        diag["n_drive_obs"] = int(len(data.drv_y))
     return hyperparameters_from(idata, data, likelihood), diag
 
 
@@ -137,7 +153,8 @@ def fit_cutoff(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: Hyperp
                draws: int = 500, tune: int = 500, seed: int = 0) -> tuple[CutoffPosterior, ModelData]:
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, [season],
                             units=tuple(hypers.units), conference=hypers.conference,
-                            projection=inputs.projection_for(hypers), drop_features=tuple(hypers.drop_features))
+                            projection=inputs.projection_for(hypers), drop_features=tuple(hypers.drop_features),
+                            drives=inputs.drives_for(hypers, cutoff))
     idata = sample(build_model(data, hypers=hypers, likelihood=hypers.likelihood), draws=draws, tune=tune, seed=seed)
     period = int(data.periods.loc[data.periods["cutoff"] == cutoff, "period"].iloc[0])
     post = idata.posterior.to_dataset().stack(sample=("chain", "draw"))
@@ -149,7 +166,8 @@ def fit_cutoff(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: Hyperp
         units=data.ts_keys["unit"].to_numpy(),
         off=off, de=de, alpha=alpha, hypers=hypers,
         diagnostics=diagnostics(idata, ["z0_off", "z0_def", "eps_off", "eps_def", "z_alpha"]
-                                + (["z_conf_off", "z_conf_def"] if hypers.conference else [])),
+                                + (["z_conf_off", "z_conf_def"] if hypers.conference else [])
+                                + (["z_alpha_ppd"] if hypers.drives else [])),
     ), data
 
 

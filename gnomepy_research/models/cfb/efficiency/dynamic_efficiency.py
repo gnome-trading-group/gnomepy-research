@@ -8,6 +8,11 @@
     O[i, k] = O[i, k-1] + tau_off * eps          (non-centered random walk)
     D analogously. Higher O = better offense, higher D = better defense.
 
+Optional drive channel (drives=True), a second observation of the same states:
+    ppd[g] ~ Normal(alpha_ppd[season] + lam_ppd * (Ocomb[off, k] - Dcomb[def, k]) + hfa_ppd * venue,
+                    sqrt(s_game_ppd^2 + s_drive_ppd^2 / n_eff))
+with Ocomb/Dcomb the pass-share-weighted mean of a team's unit states (= O/D with units ("all",)).
+
 Identifiability: features are centred within season, there is no intercept in the state priors,
 and alpha[season] carries the league baseline. A season seen for the first time in a cutoff fit
 gets alpha as its prior mean, so its baseline is learned from its own games.
@@ -30,6 +35,7 @@ from gnomepy_research.models.cfb.efficiency.data import ModelData
 
 LIKELIHOODS = ("studentt", "normal")
 CONFERENCE_FIELDS = ("s_conf_off", "s_conf_def", "conference")
+DRIVE_FIELDS = ("alpha_ppd", "sigma_alpha_ppd", "lam_ppd", "hfa_ppd", "s_game_ppd", "s_drive_ppd", "drives")
 
 
 @dataclass
@@ -56,6 +62,13 @@ class Hyperparameters:
     conference: bool = False
     projection: bool = False
     drop_features: list[str] = field(default_factory=list)
+    alpha_ppd: float = 0.0
+    sigma_alpha_ppd: float = 0.0
+    lam_ppd: float = 0.0
+    hfa_ppd: float = 0.0
+    s_game_ppd: float = 0.0
+    s_drive_ppd: float = 0.0
+    drives: bool = False
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -66,6 +79,9 @@ class Hyperparameters:
             d.pop("projection")
         if not self.drop_features:
             d.pop("drop_features")
+        if not self.drives:
+            for k in DRIVE_FIELDS:
+                d.pop(k)
         for k, v in d.items():
             if isinstance(v, np.ndarray):
                 d[k] = v.tolist()
@@ -94,6 +110,8 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
               "f_off": data.off_names, "f_def": data.def_names, "unc": np.arange(data.z_unc.shape[1])}
     if has_conf:
         coords["conf"] = np.arange(len(data.conf_keys))
+    if data.drives:
+        coords["season"] = list(data.seasons)
     with pm.Model(coords=coords) as model:
         if hypers is None:
             alpha = pm.Normal("alpha", 0.1, 0.1, dims="unit")
@@ -112,6 +130,13 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
             if has_conf:
                 s_conf_off = pm.HalfNormal("s_conf_off", 0.05)
                 s_conf_def = pm.HalfNormal("s_conf_def", 0.05)
+            if data.drives:
+                alpha_ppd = pm.Normal("alpha_ppd", 2.2, 0.5)
+                sigma_alpha_ppd = pm.HalfNormal("sigma_alpha_ppd", 0.3)
+                lam_ppd = pm.Normal("lam_ppd", 12.0, 6.0)
+                hfa_ppd = pm.Normal("hfa_ppd", 0.2, 0.2)
+                s_game_ppd = pm.HalfNormal("s_game_ppd", 1.0)
+                s_drive_ppd = pm.HalfNormal("s_drive_ppd", 3.0)
         else:
             h = hypers
             alpha, sigma_alpha, hfa = pt.as_tensor_variable(np.asarray(h.alpha, dtype=float)), h.sigma_alpha, h.hfa
@@ -120,6 +145,8 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
             s_off, s_def, tau_off, tau_def = h.s_off, h.s_def, h.tau_off, h.tau_def
             sigma_game, sigma_play, nu = h.sigma_game, h.sigma_play, h.nu
             s_conf_off, s_conf_def = h.s_conf_off, h.s_conf_def
+            alpha_ppd, sigma_alpha_ppd, lam_ppd = h.alpha_ppd, h.sigma_alpha_ppd, h.lam_ppd
+            hfa_ppd, s_game_ppd, s_drive_ppd = h.hfa_ppd, h.s_game_ppd, h.s_drive_ppd
 
         group_unit = data.alpha_keys["unit"].map({u: i for i, u in enumerate(data.units)}).to_numpy(int)
         z_alpha = pm.Normal("z_alpha", 0.0, 1.0, dims="alpha_group")
@@ -155,6 +182,15 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
             pm.StudentT("y", nu=nu, mu=mu, sigma=sigma, observed=data.obs_y)
         else:
             pm.Normal("y", mu=mu, sigma=sigma, observed=data.obs_y)
+        if data.drives:
+            z_alpha_ppd = pm.Normal("z_alpha_ppd", 0.0, 1.0, dims="season")
+            alpha_ppd_season = alpha_ppd + sigma_alpha_ppd * z_alpha_ppd
+            k = data.drv_period[:, None]
+            o_comb = (off[data.drv_off, k] * data.drv_off_w).sum(axis=1)
+            d_comb = (de[data.drv_def, k] * data.drv_def_w).sum(axis=1)
+            mu_ppd = alpha_ppd_season[data.drv_season] + lam_ppd * (o_comb - d_comb) + hfa_ppd * data.drv_venue
+            sigma_ppd = pt.sqrt(s_game_ppd ** 2 + s_drive_ppd ** 2 / data.drv_n)
+            pm.Normal("ppd", mu=mu_ppd, sigma=sigma_ppd, observed=data.drv_y)
     return model
 
 
@@ -180,6 +216,7 @@ def hyperparameters_from(idata: az.InferenceData, data: ModelData, likelihood: s
         units=list(data.units), projection=data.projection, drop_features=list(data.drop_features),
         **({"s_conf_off": float(m("s_conf_off")), "s_conf_def": float(m("s_conf_def")), "conference": True}
            if len(data.conf_keys) else {}),
+        **({k: float(m(k)) for k in DRIVE_FIELDS[:-1]} | {"drives": True} if data.drives else {}),
     )
 
 

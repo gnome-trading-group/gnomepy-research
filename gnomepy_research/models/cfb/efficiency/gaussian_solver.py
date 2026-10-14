@@ -29,6 +29,9 @@ def _layout(data: ModelData) -> dict[str, int]:
     lay["z_conf_off"] = lay["eps_def"] + n_ts * (n_k - 1)
     lay["z_conf_def"] = lay["z_conf_off"] + len(data.conf_keys)
     lay["size"] = lay["z_conf_def"] + len(data.conf_keys)
+    if data.drives:
+        lay["z_alpha_ppd"] = lay["size"]
+        lay["size"] += len(data.seasons)
     return lay
 
 
@@ -55,6 +58,28 @@ def _group_unit(data: ModelData) -> np.ndarray:
     return data.alpha_keys["unit"].map({u: i for i, u in enumerate(data.units)}).to_numpy(int)
 
 
+def _mixed_state_map(data: ModelData, h: Hyperparameters, lay: dict[str, int], ts: np.ndarray,
+                     share: np.ndarray, offense: bool) -> tuple[np.ndarray, np.ndarray]:
+    """Rows for the share-weighted mix of a team's unit states at each drive observation's period."""
+    c = np.zeros(len(data.drv_y))
+    B = np.zeros((len(data.drv_y), lay["size"]))
+    for u in range(ts.shape[1]):
+        cu, Bu = _state_map(data, h, lay, ts[:, u], data.drv_period, offense)
+        c += share[:, u] * cu
+        B += share[:, u][:, None] * Bu
+    return c, B
+
+
+def _drive_rows(data: ModelData, h: Hyperparameters, lay: dict[str, int]):
+    c_off, A_off = _mixed_state_map(data, h, lay, data.drv_off, data.drv_off_w, offense=True)
+    c_def, A_def = _mixed_state_map(data, h, lay, data.drv_def, data.drv_def_w, offense=False)
+    A = h.lam_ppd * (A_off - A_def)
+    A[np.arange(len(data.drv_y)), lay["z_alpha_ppd"] + data.drv_season] += h.sigma_alpha_ppd
+    c = h.alpha_ppd + h.lam_ppd * (c_off - c_def) + h.hfa_ppd * data.drv_venue
+    w = 1.0 / (h.s_game_ppd ** 2 + h.s_drive_ppd ** 2 / data.drv_n)
+    return A, c, w
+
+
 def solve(data: ModelData, h: Hyperparameters) -> tuple[np.ndarray, tuple, dict[str, int]]:
     lay = _layout(data)
     c_off, A_off = _state_map(data, h, lay, data.obs_off, data.obs_period, offense=True)
@@ -63,9 +88,13 @@ def solve(data: ModelData, h: Hyperparameters) -> tuple[np.ndarray, tuple, dict[
     A[np.arange(len(data.obs_y)), lay["alpha"] + data.obs_alpha] = h.sigma_alpha
     c = np.asarray(h.alpha)[_group_unit(data)][data.obs_alpha] + c_off - c_def + h.hfa * data.obs_venue
     w = 1.0 / (h.sigma_game ** 2 + h.sigma_play ** 2 / data.obs_plays)
+    y = data.obs_y
+    if data.drives:
+        A_d, c_d, w_d = _drive_rows(data, h, lay)
+        A, c, w, y = np.vstack([A, A_d]), np.r_[c, c_d], np.r_[w, w_d], np.r_[y, data.drv_y]
     P = np.eye(lay["size"]) + A.T @ (A * w[:, None])
     chol = cho_factor(P, lower=True)
-    mean = cho_solve(chol, A.T @ (w * (data.obs_y - c)))
+    mean = cho_solve(chol, A.T @ (w * (y - c)))
     return mean, chol, lay
 
 
@@ -75,7 +104,8 @@ def fit_cutoff_exact(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: 
         raise ValueError("the exact solver is only valid for the Gaussian likelihood")
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, [season],
                             units=tuple(hypers.units), conference=hypers.conference,
-                            projection=inputs.projection_for(hypers), drop_features=tuple(hypers.drop_features))
+                            projection=inputs.projection_for(hypers), drop_features=tuple(hypers.drop_features),
+                            drives=inputs.drives_for(hypers, cutoff))
     mean, chol, lay = solve(data, hypers)
     rng = np.random.default_rng(seed)
     # theta = mean + L^-T z, with P = L L^T, gives draws with covariance P^-1.

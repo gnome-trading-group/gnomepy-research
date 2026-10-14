@@ -70,6 +70,17 @@ class ModelData:
     ts_conf: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=int))  # (TS,) index into conf_keys
     projection: bool = False
     drop_features: tuple[str, ...] = ()
+    drives: bool = False
+    drv_off: np.ndarray = field(default_factory=lambda: np.zeros((0, 1), dtype=int))  # (M, U) offense ts per unit
+    drv_off_w: np.ndarray = field(default_factory=lambda: np.zeros((0, 1)))  # (M, U) unit play shares
+    drv_def: np.ndarray = field(default_factory=lambda: np.zeros((0, 1), dtype=int))
+    drv_def_w: np.ndarray = field(default_factory=lambda: np.zeros((0, 1)))
+    drv_period: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=int))
+    drv_venue: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    drv_n: np.ndarray = field(default_factory=lambda: np.zeros(0))  # effective drive count
+    drv_y: np.ndarray = field(default_factory=lambda: np.zeros(0))  # points per drive
+    drv_season: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=int))  # index into `seasons`
+    drv_game: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=int))
 
 
 def season_periods(games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
@@ -140,12 +151,54 @@ def _unit_projection(pre: pd.DataFrame, projection: pd.DataFrame, unit: str) -> 
     return pre[["season", "team_id"]].merge(p.reset_index(), on=["season", "team_id"], how="left")
 
 
+def pass_shares(efficiency: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """Per (season, team): share of its offensive plays that were passes, and of the plays it faced on defense."""
+    e = efficiency[["season", "team_id", "opponent_id", "pass_plays", "rush_plays"]].copy()
+    e["n"] = e["pass_plays"] + e["rush_plays"]
+    shares = []
+    for col in ("team_id", "opponent_id"):
+        g = e.groupby(["season", col])[["pass_plays", "n"]].sum()
+        g = g[g["n"] > 0]
+        shares.append((g["pass_plays"] / g["n"]).rename_axis(["season", "team_id"]))
+    return shares[0], shares[1]
+
+
+def _drive_observations(drives: pd.DataFrame, e: pd.DataFrame, periods: pd.DataFrame, seasons: list[int],
+                        units: tuple[str, ...], idx: dict) -> dict:
+    d = drives[drives["season"].isin(seasons) & (drives["n_eff"] > 0)]
+    d = d.merge(periods[[*WEEK_KEYS, "period"]], on=WEEK_KEYS)
+    off_share, def_share = pass_shares(e)
+    sides = {}
+    for side, team_col, cls_col, share in (("off", "team_id", "team_classification", off_share),
+                                           ("def", "opponent_id", "opponent_classification", def_share)):
+        team = np.where(d[cls_col] == "fbs", d[team_col], FCS_TEAM)
+        rows = np.column_stack([
+            [idx.get((s, t, u), idx[(s, FCS_TEAM, u)]) for s, t in zip(d["season"], team)] for u in units
+        ]).astype(int).reshape(len(d), len(units))
+        if units == UNITS_ALL:
+            w = np.ones((len(d), 1))
+        else:
+            p = share.reindex(pd.MultiIndex.from_arrays([d["season"], team])).to_numpy(float)
+            p = np.where(np.isfinite(p) & (team != FCS_TEAM), p, 0.5)
+            w = np.column_stack([p, 1.0 - p])
+        sides[side] = (rows, w)
+    return {
+        "drives": True, "drv_off": sides["off"][0], "drv_off_w": sides["off"][1],
+        "drv_def": sides["def"][0], "drv_def_w": sides["def"][1], "drv_period": d["period"].to_numpy(int),
+        "drv_venue": d["venue"].to_numpy(float), "drv_n": d["n_eff"].to_numpy(float), "drv_y": d["ppd"].to_numpy(float),
+        "drv_season": d["season"].map({s: i for i, s in enumerate(seasons)}).to_numpy(int),
+        "drv_game": d["game_id"].to_numpy(),
+    }
+
+
 def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: pd.DataFrame,
                      seasons: list[int], units: tuple[str, ...] = UNITS_ALL, conference: bool = False,
-                     projection: pd.DataFrame | None = None, drop_features: tuple[str, ...] = ()) -> ModelData:
-    """`efficiency` must already be point-in-time filtered (as_of the fit's cutoff). `projection`
-    (projection.project output) adds each unit's projected rating to that unit's block only, plus
-    the low_continuity uncertainty flag."""
+                     projection: pd.DataFrame | None = None, drop_features: tuple[str, ...] = (),
+                     drives: pd.DataFrame | None = None) -> ModelData:
+    """`efficiency` (and `drives`, features.drives.team_game_drives rows) must already be point-in-time
+    filtered (as_of the fit's cutoff). `projection` (projection.project output) adds each unit's
+    projected rating to that unit's block only, plus the low_continuity uncertainty flag. With split
+    units a drive observes the pass/rush states mixed by the team's pass share in `efficiency`."""
     if projection is not None and tuple(units) == UNITS_ALL:
         raise ValueError("the preseason projection is per pass/rush unit; use split units")
     pre = preseason[preseason["season"].isin(seasons)].sort_values(["season", "team_id"]).reset_index(drop=True)
@@ -238,6 +291,7 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
             "alpha": [a_idx[(s, u)] for s in eu["season"]], "unit": ui,
         }))
     obs = pd.concat(parts, ignore_index=True)
+    drv = {} if drives is None else _drive_observations(drives, e, periods, seasons, tuple(units), idx)
 
     return ModelData(
         ts_keys=ts_keys,
@@ -249,5 +303,5 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
         obs_game=obs["game"].to_numpy(), obs_season=obs["season"].to_numpy(int), seasons=list(seasons), periods=periods,
         units=tuple(units), alpha_keys=alpha_keys, obs_alpha=obs["alpha"].to_numpy(int), obs_unit=obs["unit"].to_numpy(int),
         conf_keys=conf_keys, ts_conf=ts_conf, projection=projection is not None,
-        drop_features=tuple(sorted(drop_features)),
+        drop_features=tuple(sorted(drop_features)), **drv,
     )
