@@ -1666,6 +1666,55 @@ K = G (no pruning, full priors) + drive channel + independents as separate confe
 
 ---
 
+## Phase 11: Model L, "Settling ratings"
+
+Added 2026-10-14. K vs G diagnostics on 2023–24:
+- K is better on regular-season home-site games (−0.011, significant).
+- K is worse on regular-season neutral-site games, mostly week 5+ and conference championships (+0.066, significant), and on the postseason (+0.050). In the postseason it is more confident, with 7 confident wrong picks vs G's 1.
+- Late-season weekly rating movement is 0.036 for K vs 0.012 for G, and K's end-of-season rating spread is wider (0.254 vs 0.204).
+
+**Hypothesis:** K's single drift rate (tau ≈ 0.034, pushed up by the drive channel) suits September, but keeps ratings chasing recent results all season.
+
+L = K + phase-varying drift rates (with a postseason phase) − the unstable bowl term.
+
+### Task 29: Phase-varying random-walk drift (opt-in `tau_phases=True`)
+
+- **Phase of each random-walk step,** by the destination period's (season_type, week):
+  - early: regular weeks ≤ 4
+  - mid: regular weeks 5–9
+  - late: regular weeks ≥ 10
+  - post: postseason
+- **Drift parameters:** `tau_off` and `tau_def` become vectors of length 4, indexed by phase. Each phase's step uses that phase's tau.
+- **Priors:** HalfNormal(0.03) for early/mid/late; HalfNormal(0.06) for post. The post walk is where bowl-layoff uncertainty enters, so post gets a wider prior.
+- **Defaults off:** scalar tau, byte-identical to today. `Hyperparameters.tau_phases` defaults to False. When on, tau_off/tau_def are stored as lists in the JSON; when off, they stay scalar.
+- **Exact solver:** `_state_map` uses the step's phase tau for each cumulative step. Each B row sums the tau of each step up to period k, so the eps columns get per-step tau values.
+- Naming suffix `_tph`, after `_drv`. Snapshot flag `--tau-phases`.
+- **Outcome layer:** add `exclude_terms` to `game_draws`, which drops named terms after all terms are built and is applied before keep_terms. L excludes `bowl_edge`.
+
+**Tests:**
+- Default unchanged.
+- Phase assignment from (season_type, week).
+- Exact solver == MCMC with tau_phases (O at atol 0.01).
+- Synthetic recovery: data generated with large early drift and near-zero late drift gives fitted early tau > late tau.
+- exclude_terms removes the column and its prior.
+
+### Task 30: Backtest L
+
+- Snapshots 2020–2024: `--likelihood normal --units split --form --conference --independents-separate --drives --tau-phases`.
+- `MODEL_CONFIGS["L"]` = K + `tau_phases=True` + `exclude_terms=["bowl_edge"]`.
+- `backtest 2023 2024 --model L`.
+- `compare_models 2023_2024 D G H I J K L`, with pairs L−K and L−G.
+- **The motivating cut table G/K/L,** each with log loss, paired L−K and L−G with 95% CIs: regular-season home-site, regular-season neutral-site, postseason, weeks 1–4, weeks 5–9, weeks 10+, big favorites, toss-ups, P4 vs G5, non-conference.
+- **Diagnostics:**
+  - Postseason confidence (mean |p − 0.5|) and the count of confident wrong picks (wrong side, |p − 0.5| > 0.25).
+  - Weekly rating volatility by phase for G/K/L, from the team-week posterior parquet: mean |Δ(offense_mean + defense_mean)|, pass unit, regular season, weeks 2–5, 6–10 and 11+.
+  - The fitted tau per phase.
+- CLV (`clv.py`) for G, K and L, plus per-season log loss.
+- Error Lab: add L. To keep 8 hues, drop D.
+- No tuning on 2023–24.
+
+---
+
 ## Weekly operating procedure (after this ships)
 
 1. Before each slate, add one row per known QB change to `sessions/cfb_win_probability/data/qb_status.csv`, with `recorded_at` set to when you learned it.
