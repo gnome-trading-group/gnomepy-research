@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cfb_win_probability.evaluation.compare_models import compare, market_probs
+from gnomepy_research.sessions.cfb_win_probability.evaluation.compare_models import blend_frames, compare, market_probs
 
 
 def test_market_probs_drops_missing_open():
@@ -32,3 +32,11 @@ def test_compare_reports_better_model_and_dropped_count():
     assert "dropped 10" in out
     line = next(l for l in out.splitlines() if l.startswith("diff B - A"))
     assert float(line.split()[4]) < 0
+
+
+def test_blend_label_is_mean_of_components_on_shared_games():
+    a = pd.DataFrame({"game_id": [1, 2, 3], "p_home": [0.2, 0.4, 0.6], "home_win": 1.0})
+    b = pd.DataFrame({"game_id": [2, 3, 4], "p_home": [0.6, 0.8, 0.9], "home_win": 1.0})
+    out = blend_frames({"C": a, "E": b}, ["C", "E", "C+E"])
+    assert out["C+E"]["game_id"].tolist() == [2, 3]
+    np.testing.assert_allclose(out["C+E"]["p_home"], [0.5, 0.7])

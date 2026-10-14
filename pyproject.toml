@@ -14,6 +14,7 @@ xgboost = "^3.4.1"
 pymc = "^6.3.2"
 nutpie = "^0.16.11"
 numba = ">=0.61,<0.68"
+catboost = "^1.2.10"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"

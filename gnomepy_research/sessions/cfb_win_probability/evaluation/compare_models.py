@@ -1,6 +1,6 @@
 """Score backtested models against each other and against the opening and closing lines.
 
-Usage: python -m gnomepy_research.sessions.cfb_win_probability.evaluation.compare_models 2023_2024 A B C [D]
+Usage: python -m gnomepy_research.sessions.cfb_win_probability.evaluation.compare_models 2023_2024 A B C [D] [E] [C+E]
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ BACKTEST = Path(__file__).resolve().parent.parent / "results" / "backtest"
 SPREAD_SD = 15.5
 BET_THRESHOLD = 0.05
 N_BLEND_BOOT = 200
-PAIRS = [("B", "A"), ("C", "B"), ("C", "A"), ("D", "C")]
+PAIRS = [("B", "A"), ("C", "B"), ("C", "A"), ("D", "C"), ("E", "C"), ("C+E", "C"), ("C+E", "E")]
 
 
 def logit(p: np.ndarray) -> np.ndarray:
@@ -66,6 +66,22 @@ def _source_table(y: np.ndarray, seasons: np.ndarray, sources: dict[str, np.ndar
             rows.append({"source": name, "season": label, "n": s["n"], "log_loss": s["log_loss"],
                          "brier": s["brier"], "calib_slope": s["calib_slope"]})
     return pd.DataFrame(rows)
+
+
+def blend_frames(preds: dict[str, pd.DataFrame], labels: list[str]) -> dict[str, pd.DataFrame]:
+    """Add each `+` label as the mean p_home of its component models on the games they share."""
+    out = dict(preds)
+    for label in labels:
+        if "+" not in label:
+            continue
+        parts = [preds[c].drop_duplicates("game_id").set_index("game_id") for c in label.split("+")]
+        shared = parts[0].index
+        for p in parts[1:]:
+            shared = shared.intersection(p.index)
+        frame = parts[0].loc[shared].copy()
+        frame["p_home"] = np.mean([p.loc[shared, "p_home"].to_numpy() for p in parts], axis=0)
+        out[label] = frame.reset_index()
+    return out
 
 
 def compare(preds: dict[str, pd.DataFrame], market: pd.DataFrame) -> str:
@@ -149,7 +165,9 @@ def main() -> None:
     ap.add_argument("tag")
     ap.add_argument("models", nargs="+")
     args = ap.parse_args()
-    preds = {m: pd.read_parquet(BACKTEST / f"predictions_{args.tag}_{m}.parquet") for m in args.models}
+    singles = sorted({c for m in args.models for c in m.split("+")})
+    loaded = {m: pd.read_parquet(BACKTEST / f"predictions_{args.tag}_{m}.parquet") for m in singles}
+    preds = {m: blend_frames(loaded, args.models)[m] for m in args.models}
     report = compare(preds, market_probs(DatasetStore().load("cfb_lines")))
     out = BACKTEST / f"comparison_{args.tag}.txt"
     out.write_text(report + "\n")

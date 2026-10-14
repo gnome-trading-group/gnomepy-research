@@ -73,6 +73,22 @@ def load_season_draws(season: int, directory: Path = DRAWS_DIR, units: tuple[str
         return {k: z[k] for k in z.files}
 
 
+def team_index(col: dict, gg: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    fcs = col[FCS_TEAM]
+    return (np.array([col.get(t, fcs) for t in gg["home_id"]]),
+            np.array([col.get(t, fcs) for t in gg["away_id"]]))
+
+
+def split_columns(key: str, draws: dict, gg: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Pass and rush column indices of a split snapshot and each game's home/away index into the pass columns."""
+    ids, u = draws[f"{key}__team_ids"], draws[f"{key}__units"]
+    p_cols, r_cols = np.flatnonzero(u == "pass"), np.flatnonzero(u == "rush")
+    if not np.array_equal(ids[p_cols], ids[r_cols]):
+        raise ValueError(f"{key}: pass and rush team columns are not aligned")
+    hi, ai = team_index({t: i for i, t in enumerate(ids[p_cols])}, gg)
+    return p_cols, r_cols, hi, ai
+
+
 def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = None, seed: int = 0,
                directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL, form: bool = False) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
@@ -93,21 +109,11 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
             s = off.shape[0]
             pick = np.arange(s) if n_draws is None else rng.choice(s, size=min(n_draws, s), replace=False)
             if units == UNITS_ALL:
-                col = {t: i for i, t in enumerate(ids)}
-                fcs = col[FCS_TEAM]
-                hi = np.array([col.get(t, fcs) for t in gg["home_id"]])
-                ai = np.array([col.get(t, fcs) for t in gg["away_id"]])
+                hi, ai = team_index({t: i for i, t in enumerate(ids)}, gg)
                 main = [(off[pick][:, hi] - off[pick][:, ai]).T, (de[pick][:, hi] - de[pick][:, ai]).T]
             else:
-                u = draws[f"{key}__units"]
                 share_all = draws[f"{key}__rush_share"]
-                p_cols, r_cols = np.flatnonzero(u == "pass"), np.flatnonzero(u == "rush")
-                if not np.array_equal(ids[p_cols], ids[r_cols]):
-                    raise ValueError(f"{key}: pass and rush team columns are not aligned")
-                col = {t: i for i, t in enumerate(ids[p_cols])}
-                fcs = col[FCS_TEAM]
-                hi = np.array([col.get(t, fcs) for t in gg["home_id"]])
-                ai = np.array([col.get(t, fcs) for t in gg["away_id"]])
+                p_cols, r_cols, hi, ai = split_columns(key, draws, gg)
                 main = list(edge_terms(off[pick][:, p_cols], de[pick][:, p_cols], off[pick][:, r_cols],
                                        de[pick][:, r_cols], share_all[p_cols], hi, ai))
             extra = []
