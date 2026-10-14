@@ -1525,6 +1525,49 @@ Everything is opt-in. Defaults and models A–G stay byte-identical.
 
 ---
 
+## Phase 8: Model I, "Margin"
+
+Added 2026-10-13. Diagnostic on 2023–24, comparing model probabilities converted to spreads at SD 15.5 with the opening spread and the actual margin:
+- Model spreads are uniformly compressed: slope vs the open is 0.83 (A–D), 0.88 (G/H). The open is well scaled (actual margin ≈ 1.01 × open); G is under-scaled (actual ≈ 1.03 × model).
+- For open favorites of 21+ points, G implies 25.5 against 27.4 actual (open 28.2).
+- Hypothesis: the win/loss-only outcome layer can't learn scale from margin of victory.
+- Model I = G with a margin-based outcome layer plus a monotone recalibration fitted on training seasons only.
+
+### Task 22: Margin outcome layer
+
+**Files:**
+- Modify: `sessions/cfb_win_probability/models/win_probability.py` (new `fit_margin`, `MarginModel`)
+- Modify: `evaluation/backtest.py` (`MODEL_CONFIGS["I"]`, a margin learner)
+- Test: `tests/sessions/test_cfb_win_probability_models.py`
+
+**Design:**
+- Use the same design arrays `x` (G, S, T) and terms as G (`game_draws` with G's flags).
+- Margin model: `margin[g] ~ StudentT(nu, mu[g], sigma)`, where `mu[g] = mean over rating draws of (x[g,s,:] @ beta)`, the same averaging-over-draws idea as `fit`.
+  - Priors: beta ~ N(0, 50·prior_sd_scale) on the same terms. Scale the old PRIORS mu/sd by 100/8, since a 0.1 net PPA edge is about 12 points.
+  - `sigma ~ HalfNormal(20)`, `nu ~ Gamma(2, 0.1)`.
+  - `margin = home_points − away_points` for completed games.
+- Prediction: `P(home) = mean over rating draws and posterior draws of (1 − T_cdf(0; nu, mu, sigma))`. That is the probability the margin is above 0, with ties negligible. Same API as `OutcomeModel.predict`: DataFrame with p_home, p_lo, p_hi. Also return `margin_mean` per game.
+- No intercept: neutral-site swap symmetry must hold exactly. Venue is a term, as before.
+- **Recalibration (optional flag `recal=True`):** after fitting on train seasons, compute in-sample train predictions, then fit a 2-parameter logistic recalibration `logit(p') = a·logit(p) + b` on **the last training season only**, using predictions from a margin model fit on the other training seasons (cross-fitted, like model F's fix). Apply it to test predictions. Report a and b. To keep symmetry, fix b = 0.
+- `MODEL_CONFIGS["I"]` = G config + `learner="margin", recal=True`. Also `"I0"` = margin without recalibration, so we can see each piece's contribution.
+
+**Tests:**
+- Synthetic: margins generated as Normal(10·edge, 14) are recovered (beta within tolerance).
+- P(home) is monotone in edge.
+- Swap symmetry: p + p_swapped = 1 at a neutral site.
+- The recalibration with b = 0 keeps symmetry.
+- The recalibration is fitted only on rows from the last training season, using cross-fitted predictions.
+
+### Task 23: Backtest I and I0, compression diagnostic, cut table, Error Lab
+- `backtest 2023 2024 --model I0`, then `--model I`.
+- `compare_models 2023_2024 A C D E G H I0 I C+E`, with pairs I−G and I0−G.
+- Re-run the compression diagnostic (`compression_diag.py` logic, committed as `evaluation/compression_diag.py`) for G, I0 and I: the slope vs the open, the actual-vs-model slope, and the favorite-size band table.
+- Cut table G/I0/I via `g_report` (big favorites, favorites, P4 vs G5, non-conference, weeks 1–4, weeks 5–9, toss-ups, service academies), with paired I−G.
+- Error Lab: add I ("Margin"). To stay at 8 hues, drop A.
+- No tuning on 2023–24.
+
+---
+
 ## Weekly operating procedure (after this ships)
 
 1. Before each slate, add one row per known QB change to `sessions/cfb_win_probability/data/qb_status.csv`, with `recorded_at` set to when you learned it.
