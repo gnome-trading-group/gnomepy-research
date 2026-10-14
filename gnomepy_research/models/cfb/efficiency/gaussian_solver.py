@@ -108,6 +108,8 @@ def fit_cutoff_exact(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: 
                      n_draws: int = 2000, seed: int = 0) -> tuple[CutoffPosterior, ModelData]:
     if hypers.likelihood != "normal":
         raise ValueError("the exact solver is only valid for the Gaussian likelihood")
+    if hypers.heavy_tails:
+        raise ValueError("the exact solver is not valid for heavy_tails (StudentT start states); use fit_cutoff")
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, [season],
                             units=tuple(hypers.units), conference=hypers.conference,
                             projection=inputs.projection_for(hypers), drop_features=tuple(hypers.drop_features),

@@ -4,7 +4,7 @@
     mu[g]  = alpha[season] + O[off, k] - D[def, k] + h * venue
     alpha[season, unit] ~ Normal(alpha[unit], sigma_alpha)    (PPA's league baseline drifts between seasons)
     sigma[g]^2 = sigma_game^2 + sigma_play^2 / plays
-    O[i, 0] ~ Normal(x_off[i] @ beta_off, s_off * exp(z[i] @ gamma))
+    O[i, 0] ~ Normal(x_off[i] @ beta_off, s_off * exp(z[i] @ gamma))   (StudentT(nu_team, ...) with heavy_tails)
     O[i, k] = O[i, k-1] + tau_off * eps          (non-centered random walk)
     D analogously. Higher O = better offense, higher D = better defense.
 
@@ -72,6 +72,8 @@ class Hyperparameters:
     drives: bool = False
     independents_separate: bool = False
     tau_phases: bool = False
+    heavy_tails: bool = False
+    nu_team: float = float("inf")
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -89,6 +91,9 @@ class Hyperparameters:
             d.pop("independents_separate")
         if not self.tau_phases:
             d.pop("tau_phases")
+        if not self.heavy_tails:
+            d.pop("heavy_tails")
+            d.pop("nu_team")
         for k, v in d.items():
             if isinstance(v, np.ndarray):
                 d[k] = v.tolist()
@@ -108,10 +113,11 @@ class Hyperparameters:
 
 
 def build_model(data: ModelData, hypers: Hyperparameters | None = None, likelihood: str = "studentt",
-                store_states: bool = True, tau_phases: bool = False) -> pm.Model:
+                store_states: bool = True, tau_phases: bool = False, heavy_tails: bool = False) -> pm.Model:
     """store_states=False skips saving O and D per draw: a multi-season hyperparameter fit would
     otherwise keep GBs of states it never uses. tau_phases (free fit; fixed hypers carry their own
-    flag) gives the walk one drift rate per season phase, TAU_PHASES."""
+    flag) gives the walk one drift rate per season phase, TAU_PHASES. heavy_tails (likewise) gives
+    the start states a StudentT(nu_team) prior so genuine outliers are shrunk less."""
     if likelihood not in LIKELIHOODS:
         raise ValueError(likelihood)
     n_ts, n_k = len(data.ts_keys), data.n_periods
@@ -125,6 +131,7 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
         coords["season"] = list(data.seasons)
     if hypers is not None:
         tau_phases = hypers.tau_phases
+        heavy_tails = hypers.heavy_tails
     if tau_phases:
         coords["tau_phase"] = list(TAU_PHASES)
     with pm.Model(coords=coords) as model:
@@ -146,6 +153,7 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
             sigma_game = pm.HalfNormal("sigma_game", 0.2)
             sigma_play = pm.HalfNormal("sigma_play", 1.5)
             nu = pm.Gamma("nu", 2.0, 0.1) if likelihood == "studentt" else None
+            nu_team = pm.Gamma("nu_team", 2.0, 0.2) if heavy_tails else None
             if has_conf:
                 s_conf_off = pm.HalfNormal("s_conf_off", 0.05)
                 s_conf_def = pm.HalfNormal("s_conf_def", 0.05)
@@ -164,7 +172,7 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
             s_off, s_def, tau_off, tau_def = h.s_off, h.s_def, h.tau_off, h.tau_def
             if tau_phases:
                 tau_off, tau_def = pt.as_tensor_variable(np.asarray(tau_off)), pt.as_tensor_variable(np.asarray(tau_def))
-            sigma_game, sigma_play, nu = h.sigma_game, h.sigma_play, h.nu
+            sigma_game, sigma_play, nu, nu_team = h.sigma_game, h.sigma_play, h.nu, h.nu_team
             s_conf_off, s_conf_def = h.s_conf_off, h.s_conf_def
             alpha_ppd, sigma_alpha_ppd, lam_ppd = h.alpha_ppd, h.sigma_alpha_ppd, h.lam_ppd
             hfa_ppd, s_game_ppd, s_drive_ppd = h.hfa_ppd, h.s_game_ppd, h.s_drive_ppd
@@ -176,8 +184,12 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
         prior_off = pt.dot(data.x_off, beta_off)
         prior_def = pt.dot(data.x_def, beta_def)
 
-        z0_off = pm.Normal("z0_off", 0.0, 1.0, dims="ts")
-        z0_def = pm.Normal("z0_def", 0.0, 1.0, dims="ts")
+        if heavy_tails:
+            z0_off = pm.StudentT("z0_off", nu=nu_team, mu=0.0, sigma=1.0, dims="ts")
+            z0_def = pm.StudentT("z0_def", nu=nu_team, mu=0.0, sigma=1.0, dims="ts")
+        else:
+            z0_off = pm.Normal("z0_off", 0.0, 1.0, dims="ts")
+            z0_def = pm.Normal("z0_def", 0.0, 1.0, dims="ts")
         eps_off = pm.Normal("eps_off", 0.0, 1.0, dims=("ts", "step"))
         eps_def = pm.Normal("eps_def", 0.0, 1.0, dims=("ts", "step"))
 
@@ -226,7 +238,7 @@ def sample(model: pm.Model, draws: int = 500, tune: int = 1000, chains: int = 4,
 
 
 def hyperparameters_from(idata: az.InferenceData, data: ModelData, likelihood: str,
-                         tau_phases: bool = False) -> Hyperparameters:
+                         tau_phases: bool = False, heavy_tails: bool = False) -> Hyperparameters:
     post = idata.posterior
 
     def m(name: str):
@@ -243,6 +255,7 @@ def hyperparameters_from(idata: az.InferenceData, data: ModelData, likelihood: s
            if len(data.conf_keys) else {}),
         **({k: float(m(k)) for k in DRIVE_FIELDS[:-1]} | {"drives": True} if data.drives else {}),
         independents_separate=data.independents_separate, tau_phases=tau_phases,
+        **({"heavy_tails": True, "nu_team": float(m("nu_team"))} if heavy_tails else {}),
     )
 
 

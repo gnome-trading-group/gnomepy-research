@@ -106,7 +106,8 @@ def tau_phase_rows(season: int, raw: dict) -> list[dict]:
 def _posterior_path(model: str, first: int, last: int):
     c = resolve_config(model)
     sfx = _suffix(c["units"], c.get("conference", False), c.get("projection", False), tuple(c.get("drop_features", ())),
-                  c.get("drives", False), c.get("independents_separate", False), c.get("tau_phases", False))
+                  c.get("drives", False), c.get("independents_separate", False), c.get("tau_phases", False),
+                  c.get("heavy_tails", False))
     return POSTERIOR_DIR / f"cfb_team_week_posterior{sfx}_{first}_{last}.parquet"
 
 

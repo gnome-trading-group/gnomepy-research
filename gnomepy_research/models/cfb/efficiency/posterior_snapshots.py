@@ -48,8 +48,10 @@ IND_SUFFIX = "_ind"
 PROJ_SUFFIX = "_proj"
 DRIVES_SUFFIX = "_drv"
 TAU_PHASES_SUFFIX = "_tph"
+HEAVY_TAILS_SUFFIX = "_ht"
 FIRST_TRAIN_SEASON = 2019
 N_DRAWS_KEPT = 400
+HEAVY_TAILS_MCMC = {"draws": 300, "tune": 300, "chains": 2}
 DRAWS_DIR = Path(__file__).resolve().parents[3] / "sessions" / "cfb_win_probability" / "results" / "posterior_draws"
 
 
@@ -61,17 +63,19 @@ def drop_suffix(drop_features: tuple[str, ...] = ()) -> str:
 
 def _suffix(units: tuple[str, ...], conference: bool = False, projection: bool = False,
             drop_features: tuple[str, ...] = (), drives: bool = False, independents_separate: bool = False,
-            tau_phases: bool = False) -> str:
-    """Order: split, conf, ind, proj, drv, tph, drop."""
+            tau_phases: bool = False, heavy_tails: bool = False) -> str:
+    """Order: split, conf, ind, proj, drv, tph, ht, drop."""
     return (("" if units == UNITS_ALL else SPLIT_SUFFIX) + (CONF_SUFFIX if conference else "")
             + (IND_SUFFIX if independents_separate else "") + (PROJ_SUFFIX if projection else "") + (DRIVES_SUFFIX if drives else "")
-            + (TAU_PHASES_SUFFIX if tau_phases else "") + drop_suffix(drop_features))
+            + (TAU_PHASES_SUFFIX if tau_phases else "") + (HEAVY_TAILS_SUFFIX if heavy_tails else "")
+            + drop_suffix(drop_features))
 
 
 def model_version(units: tuple[str, ...], conference: bool = False, projection: bool = False,
-                  drives: bool = False, independents_separate: bool = False, tau_phases: bool = False) -> str:
+                  drives: bool = False, independents_separate: bool = False, tau_phases: bool = False,
+                  heavy_tails: bool = False) -> str:
     suffix = _suffix(units, conference, projection, drives=drives, independents_separate=independents_separate,
-                     tau_phases=tau_phases)
+                     tau_phases=tau_phases, heavy_tails=heavy_tails)
     return f"dyn-eff{suffix.replace('_', '-')}-1"
 
 
@@ -80,28 +84,31 @@ MODEL_VERSION = model_version(UNITS_ALL)
 
 def hyper_name(likelihood: str, season: int, units: tuple[str, ...] = UNITS_ALL, conference: bool = False,
                projection: bool = False, drop_features: tuple[str, ...] = (), drives: bool = False,
-               independents_separate: bool = False, tau_phases: bool = False) -> str:
-    suffix = _suffix(units, conference, projection, drop_features, drives, independents_separate, tau_phases)
+               independents_separate: bool = False, tau_phases: bool = False, heavy_tails: bool = False) -> str:
+    suffix = _suffix(units, conference, projection, drop_features, drives, independents_separate, tau_phases,
+                     heavy_tails)
     return f"{likelihood}{suffix}_{FIRST_TRAIN_SEASON}_{season - 1}"
 
 
 def draws_name(season: int, units: tuple[str, ...] = UNITS_ALL, conference: bool = False,
                projection: bool = False, drop_features: tuple[str, ...] = (), drives: bool = False,
-               independents_separate: bool = False, tau_phases: bool = False) -> str:
-    return f"cfb_team_week_draws{_suffix(units, conference, projection, drop_features, drives, independents_separate, tau_phases)}_{season}"
+               independents_separate: bool = False, tau_phases: bool = False, heavy_tails: bool = False) -> str:
+    sfx = _suffix(units, conference, projection, drop_features, drives, independents_separate, tau_phases, heavy_tails)
+    return f"cfb_team_week_draws{sfx}_{season}"
 
 
 def ensure_hyperparameters(inputs: Inputs, likelihood: str, season: int, units: tuple[str, ...] = UNITS_ALL,
                            conference: bool = False, projection: bool = False,
                            drop_features: tuple[str, ...] = (), drives: bool = False,
-                           independents_separate: bool = False, tau_phases: bool = False) -> str:
+                           independents_separate: bool = False, tau_phases: bool = False,
+                           heavy_tails: bool = False) -> str:
     name = hyper_name(likelihood, season, units, conference, projection, drop_features, drives,
-                      independents_separate, tau_phases)
+                      independents_separate, tau_phases, heavy_tails)
     if not (HYPER_DIR / f"{name}.json").exists():
         h, diag = fit_hyperparameters(inputs, list(range(FIRST_TRAIN_SEASON, season)), likelihood, units=units,
                                       conference=conference, projection=projection, drop_features=drop_features,
                                       drives=drives, independents_separate=independents_separate,
-                                      tau_phases=tau_phases)
+                                      tau_phases=tau_phases, heavy_tails=heavy_tails)
         save_hyperparameters(h, diag, name)
         print(f"fitted {name}: {diag['hyper']}", flush=True)
     return name
@@ -117,17 +124,23 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
                     out_dir: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL,
                     conference: bool = False, projection: bool = False,
                     drop_features: tuple[str, ...] = (), drives: bool = False,
-                    independents_separate: bool = False, tau_phases: bool = False) -> tuple[pd.DataFrame, Path]:
+                    independents_separate: bool = False, tau_phases: bool = False,
+                    heavy_tails: bool = False, mcmc: dict | None = None) -> tuple[pd.DataFrame, Path]:
+    """mcmc: draws/tune/chains of each cutoff's MCMC fit under heavy_tails (default HEAVY_TAILS_MCMC)."""
     name = ensure_hyperparameters(inputs, likelihood, season, units, conference, projection, drop_features, drives,
-                                  independents_separate, tau_phases)
+                                  independents_separate, tau_phases, heavy_tails)
     h = load_hyperparameters(name)
     rng = np.random.default_rng(seed)
     summaries, draws = [], {}
     e = inputs.efficiency
     for p in season_periods(inputs.games, [season]).itertuples():
-        # The Gaussian model has a closed-form posterior (validated against NUTS); Student-t needs MCMC.
-        fit = fit_cutoff_exact if likelihood == "normal" else fit_cutoff
-        post, _ = fit(inputs, season, p.cutoff, h, seed=seed)
+        # The Gaussian model has a closed-form posterior (validated against NUTS); Student-t
+        # (likelihood or heavy-tailed start states) needs MCMC.
+        if h.heavy_tails:
+            post, _ = fit_cutoff(inputs, season, p.cutoff, h, **(mcmc or HEAVY_TAILS_MCMC), seed=seed)
+        else:
+            fit = fit_cutoff_exact if likelihood == "normal" else fit_cutoff
+            post, _ = fit(inputs, season, p.cutoff, h, seed=seed)
         keep = rng.choice(post.off.shape[0], size=min(N_DRAWS_KEPT, post.off.shape[0]), replace=False)
         key = f"{p.season_type}_{p.week}"
         draws[f"{key}__off"] = post.off[keep].astype(np.float32)
@@ -153,10 +166,11 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
                                   divergences=post.diagnostics["divergences"]))
         print(f"{season} {key}: rhat {post.diagnostics['max_rhat']:.3f} div {post.diagnostics['divergences']}", flush=True)
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{draws_name(season, units, conference, projection, drop_features, drives, independents_separate, tau_phases)}.npz"
+    path = out_dir / f"{draws_name(season, units, conference, projection, drop_features, drives, independents_separate, tau_phases, heavy_tails)}.npz"
     np.savez_compressed(path, **draws)
     out = pd.concat(summaries, ignore_index=True).assign(
-        model_version=model_version(units, conference, projection, drives, independents_separate, tau_phases), hyperparameters=name, likelihood=likelihood,
+        model_version=model_version(units, conference, projection, drives, independents_separate, tau_phases, heavy_tails),
+        hyperparameters=name, likelihood=likelihood,
         training_data_version=f"{PRESEASON_FEATURES},{EFFICIENCY}@{inputs.as_of.isoformat()}",
         created_at=datetime.now(timezone.utc).isoformat(),
     )
@@ -168,7 +182,7 @@ def snapshot_seasons(inputs: Inputs, first: int, last: int, likelihood: str,
                      conference: bool = False, projection: bool = False,
                      drop_features: tuple[str, ...] = (), drives: bool = False,
                      independents_separate: bool = False,
-                     tau_phases: bool = False) -> tuple[pd.DataFrame, list[tuple[int, Path]]]:
+                     tau_phases: bool = False, heavy_tails: bool = False) -> tuple[pd.DataFrame, list[tuple[int, Path]]]:
     """The team-week table for seasons first..last, and each season's draws file under out_dir."""
     if first <= FIRST_TRAIN_SEASON:
         raise ValueError(f"first snapshot season must be after {FIRST_TRAIN_SEASON}")
@@ -178,11 +192,13 @@ def snapshot_seasons(inputs: Inputs, first: int, last: int, likelihood: str,
     for season in range(first, last + 1):
         df, path = snapshot_season(inputs, season, likelihood, out_dir=out_dir, units=units, conference=conference,
                                      projection=projection, drop_features=drop_features, drives=drives,
-                                     independents_separate=independents_separate, tau_phases=tau_phases)
+                                     independents_separate=independents_separate, tau_phases=tau_phases,
+                                     heavy_tails=heavy_tails)
         frames.append(df)
         paths.append((season, path))
     table = pd.concat(frames, ignore_index=True)
-    table.to_parquet(out_dir / f"cfb_team_week_posterior{_suffix(units, conference, projection, drop_features, drives, independents_separate, tau_phases)}_{first}_{last}.parquet", index=False)
+    sfx = _suffix(units, conference, projection, drop_features, drives, independents_separate, tau_phases, heavy_tails)
+    table.to_parquet(out_dir / f"cfb_team_week_posterior{sfx}_{first}_{last}.parquet", index=False)
     return table, paths
 
 
@@ -202,12 +218,14 @@ def snapshot_options(argv: list[str] | None = None) -> dict:
     ap.add_argument("--drives", action="store_true")
     ap.add_argument("--independents-separate", action="store_true")
     ap.add_argument("--tau-phases", action="store_true")
+    ap.add_argument("--heavy-tails", action="store_true")
     ap.add_argument("--drop-features-from", type=Path, default=None)
     args = ap.parse_args(argv)
     return {"first": args.first, "last": args.last, "likelihood": args.likelihood,
             "units": UNITS_ALL if args.units == "all" else UNITS_SPLIT, "form": args.form,
             "conference": args.conference, "projection": args.projection, "drives": args.drives,
             "independents_separate": args.independents_separate, "tau_phases": args.tau_phases,
+            "heavy_tails": args.heavy_tails,
             "drop_features": read_drop_features(args.drop_features_from) if args.drop_features_from else ()}
 
 
@@ -221,7 +239,8 @@ def main() -> None:
     table, _ = snapshot_seasons(inputs, o["first"], o["last"], o["likelihood"], units=o["units"],
                                 conference=o["conference"], projection=o["projection"],
                                 drop_features=o["drop_features"], drives=o["drives"],
-                                independents_separate=o["independents_separate"], tau_phases=o["tau_phases"])
+                                independents_separate=o["independents_separate"], tau_phases=o["tau_phases"],
+                                heavy_tails=o["heavy_tails"])
     print(f"{len(table):,} team-week rows")
 
 

@@ -122,7 +122,8 @@ def fit_hyperparameters(inputs: Inputs, seasons: list[int], likelihood: str, dra
                         units: tuple[str, ...] = UNITS_ALL,
                         conference: bool = False, projection: bool = False,
                         drop_features: tuple[str, ...] = (), drives: bool = False,
-                        independents_separate: bool = False, tau_phases: bool = False) -> tuple[Hyperparameters, dict]:
+                        independents_separate: bool = False, tau_phases: bool = False,
+                        heavy_tails: bool = False) -> tuple[Hyperparameters, dict]:
     if projection and inputs.projection is None:
         raise ValueError("projection=True needs Inputs.projection")
     cutoff = hyper_cutoff(inputs, max(seasons))
@@ -130,14 +131,16 @@ def fit_hyperparameters(inputs: Inputs, seasons: list[int], likelihood: str, dra
                             conference=conference, projection=inputs.projection if projection else None,
                             drop_features=drop_features, drives=inputs.visible_drives(cutoff) if drives else None,
                             independents_separate=independents_separate)
-    idata = sample(build_model(data, likelihood=likelihood, store_states=False, tau_phases=tau_phases), draws=draws, tune=tune, seed=seed)
+    idata = sample(build_model(data, likelihood=likelihood, store_states=False, tau_phases=tau_phases,
+                               heavy_tails=heavy_tails), draws=draws, tune=tune, seed=seed)
     hv = HYPER_VARS + (["nu"] if likelihood == "studentt" else []) + (CONF_HYPER_VARS if conference else [])
     hv += DRIVE_HYPER_VARS if drives else []
+    hv += ["nu_team"] if heavy_tails else []
     diag = {"hyper": diagnostics(idata, hv), "states": diagnostics(idata, ["z0_off", "z0_def"]),
             "seasons": seasons, "cutoff": str(cutoff), "n_obs": int(len(data.obs_y))}
     if drives:
         diag["n_drive_obs"] = int(len(data.drv_y))
-    return hyperparameters_from(idata, data, likelihood, tau_phases=tau_phases), diag
+    return hyperparameters_from(idata, data, likelihood, tau_phases=tau_phases, heavy_tails=heavy_tails), diag
 
 
 def save_hyperparameters(h: Hyperparameters, diag: dict, name: str) -> Path:
@@ -152,13 +155,14 @@ def load_hyperparameters(name: str) -> Hyperparameters:
 
 
 def fit_cutoff(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: Hyperparameters,
-               draws: int = 500, tune: int = 500, seed: int = 0) -> tuple[CutoffPosterior, ModelData]:
+               draws: int = 500, tune: int = 500, seed: int = 0, chains: int = 4) -> tuple[CutoffPosterior, ModelData]:
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, [season],
                             units=tuple(hypers.units), conference=hypers.conference,
                             projection=inputs.projection_for(hypers), drop_features=tuple(hypers.drop_features),
                             drives=inputs.drives_for(hypers, cutoff),
                             independents_separate=hypers.independents_separate)
-    idata = sample(build_model(data, hypers=hypers, likelihood=hypers.likelihood), draws=draws, tune=tune, seed=seed)
+    idata = sample(build_model(data, hypers=hypers, likelihood=hypers.likelihood), draws=draws, tune=tune, chains=chains,
+                   seed=seed)
     period = int(data.periods.loc[data.periods["cutoff"] == cutoff, "period"].iloc[0])
     post = idata.posterior.to_dataset().stack(sample=("chain", "draw"))
     off = post["O"].values[:, period, :].T
