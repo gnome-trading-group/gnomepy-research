@@ -694,6 +694,14 @@ def test_fit_margin_recovers_synthetic_slope():
     assert 10 < model.sigma.mean() < 18
 
 
+def test_fit_margin_skips_rows_missing_away_points():
+    gd = margin_draws()
+    gd.games.loc[0, "away_points"] = np.nan
+    model = fit_margin(gd, draws=100, tune=100)
+    assert np.isfinite(model.beta).all()
+    assert np.isfinite(model.sigma).all()
+
+
 def stub_margin(beta=(10.0, 2.0), k: int = 50) -> MarginModel:
     rng = np.random.default_rng(0)
     return MarginModel(beta=np.array(beta) + rng.normal(0, 0.5, (k, 2)), sigma=np.full(k, 14.0) + rng.normal(0, 0.5, k),

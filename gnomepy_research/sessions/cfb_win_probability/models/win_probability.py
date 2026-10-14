@@ -278,7 +278,8 @@ class MarginModel:
 
 def fit_margin(gd: GameDraws, draws: int = 1000, tune: int = 1000, seed: int = 0) -> MarginModel:
     """mu is linear in beta, so the mean over rating draws of x @ beta is (mean over draws of x) @ beta."""
-    keep = gd.games["completed"].fillna(False).to_numpy(bool) & gd.games["home_points"].notna().to_numpy()
+    keep = gd.games["completed"].fillna(False).to_numpy(bool) & gd.games["home_points"].notna().to_numpy() \
+        & gd.games["away_points"].notna().to_numpy()
     xbar = gd.x[keep].mean(axis=1)
     margin = (gd.games.loc[keep, "home_points"] - gd.games.loc[keep, "away_points"]).to_numpy(float)
     terms = gd.terms

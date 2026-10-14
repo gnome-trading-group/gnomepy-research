@@ -130,14 +130,16 @@ def _bayes_season(season, games, train_seasons, units, form, qb=None, flags=None
     a, n_recal = cross_fitted_recal(train_gd) if recal else (1.0, 0)
 
     refits = []
+    scale = {}
     for r in range(N_REFITS):
         gd = train_gd if r == 0 else game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, seed=r, units=units, form=form, qb=qb,
                                                   **flags)
         model = fitter(gd, seed=r)
         if r == 0:
             coefs = model.beta if margin else model.gamma
-            scale = {"sigma": [float(model.sigma.mean()), *np.quantile(model.sigma, [0.05, 0.95]).tolist()],
-                     "nu": [float(model.nu.mean()), *np.quantile(model.nu, [0.05, 0.95]).tolist()]} if margin else {}
+            if margin:
+                scale = {"sigma": [float(model.sigma.mean()), *np.quantile(model.sigma, [0.05, 0.95]).tolist()],
+                         "nu": [float(model.nu.mean()), *np.quantile(model.nu, [0.05, 0.95]).tolist()]}
         pred = model.predict(x_test)
         if recal:
             pred[["p_home", "p_lo", "p_hi"]] = apply_recal(pred[["p_home", "p_lo", "p_hi"]].to_numpy(), a)
