@@ -53,7 +53,8 @@ MODEL_CONFIGS["I0"] = {**MODEL_CONFIGS["G"], "learner": "margin", "recal": False
 MODEL_CONFIGS["I"] = {**MODEL_CONFIGS["G"], "learner": "margin", "recal": True}
 MODEL_CONFIGS["J0"] = {**MODEL_CONFIGS["G"], "j_features": True}
 MODEL_CONFIGS["J"] = {**MODEL_CONFIGS["G"], "j_features": True, "drives": True}
-OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives")
+OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
+                "independents_separate", "phase")
 VALIDATION_SEASON = 2022
 F_CONFIG = RESULTS / "F_config.json"
 J_FEATURES = RESULTS / "J_features.json"

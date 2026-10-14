@@ -69,6 +69,7 @@ class Hyperparameters:
     s_game_ppd: float = 0.0
     s_drive_ppd: float = 0.0
     drives: bool = False
+    independents_separate: bool = False
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -82,6 +83,8 @@ class Hyperparameters:
         if not self.drives:
             for k in DRIVE_FIELDS:
                 d.pop(k)
+        if not self.independents_separate:
+            d.pop("independents_separate")
         for k, v in d.items():
             if isinstance(v, np.ndarray):
                 d[k] = v.tolist()
@@ -217,6 +220,7 @@ def hyperparameters_from(idata: az.InferenceData, data: ModelData, likelihood: s
         **({"s_conf_off": float(m("s_conf_off")), "s_conf_def": float(m("s_conf_def")), "conference": True}
            if len(data.conf_keys) else {}),
         **({k: float(m(k)) for k in DRIVE_FIELDS[:-1]} | {"drives": True} if data.drives else {}),
+        independents_separate=data.independents_separate,
     )
 
 

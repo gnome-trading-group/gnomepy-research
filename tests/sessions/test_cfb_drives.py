@@ -204,3 +204,6 @@ def test_drive_naming_order():
     assert draws_name(2024, UNITS_SPLIT, conference=True, drives=True) == "cfb_team_week_draws_split_conf_drv_2024"
     assert model_version(UNITS_SPLIT, conference=True, drives=True) == "dyn-eff-split-conf-drv-1"
     assert hyper_name("normal", 2023, UNITS_SPLIT, conference=True) == "normal_split_conf_2019_2022"
+    ind = hyper_name("normal", 2023, UNITS_SPLIT, conference=True, projection=True, drop_features=drop, drives=True,
+                     independents_separate=True)
+    assert ind.startswith("normal_split_conf_ind_proj_drv_drop-")

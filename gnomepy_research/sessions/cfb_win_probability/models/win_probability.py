@@ -31,6 +31,8 @@ TERMS_SPLIT = ["pass_edge", "rush_edge", "venue", "bowl_edge"]
 TERMS = TERMS_ALL
 STRETCH_TERM = "edge_abs_edge"
 OPTION_TERM = "option_diff"
+PHASE_TERMS = ["pass_edge_early", "rush_edge_early"]
+EARLY_LAST_WEEK = 4
 PHYSICAL_TERMS = ["talent_diff", "bluechip_diff", "trench_diff", "gap_x_edge"]
 FORM_TERMS = ["early_success_diff", "late_down_luck_diff", "finishing_luck_diff", "field_position_diff", "pace_x_edge"]
 # Ratings are in PPA/play; a 0.1 net edge is roughly a 10-point favourite.
@@ -54,6 +56,8 @@ PRIORS: dict[str, tuple[float, float]] = {
     "bluechip_diff": (0.0, 0.5),
     "trench_diff": (0.0, 0.5),
     "gap_x_edge": (0.0, 10.0),
+    "pass_edge_early": (0.0, 5.0),
+    "rush_edge_early": (0.0, 5.0),
 }
 # Margin model priors in points: a 0.1 net PPA edge is about 12 points, so edge-type log-odds priors
 # are scaled by 100/8; z-scored diffs (form, qb, option, physical) get N(0, 6); venue N(3, 3).
@@ -94,8 +98,9 @@ def form_terms(form_h: np.ndarray, form_a: np.ndarray, edge: np.ndarray) -> np.n
 
 def load_season_draws(season: int, directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL,
                       conference: bool = False, projection: bool = False, drop_features: tuple[str, ...] = (),
-                      drives: bool = False) -> dict:
-    with np.load(directory / f"{draws_name(season, units, conference, projection, drop_features, drives)}.npz") as z:
+                      drives: bool = False, independents_separate: bool = False) -> dict:
+    name = draws_name(season, units, conference, projection, drop_features, drives, independents_separate)
+    with np.load(directory / f"{name}.npz") as z:
         return {k: z[k] for k in z.files}
 
 
@@ -148,19 +153,20 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                qb: pd.DataFrame | None = None, conference: bool = False, stretch: bool = False,
                option: bool = False, physical: pd.DataFrame | None = None, projection: bool = False,
                keep_terms: list[str] | None = None, drop_features: tuple[str, ...] = (),
-               drives: bool = False) -> GameDraws:
+               drives: bool = False, independents_separate: bool = False, phase: bool = False) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff)."""
     if form and units == UNITS_ALL:
         raise ValueError("form terms are defined on the split model only")
-    if (stretch or option or physical is not None) and units == UNITS_ALL:
-        raise ValueError("stretch, option and physical terms are defined on the split model only")
+    if (stretch or option or phase or physical is not None) and units == UNITS_ALL:
+        raise ValueError("stretch, option, phase and physical terms are defined on the split model only")
     rng = np.random.default_rng(seed)
     g = games[games["season"].isin(seasons) & (games["home_classification"] == "fbs")
               & (games["away_classification"] == "fbs")].copy()
-    rows, xs, tails = [], [], []
+    rows, xs, tails, phases = [], [], [], []
     for season in seasons:
-        draws = load_season_draws(season, directory, units, conference, projection, drop_features, drives)
+        draws = load_season_draws(season, directory, units, conference, projection, drop_features, drives,
+                                  independents_separate)
         for (st, wk), gg in g[g["season"] == season].groupby(["season_type", "week"]):
             key = f"{st}_{wk}"
             if f"{key}__off" not in draws:
@@ -192,9 +198,11 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                 extra = [form_terms(f[hi], f[ai], main[0] + main[1])]
             venue = np.where(gg["neutral_site"].to_numpy(bool), 0.0, 1.0)[:, None].repeat(len(pick), 1)
             post = float(st == "postseason")
+            early = float(st == "regular" and wk <= EARLY_LAST_WEEK)
             base = np.stack([*main, venue, post * (main[0] + main[1])], axis=-1)
             xs.append(np.concatenate([base, *extra], axis=-1))
             tails.append(np.concatenate(tail, axis=-1) if tail else np.empty((len(gg), len(pick), 0)))
+            phases.append(early * np.stack(main, axis=-1))
             rows.append(gg)
     out = pd.concat(rows, ignore_index=True)
     out["venue"] = np.where(out["neutral_site"], 0, 1)
@@ -213,6 +221,9 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
         net = x[..., 0] + x[..., 1]
         x = np.concatenate([x, np.broadcast_to(d, (*x.shape[:2], 3)), (d[..., 0] * net)[..., None]], axis=-1)
         terms = terms + PHYSICAL_TERMS
+    if phase:
+        x = np.concatenate([x, np.concatenate(phases, axis=0)], axis=-1)
+        terms = terms + PHASE_TERMS
     if keep_terms is not None:
         unknown = [t for t in keep_terms if t not in terms]
         if unknown:

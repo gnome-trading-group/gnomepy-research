@@ -44,6 +44,7 @@ from gnomepy_research.models.cfb.efficiency.inference import (
 
 SPLIT_SUFFIX = "_split"
 CONF_SUFFIX = "_conf"
+IND_SUFFIX = "_ind"
 PROJ_SUFFIX = "_proj"
 DRIVES_SUFFIX = "_drv"
 FIRST_TRAIN_SEASON = 2019
@@ -58,39 +59,44 @@ def drop_suffix(drop_features: tuple[str, ...] = ()) -> str:
 
 
 def _suffix(units: tuple[str, ...], conference: bool = False, projection: bool = False,
-            drop_features: tuple[str, ...] = (), drives: bool = False) -> str:
-    """Order: split, conf, proj, drv, drop."""
+            drop_features: tuple[str, ...] = (), drives: bool = False, independents_separate: bool = False) -> str:
+    """Order: split, conf, ind, proj, drv, drop."""
     return (("" if units == UNITS_ALL else SPLIT_SUFFIX) + (CONF_SUFFIX if conference else "")
-            + (PROJ_SUFFIX if projection else "") + (DRIVES_SUFFIX if drives else "") + drop_suffix(drop_features))
+            + (IND_SUFFIX if independents_separate else "") + (PROJ_SUFFIX if projection else "") + (DRIVES_SUFFIX if drives else "") + drop_suffix(drop_features))
 
 
 def model_version(units: tuple[str, ...], conference: bool = False, projection: bool = False,
-                  drives: bool = False) -> str:
-    return f"dyn-eff{_suffix(units, conference, projection, drives=drives).replace('_', '-')}-1"
+                  drives: bool = False, independents_separate: bool = False) -> str:
+    suffix = _suffix(units, conference, projection, drives=drives, independents_separate=independents_separate)
+    return f"dyn-eff{suffix.replace('_', '-')}-1"
 
 
 MODEL_VERSION = model_version(UNITS_ALL)
 
 
 def hyper_name(likelihood: str, season: int, units: tuple[str, ...] = UNITS_ALL, conference: bool = False,
-               projection: bool = False, drop_features: tuple[str, ...] = (), drives: bool = False) -> str:
-    suffix = _suffix(units, conference, projection, drop_features, drives)
+               projection: bool = False, drop_features: tuple[str, ...] = (), drives: bool = False,
+               independents_separate: bool = False) -> str:
+    suffix = _suffix(units, conference, projection, drop_features, drives, independents_separate)
     return f"{likelihood}{suffix}_{FIRST_TRAIN_SEASON}_{season - 1}"
 
 
 def draws_name(season: int, units: tuple[str, ...] = UNITS_ALL, conference: bool = False,
-               projection: bool = False, drop_features: tuple[str, ...] = (), drives: bool = False) -> str:
-    return f"cfb_team_week_draws{_suffix(units, conference, projection, drop_features, drives)}_{season}"
+               projection: bool = False, drop_features: tuple[str, ...] = (), drives: bool = False,
+               independents_separate: bool = False) -> str:
+    return f"cfb_team_week_draws{_suffix(units, conference, projection, drop_features, drives, independents_separate)}_{season}"
 
 
 def ensure_hyperparameters(inputs: Inputs, likelihood: str, season: int, units: tuple[str, ...] = UNITS_ALL,
                            conference: bool = False, projection: bool = False,
-                           drop_features: tuple[str, ...] = (), drives: bool = False) -> str:
-    name = hyper_name(likelihood, season, units, conference, projection, drop_features, drives)
+                           drop_features: tuple[str, ...] = (), drives: bool = False,
+                           independents_separate: bool = False) -> str:
+    name = hyper_name(likelihood, season, units, conference, projection, drop_features, drives,
+                      independents_separate)
     if not (HYPER_DIR / f"{name}.json").exists():
         h, diag = fit_hyperparameters(inputs, list(range(FIRST_TRAIN_SEASON, season)), likelihood, units=units,
                                       conference=conference, projection=projection, drop_features=drop_features,
-                                      drives=drives)
+                                      drives=drives, independents_separate=independents_separate)
         save_hyperparameters(h, diag, name)
         print(f"fitted {name}: {diag['hyper']}", flush=True)
     return name
@@ -105,8 +111,10 @@ def form_at(form_rows: pd.DataFrame, season: int, cutoff: pd.Timestamp, team_ids
 def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
                     out_dir: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL,
                     conference: bool = False, projection: bool = False,
-                    drop_features: tuple[str, ...] = (), drives: bool = False) -> tuple[pd.DataFrame, Path]:
-    name = ensure_hyperparameters(inputs, likelihood, season, units, conference, projection, drop_features, drives)
+                    drop_features: tuple[str, ...] = (), drives: bool = False,
+                    independents_separate: bool = False) -> tuple[pd.DataFrame, Path]:
+    name = ensure_hyperparameters(inputs, likelihood, season, units, conference, projection, drop_features, drives,
+                                  independents_separate)
     h = load_hyperparameters(name)
     rng = np.random.default_rng(seed)
     summaries, draws = [], {}
@@ -140,10 +148,10 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
                                   divergences=post.diagnostics["divergences"]))
         print(f"{season} {key}: rhat {post.diagnostics['max_rhat']:.3f} div {post.diagnostics['divergences']}", flush=True)
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{draws_name(season, units, conference, projection, drop_features, drives)}.npz"
+    path = out_dir / f"{draws_name(season, units, conference, projection, drop_features, drives, independents_separate)}.npz"
     np.savez_compressed(path, **draws)
     out = pd.concat(summaries, ignore_index=True).assign(
-        model_version=model_version(units, conference, projection, drives), hyperparameters=name, likelihood=likelihood,
+        model_version=model_version(units, conference, projection, drives, independents_separate), hyperparameters=name, likelihood=likelihood,
         training_data_version=f"{PRESEASON_FEATURES},{EFFICIENCY}@{inputs.as_of.isoformat()}",
         created_at=datetime.now(timezone.utc).isoformat(),
     )
@@ -153,7 +161,8 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
 def snapshot_seasons(inputs: Inputs, first: int, last: int, likelihood: str,
                      out_dir: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL,
                      conference: bool = False, projection: bool = False,
-                     drop_features: tuple[str, ...] = (), drives: bool = False) -> tuple[pd.DataFrame, list[tuple[int, Path]]]:
+                     drop_features: tuple[str, ...] = (), drives: bool = False,
+                     independents_separate: bool = False) -> tuple[pd.DataFrame, list[tuple[int, Path]]]:
     """The team-week table for seasons first..last, and each season's draws file under out_dir."""
     if first <= FIRST_TRAIN_SEASON:
         raise ValueError(f"first snapshot season must be after {FIRST_TRAIN_SEASON}")
@@ -162,11 +171,12 @@ def snapshot_seasons(inputs: Inputs, first: int, last: int, likelihood: str,
     frames, paths = [], []
     for season in range(first, last + 1):
         df, path = snapshot_season(inputs, season, likelihood, out_dir=out_dir, units=units, conference=conference,
-                                     projection=projection, drop_features=drop_features, drives=drives)
+                                     projection=projection, drop_features=drop_features, drives=drives,
+                                     independents_separate=independents_separate)
         frames.append(df)
         paths.append((season, path))
     table = pd.concat(frames, ignore_index=True)
-    table.to_parquet(out_dir / f"cfb_team_week_posterior{_suffix(units, conference, projection, drop_features, drives)}_{first}_{last}.parquet", index=False)
+    table.to_parquet(out_dir / f"cfb_team_week_posterior{_suffix(units, conference, projection, drop_features, drives, independents_separate)}_{first}_{last}.parquet", index=False)
     return table, paths
 
 
@@ -184,11 +194,13 @@ def snapshot_options(argv: list[str] | None = None) -> dict:
     ap.add_argument("--conference", action="store_true")
     ap.add_argument("--projection", action="store_true")
     ap.add_argument("--drives", action="store_true")
+    ap.add_argument("--independents-separate", action="store_true")
     ap.add_argument("--drop-features-from", type=Path, default=None)
     args = ap.parse_args(argv)
     return {"first": args.first, "last": args.last, "likelihood": args.likelihood,
             "units": UNITS_ALL if args.units == "all" else UNITS_SPLIT, "form": args.form,
             "conference": args.conference, "projection": args.projection, "drives": args.drives,
+            "independents_separate": args.independents_separate,
             "drop_features": read_drop_features(args.drop_features_from) if args.drop_features_from else ()}
 
 
@@ -201,7 +213,8 @@ def main() -> None:
         inputs.projection = project_seasons(table, seasons)
     table, _ = snapshot_seasons(inputs, o["first"], o["last"], o["likelihood"], units=o["units"],
                                 conference=o["conference"], projection=o["projection"],
-                                drop_features=o["drop_features"], drives=o["drives"])
+                                drop_features=o["drop_features"], drives=o["drives"],
+                                independents_separate=o["independents_separate"])
     print(f"{len(table):,} team-week rows")
 
 

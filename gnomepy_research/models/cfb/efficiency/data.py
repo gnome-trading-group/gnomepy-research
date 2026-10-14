@@ -33,6 +33,7 @@ CONF_SOURCES = {"conf_prior_off": "prior_off_rating", "conf_prior_def": "prior_d
                 "conf_talent_offense": "talent_offense", "conf_talent_defense": "talent_defense",
                 "conf_recruiting": "recruiting_points"}
 NO_CONFERENCE = "none"
+INDEPENDENTS = "FBS Independents"
 UNITS_ALL = ("all",)
 UNITS_SPLIT = ("pass", "rush")
 UNIT_COLUMNS = {"all": ("plays", "off_ppa"), "pass": ("pass_plays", "off_pass_ppa"),
@@ -71,6 +72,7 @@ class ModelData:
     projection: bool = False
     drop_features: tuple[str, ...] = ()
     drives: bool = False
+    independents_separate: bool = False
     drv_off: np.ndarray = field(default_factory=lambda: np.zeros((0, 1), dtype=int))  # (M, U) offense ts per unit
     drv_off_w: np.ndarray = field(default_factory=lambda: np.zeros((0, 1)))  # (M, U) unit play shares
     drv_def: np.ndarray = field(default_factory=lambda: np.zeros((0, 1), dtype=int))
@@ -122,9 +124,13 @@ def team_conferences(games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
     return counts.drop_duplicates(["season", "team_id"])[["season", "team_id", "conference"]]
 
 
-def with_conference_means(pre: pd.DataFrame, games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
+def with_conference_means(pre: pd.DataFrame, games: pd.DataFrame, seasons: list[int],
+                          independents_separate: bool = False) -> pd.DataFrame:
     pre = pre.merge(team_conferences(games, seasons), on=["season", "team_id"], how="left")
     pre["conference"] = pre["conference"].fillna(NO_CONFERENCE)
+    if independents_separate:
+        solo = pre["conference"] == INDEPENDENTS
+        pre.loc[solo, "conference"] = INDEPENDENTS + ":" + pre.loc[solo, "team_id"].astype(str)
     for col, src in CONF_SOURCES.items():
         v = pre[src].astype(float)
         conf_mean = v.groupby([pre["season"], pre["conference"]]).transform("mean")
@@ -194,11 +200,13 @@ def _drive_observations(drives: pd.DataFrame, e: pd.DataFrame, periods: pd.DataF
 def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: pd.DataFrame,
                      seasons: list[int], units: tuple[str, ...] = UNITS_ALL, conference: bool = False,
                      projection: pd.DataFrame | None = None, drop_features: tuple[str, ...] = (),
-                     drives: pd.DataFrame | None = None) -> ModelData:
+                     drives: pd.DataFrame | None = None, independents_separate: bool = False) -> ModelData:
     """`efficiency` (and `drives`, features.drives.team_game_drives rows) must already be point-in-time
     filtered (as_of the fit's cutoff). `projection` (projection.project output) adds each unit's
     projected rating to that unit's block only, plus the low_continuity uncertainty flag. With split
     units a drive observes the pass/rush states mixed by the team's pass share in `efficiency`."""
+    if independents_separate and not conference:
+        raise ValueError("independents_separate needs conference=True")
     if projection is not None and tuple(units) == UNITS_ALL:
         raise ValueError("the preseason projection is per pass/rush unit; use split units")
     pre = preseason[preseason["season"].isin(seasons)].sort_values(["season", "team_id"]).reset_index(drop=True)
@@ -206,7 +214,7 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
     pre["coach_new"] = pre["coach_new"].astype(float)
     off_cols, def_cols = OFF_FEATURES, DEF_FEATURES
     if conference:
-        pre = with_conference_means(pre, games, seasons)
+        pre = with_conference_means(pre, games, seasons, independents_separate)
         off_cols, def_cols = OFF_FEATURES + CONF_OFF_FEATURES, DEF_FEATURES + CONF_DEF_FEATURES
     unknown = set(drop_features) - set(off_cols) - set(def_cols)
     if unknown:
@@ -303,5 +311,6 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
         obs_game=obs["game"].to_numpy(), obs_season=obs["season"].to_numpy(int), seasons=list(seasons), periods=periods,
         units=tuple(units), alpha_keys=alpha_keys, obs_alpha=obs["alpha"].to_numpy(int), obs_unit=obs["unit"].to_numpy(int),
         conf_keys=conf_keys, ts_conf=ts_conf, projection=projection is not None,
-        drop_features=tuple(sorted(drop_features)), **drv,
+        drop_features=tuple(sorted(drop_features)),
+        independents_separate=independents_separate, **drv,
     )
