@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -169,7 +170,11 @@ def snapshot_seasons(inputs: Inputs, first: int, last: int, likelihood: str,
     return table, paths
 
 
-def main() -> None:
+def read_drop_features(path: Path | str) -> tuple[str, ...]:
+    return tuple(json.loads(Path(path).read_text())["drop_features"])
+
+
+def snapshot_options(argv: list[str] | None = None) -> dict:
     ap = argparse.ArgumentParser()
     ap.add_argument("first", type=int)
     ap.add_argument("last", type=int)
@@ -179,15 +184,24 @@ def main() -> None:
     ap.add_argument("--conference", action="store_true")
     ap.add_argument("--projection", action="store_true")
     ap.add_argument("--drives", action="store_true")
-    args = ap.parse_args()
-    units = UNITS_ALL if args.units == "all" else UNITS_SPLIT
-    inputs = Inputs.load(with_form=args.form, with_drives=args.drives)
-    if args.projection:
-        seasons = list(range(FIRST_TRAIN_SEASON, args.last + 1))
+    ap.add_argument("--drop-features-from", type=Path, default=None)
+    args = ap.parse_args(argv)
+    return {"first": args.first, "last": args.last, "likelihood": args.likelihood,
+            "units": UNITS_ALL if args.units == "all" else UNITS_SPLIT, "form": args.form,
+            "conference": args.conference, "projection": args.projection, "drives": args.drives,
+            "drop_features": read_drop_features(args.drop_features_from) if args.drop_features_from else ()}
+
+
+def main() -> None:
+    o = snapshot_options()
+    inputs = Inputs.load(with_form=o["form"], with_drives=o["drives"])
+    if o["projection"]:
+        seasons = list(range(FIRST_TRAIN_SEASON, o["last"] + 1))
         table = projection_table(inputs.preseason, SourceData.load(), inputs.games, seasons)
         inputs.projection = project_seasons(table, seasons)
-    table, _ = snapshot_seasons(inputs, args.first, args.last, args.likelihood, units=units,
-                                conference=args.conference, projection=args.projection, drives=args.drives)
+    table, _ = snapshot_seasons(inputs, o["first"], o["last"], o["likelihood"], units=o["units"],
+                                conference=o["conference"], projection=o["projection"],
+                                drop_features=o["drop_features"], drives=o["drives"])
     print(f"{len(table):,} team-week rows")
 
 

@@ -2,107 +2,88 @@ SUMMARY
 - Best model by log loss: G (0.5438); open 0.5286; close 0.5229.
 - Gap to open (model - open, negative = model better): +0.0151  [+0.0043, +0.0254]  P(first worse)=1.00
 - Gap to close (model - close): +0.0208  [+0.0105, +0.0310]  P(first worse)=1.00
-- Blend weight a on the model vs the open (a > 0 = information beyond the open): A a=+0.09 [-0.19, +0.34], C a=+0.23 [-0.05, +0.47], D a=+0.23 [-0.02, +0.44], E a=+0.09 [-0.15, +0.32], G a=+0.24 [-0.04, +0.49], H a=+0.22 [-0.06, +0.46], I0 a=+0.25 [-0.08, +0.55], I a=+0.17 [-0.12, +0.45], C+E a=+0.17 [-0.09, +0.41]
-- No model's blend weight CI excludes 0 vs the open: no demonstrated information beyond the open.
+- Blend weight a on the model vs the open (a > 0 = information beyond the open): C a=+0.23 [-0.05, +0.47], D a=+0.23 [-0.02, +0.44], G a=+0.24 [-0.04, +0.49], H a=+0.22 [-0.06, +0.46], I a=+0.17 [-0.12, +0.45], J0 a=+0.22 [-0.06, +0.47], J a=+0.27 [+0.04, +0.51]
+- Carries information beyond the open (95% CI of a above 0): J
 
-models: A C D E G H I0 I C+E; games scored: 1590; dropped 0 games present in every model but missing an opening or closing line
+models: C D G H I J0 J; games scored: 1590; dropped 0 games present in every model but missing an opening or closing line
 sanity: 0 of 1590 games have |backtest p_market_close - p_close| > 0.02
 
 PER-SOURCE SCORES (calib_slope: 1 = calibrated)
-   source season    n  log_loss  brier  calib_slope
-  model A    all 1590    0.5499 0.1869       1.0389
-  model A   2023  792    0.5375 0.1823       1.1006
-  model A   2024  798    0.5622 0.1914       0.9788
-  model C    all 1590    0.5457 0.1849       1.0510
-  model C   2023  792    0.5334 0.1800       1.0946
-  model C   2024  798    0.5578 0.1898       1.0065
-  model D    all 1590    0.5452 0.1847       1.0449
-  model D   2023  792    0.5308 0.1790       1.1072
-  model D   2024  798    0.5596 0.1903       0.9835
-  model E    all 1590    0.5552 0.1883       1.0576
-  model E   2023  792    0.5459 0.1838       1.1308
-  model E   2024  798    0.5644 0.1927       0.9875
-  model G    all 1590    0.5438 0.1841       1.0539
-  model G   2023  792    0.5287 0.1784       1.1222
-  model G   2024  798    0.5587 0.1897       0.9865
-  model H    all 1590    0.5450 0.1848       1.0307
-  model H   2023  792    0.5312 0.1797       1.0831
-  model H   2024  798    0.5587 0.1898       0.9776
- model I0    all 1590    0.5471 0.1854       1.1939
- model I0   2023  792    0.5339 0.1800       1.2539
- model I0   2024  798    0.5603 0.1907       1.1336
-  model I    all 1590    0.5471 0.1854       1.0530
-  model I   2023  792    0.5345 0.1802       1.2747
-  model I   2024  798    0.5596 0.1904       0.8961
-model C+E    all 1590    0.5489 0.1860       1.0738
-model C+E   2023  792    0.5382 0.1813       1.1325
-model C+E   2024  798    0.5596 0.1906       1.0151
-     open    all 1590    0.5286 0.1786       1.0698
-     open   2023  792    0.5206 0.1751       1.1141
-     open   2024  798    0.5366 0.1821       1.0275
-    close    all 1590    0.5229 0.1763       1.0762
-    close   2023  792    0.5108 0.1710       1.1401
-    close   2024  798    0.5350 0.1816       1.0158
+  source season    n  log_loss  brier  calib_slope
+ model C    all 1590    0.5457 0.1849       1.0510
+ model C   2023  792    0.5334 0.1800       1.0946
+ model C   2024  798    0.5578 0.1898       1.0065
+ model D    all 1590    0.5452 0.1847       1.0449
+ model D   2023  792    0.5308 0.1790       1.1072
+ model D   2024  798    0.5596 0.1903       0.9835
+ model G    all 1590    0.5438 0.1841       1.0539
+ model G   2023  792    0.5287 0.1784       1.1222
+ model G   2024  798    0.5587 0.1897       0.9865
+ model H    all 1590    0.5450 0.1848       1.0307
+ model H   2023  792    0.5312 0.1797       1.0831
+ model H   2024  798    0.5587 0.1898       0.9776
+ model I    all 1590    0.5471 0.1854       1.0530
+ model I   2023  792    0.5345 0.1802       1.2747
+ model I   2024  798    0.5596 0.1904       0.8961
+model J0    all 1590    0.5472 0.1856       1.0378
+model J0   2023  792    0.5362 0.1807       1.0872
+model J0   2024  798    0.5580 0.1906       0.9893
+ model J    all 1590    0.5442 0.1843       1.0531
+ model J   2023  792    0.5359 0.1805       1.1219
+ model J   2024  798    0.5524 0.1881       0.9908
+    open    all 1590    0.5286 0.1786       1.0698
+    open   2023  792    0.5206 0.1751       1.1141
+    open   2024  798    0.5366 0.1821       1.0275
+   close    all 1590    0.5229 0.1763       1.0762
+   close   2023  792    0.5108 0.1710       1.1401
+   close   2024  798    0.5350 0.1816       1.0158
 
 PAIRED LOG-LOSS DIFFERENCES (first - second; negative = first better; game-bootstrap 95% CI)
-diff C - A  -0.0042  [-0.0101, +0.0018]  P(first worse)=0.09
 diff D - C  -0.0005  [-0.0033, +0.0023]  P(first worse)=0.40
-diff E - C  +0.0095  [+0.0045, +0.0151]  P(first worse)=1.00
-diff C+E - C  +0.0033  [+0.0008, +0.0060]  P(first worse)=0.99
-diff C+E - E  -0.0063  [-0.0090, -0.0037]  P(first worse)=0.00
 diff G - D  -0.0015  [-0.0038, +0.0008]  P(first worse)=0.11
 diff G - C  -0.0019  [-0.0057, +0.0017]  P(first worse)=0.15
 diff H - G  +0.0012  [-0.0003, +0.0029]  P(first worse)=0.93
 diff H - D  -0.0002  [-0.0028, +0.0023]  P(first worse)=0.43
 diff I - G  +0.0033  [-0.0003, +0.0071]  P(first worse)=0.97
-diff I0 - G  +0.0034  [-0.0006, +0.0074]  P(first worse)=0.95
-diff I - I0  -0.0000  [-0.0033, +0.0034]  P(first worse)=0.47
-diff A - open  +0.0213  [+0.0110, +0.0311]  P(first worse)=1.00
+diff J0 - G  +0.0034  [-0.0026, +0.0098]  P(first worse)=0.86
+diff J - G  +0.0004  [-0.0093, +0.0099]  P(first worse)=0.54
+diff J - J0  -0.0030  [-0.0111, +0.0052]  P(first worse)=0.23
 diff C - open  +0.0171  [+0.0063, +0.0272]  P(first worse)=1.00
 diff D - open  +0.0166  [+0.0053, +0.0267]  P(first worse)=1.00
-diff E - open  +0.0266  [+0.0155, +0.0380]  P(first worse)=1.00
 diff G - open  +0.0151  [+0.0043, +0.0254]  P(first worse)=1.00
 diff H - open  +0.0164  [+0.0054, +0.0267]  P(first worse)=1.00
-diff I0 - open  +0.0185  [+0.0082, +0.0280]  P(first worse)=1.00
 diff I - open  +0.0185  [+0.0079, +0.0286]  P(first worse)=1.00
-diff C+E - open  +0.0203  [+0.0099, +0.0307]  P(first worse)=1.00
-diff A - close  +0.0270  [+0.0165, +0.0366]  P(first worse)=1.00
+diff J0 - open  +0.0185  [+0.0073, +0.0290]  P(first worse)=1.00
+diff J - open  +0.0155  [+0.0037, +0.0259]  P(first worse)=1.00
 diff C - close  +0.0227  [+0.0120, +0.0330]  P(first worse)=1.00
 diff D - close  +0.0223  [+0.0118, +0.0327]  P(first worse)=1.00
-diff E - close  +0.0322  [+0.0215, +0.0433]  P(first worse)=1.00
 diff G - close  +0.0208  [+0.0105, +0.0310]  P(first worse)=1.00
 diff H - close  +0.0221  [+0.0118, +0.0323]  P(first worse)=1.00
-diff I0 - close  +0.0242  [+0.0142, +0.0338]  P(first worse)=1.00
 diff I - close  +0.0242  [+0.0138, +0.0342]  P(first worse)=1.00
-diff C+E - close  +0.0260  [+0.0157, +0.0364]  P(first worse)=1.00
+diff J0 - close  +0.0242  [+0.0137, +0.0343]  P(first worse)=1.00
+diff J - close  +0.0212  [+0.0112, +0.0309]  P(first worse)=1.00
 
 BLEND: logit(y) ~ a*logit(model) + b*logit(ref); a > 0 = model carries information the reference lacks
-A vs open:  a=+0.095 [-0.195, +0.335]  b=+0.992
-A vs close: a=-0.007 [-0.245, +0.242]  b=+1.089  (reference)
 C vs open:  a=+0.225 [-0.047, +0.472]  b=+0.881
 C vs close: a=+0.117 [-0.140, +0.362]  b=+0.986  (reference)
 D vs open:  a=+0.229 [-0.023, +0.444]  b=+0.876
 D vs close: a=+0.100 [-0.138, +0.347]  b=+0.998  (reference)
-E vs open:  a=+0.092 [-0.151, +0.325]  b=+0.998
-E vs close: a=-0.004 [-0.239, +0.220]  b=+1.086  (reference)
 G vs open:  a=+0.237 [-0.035, +0.493]  b=+0.869
 G vs close: a=+0.110 [-0.149, +0.391]  b=+0.989  (reference)
 H vs open:  a=+0.217 [-0.058, +0.455]  b=+0.884
 H vs close: a=+0.093 [-0.160, +0.352]  b=+1.003  (reference)
-I0 vs open:  a=+0.250 [-0.083, +0.547]  b=+0.885
-I0 vs close: a=+0.104 [-0.188, +0.387]  b=+1.006  (reference)
 I vs open:  a=+0.174 [-0.119, +0.447]  b=+0.926
 I vs close: a=+0.054 [-0.207, +0.351]  b=+1.038  (reference)
-C+E vs open:  a=+0.170 [-0.090, +0.411]  b=+0.933
-C+E vs close: a=+0.060 [-0.213, +0.295]  b=+1.035  (reference)
+J0 vs open:  a=+0.223 [-0.062, +0.469]  b=+0.883
+J0 vs close: a=+0.095 [-0.178, +0.317]  b=+1.003  (reference)
+J vs open:  a=+0.267 [+0.044, +0.509]  b=+0.843
+J vs close: a=+0.096 [-0.131, +0.342]  b=+1.001  (reference)
 
 BET-LIKE SUBSET: |p_model - p_open| > 0.05 (log loss; open scored on the same games)
-A: n=856  model=0.5980  open=0.5614
 C: n=883  model=0.5897  open=0.5636
 D: n=876  model=0.5962  open=0.5685
-E: n=935  model=0.5874  open=0.5437
 G: n=843  model=0.6052  open=0.5794
 H: n=831  model=0.6148  open=0.5862
-I0: n=892  model=0.5824  open=0.5494
 I: n=879  model=0.6015  open=0.5693
-C+E: n=894  model=0.5874  open=0.5543
+J0: n=900  model=0.5994  open=0.5744
+J: n=881  model=0.5881  open=0.5632

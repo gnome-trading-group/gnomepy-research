@@ -51,9 +51,21 @@ MODEL_CONFIGS = {
 }
 MODEL_CONFIGS["I0"] = {**MODEL_CONFIGS["G"], "learner": "margin", "recal": False}
 MODEL_CONFIGS["I"] = {**MODEL_CONFIGS["G"], "learner": "margin", "recal": True}
-OUTCOME_FLAGS = ("conference", "stretch", "option")
+MODEL_CONFIGS["J0"] = {**MODEL_CONFIGS["G"], "j_features": True}
+MODEL_CONFIGS["J"] = {**MODEL_CONFIGS["G"], "j_features": True, "drives": True}
+OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives")
 VALIDATION_SEASON = 2022
 F_CONFIG = RESULTS / "F_config.json"
+J_FEATURES = RESULTS / "J_features.json"
+
+
+def resolve_config(model: str, features_path: Path = J_FEATURES) -> dict:
+    """J0/J read the frozen 2022-validation feature selection at run time; other configs pass through."""
+    cfg = dict(MODEL_CONFIGS[model])
+    if not cfg.pop("j_features", False):
+        return cfg
+    feats = json.loads(Path(features_path).read_text())
+    return {**cfg, "keep_terms": list(feats["keep_terms"]), "drop_features": tuple(feats["drop_features"])}
 
 
 def phase(df: pd.DataFrame) -> pd.Series:
@@ -284,7 +296,7 @@ def main() -> None:
         raise SystemExit(f"{HOLDOUT} is the holdout season; pass --holdout to score it")
     if args.validate and (args.model != "F" or args.seasons != [VALIDATION_SEASON]):
         raise SystemExit(f"--validate is only for model F on {VALIDATION_SEASON}")
-    cfg = MODEL_CONFIGS[args.model]
+    cfg = resolve_config(args.model)
     f_config = None
     if cfg["learner"] == "residual" and not args.validate:
         if not F_CONFIG.exists():

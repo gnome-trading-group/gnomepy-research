@@ -20,7 +20,7 @@ from gnomepy_research.models.cfb.efficiency.inference import HYPER_DIR, Inputs, 
 from gnomepy_research.models.cfb.efficiency.posterior_snapshots import hyper_name
 from gnomepy_research.models.cfb.efficiency.projection import project_seasons, projection_table
 from gnomepy_research.models.cfb.features.source import SourceData
-from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import RESULTS
+from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import RESULTS, resolve_config
 from gnomepy_research.sessions.cfb_win_probability.evaluation.compare_models import market_probs
 from gnomepy_research.sessions.cfb_win_probability.evaluation.metrics import log_loss, summarize
 
@@ -28,8 +28,8 @@ P4 = {"SEC", "Big Ten", "Big 12", "ACC", "Pac-12"}
 ACADEMIES = {"Army", "Navy", "Air Force"}
 Z95 = 1.96
 EXTRAS_MARKER = "\n\n==== EXTRAS (g_report) ====\n"
-CUT_MODELS = {"G": ["D", "G"], "H": ["D", "G", "H"], "I": ["G", "I0", "I"]}
-CUT_PAIRS = {"I": [("I0", "G"), ("I", "G"), ("I", "I0")]}
+CUT_MODELS = {"G": ["D", "G"], "H": ["D", "G", "H"], "I": ["G", "I0", "I"], "J": ["G", "J0", "J"]}
+CUT_PAIRS = {"I": [("I0", "G"), ("I", "G"), ("I", "I0")], "J": [("J", "G"), ("J", "J0")]}
 
 
 def hyper_section(seasons: list[int], projection: bool = False) -> str:
@@ -49,6 +49,25 @@ def hyper_section(seasons: list[int], projection: bool = False) -> str:
                     **{f"def/{n}": b for n, b in zip(h["def_names"], h["beta_def"]) if n.endswith(("proj", "proj_missing"))}}
             lines.append("    proj betas (posterior mean; proj per sd): " + ", ".join(f"{k}={v:+.4f}" for k, v in proj.items())
                          + f"; gamma (z_unc, last = low_continuity): {np.round(h['gamma'], 4).tolist()}")
+    return "\n".join(lines)
+
+
+DRIVE_PARAMS = ("alpha_ppd", "sigma_alpha_ppd", "lam_ppd", "hfa_ppd", "s_game_ppd", "s_drive_ppd")
+
+
+def j_hyper_section(seasons: list[int]) -> str:
+    drop = resolve_config("J0")["drop_features"]
+    lines = [f"J0/J HYPERPARAMETERS (normal split conf, drop {list(drop)}; J adds drives; fitted on 2019..S-1)"]
+    for s in seasons:
+        for label, drives in (("J0", False), ("J", True)):
+            raw = json.loads((HYPER_DIR / f"{hyper_name('normal', s, UNITS_SPLIT, True, drop_features=drop, drives=drives)}.json").read_text())
+            h, diag = raw["hyperparameters"], raw["diagnostics"]
+            d = diag["hyper"]
+            core = ", ".join(f"{k}={h[k]:.4f}" for k in ("tau_off", "tau_def", "s_conf_off", "s_conf_def", "sigma_play"))
+            drv = ", ".join(f"{k}={h[k]:.4f}" for k in DRIVE_PARAMS if k in h)
+            lines.append(f"{s} {label}: {core}{'; ' + drv if drv else ''}  max_rhat={d['max_rhat']:.3f} ({d['worst_rhat_param']}) "
+                         f"min_ess_bulk={d['min_ess_bulk']:.0f} divergences={d['divergences']} n_obs={diag.get('n_obs')}"
+                         + (f" n_drive_obs={diag['n_drive_obs']}" if "n_drive_obs" in diag else ""))
     return "\n".join(lines)
 
 
@@ -175,7 +194,8 @@ def main() -> None:
     tag = "_".join(map(str, args.seasons))
     inputs = Inputs.load(with_form=False)
     models = CUT_MODELS[args.model]
-    sections = [hyper_section(list(range(2020, max(args.seasons) + 1)), projection=args.model == "H")]
+    seasons = list(range(2020, max(args.seasons) + 1))
+    sections = [j_hyper_section(seasons) if args.model == "J" else hyper_section(seasons, projection=args.model == "H")]
     if args.model == "G":
         sections.append(effects_section(inputs, args.seasons))
     sections.append(cuts_section(tag, models, CUT_PAIRS.get(args.model)))
