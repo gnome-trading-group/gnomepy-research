@@ -63,7 +63,7 @@ PRIORS: dict[str, tuple[float, float]] = {
 # are scaled by 100/8; z-scored diffs (form, qb, option, physical) get N(0, 6); venue N(3, 3).
 MARGIN_EDGE_SCALE = 12.5
 MARGIN_EDGE_TERMS = {"off_diff", "def_diff", "bowl_net_diff", "pass_edge", "rush_edge", "bowl_edge", "pace_x_edge",
-                     "edge_abs_edge", "gap_x_edge"}
+                     "edge_abs_edge", "gap_x_edge", "pass_edge_early", "rush_edge_early"}
 MARGIN_PRIORS: dict[str, tuple[float, float]] = {
     t: ((PRIORS[t][0] * MARGIN_EDGE_SCALE, PRIORS[t][1] * MARGIN_EDGE_SCALE) if t in MARGIN_EDGE_TERMS
         else (3.0, 3.0) if t == "venue" else (0.0, 6.0))

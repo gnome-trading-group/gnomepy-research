@@ -5,13 +5,15 @@ import pandas as pd
 import pytest
 
 from gnomepy_research.models.cfb.efficiency.data import UNITS_SPLIT, build_model_data
-from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import Hyperparameters
+from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import Hyperparameters, build_model, sample
+from gnomepy_research.models.cfb.efficiency.gaussian_solver import _state_map, fit_cutoff_exact, solve
+from gnomepy_research.models.cfb.efficiency.inference import Inputs
 from gnomepy_research.models.cfb.efficiency.posterior_snapshots import draws_name, hyper_name, model_version, snapshot_options
 from gnomepy_research.models.cfb.features.ratings import FCS_TEAM
-from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import OUTCOME_FLAGS
+from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import MODEL_CONFIGS, OUTCOME_FLAGS, resolve_config
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import (
-    PHASE_TERMS, PRIORS, TERMS_SPLIT, game_draws)
-from tests.sessions.test_cfb_win_probability_models import N_TEAMS, SEASON, hypers, synthetic
+    MARGIN_EDGE_TERMS, MARGIN_PRIORS, MARGIN_EDGE_SCALE, PHASE_TERMS, PRIORS, TERMS_SPLIT, game_draws)
+from tests.sessions.test_cfb_win_probability_models import N_TEAMS, SEASON, conf_hypers, hypers, synthetic
 
 INDEPENDENTS = "FBS Independents"
 CONF = {t: (INDEPENDENTS if t in (1, 2) else "A" if t <= 5 else "B") for t in range(1, N_TEAMS + 1)}
@@ -141,3 +143,63 @@ class TestPhaseTerms:
     def test_phase_requires_split_units(self, tmp_path):
         with pytest.raises(ValueError, match="split"):
             game_draws(self.games(), [SEASON], directory=tmp_path, phase=True)
+
+
+def test_phase_terms_are_margin_edges():
+    assert set(PHASE_TERMS) <= MARGIN_EDGE_TERMS
+    for t in PHASE_TERMS:
+        assert MARGIN_PRIORS[t] == (0.0, PRIORS[t][1] * MARGIN_EDGE_SCALE)
+
+
+class TestIndependentsSolver:
+    @staticmethod
+    def data(seed=1):
+        games, eff, pre, _, _ = synthetic(seed=seed)
+        games = with_conferences(games)
+        return games, eff, pre, build_model_data(pre, eff, games, [SEASON], units=UNITS_SPLIT, conference=True,
+                                                 independents_separate=True)
+
+    def test_solver_matches_mcmc(self):
+        _, _, _, d = self.data()
+        h = conf_hypers(d)
+        h.alpha = np.array([0.15, 0.05])
+        h.independents_separate = True
+        mean, _, lay = solve(d, h)
+        ts = np.arange(len(d.ts_keys))
+        c_off, B_off = _state_map(d, h, lay, ts, np.full(len(ts), d.n_periods - 1), offense=True)
+        exact = c_off + B_off @ mean
+        idata = sample(build_model(d, hypers=h, likelihood="normal"), draws=1000, tune=500, chains=2)
+        post = idata.posterior.to_dataset()
+        np.testing.assert_allclose(exact, post["O"].mean(("chain", "draw")).values[:, -1], atol=0.01)
+
+    def test_cutoff_fit_exact(self):
+        games, eff, pre, d = self.data(seed=2)
+        h = conf_hypers(d)
+        h.independents_separate = True
+        inputs = Inputs(preseason=pre, efficiency=eff, games=games, as_of=pd.Timestamp("2025-01-01", tz="UTC"))
+        post, data = fit_cutoff_exact(inputs, SEASON, d.periods["cutoff"].iloc[-1], h, n_draws=50)
+        assert data.independents_separate
+        assert {f"{INDEPENDENTS}:1", f"{INDEPENDENTS}:2"} <= set(data.conf_keys["conference"])
+
+
+def test_model_k_config(tmp_path):
+    k = MODEL_CONFIGS["K"]
+    g = MODEL_CONFIGS["G"]
+    assert {kk: v for kk, v in k.items() if kk in g} == g
+    assert k["drives"] and k["independents_separate"] and k["phase"]
+    assert "keep_terms" not in k and "drop_features" not in k and "j_features" not in k
+    assert resolve_config("K", tmp_path / "nope.json") == k
+
+
+def test_game_draws_loads_k_draws(tmp_path):
+    TestPhaseTerms.write(tmp_path)
+    src = tmp_path / f"{draws_name(SEASON, UNITS_SPLIT)}.npz"
+    name = draws_name(SEASON, UNITS_SPLIT, True, drives=True, independents_separate=True)
+    assert name == f"cfb_team_week_draws_split_conf_ind_drv_{SEASON}"
+    src.rename(tmp_path / f"{name}.npz")
+    g = TestPhaseTerms.games()
+    gd = game_draws(g, [SEASON], directory=tmp_path, units=UNITS_SPLIT, conference=True, drives=True,
+                    independents_separate=True, phase=True)
+    assert gd.terms == TERMS_SPLIT + PHASE_TERMS
+    with pytest.raises(FileNotFoundError):
+        game_draws(g, [SEASON], directory=tmp_path, units=UNITS_SPLIT, conference=True, drives=True, phase=True)
