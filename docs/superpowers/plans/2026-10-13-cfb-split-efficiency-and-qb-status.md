@@ -1568,6 +1568,61 @@ Added 2026-10-13. Diagnostic on 2023–24, comparing model probabilities convert
 
 ---
 
+## Phase 9: Model J, "Lean drives"
+
+Added 2026-10-13. Model I showed that big-favorite compression is regression dilution from noisy ratings: a margin layer fitted on real margins still predicts 25 for 21+ favorites that win by 27. The fix is more information in the ratings, not output reshaping. The user wants an independent model (no blending with the line) and asked to cut feature count for clearer signal.
+
+J = G, pruned (Task 24), + a drive-level observation channel in the efficiency model (Task 25).
+
+### Task 24: Feature ablation on the 2022 validation season → frozen reduced G
+
+**Protocol:** train 2020–2021 and score 2022 only. 2023–24 is never used for selection.
+
+1. **Outcome-layer terms:** start from G's 15 terms. For each term, refit the outcome layer without it (same draws, so this is cheap) and record the 2022 log loss. Use 3 seeds, averaging the log losses, to cut refit noise.
+2. **Preseason prior feature groups:** these need hyperparameter refits, so run them as groups (normal likelihood, split + conf, hypers fitted on 2019–2021 only, snapshots for 2020–2022):
+   - QB: `qb_prior_ppa`, `qb_returning_starter`
+   - coach: `coach_srs_resid`, `coach_new`
+   - recruiting/talent: `talent_*`, `recruiting_points`
+   - portal: `portal_in_stars`
+   - returning: `returning_pct_ppa`, `returning_pct_passing_ppa`
+   - conference means: `conf_*`
+3. **Selection rule, fixed in advance:**
+   - Backward elimination: repeatedly drop the item whose removal *improves or worsens by less than 0.0005* the 2022 log loss. Stop when every remaining removal costs more than 0.0005.
+   - Freeze the result in `results/backtest/J_features.json` (kept outcome terms; kept prior features).
+   - Report every step.
+4. Implement this as `evaluation/ablation.py` (CLI `ablation --validate 2022`) plus a small `features=` / `terms=` selection hook. Concretely: `game_draws(..., keep_terms=None)` filters columns, and `build_model_data(..., drop_features=())` removes base features before standardizing. Defaults are unchanged.
+
+### Task 25: Drive-level observation channel (opt-in `drives=True`)
+
+- **Data:** `cfb_drives` per team-game offense, keyed by offense_id/defense_id and game_id, with `available_at` = kickoff + 1 day (same point-in-time rule as efficiency).
+- **Observation:** `ppd` = points per drive for the offense in that game.
+  - Exclude end-of-half/game kneel drives (`drive_result` in {"END OF HALF", "END OF GAME", "END OF 4TH QUARTER"} with `n_plays` ≤ 3).
+  - Include garbage-time drives at weight 0.3. A drive is garbage time if it starts in Q2 at a margin > 38, Q3 > 28, or Q4 > 22, from `start_offense_score`/`start_defense_score`.
+  - The effective drive count `n_eff` = Σ weights; `ppd` = Σ(w · points) / n_eff.
+- **Likelihood:** add to `build_model` and to the exact solver (both must agree):
+  - `ppd[g] ~ Normal(alpha_ppd[season] + lam_ppd * (Ocomb[off, k] − Dcomb[def, k]) + hfa_ppd * venue, sqrt(s_game_ppd² + s_drive_ppd² / n_eff))`
+  - `Ocomb` = the play-share-weighted mean of the team's unit ratings (pass share from the season-to-date efficiency rows; 0.5/0.5 if none), and `Dcomb` likewise. With `units=("all",)`, Ocomb = O.
+  - New hyperparameters: `alpha_ppd`, `lam_ppd` (prior N(12, 6): points per drive per PPA/play), `hfa_ppd`, `s_game_ppd`, `s_drive_ppd`. Defaults are off, so default paths stay byte-identical.
+- Naming suffix `_drv`; snapshot flag `--drives`.
+- Tests:
+  - Synthetic recovery: ratings recovered better (higher correlation with truth) when a ppd channel generated from the same latent is added.
+  - The exact solver matches MCMC.
+  - Point-in-time: drives from games after the cutoff are excluded.
+  - The garbage weight is applied.
+  - Defaults are unchanged.
+
+### Task 26: Backtest J and compare
+
+- `J` = G's config + the frozen feature selection + `drives=True`. Also run **J0** = G + frozen selection without drives, to separate pruning from drives.
+- Snapshots, then `backtest 2023 2024 --model J0` and `--model J`.
+- `compare_models 2023_2024 C D G H I J0 J`, with pairs J0−G, J−G, J−J0.
+- Compression diagnostic for G/J0/J, including the 21+ band.
+- `g_report` cut table G/J0/J with paired J−G.
+- Error Lab: add J ("Lean drives"). To keep 8 hues, drop E (CatBoost).
+- No tuning on 2023–24.
+
+---
+
 ## Weekly operating procedure (after this ships)
 
 1. Before each slate, add one row per known QB change to `sessions/cfb_win_probability/data/qb_status.csv`, with `recorded_at` set to when you learned it.
