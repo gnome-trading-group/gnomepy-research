@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge
 
-from gnomepy_research.models.cfb.efficiency.data import _with_conference_means
+from gnomepy_research.models.cfb.efficiency.data import with_conference_means
 from gnomepy_research.models.cfb.efficiency.inference import Inputs
 from gnomepy_research.models.cfb.features.physical import SEASON_START_GRACE, blue_chip_ratio
 from gnomepy_research.models.cfb.features.ratings import FCS_TEAM, ridge_ratings
@@ -25,7 +25,6 @@ from gnomepy_research.models.cfb.features.team_talent import roster_ratings
 
 FIRST_DATA_SEASON = 2018
 RIDGE_ALPHA = 1.0
-LOW_CONTINUITY = 0.4
 UNIT_PLAYS = {"pass": ("pass_plays", "off_pass_ppa"), "rush": ("rush_plays", "off_rush_ppa")}
 SIDES = ("off", "def")
 DEF_POSITIONS = {"DL", "DT", "DE", "NT", "LB", "ILB", "OLB", "DB", "CB", "S", "FS", "SS"}
@@ -98,7 +97,7 @@ def season_extras(src: SourceData, season: int) -> pd.DataFrame:
 def projection_table(preseason: pd.DataFrame, src: SourceData, games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
     """Raw projection inputs (and targets where the season has been played) per (season, FBS team)."""
     pre = preseason[preseason["season"].isin(seasons)].copy()
-    pre = _with_conference_means(pre, games, seasons)
+    pre = with_conference_means(pre, games, seasons)
     extras = pd.concat([season_extras(src, s) for s in seasons], ignore_index=True)
     pre = pre.merge(extras, on=["season", "team_id"], how="left")
     ratings = season_unit_ratings(src.efficiency, sorted({s - 1 for s in seasons} | set(seasons)))

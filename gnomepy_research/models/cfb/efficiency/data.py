@@ -110,7 +110,7 @@ def team_conferences(games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
     return counts.drop_duplicates(["season", "team_id"])[["season", "team_id", "conference"]]
 
 
-def _with_conference_means(pre: pd.DataFrame, games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
+def with_conference_means(pre: pd.DataFrame, games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
     pre = pre.merge(team_conferences(games, seasons), on=["season", "team_id"], how="left")
     pre["conference"] = pre["conference"].fillna(NO_CONFERENCE)
     for col, src in CONF_SOURCES.items():
@@ -152,7 +152,7 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
     pre["coach_new"] = pre["coach_new"].astype(float)
     off_cols, def_cols = OFF_FEATURES, DEF_FEATURES
     if conference:
-        pre = _with_conference_means(pre, games, seasons)
+        pre = with_conference_means(pre, games, seasons)
         off_cols, def_cols = OFF_FEATURES + CONF_OFF_FEATURES, DEF_FEATURES + CONF_DEF_FEATURES
     xo, off_names = _standardize(pre, off_cols)
     xd, def_names = _standardize(pre, def_cols)
@@ -186,14 +186,15 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
             p = _unit_projection(pre, projection, u)
             for side, x, out in (("off", xo, xo_u), ("def", xd, xd_u)):
                 z, _ = _standardize(p.assign(proj=p[f"proj_{side}"]), ["proj"])
-                out.append(with_fcs(x.assign(proj=z["proj"].to_numpy())))
+                missing = p[f"proj_{side}"].isna().astype(float).to_numpy()
+                out.append(with_fcs(x.assign(proj=z["proj"].to_numpy(), proj_missing=missing)))
             share = p[["returning_share_off", "returning_share_def"]].mean(axis=1)
             low = (~(share >= LOW_CONTINUITY)).astype(float).to_numpy()[:, None]
             z_u.append(np.hstack([base_z, np.r_[low[:, 0], np.ones(len(seasons))][:, None]]))
         x_off = np.vstack([_block(xo_u[i], i, n_u) for i in range(n_u)])
         x_def = np.vstack([_block(xd_u[i], i, n_u) for i in range(n_u)])
         z_unc = np.vstack(z_u)
-        off_names, def_names = [*off_names, "proj"], [*def_names, "proj"]
+        off_names, def_names = [*off_names, "proj", "proj_missing"], [*def_names, "proj", "proj_missing"]
     alpha_keys = pd.DataFrame([(s, u) for u in units for s in seasons], columns=["season", "unit"])
     conf_keys = _empty_conf_keys()
     ts_conf = np.zeros(0, dtype=int)

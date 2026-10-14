@@ -159,7 +159,7 @@ class TestProjectionModelData:
         d = build_model_data(pre, eff, games, [SEASON], units=UNITS_SPLIT, projection=proj)
         base = build_model_data(pre, eff, games, [SEASON], units=UNITS_SPLIT)
         assert d.projection
-        assert len(d.off_names) == len(base.off_names) + 2
+        assert len(d.off_names) == len(base.off_names) + 4
         assert "pass:proj" in d.off_names and "rush:proj" in d.def_names
         keys = d.ts_keys
         for u in ("pass", "rush"):
@@ -218,3 +218,19 @@ def test_projection_naming():
     assert draws_name(2024, UNITS_SPLIT, conference=True, projection=True) == "cfb_team_week_draws_split_conf_proj_2024"
     assert model_version(UNITS_SPLIT, conference=True, projection=True) == "dyn-eff-split-conf-proj-1"
     assert hyper_name("normal", 2023, UNITS_SPLIT, conference=True) == "normal_split_conf_2019_2022"
+
+
+def test_all_missing_projection_season_sets_proj_missing():
+    games, eff, pre, _, _ = synthetic()
+    proj = synthetic_projection(pre).assign(proj=np.nan)
+    d = build_model_data(pre, eff, games, [SEASON], units=UNITS_SPLIT, projection=proj)
+    keys = d.ts_keys
+    for u in ("pass", "rush"):
+        rows = ((keys["unit"] == u) & (keys["team_id"] != -1)).to_numpy()
+        for x, names in ((d.x_off, d.off_names), (d.x_def, d.def_names)):
+            assert (x[rows, names.index(f"{u}:proj_missing")] == 1).all()
+            assert (x[rows, names.index(f"{u}:proj")] == 0).all()
+    present = build_model_data(pre, eff, games, [SEASON], units=UNITS_SPLIT, projection=synthetic_projection(pre))
+    assert (present.x_off[:, present.off_names.index("pass:proj_missing")] == 0).all()
+    a = build_model_data(pre, eff, games, [SEASON], units=UNITS_SPLIT)
+    assert not any("proj" in n for n in a.off_names + a.def_names)
