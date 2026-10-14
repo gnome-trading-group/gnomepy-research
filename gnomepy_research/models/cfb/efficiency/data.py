@@ -92,6 +92,30 @@ def season_periods(games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
     return c.reset_index(drop=True)
 
 
+TAU_PHASES = ("early", "mid", "late", "post")
+EARLY_LAST_WEEK = 4
+MID_LAST_WEEK = 9
+
+
+def period_phase(season_type, week) -> np.ndarray:
+    """Index into TAU_PHASES: regular weeks <=4 early, 5-9 mid, >=10 late; postseason post."""
+    week = np.asarray(week)
+    return np.where(np.asarray(season_type) == "postseason", 3,
+                    np.where(week <= EARLY_LAST_WEEK, 0, np.where(week <= MID_LAST_WEEK, 1, 2)))
+
+
+def step_phases(periods: pd.DataFrame, ts_season: np.ndarray, n_periods: int) -> np.ndarray:
+    """(TS, n_periods - 1) phase of each random-walk step: step j moves into period j + 1 of the
+    team-season's own season. Padding steps past a season's last period take that period's phase."""
+    out = np.zeros((len(ts_season), n_periods - 1), dtype=int)
+    for season, p in periods.groupby("season"):
+        p = p.sort_values("period")
+        ph = period_phase(p["season_type"].to_numpy(), p["week"].to_numpy())
+        dest = np.minimum(np.arange(1, n_periods), len(ph) - 1)
+        out[np.asarray(ts_season) == season] = ph[dest]
+    return out
+
+
 def _standardize(pre: pd.DataFrame, cols: list[str]) -> tuple[pd.DataFrame, list[str]]:
     """z-score each feature within its season over FBS teams; missing -> 0 plus a missing flag
     when the feature is ever missing (prior ratings in 2018, the portal before 2021)."""

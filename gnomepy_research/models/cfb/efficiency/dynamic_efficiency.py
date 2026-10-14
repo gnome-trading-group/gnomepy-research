@@ -31,10 +31,11 @@ import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
 
-from gnomepy_research.models.cfb.efficiency.data import ModelData
+from gnomepy_research.models.cfb.efficiency.data import TAU_PHASES, ModelData, step_phases
 
 LIKELIHOODS = ("studentt", "normal")
 CONFERENCE_FIELDS = ("s_conf_off", "s_conf_def", "conference")
+TAU_PHASE_PRIORS = (0.03, 0.03, 0.03, 0.06)
 DRIVE_FIELDS = ("alpha_ppd", "sigma_alpha_ppd", "lam_ppd", "hfa_ppd", "s_game_ppd", "s_drive_ppd", "drives")
 
 
@@ -48,8 +49,8 @@ class Hyperparameters:
     gamma: np.ndarray
     s_off: float
     s_def: float
-    tau_off: float
-    tau_def: float
+    tau_off: float | np.ndarray
+    tau_def: float | np.ndarray
     sigma_game: float
     sigma_play: float
     nu: float
@@ -70,6 +71,7 @@ class Hyperparameters:
     s_drive_ppd: float = 0.0
     drives: bool = False
     independents_separate: bool = False
+    tau_phases: bool = False
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -85,6 +87,8 @@ class Hyperparameters:
                 d.pop(k)
         if not self.independents_separate:
             d.pop("independents_separate")
+        if not self.tau_phases:
+            d.pop("tau_phases")
         for k, v in d.items():
             if isinstance(v, np.ndarray):
                 d[k] = v.tolist()
@@ -97,13 +101,17 @@ class Hyperparameters:
             d[k] = np.asarray(d[k], dtype=float)
         d["alpha"] = np.atleast_1d(np.asarray(d["alpha"], dtype=float))
         d.setdefault("units", ["all"])
+        if d.get("tau_phases"):
+            d["tau_off"] = np.asarray(d["tau_off"], dtype=float)
+            d["tau_def"] = np.asarray(d["tau_def"], dtype=float)
         return cls(**d)
 
 
 def build_model(data: ModelData, hypers: Hyperparameters | None = None, likelihood: str = "studentt",
-                store_states: bool = True) -> pm.Model:
+                store_states: bool = True, tau_phases: bool = False) -> pm.Model:
     """store_states=False skips saving O and D per draw: a multi-season hyperparameter fit would
-    otherwise keep GBs of states it never uses."""
+    otherwise keep GBs of states it never uses. tau_phases (free fit; fixed hypers carry their own
+    flag) gives the walk one drift rate per season phase, TAU_PHASES."""
     if likelihood not in LIKELIHOODS:
         raise ValueError(likelihood)
     n_ts, n_k = len(data.ts_keys), data.n_periods
@@ -115,6 +123,10 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
         coords["conf"] = np.arange(len(data.conf_keys))
     if data.drives:
         coords["season"] = list(data.seasons)
+    if hypers is not None:
+        tau_phases = hypers.tau_phases
+    if tau_phases:
+        coords["tau_phase"] = list(TAU_PHASES)
     with pm.Model(coords=coords) as model:
         if hypers is None:
             alpha = pm.Normal("alpha", 0.1, 0.1, dims="unit")
@@ -125,8 +137,12 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
             gamma = pm.Normal("gamma", 0.0, 0.3, dims="unc")
             s_off = pm.HalfNormal("s_off", 0.1)
             s_def = pm.HalfNormal("s_def", 0.1)
-            tau_off = pm.HalfNormal("tau_off", 0.02)
-            tau_def = pm.HalfNormal("tau_def", 0.02)
+            if tau_phases:
+                tau_off = pm.HalfNormal("tau_off", np.array(TAU_PHASE_PRIORS), dims="tau_phase")
+                tau_def = pm.HalfNormal("tau_def", np.array(TAU_PHASE_PRIORS), dims="tau_phase")
+            else:
+                tau_off = pm.HalfNormal("tau_off", 0.02)
+                tau_def = pm.HalfNormal("tau_def", 0.02)
             sigma_game = pm.HalfNormal("sigma_game", 0.2)
             sigma_play = pm.HalfNormal("sigma_play", 1.5)
             nu = pm.Gamma("nu", 2.0, 0.1) if likelihood == "studentt" else None
@@ -146,6 +162,8 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
             beta_off, beta_def, gamma = (pt.as_tensor_variable(h.beta_off), pt.as_tensor_variable(h.beta_def),
                                          pt.as_tensor_variable(h.gamma))
             s_off, s_def, tau_off, tau_def = h.s_off, h.s_def, h.tau_off, h.tau_def
+            if tau_phases:
+                tau_off, tau_def = pt.as_tensor_variable(np.asarray(tau_off)), pt.as_tensor_variable(np.asarray(tau_def))
             sigma_game, sigma_play, nu = h.sigma_game, h.sigma_play, h.nu
             s_conf_off, s_conf_def = h.s_conf_off, h.s_conf_def
             alpha_ppd, sigma_alpha_ppd, lam_ppd = h.alpha_ppd, h.sigma_alpha_ppd, h.lam_ppd
@@ -170,6 +188,9 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
             z_conf_def = pm.Normal("z_conf_def", 0.0, 1.0, dims="conf")
             start_off = start_off + s_conf_off * z_conf_off[data.ts_conf]
             start_def = start_def + s_conf_def * z_conf_def[data.ts_conf]
+        if tau_phases:
+            phase = step_phases(data.periods, data.ts_keys["season"].to_numpy(), n_k)
+            tau_off, tau_def = tau_off[phase], tau_def[phase]
         walk_off = pt.concatenate([pt.zeros((n_ts, 1)), pt.cumsum(tau_off * eps_off, axis=1)], axis=1)
         walk_def = pt.concatenate([pt.zeros((n_ts, 1)), pt.cumsum(tau_def * eps_def, axis=1)], axis=1)
         off = start_off[:, None] + walk_off
@@ -204,7 +225,8 @@ def sample(model: pm.Model, draws: int = 500, tune: int = 1000, chains: int = 4,
                          target_accept=target_accept, progressbar=False)
 
 
-def hyperparameters_from(idata: az.InferenceData, data: ModelData, likelihood: str) -> Hyperparameters:
+def hyperparameters_from(idata: az.InferenceData, data: ModelData, likelihood: str,
+                         tau_phases: bool = False) -> Hyperparameters:
     post = idata.posterior
 
     def m(name: str):
@@ -212,15 +234,15 @@ def hyperparameters_from(idata: az.InferenceData, data: ModelData, likelihood: s
 
     return Hyperparameters(
         alpha=np.atleast_1d(m("alpha")), sigma_alpha=float(m("sigma_alpha")), hfa=float(m("hfa")), beta_off=m("beta_off"), beta_def=m("beta_def"),
-        gamma=m("gamma"), s_off=float(m("s_off")), s_def=float(m("s_def")), tau_off=float(m("tau_off")),
-        tau_def=float(m("tau_def")), sigma_game=float(m("sigma_game")), sigma_play=float(m("sigma_play")),
+        gamma=m("gamma"), s_off=float(m("s_off")), s_def=float(m("s_def")), tau_off=m("tau_off") if tau_phases else float(m("tau_off")),
+        tau_def=m("tau_def") if tau_phases else float(m("tau_def")), sigma_game=float(m("sigma_game")), sigma_play=float(m("sigma_play")),
         nu=float(m("nu")) if likelihood == "studentt" else float("inf"),
         off_names=list(data.off_names), def_names=list(data.def_names), likelihood=likelihood,
         units=list(data.units), projection=data.projection, drop_features=list(data.drop_features),
         **({"s_conf_off": float(m("s_conf_off")), "s_conf_def": float(m("s_conf_def")), "conference": True}
            if len(data.conf_keys) else {}),
         **({k: float(m(k)) for k in DRIVE_FIELDS[:-1]} | {"drives": True} if data.drives else {}),
-        independents_separate=data.independents_separate,
+        independents_separate=data.independents_separate, tau_phases=tau_phases,
     )
 
 

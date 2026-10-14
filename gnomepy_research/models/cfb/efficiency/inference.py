@@ -122,7 +122,7 @@ def fit_hyperparameters(inputs: Inputs, seasons: list[int], likelihood: str, dra
                         units: tuple[str, ...] = UNITS_ALL,
                         conference: bool = False, projection: bool = False,
                         drop_features: tuple[str, ...] = (), drives: bool = False,
-                        independents_separate: bool = False) -> tuple[Hyperparameters, dict]:
+                        independents_separate: bool = False, tau_phases: bool = False) -> tuple[Hyperparameters, dict]:
     if projection and inputs.projection is None:
         raise ValueError("projection=True needs Inputs.projection")
     cutoff = hyper_cutoff(inputs, max(seasons))
@@ -130,14 +130,14 @@ def fit_hyperparameters(inputs: Inputs, seasons: list[int], likelihood: str, dra
                             conference=conference, projection=inputs.projection if projection else None,
                             drop_features=drop_features, drives=inputs.visible_drives(cutoff) if drives else None,
                             independents_separate=independents_separate)
-    idata = sample(build_model(data, likelihood=likelihood, store_states=False), draws=draws, tune=tune, seed=seed)
+    idata = sample(build_model(data, likelihood=likelihood, store_states=False, tau_phases=tau_phases), draws=draws, tune=tune, seed=seed)
     hv = HYPER_VARS + (["nu"] if likelihood == "studentt" else []) + (CONF_HYPER_VARS if conference else [])
     hv += DRIVE_HYPER_VARS if drives else []
     diag = {"hyper": diagnostics(idata, hv), "states": diagnostics(idata, ["z0_off", "z0_def"]),
             "seasons": seasons, "cutoff": str(cutoff), "n_obs": int(len(data.obs_y))}
     if drives:
         diag["n_drive_obs"] = int(len(data.drv_y))
-    return hyperparameters_from(idata, data, likelihood), diag
+    return hyperparameters_from(idata, data, likelihood, tau_phases=tau_phases), diag
 
 
 def save_hyperparameters(h: Hyperparameters, diag: dict, name: str) -> Path:

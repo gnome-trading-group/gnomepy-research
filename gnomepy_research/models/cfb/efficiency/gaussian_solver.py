@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from scipy.linalg import cho_factor, cho_solve, solve_triangular
 
-from gnomepy_research.models.cfb.efficiency.data import ModelData, build_model_data
+from gnomepy_research.models.cfb.efficiency.data import ModelData, build_model_data, step_phases
 from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import Hyperparameters
 from gnomepy_research.models.cfb.efficiency.inference import CutoffPosterior, Inputs
 
@@ -48,9 +48,15 @@ def _state_map(data: ModelData, h: Hyperparameters, lay: dict[str, int], ts: np.
     B[rows, lay[z0] + ts] = s * widen[ts]
     if len(data.conf_keys):
         B[rows, lay[zc] + data.ts_conf[ts]] = s_conf
-    for r, (i, kk) in enumerate(zip(ts, k)):
-        if kk > 0:
-            B[r, lay[eps] + i * (n_k - 1): lay[eps] + i * (n_k - 1) + kk] = tau
+    if h.tau_phases:
+        steps = np.arange(n_k - 1)
+        tau_step = np.asarray(tau)[step_phases(data.periods, data.ts_keys["season"].to_numpy(), n_k)]
+        cols = lay[eps] + np.asarray(ts)[:, None] * (n_k - 1) + steps[None, :]
+        B[rows[:, None], cols] = tau_step[ts] * (steps[None, :] < np.asarray(k)[:, None])
+    else:
+        for r, (i, kk) in enumerate(zip(ts, k)):
+            if kk > 0:
+                B[r, lay[eps] + i * (n_k - 1): lay[eps] + i * (n_k - 1) + kk] = tau
     return (x @ beta)[ts], B
 
 

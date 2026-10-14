@@ -55,7 +55,7 @@ MODEL_CONFIGS["J0"] = {**MODEL_CONFIGS["G"], "j_features": True}
 MODEL_CONFIGS["J"] = {**MODEL_CONFIGS["G"], "j_features": True, "drives": True}
 MODEL_CONFIGS["K"] = {**MODEL_CONFIGS["G"], "drives": True, "independents_separate": True, "phase": True}
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
-                "independents_separate", "phase")
+                "independents_separate", "phase", "tau_phases", "exclude_terms")
 VALIDATION_SEASON = 2022
 F_CONFIG = RESULTS / "F_config.json"
 J_FEATURES = RESULTS / "J_features.json"

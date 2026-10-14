@@ -98,8 +98,8 @@ def form_terms(form_h: np.ndarray, form_a: np.ndarray, edge: np.ndarray) -> np.n
 
 def load_season_draws(season: int, directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL,
                       conference: bool = False, projection: bool = False, drop_features: tuple[str, ...] = (),
-                      drives: bool = False, independents_separate: bool = False) -> dict:
-    name = draws_name(season, units, conference, projection, drop_features, drives, independents_separate)
+                      drives: bool = False, independents_separate: bool = False, tau_phases: bool = False) -> dict:
+    name = draws_name(season, units, conference, projection, drop_features, drives, independents_separate, tau_phases)
     with np.load(directory / f"{name}.npz") as z:
         return {k: z[k] for k in z.files}
 
@@ -153,7 +153,8 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                qb: pd.DataFrame | None = None, conference: bool = False, stretch: bool = False,
                option: bool = False, physical: pd.DataFrame | None = None, projection: bool = False,
                keep_terms: list[str] | None = None, drop_features: tuple[str, ...] = (),
-               drives: bool = False, independents_separate: bool = False, phase: bool = False) -> GameDraws:
+               drives: bool = False, independents_separate: bool = False, phase: bool = False,
+               tau_phases: bool = False, exclude_terms: list[str] | None = None) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff)."""
     if form and units == UNITS_ALL:
@@ -166,7 +167,7 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
     rows, xs, tails, phases = [], [], [], []
     for season in seasons:
         draws = load_season_draws(season, directory, units, conference, projection, drop_features, drives,
-                                  independents_separate)
+                                  independents_separate, tau_phases)
         for (st, wk), gg in g[g["season"] == season].groupby(["season_type", "week"]):
             key = f"{st}_{wk}"
             if f"{key}__off" not in draws:
@@ -224,6 +225,12 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
     if phase:
         x = np.concatenate([x, np.concatenate(phases, axis=0)], axis=-1)
         terms = terms + PHASE_TERMS
+    if exclude_terms:
+        unknown = [t for t in exclude_terms if t not in terms]
+        if unknown:
+            raise ValueError(f"unknown exclude_terms {unknown}; available {terms}")
+        kept = [i for i, t in enumerate(terms) if t not in exclude_terms]
+        x, terms = x[..., kept], [terms[i] for i in kept]
     if keep_terms is not None:
         unknown = [t for t in keep_terms if t not in terms]
         if unknown:
