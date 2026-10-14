@@ -19,7 +19,14 @@ from gnomepy_research.models.cfb.efficiency.gaussian_solver import _state_map, f
 from gnomepy_research.models.cfb.features.rush_share import league_rush_share, rush_share
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import (
     FORM_TERMS,
+    MARGIN_PRIORS,
     PRIORS,
+    GameDraws,
+    MarginModel,
+    apply_recal,
+    cross_fitted_recal,
+    fit_margin,
+    fit_recal,
     form_terms,
     game_draws,
     TERMS,
@@ -659,3 +666,83 @@ def test_qb_term_swap_symmetry():
     m = OutcomeModel(gamma=np.column_stack([rng.normal(8, .5, 200), rng.normal(7, .5, 200),
                                             rng.normal(.3, .05, 200), rng.normal(-1, .5, 200), rng.normal(4, .5, 200)]))
     np.testing.assert_allclose(m.predict(x)["p_home"] + m.predict(xs)["p_home"], 1.0, atol=1e-12)
+
+
+def margin_draws(n_games: int = 400, n_draws: int = 8, seed: int = 0, season: int = 2021) -> GameDraws:
+    rng = np.random.default_rng(seed)
+    edge = rng.normal(0, 1, n_games)
+    x = np.stack([edge[:, None] + rng.normal(0, 0.1, (n_games, n_draws)), np.ones((n_games, n_draws))], axis=-1)
+    margin = np.round(10 * edge + 2 + rng.normal(0, 14, n_games))
+    games = pd.DataFrame({"game_id": np.arange(n_games) + season * 10000, "season": season, "completed": True,
+                          "home_points": 30 + margin, "away_points": 30.0})
+    games["home_win"] = (margin > 0).astype(float)
+    return GameDraws(games=games, x=x, terms=["pass_edge", "venue"])
+
+
+def test_margin_priors_cover_every_outcome_term():
+    assert set(PRIORS) <= set(MARGIN_PRIORS)
+    assert MARGIN_PRIORS["pass_edge"] == (PRIORS["pass_edge"][0] * 12.5, PRIORS["pass_edge"][1] * 12.5)
+    assert MARGIN_PRIORS["venue"] == (3.0, 3.0)
+    assert MARGIN_PRIORS["early_success_diff"] == (0.0, 6.0)
+
+
+def test_fit_margin_recovers_synthetic_slope():
+    model = fit_margin(margin_draws(), draws=300, tune=300)
+    beta = model.beta.mean(0)
+    assert abs(beta[0] - 10) < 2.5
+    assert abs(beta[1] - 2) < 2.5
+    assert 10 < model.sigma.mean() < 18
+
+
+def stub_margin(beta=(10.0, 2.0), k: int = 50) -> MarginModel:
+    rng = np.random.default_rng(0)
+    return MarginModel(beta=np.array(beta) + rng.normal(0, 0.5, (k, 2)), sigma=np.full(k, 14.0) + rng.normal(0, 0.5, k),
+                       nu=np.full(k, 8.0))
+
+
+def test_margin_predict_monotone_in_edge_and_returns_margin_mean():
+    edge = np.linspace(-2, 2, 21)
+    x = np.stack([edge[:, None].repeat(5, 1), np.zeros((21, 5))], axis=-1)
+    pred = stub_margin().predict(x, chunk=7)
+    assert list(pred.columns) == ["p_home", "p_lo", "p_hi", "margin_mean"]
+    assert np.all(np.diff(pred["p_home"]) > 0)
+    assert np.all(np.diff(pred["margin_mean"]) > 0)
+    assert np.all((pred["p_lo"] <= pred["p_home"]) & (pred["p_home"] <= pred["p_hi"]))
+
+
+def test_margin_predict_neutral_swap_symmetry():
+    rng = np.random.default_rng(1)
+    x = np.concatenate([rng.normal(0, 1, (30, 6, 1)), np.zeros((30, 6, 1))], axis=-1)
+    m = stub_margin()
+    p, q = m.predict(x)["p_home"].to_numpy(), m.predict(-x)["p_home"].to_numpy()
+    np.testing.assert_allclose(p + q, 1.0, atol=1e-12)
+
+
+def test_recal_has_no_intercept_and_keeps_symmetry():
+    rng = np.random.default_rng(2)
+    z = rng.normal(0, 1.5, 2000)
+    y = (rng.random(2000) < 1 / (1 + np.exp(-1.4 * z))).astype(float)
+    a = fit_recal(1 / (1 + np.exp(-z)), y)
+    assert 1.2 < a < 1.6
+    p = np.linspace(0.05, 0.95, 19)
+    np.testing.assert_allclose(apply_recal(p, a) + apply_recal(1 - p, a), 1.0, atol=1e-12)
+    assert apply_recal(np.array([0.5]), a)[0] == pytest.approx(0.5)
+
+
+def test_cross_fitted_recal_uses_only_last_season_out_of_sample_rows():
+    parts = [margin_draws(n_games=100, seed=s, season=s) for s in (2020, 2021, 2022)]
+    gd = GameDraws(games=pd.concat([p.games for p in parts], ignore_index=True),
+                   x=np.concatenate([p.x for p in parts]), terms=parts[0].terms)
+    seen = {}
+
+    def fitter(sub, **kw):
+        seen["fit_seasons"] = sorted(sub.games["season"].unique())
+        return stub_margin(beta=(25.0, 0.0))
+
+    a, n = cross_fitted_recal(gd, fitter=fitter)
+    assert seen["fit_seasons"] == [2020, 2021]
+    assert n == 100
+    last = gd.games["season"].to_numpy() == 2022
+    p = stub_margin(beta=(25.0, 0.0)).predict(gd.x[last])["p_home"].to_numpy()
+    assert a == pytest.approx(fit_recal(p, gd.games.loc[last, "home_win"].to_numpy()), abs=1e-4)
+    assert a < 1.0

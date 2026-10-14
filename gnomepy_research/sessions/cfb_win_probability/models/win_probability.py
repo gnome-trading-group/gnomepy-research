@@ -18,6 +18,8 @@ import numpy as np
 import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
+from scipy.optimize import minimize_scalar
+from scipy.special import stdtr
 
 from gnomepy_research.models.cfb.features.physical import zscore_by_season
 from gnomepy_research.models.cfb.features.ratings import FCS_TEAM
@@ -53,6 +55,17 @@ PRIORS: dict[str, tuple[float, float]] = {
     "trench_diff": (0.0, 0.5),
     "gap_x_edge": (0.0, 10.0),
 }
+# Margin model priors in points: a 0.1 net PPA edge is about 12 points, so edge-type log-odds priors
+# are scaled by 100/8; z-scored diffs (form, qb, option, physical) get N(0, 6); venue N(3, 3).
+MARGIN_EDGE_SCALE = 12.5
+MARGIN_EDGE_TERMS = {"off_diff", "def_diff", "bowl_net_diff", "pass_edge", "rush_edge", "bowl_edge", "pace_x_edge",
+                     "edge_abs_edge", "gap_x_edge"}
+MARGIN_PRIORS: dict[str, tuple[float, float]] = {
+    t: ((PRIORS[t][0] * MARGIN_EDGE_SCALE, PRIORS[t][1] * MARGIN_EDGE_SCALE) if t in MARGIN_EDGE_TERMS
+        else (3.0, 3.0) if t == "venue" else (0.0, 6.0))
+    for t in PRIORS
+}
+RECAL_BOUNDS = (0.5, 2.0)
 N_FIT_DRAWS = 50
 PHYSICAL_MIN_MATCH = 0.95
 
@@ -236,3 +249,83 @@ def fit(gd: GameDraws, draws: int = 1000, tune: int = 1000, seed: int = 0) -> Ou
                           progressbar=False)
     gamma = idata.posterior.to_dataset()["gamma"].stack(sample=("chain", "draw")).values.T
     return OutcomeModel(gamma=gamma)
+
+
+@dataclass
+class MarginModel:
+    beta: np.ndarray           # (K, len(terms)) posterior draws, points per unit of each term
+    sigma: np.ndarray          # (K,)
+    nu: np.ndarray             # (K,)
+
+    def predict(self, x: np.ndarray, interval: float = 0.9, n_gamma: int = 200, chunk: int = 100,
+                seed: int = 0) -> pd.DataFrame:
+        """P(home) = P(margin > 0) under StudentT(nu, x @ beta, sigma), averaged over rating and posterior
+        draws; chunked like OutcomeModel.predict."""
+        rng = np.random.default_rng(seed)
+        k = min(n_gamma, len(self.beta))
+        idx = rng.choice(len(self.beta), size=k, replace=False)
+        beta, sigma, nu = self.beta[idx], self.sigma[idx], self.nu[idx]
+        lo, hi = (1 - interval) / 2, 1 - (1 - interval) / 2
+        parts = []
+        for start in range(0, x.shape[0], chunk):
+            mu = np.einsum("gst,kt->gsk", x[start:start + chunk], beta)
+            p = stdtr(nu, mu / sigma).reshape(mu.shape[0], -1)
+            parts.append(np.column_stack([p.mean(1), np.quantile(p, lo, axis=1), np.quantile(p, hi, axis=1),
+                                          mu.reshape(mu.shape[0], -1).mean(1)]))
+        out = np.vstack(parts) if parts else np.empty((0, 4))
+        return pd.DataFrame(out, columns=["p_home", "p_lo", "p_hi", "margin_mean"])
+
+
+def fit_margin(gd: GameDraws, draws: int = 1000, tune: int = 1000, seed: int = 0) -> MarginModel:
+    """mu is linear in beta, so the mean over rating draws of x @ beta is (mean over draws of x) @ beta."""
+    keep = gd.games["completed"].fillna(False).to_numpy(bool) & gd.games["home_points"].notna().to_numpy()
+    xbar = gd.x[keep].mean(axis=1)
+    margin = (gd.games.loc[keep, "home_points"] - gd.games.loc[keep, "away_points"]).to_numpy(float)
+    terms = gd.terms
+    with pm.Model(coords={"term": terms}):
+        beta = pm.Normal("beta", mu=[MARGIN_PRIORS[t][0] for t in terms], sigma=[MARGIN_PRIORS[t][1] for t in terms],
+                         dims="term")
+        sigma = pm.HalfNormal("sigma", 20.0)
+        nu = pm.Gamma("nu", alpha=2.0, beta=0.1)
+        pm.StudentT("margin", nu=nu, mu=pt.dot(xbar, beta), sigma=sigma, observed=margin)
+        idata = pm.sample(draws=draws, tune=tune, chains=4, random_seed=seed, nuts_sampler="nutpie",
+                          progressbar=False)
+    post = idata.posterior.to_dataset().stack(sample=("chain", "draw"))
+    return MarginModel(beta=post["beta"].values.T, sigma=post["sigma"].values, nu=post["nu"].values)
+
+
+def _logit(p: np.ndarray) -> np.ndarray:
+    p = np.clip(p, 1e-6, 1 - 1e-6)
+    return np.log(p / (1 - p))
+
+
+def apply_recal(p: np.ndarray, a: float) -> np.ndarray:
+    """sigmoid(a * logit(p)); no intercept so a neutral-site swap still gives 1 - p."""
+    return 1 / (1 + np.exp(-a * _logit(np.asarray(p, float))))
+
+
+def fit_recal(p: np.ndarray, y: np.ndarray) -> float:
+    z, y = _logit(np.asarray(p, float)), np.asarray(y, float)
+
+    def loss(a: float) -> float:
+        q = np.clip(1 / (1 + np.exp(-a * z)), 1e-12, 1 - 1e-12)
+        return float(-np.mean(y * np.log(q) + (1 - y) * np.log(1 - q)))
+
+    return float(minimize_scalar(loss, bounds=RECAL_BOUNDS, method="bounded").x)
+
+
+def subset_draws(gd: GameDraws, mask: np.ndarray) -> GameDraws:
+    return GameDraws(games=gd.games.loc[mask].reset_index(drop=True), x=gd.x[mask], terms=gd.terms)
+
+
+def cross_fitted_recal(gd: GameDraws, fitter=fit_margin, **fit_kwargs) -> tuple[float, int]:
+    """Recalibration slope fitted on the last training season only, scored by a model fitted on the
+    other training seasons, so the slope sees out-of-sample predictions like the test season's."""
+    season = gd.games["season"].to_numpy()
+    last = season == season.max()
+    if last.all():
+        raise ValueError("cross-fitted recalibration needs at least two training seasons")
+    model = fitter(subset_draws(gd, ~last), **fit_kwargs)
+    rows = last & gd.games["home_win"].notna().to_numpy()
+    p = model.predict(gd.x[rows])["p_home"].to_numpy()
+    return fit_recal(p, gd.games.loc[rows, "home_win"].to_numpy()), int(rows.sum())
