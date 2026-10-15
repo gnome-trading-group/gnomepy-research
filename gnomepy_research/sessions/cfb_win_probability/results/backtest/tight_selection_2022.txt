@@ -1,0 +1,10 @@
+tight prior: train 2020-2021, score 2022; keep unless worse than the base by more than 0.002
+
+2022 log loss:
+     overall  big_favorites  toss_ups
+Np   0.56214        0.39101   0.67832
+Npt  0.56227        0.38929   0.67841
+
+decisions:
+    base    delta  kept
+Npt   Np  0.00013  True
