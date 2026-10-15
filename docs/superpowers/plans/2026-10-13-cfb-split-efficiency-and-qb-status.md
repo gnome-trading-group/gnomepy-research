@@ -1881,6 +1881,32 @@ Added 2026-10-15.
 
 ---
 
+## Known limitation: mid-season bad-team games (open issue)
+
+Recorded 2026-10-15.
+
+**What is wrong.** Np matches the open in weeks 5–9 games between decent teams (+0.001 per game, 2022–24). It trails by **+0.026 per game when a bottom-35 team is involved**, about 290 games over 2022–24, and that is essentially all of its remaining mid-season gap. The cut stretches across Group-of-5-vs-Group-of-5 games (77% of Np's total gap) and is worst in AAC conference games. The weeks 5–9 gap in 2021 was an artifact: the outcome layer was trained only on COVID-2020.
+
+**What failed**, all chosen on 2022 or tested out of sample:
+- tighter prior (Npt);
+- raw success rate;
+- turnover margin and pace;
+- results-above-efficiency as an all-season outcome term, at scale 5 and at a calibrated scale of 8;
+- QB churn;
+- G5 prior width;
+- coach-transition features.
+
+**Most likely cause.** The market has information we do not: hot-seat or fired coaches, QB health, effort, and injuries beyond the QB.
+
+**Open leads:**
+- mid-season coach firings (interim coaches are detectable in `cfb_coaches`);
+- injury and availability data, which would be a new dataset;
+- a results-above-efficiency term restricted to weeks 5–9 and bad teams, which can only be tested fairly on unseen seasons.
+
+**Operational mitigation:** do not bet weeks 5–9 games that involve a bottom-35 team (by Np rank).
+
+---
+
 ## Weekly operating procedure (after this ships)
 
 1. Before each slate, add one row per known QB change to `sessions/cfb_win_probability/data/qb_status.csv`, with `recorded_at` set to when you learned it.
