@@ -116,6 +116,21 @@ def _state(at, kickoff=KICKOFF, status="upcoming"):
 
 
 EARLY = KICKOFF - pd.Timedelta(hours=24)
+RUN_EVERY = pd.Timedelta(minutes=15)
+
+
+def _states(*changes, until=KICKOFF + pd.Timedelta(hours=6)):
+    """A matches row every pipeline run from EARLY, as cs2_upcoming writes them; changes are
+    (from_time, {"kickoff": ..., "status": ...}) applied from that run on."""
+    rows, current = [], {"kickoff": KICKOFF, "status": "upcoming"}
+    pending = sorted(changes, key=lambda c: c[0])
+    at = EARLY
+    while at <= until:
+        while pending and pending[0][0] <= at:
+            current = {**current, **pending.pop(0)[1]}
+        rows.append(_state(at, **current))
+        at += RUN_EVERY
+    return rows
 
 
 def _write(tmp_path, features, states):
@@ -246,7 +261,7 @@ class _Report:
 @pytest.fixture
 def make(tmp_path):
     def _make(features=None, states=None, spec=None, **kw):
-        f, m = _write(tmp_path, features or [_feature(EARLY)], states or [_state(EARLY)])
+        f, m = _write(tmp_path, features or [_feature(EARLY)], states or _states())
         with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry(spec or _Spec())), \
                 patch.object(mod, "load_model", lambda path: (_MapModel(), path)):
             strat = mod.CS2Series(match_id=7, listing_team_a=101, listing_team_b=102, fee_rate=0.07,
@@ -276,17 +291,33 @@ def test_nothing_outside_the_entry_window(make):
 
 
 def test_the_window_follows_the_latest_kickoff(make):
-    s = make(states=[_state(EARLY), _state(EARLY + pd.Timedelta(hours=1), kickoff=KICKOFF + pd.Timedelta(hours=3))])
+    s = make(states=_states((EARLY + pd.Timedelta(hours=1), {"kickoff": KICKOFF + pd.Timedelta(hours=3)})))
     assert _tick(s, 102, [(0.45, 1000)], hours_before=-1) != [], "past the first kickoff, 2h before the new one"
     assert _tick(s, 102, [(0.45, 1000)], hours_before=-3.1) == [], "and closed at the new kickoff"
 
 
 @pytest.mark.parametrize("status", ["live", "missing"])
 def test_no_trading_once_hltv_says_live_or_drops_the_match(make, status):
-    s = make(states=[_state(EARLY), _state(KICKOFF - pd.Timedelta(hours=2), status=status)])
+    s = make(states=_states((KICKOFF - pd.Timedelta(hours=2), {"status": status})))
     assert _tick(s, 102, [(0.45, 1000)], hours_before=3) != []
     s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
     assert _tick(s, 102, [(0.45, 1000)], hours_before=1) == []
+
+
+def test_no_trading_on_stale_match_state(make):
+    s = make(states=_states(until=KICKOFF - pd.Timedelta(hours=4)))
+    for hours_before, trades in ((4, True), (3.75, True), (3.4, False)):
+        out = _tick(s, 102, [(0.45, 1000)], hours_before=hours_before)
+        assert (out != []) == trades, f"{hours_before}h before kickoff, the pipeline stalled 4h before"
+        s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
+
+
+def test_the_feed_rereads_faster_near_kickoff(tmp_path):
+    f, m = _write(tmp_path, [_feature(EARLY)], _states())
+    feed = MatchFeed(7, _pricer([]), f, m, reload_seconds=300, near_kickoff_reload_seconds=60, near_kickoff_seconds=3600)
+    assert feed.reload_interval(K_NS - 2 * HOUR) == 300
+    assert feed.reload_interval(K_NS - HOUR // 2) == 60
+    assert feed.reload_interval(K_NS + HOUR) == 60, "and after kickoff, until HLTV shows it live"
 
 
 def test_no_trade_before_the_first_features_row(make):

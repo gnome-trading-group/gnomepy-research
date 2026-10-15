@@ -7,7 +7,9 @@ never trades on a row before it existed, and a live session sees each row from t
 pipeline wrote it. Each features row is priced once, when it is first loaded.
 
 Live, a daemon thread re-reads both tables every reload interval and swaps in a new snapshot,
-so trading callbacks never wait on S3 or the model. A reload interval of 0 loads once, for
+so trading callbacks never wait on S3 or the model. Inside the last stretch before kickoff it
+re-reads at the shorter near-kickoff interval, so HLTV marking the match live reaches the
+strategy within a minute of the pipeline writing it. A reload interval of 0 loads once, for
 replays against a fixed table.
 """
 from __future__ import annotations
@@ -87,12 +89,15 @@ def _ids(value) -> tuple[int, ...]:
 
 class MatchFeed:
     def __init__(self, match_id: int, pricer: Pricer, features_source: str = FEATURES,
-                 matches_source: str = MATCHES, reload_seconds: float = 300.0) -> None:
+                 matches_source: str = MATCHES, reload_seconds: float = 300.0,
+                 near_kickoff_reload_seconds: float = 60.0, near_kickoff_seconds: float = 3600.0) -> None:
         self._match_id = match_id
         self._pricer = pricer
         self._features_source = features_source
         self._matches_source = matches_source
         self._reload_seconds = reload_seconds
+        self._near_kickoff_reload_seconds = near_kickoff_reload_seconds
+        self._near_kickoff_ns = int(near_kickoff_seconds * 1e9)
         # Only the loading thread touches this after the first load.
         self._prices: dict[int, float] = {}
         self._snapshot = self._load()
@@ -105,9 +110,16 @@ class MatchFeed:
     def state(self, now_ns: int) -> MatchState | None:
         return self._snapshot.state(now_ns)
 
+    def reload_interval(self, now_ns: int) -> float:
+        """Seconds until the next re-read: shorter once kickoff is near (or already past)."""
+        state = self.state(now_ns)
+        if state is not None and state.kickoff_ns - now_ns <= self._near_kickoff_ns:
+            return min(self._reload_seconds, self._near_kickoff_reload_seconds)
+        return self._reload_seconds
+
     def _reload_forever(self) -> None:
         while True:
-            time.sleep(self._reload_seconds)
+            time.sleep(self.reload_interval(time.time_ns()))
             try:
                 self._snapshot = self._load()
             except Exception:

@@ -13,7 +13,9 @@ that still clears the threshold, so it only ever takes liquidity it has already 
 Positions are held to settlement.
 
 It does not trade until both lineups are announced: the model leans on player form, which is
-blank until then. Once it holds a position it stops adding if a lineup changes, because a
+blank until then. Nor does it trade on stale match state: if the newest cs2_upcoming row is
+older than max_state_age_minutes, the pipeline has stalled, and a match that has since started
+or moved would look upcoming. Once it holds a position it stops adding if a lineup changes, because a
 stand-in the model has barely seen is news it cannot price.
 
 Settings come from the six-month walk-forward backtest (spec.yaml). State that must survive a
@@ -83,7 +85,10 @@ class CS2Series(Strategy):
         adverse_move: stop adding once the price has fallen this far below our average entry -
             a big pre-kickoff move is usually news the model cannot see.
         min_order_usd: smallest order worth sending.
+        max_state_age_minutes: the oldest match state it trades on; the pipeline writes one every 15 minutes.
         reload_minutes: how often to re-read the match's rows (0 = once, for replays).
+        near_kickoff_reload_minutes, near_kickoff_hours: re-read this often inside this long before kickoff,
+            so HLTV marking the match live stops trading within a minute of the pipeline writing it.
         features_source, matches_source: DatasetStore tables, or parquet extracts of them.
     """
 
@@ -102,7 +107,10 @@ class CS2Series(Strategy):
         min_order_usd: float = 1.0,
         book_depth: int = 10,
         processing_time_ns: int = 0,
+        max_state_age_minutes: float = 30.0,
         reload_minutes: float = 5.0,
+        near_kickoff_reload_minutes: float = 1.0,
+        near_kickoff_hours: float = 1.0,
         features_source: str = FEATURES,
         matches_source: str = MATCHES,
     ):
@@ -116,6 +124,7 @@ class CS2Series(Strategy):
         self.min_order_usd = min_order_usd
         self.book_depth = book_depth
         self._processing_time_ns = processing_time_ns
+        self.max_state_age_ns = int(max_state_age_minutes * 60 * 1e9)
         self._metrics_buf = None
         self._entry_lineups = None
 
@@ -126,7 +135,8 @@ class CS2Series(Strategy):
         model, resolved = load_model(model_path)
         logger.info("match %d: pricing with %s", self.match_id, resolved)
         self._feed = MatchFeed(self.match_id, lambda rows: price(model, rows)["series"].tolist(),
-                               features_source, matches_source, reload_minutes * 60)
+                               features_source, matches_source, reload_minutes * 60,
+                               near_kickoff_reload_minutes * 60, near_kickoff_hours * 3600)
 
     @staticmethod
     def _resolve(registry, listing_id: int) -> _Leg:
@@ -180,6 +190,8 @@ class CS2Series(Strategy):
     def _evaluate(self, now_ns: int) -> list[Intent]:
         state, quote = self._feed.state(now_ns), self._feed.quote(now_ns)
         if state is None or quote is None or state.status != UPCOMING:
+            return []
+        if now_ns - state.at_ns > self.max_state_age_ns:
             return []
         if not (state.kickoff_ns - self.window_ns <= now_ns < state.kickoff_ns):
             return []
