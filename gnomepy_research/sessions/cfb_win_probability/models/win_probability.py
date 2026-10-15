@@ -35,6 +35,7 @@ OPTION_TERM = "option_diff"
 PHASE_TERMS = ["pass_edge_early", "rush_edge_early"]
 EARLY_LAST_WEEK = 4
 PHYSICAL_TERMS = ["talent_diff", "bluechip_diff", "trench_diff", "gap_x_edge"]
+FINISH_TERM = "finish_edge"
 FORM_TERMS = ["early_success_diff", "late_down_luck_diff", "finishing_luck_diff", "field_position_diff", "pace_x_edge"]
 # Ratings are in PPA/play; a 0.1 net edge is roughly a 10-point favourite.
 PRIORS: dict[str, tuple[float, float]] = {
@@ -59,6 +60,8 @@ PRIORS: dict[str, tuple[float, float]] = {
     "gap_x_edge": (0.0, 10.0),
     "pass_edge_early": (0.0, 5.0),
     "rush_edge_early": (0.0, 5.0),
+    # Finishing effects are in points per drive; one point per drive is roughly a 12-point favourite.
+    "finish_edge": (1.0, 1.0),
 }
 # Margin model priors in points: a 0.1 net PPA edge is about 12 points, so edge-type log-odds priors
 # are scaled by 100/8; z-scored diffs (form, qb, option, physical) get N(0, 6); venue N(3, 3).
@@ -67,7 +70,7 @@ MARGIN_EDGE_TERMS = {"off_diff", "def_diff", "bowl_net_diff", "pass_edge", "rush
                      "edge_abs_edge", "gap_x_edge", "pass_edge_early", "rush_edge_early"}
 MARGIN_PRIORS: dict[str, tuple[float, float]] = {
     t: ((PRIORS[t][0] * MARGIN_EDGE_SCALE, PRIORS[t][1] * MARGIN_EDGE_SCALE) if t in MARGIN_EDGE_TERMS
-        else (3.0, 3.0) if t == "venue" else (0.0, 6.0))
+        else (3.0, 3.0) if t == "venue" else (12.0, 12.0) if t == FINISH_TERM else (0.0, 6.0))
     for t in PRIORS
 }
 RECAL_BOUNDS = (0.5, 2.0)
@@ -100,9 +103,10 @@ def form_terms(form_h: np.ndarray, form_a: np.ndarray, edge: np.ndarray) -> np.n
 def load_season_draws(season: int, directory: Path = DRAWS_DIR, units: tuple[str, ...] = UNITS_ALL,
                       conference: bool = False, projection: bool = False, drop_features: tuple[str, ...] = (),
                       drives: bool = False, independents_separate: bool = False, tau_phases: bool = False,
-                      heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT) -> dict:
+                      heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT,
+                      extensions: tuple[str, ...] = ()) -> dict:
     name = draws_name(season, units, conference, projection, drop_features, drives, independents_separate, tau_phases,
-                      heavy_tails, garbage_weight)
+                      heavy_tails, garbage_weight, extensions)
     with np.load(directory / f"{name}.npz") as z:
         return {k: z[k] for k in z.files}
 
@@ -158,9 +162,11 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                keep_terms: list[str] | None = None, drop_features: tuple[str, ...] = (),
                drives: bool = False, independents_separate: bool = False, phase: bool = False,
                tau_phases: bool = False, exclude_terms: list[str] | None = None,
-               heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT) -> GameDraws:
+               heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT,
+               extensions: tuple[str, ...] = ()) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
-    cutoff posterior (built only from data before that cutoff)."""
+    cutoff posterior (built only from data before that cutoff). Draws with the "finish" extension add
+    finish_edge, the home-minus-away finishing matchup in points per drive."""
     if form and units == UNITS_ALL:
         raise ValueError("form terms are defined on the split model only")
     if (stretch or option or phase or physical is not None) and units == UNITS_ALL:
@@ -168,10 +174,11 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
     rng = np.random.default_rng(seed)
     g = games[games["season"].isin(seasons) & (games["home_classification"] == "fbs")
               & (games["away_classification"] == "fbs")].copy()
-    rows, xs, tails, phases = [], [], [], []
+    finish = "finish" in extensions
+    rows, xs, tails, phases, fins = [], [], [], [], []
     for season in seasons:
         draws = load_season_draws(season, directory, units, conference, projection, drop_features, drives,
-                                  independents_separate, tau_phases, heavy_tails, garbage_weight)
+                                  independents_separate, tau_phases, heavy_tails, garbage_weight, extensions)
         for (st, wk), gg in g[g["season"] == season].groupby(["season_type", "week"]):
             key = f"{st}_{wk}"
             if f"{key}__off" not in draws:
@@ -208,6 +215,12 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
             xs.append(np.concatenate([base, *extra], axis=-1))
             tails.append(np.concatenate(tail, axis=-1) if tail else np.empty((len(gg), len(pick), 0)))
             phases.append(early * np.stack(main, axis=-1))
+            if finish:
+                if f"{key}__fin_off" not in draws:
+                    raise ValueError(f"{key}: draws have no finishing effects; snapshot with --extensions finish")
+                cols = np.arange(len(ids)) if units == UNITS_ALL else p_cols
+                fo, fd = draws[f"{key}__fin_off"][pick][:, cols], draws[f"{key}__fin_def"][pick][:, cols]
+                fins.append(((fo[:, hi] - fd[:, ai]) - (fo[:, ai] - fd[:, hi])).T[..., None])
             rows.append(gg)
     out = pd.concat(rows, ignore_index=True)
     out["venue"] = np.where(out["neutral_site"], 0, 1)
@@ -229,6 +242,9 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
     if phase:
         x = np.concatenate([x, np.concatenate(phases, axis=0)], axis=-1)
         terms = terms + PHASE_TERMS
+    if finish:
+        x = np.concatenate([x, np.concatenate(fins, axis=0)], axis=-1)
+        terms = terms + [FINISH_TERM]
     if exclude_terms:
         unknown = [t for t in exclude_terms if t not in terms]
         if unknown:

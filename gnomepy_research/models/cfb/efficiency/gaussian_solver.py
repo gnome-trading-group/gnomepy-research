@@ -8,6 +8,8 @@ eps_off, eps_def) has a standard-normal prior and each observation is linear in 
 so the posterior is N(m, P^-1) with P = I + A' W A and m = P^-1 A' W (y - c). One Cholesky
 of a ~4.5k x 4.5k matrix replaces an MCMC run. Must agree with the PyMC fit of the same model
 (tests/sessions/test_cfb_win_probability_models.py and the validation report check it).
+
+The couple extension stays linear: ppd - sum_u kappa_u (y_u - c_u) = c_d + (A_d - sum_u kappa_u A_u) theta + e_d.
 """
 from __future__ import annotations
 
@@ -15,7 +17,8 @@ import numpy as np
 import pandas as pd
 from scipy.linalg import cho_factor, cho_solve, solve_triangular
 
-from gnomepy_research.models.cfb.efficiency.data import ModelData, build_model_data, step_phases
+from gnomepy_research.models.cfb.efficiency.data import (
+    EXT_COUPLE, EXT_FCS, EXT_FINISH, ModelData, build_model_data, step_phases)
 from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import Hyperparameters
 from gnomepy_research.models.cfb.efficiency.inference import CutoffPosterior, Inputs
 
@@ -32,6 +35,10 @@ def _layout(data: ModelData) -> dict[str, int]:
     if data.drives:
         lay["z_alpha_ppd"] = lay["size"]
         lay["size"] += len(data.seasons)
+    if EXT_FINISH in data.extensions:
+        lay["z_fin_off"] = lay["size"]
+        lay["z_fin_def"] = lay["size"] + data.n_base
+        lay["size"] += 2 * data.n_base
     return lay
 
 
@@ -80,24 +87,49 @@ def _drive_rows(data: ModelData, h: Hyperparameters, lay: dict[str, int]):
     c_off, A_off = _mixed_state_map(data, h, lay, data.drv_off, data.drv_off_w, offense=True)
     c_def, A_def = _mixed_state_map(data, h, lay, data.drv_def, data.drv_def_w, offense=False)
     A = h.lam_ppd * (A_off - A_def)
-    A[np.arange(len(data.drv_y)), lay["z_alpha_ppd"] + data.drv_season] += h.sigma_alpha_ppd
+    rows = np.arange(len(data.drv_y))
+    A[rows, lay["z_alpha_ppd"] + data.drv_season] += h.sigma_alpha_ppd
+    if EXT_FINISH in data.extensions:
+        A[rows, lay["z_fin_off"] + data.drv_base_off] += h.s_fin_off
+        A[rows, lay["z_fin_def"] + data.drv_base_def] -= h.s_fin_def
     c = h.alpha_ppd + h.lam_ppd * (c_off - c_def) + h.hfa_ppd * data.drv_venue
-    w = 1.0 / (h.s_game_ppd ** 2 + h.s_drive_ppd ** 2 / data.drv_n)
-    return A, c, w
+    var = h.s_game_ppd ** 2 + h.s_drive_ppd ** 2 / data.drv_n
+    if EXT_FCS in data.extensions:
+        var = var + h.s_fcs_ppd ** 2 * data.drv_fcs
+    return A, c, 1.0 / var
+
+
+def _couple(data: ModelData, h: Hyperparameters, A_d, y_d, A, c, y):
+    """Condition each drive row on its same-game PPA residuals (see module docstring)."""
+    A_d, y_d = A_d.copy(), y_d.astype(float).copy()
+    for u, kappa in enumerate(np.asarray(h.kappa_ppd, dtype=float)):
+        idx = data.drv_obs[:, u]
+        ok = idx >= 0
+        y_d[ok] -= kappa * (y[idx[ok]] - c[idx[ok]])
+        A_d[ok] -= kappa * A[idx[ok]]
+    return A_d, y_d
 
 
 def solve(data: ModelData, h: Hyperparameters) -> tuple[np.ndarray, tuple, dict[str, int]]:
+    if tuple(h.extensions) != tuple(data.extensions):
+        raise ValueError(f"hyperparameter extensions {h.extensions} != data extensions {data.extensions}")
     lay = _layout(data)
     c_off, A_off = _state_map(data, h, lay, data.obs_off, data.obs_period, offense=True)
     c_def, A_def = _state_map(data, h, lay, data.obs_def, data.obs_period, offense=False)
     A = A_off - A_def
     A[np.arange(len(data.obs_y)), lay["alpha"] + data.obs_alpha] = h.sigma_alpha
     c = np.asarray(h.alpha)[_group_unit(data)][data.obs_alpha] + c_off - c_def + h.hfa * data.obs_venue
-    w = 1.0 / (h.sigma_game ** 2 + h.sigma_play ** 2 / data.obs_plays)
+    var = h.sigma_game ** 2 + h.sigma_play ** 2 / data.obs_plays
+    if EXT_FCS in data.extensions:
+        var = var + h.s_fcs ** 2 * data.obs_fcs
+    w = 1.0 / var
     y = data.obs_y
     if data.drives:
         A_d, c_d, w_d = _drive_rows(data, h, lay)
-        A, c, w, y = np.vstack([A, A_d]), np.r_[c, c_d], np.r_[w, w_d], np.r_[y, data.drv_y]
+        y_d = data.drv_y
+        if EXT_COUPLE in data.extensions:
+            A_d, y_d = _couple(data, h, A_d, y_d, A, c, y)
+        A, c, w, y = np.vstack([A, A_d]), np.r_[c, c_d], np.r_[w, w_d], np.r_[y, y_d]
     P = np.eye(lay["size"]) + A.T @ (A * w[:, None])
     chol = cho_factor(P, lower=True)
     mean = cho_solve(chol, A.T @ (w * (y - c)))
@@ -114,7 +146,8 @@ def fit_cutoff_exact(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: 
                             units=tuple(hypers.units), conference=hypers.conference,
                             projection=inputs.projection_for(hypers), drop_features=tuple(hypers.drop_features),
                             drives=inputs.drives_for(hypers, cutoff),
-                            independents_separate=hypers.independents_separate)
+                            independents_separate=hypers.independents_separate,
+                            extensions=tuple(hypers.extensions))
     mean, chol, lay = solve(data, hypers)
     rng = np.random.default_rng(seed)
     # theta = mean + L^-T z, with P = L L^T, gives draws with covariance P^-1.
@@ -131,10 +164,15 @@ def fit_cutoff_exact(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: 
     n_g = len(data.alpha_keys)
     alpha = (np.asarray(hypers.alpha)[_group_unit(data)][:, None]
              + hypers.sigma_alpha * theta[lay["alpha"]:lay["alpha"] + n_g]).T
+    fin = {}
+    if EXT_FINISH in data.extensions:
+        base = ts % data.n_base
+        fin = {"fin_off": (hypers.s_fin_off * theta[lay["z_fin_off"] + base]).T,
+               "fin_def": (hypers.s_fin_def * theta[lay["z_fin_def"] + base]).T}
     return CutoffPosterior(
         season=season, cutoff=cutoff, period=period, team_ids=data.ts_keys["team_id"].to_numpy(),
         units=data.ts_keys["unit"].to_numpy(),
         off=off, de=de, alpha=alpha, hypers=hypers,
         diagnostics={"max_rhat": 1.0, "min_ess_bulk": float(n_draws), "min_ess_tail": float(n_draws),
-                     "divergences": 0, "method": "exact_gaussian"},
+                     "divergences": 0, "method": "exact_gaussian"}, **fin,
     ), data

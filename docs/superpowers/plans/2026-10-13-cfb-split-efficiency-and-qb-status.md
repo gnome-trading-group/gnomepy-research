@@ -1773,6 +1773,51 @@ Added 2026-10-14.
 
 ---
 
+## Phase 13: Model N, "Honest observation model"
+
+Added 2026-10-14.
+
+**Diagnosis.** K's gap to the open sits in the games where it disagrees strongly with the market. Those games are early-season heavy, and K's rating edges there are twice the usual size with no extra posterior uncertainty. Three measured misspecifications in the efficiency model explain this:
+
+1. **Drives double-count each game.** Within a team-game, the residuals of points per drive and PPA correlate 0.72 (pass 0.55, rush 0.36; pass vs rush −0.04). The model treats them as independent. Adding drives raised τ from about 0.008 to 0.035 per week (`conf_drop` → `conf_drv_drop`). The ratings now chase single games.
+2. **FCS games are treated as precise.** FBS-vs-FCS team-games carry about 0.11 PPA/play of extra noise beyond play sampling; FBS mismatches don't. 538 of 622 such games fall in weeks 1–3, but `sigma_game` is about 0.008.
+3. **One rating per unit blends per-play efficiency with drive scoring.** In split-half tests, half-season points-per-drive ratings beat PPA ratings on future margins (R² 0.348 vs 0.277; win log loss 0.558 vs 0.586). A single 50/50 blend loses about 0.017 R² against separate components.
+
+**Design.** Add one opt-in tuple, `extensions ⊆ {"couple", "fcs", "finish"}`, threaded like `drop_features`.
+- Naming suffix after `ht`, in canonical order `_cpl`, `_fcs`, `_fin`.
+- `couple` and `finish` require `drives=True`.
+- The default path stays byte-identical.
+
+**Model terms:**
+- **couple:** ppd[g] | PPA rows of the same (game, offense) is distributed N(mu_ppd + Σ_u κ_u (y_u − mu_u), σ_ppd). This is the exact Gaussian factorization of jointly distributed PPA and ppd noise. κ ~ N(2, 2) per unit. In the solver the drive row becomes y_d − Σκ(y_u − c_u) = c_d + (A_d − Σκ A_u)θ + e.
+- **fcs:** σ² gets + s_fcs² on PPA rows with an FCS side, and + s_fcs_ppd² on drive rows. Priors s_fcs ~ HalfNormal(0.1) and s_fcs_ppd ~ HalfNormal(1.0).
+- **finish:** a static team-season finishing effect per side, fin_off and fin_def ~ N(0, s_fin_off/def), with priors HalfNormal(0.5). It enters only the ppd mean as + fin_off[off] − fin_def[def].
+  - Snapshots store `__fin_off`/`__fin_def` aligned to the unit columns.
+  - The outcome layer adds the term `finish_edge` = (fo_h − fd_a) − (fo_a − fd_h), with prior N(1, 1) in logit per ppd.
+
+**Tasks:**
+- **Task 35:** extensions plumbing plus `fcs` (data flags, PyMC model, exact solver, hypers round trip, naming, CLI).
+- **Task 36:** `couple` (data row links, PyMC conditional, solver transform).
+- **Task 37:** `finish` (latents, posterior draws, snapshots, `game_draws` term).
+- Each task includes these tests: the default is unchanged, exact vs NUTS agreement on synthetic data, synthetic recovery (planted coupling, FCS noise, finishing), naming, and the round trip.
+
+**Task 38: selection and scoring.** The rule is fixed before any run:
+- **Ablation ladder:** N1 = K+couple, N2 = N1+fcs, N = N2+finish.
+- **Validation:** snapshots 2020–22 (hypers 2019..S−1), outcome trained on 2020–21, score 2022, average of 3 refits.
+- **Keep rule:** keep each step unless it worsens 2022 log loss by more than 0.002 against the previous kept step. These are diagnostic-driven corrections, so the threshold guards against harm, not for gain.
+- Freeze the chosen config in `results/backtest/N_selection.json` before scoring 2023–24.
+- **Scoring:** score 2023–24 once with the frozen N (ladder steps reported for information), plus the 2021–22 out-of-sample backtest.
+- **Report:**
+  - τ before and after;
+  - κ, s_fcs and s_fin;
+  - the cut table;
+  - the big-disagreement bucket table;
+  - CLV;
+  - the Error Lab rebuild.
+- No tuning on 2023–24.
+
+---
+
 ## Weekly operating procedure (after this ships)
 
 1. Before each slate, add one row per known QB change to `sessions/cfb_win_probability/data/qb_status.csv`, with `recorded_at` set to when you learned it.

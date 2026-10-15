@@ -19,6 +19,7 @@ from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, ModelData, bu
 from gnomepy_research.models.cfb.features.drives import GARBAGE_WEIGHT, team_game_drives
 from gnomepy_research.models.cfb.features.team_form import team_game_form
 from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
+    EXTENSION_FIELDS,
     Hyperparameters,
     build_model,
     diagnostics,
@@ -112,6 +113,8 @@ class CutoffPosterior:
     alpha: np.ndarray              # (S, G)
     hypers: Hyperparameters
     diagnostics: dict
+    fin_off: np.ndarray | None = None  # (S, T) finishing effects (extension "finish"), repeated per unit column
+    fin_def: np.ndarray | None = None
 
     def summary(self) -> pd.DataFrame:
         units = list(pd.unique(self.units))
@@ -141,19 +144,21 @@ def fit_hyperparameters(inputs: Inputs, seasons: list[int], likelihood: str, dra
                         drop_features: tuple[str, ...] = (), drives: bool = False,
                         independents_separate: bool = False, tau_phases: bool = False,
                         heavy_tails: bool = False,
-                        garbage_weight: float = GARBAGE_WEIGHT) -> tuple[Hyperparameters, dict]:
+                        garbage_weight: float = GARBAGE_WEIGHT,
+                        extensions: tuple[str, ...] = ()) -> tuple[Hyperparameters, dict]:
     if projection and inputs.projection is None:
         raise ValueError("projection=True needs Inputs.projection")
     cutoff = hyper_cutoff(inputs, max(seasons))
     data = build_model_data(inputs.preseason, inputs.visible(cutoff), inputs.games, seasons, units=units,
                             conference=conference, projection=inputs.projection if projection else None,
                             drop_features=drop_features, drives=inputs.visible_drives(cutoff, garbage_weight) if drives else None,
-                            independents_separate=independents_separate)
+                            independents_separate=independents_separate, extensions=extensions)
     idata = sample(build_model(data, likelihood=likelihood, store_states=False, tau_phases=tau_phases,
                                heavy_tails=heavy_tails), draws=draws, tune=tune, seed=seed)
     hv = HYPER_VARS + (["nu"] if likelihood == "studentt" else []) + (CONF_HYPER_VARS if conference else [])
     hv += DRIVE_HYPER_VARS if drives else []
     hv += ["nu_team"] if heavy_tails else []
+    hv += [v for e in data.extensions for v in EXTENSION_FIELDS[e] if v in idata.posterior]
     diag = {"hyper": diagnostics(idata, hv), "states": diagnostics(idata, ["z0_off", "z0_def"]),
             "seasons": seasons, "cutoff": str(cutoff), "n_obs": int(len(data.obs_y))}
     if drives:
@@ -180,7 +185,8 @@ def fit_cutoff(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: Hyperp
                             units=tuple(hypers.units), conference=hypers.conference,
                             projection=inputs.projection_for(hypers), drop_features=tuple(hypers.drop_features),
                             drives=inputs.drives_for(hypers, cutoff),
-                            independents_separate=hypers.independents_separate)
+                            independents_separate=hypers.independents_separate,
+                            extensions=tuple(hypers.extensions))
     idata = sample(build_model(data, hypers=hypers, likelihood=hypers.likelihood), draws=draws, tune=tune, chains=chains,
                    seed=seed)
     period = int(data.periods.loc[data.periods["cutoff"] == cutoff, "period"].iloc[0])
@@ -188,13 +194,18 @@ def fit_cutoff(inputs: Inputs, season: int, cutoff: pd.Timestamp, hypers: Hyperp
     off = post["O"].values[:, period, :].T
     de = post["D"].values[:, period, :].T
     alpha = post["alpha_season"].values.T
+    finish = "FIN_O" in post
+    base = np.arange(len(data.ts_keys)) % max(data.n_base, 1)
     return CutoffPosterior(
         season=season, cutoff=cutoff, period=period, team_ids=data.ts_keys["team_id"].to_numpy(),
         units=data.ts_keys["unit"].to_numpy(),
         off=off, de=de, alpha=alpha, hypers=hypers,
         diagnostics=diagnostics(idata, ["z0_off", "z0_def", "eps_off", "eps_def", "z_alpha"]
                                 + (["z_conf_off", "z_conf_def"] if hypers.conference else [])
-                                + (["z_alpha_ppd"] if hypers.drives else [])),
+                                + (["z_alpha_ppd"] if hypers.drives else [])
+                                + (["z_fin_off", "z_fin_def"] if finish else [])),
+        fin_off=post["FIN_O"].values[base].T if finish else None,
+        fin_def=post["FIN_D"].values[base].T if finish else None,
     ), data
 
 

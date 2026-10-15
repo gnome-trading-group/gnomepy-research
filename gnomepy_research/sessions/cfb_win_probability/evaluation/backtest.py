@@ -59,8 +59,13 @@ MODEL_CONFIGS["K"] = {**MODEL_CONFIGS["G"], "drives": True, "independents_separa
 MODEL_CONFIGS["L"] = {**MODEL_CONFIGS["K"], "tau_phases": True, "exclude_terms": ["bowl_edge"]}
 MODEL_CONFIGS["Kc"] = {**MODEL_CONFIGS["K"], "calibrator": "tail", "calibrator_base": "K"}
 MODEL_CONFIGS["M"] = {**MODEL_CONFIGS["K"], "heavy_tails": True}
+# Model N ladder (Phase 13): coupled drive noise, then FCS-game noise, then team finishing effects.
+MODEL_CONFIGS["N1"] = {**MODEL_CONFIGS["K"], "extensions": ("couple",)}
+MODEL_CONFIGS["N2"] = {**MODEL_CONFIGS["K"], "extensions": ("couple", "fcs")}
+MODEL_CONFIGS["N"] = {**MODEL_CONFIGS["K"], "extensions": ("couple", "fcs", "finish")}
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
-                "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails", "garbage_weight")
+                "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails", "garbage_weight",
+                "extensions")
 VALIDATION_SEASON = 2022
 F_CONFIG = RESULTS / "F_config.json"
 J_FEATURES = RESULTS / "J_features.json"

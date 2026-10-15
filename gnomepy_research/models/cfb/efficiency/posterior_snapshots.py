@@ -24,7 +24,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, UNITS_SPLIT, season_periods
+from gnomepy_research.models.cfb.efficiency.data import (
+    EXTENSIONS, UNITS_ALL, UNITS_SPLIT, canonical_extensions, season_periods)
 from gnomepy_research.models.cfb.efficiency.gaussian_solver import fit_cutoff_exact
 from gnomepy_research.models.cfb.efficiency.projection import project_seasons, projection_table
 from gnomepy_research.models.cfb.features.drives import GARBAGE_WEIGHT
@@ -50,6 +51,7 @@ PROJ_SUFFIX = "_proj"
 DRIVES_SUFFIX = "_drv"
 TAU_PHASES_SUFFIX = "_tph"
 HEAVY_TAILS_SUFFIX = "_ht"
+EXTENSION_SUFFIX = {"couple": "_cpl", "fcs": "_fcs", "finish": "_fin"}
 FIRST_TRAIN_SEASON = 2019
 N_DRAWS_KEPT = 400
 HEAVY_TAILS_MCMC = {"draws": 300, "tune": 300, "chains": 2}
@@ -68,21 +70,25 @@ def garbage_suffix(garbage_weight: float = GARBAGE_WEIGHT) -> str:
 
 def _suffix(units: tuple[str, ...], conference: bool = False, projection: bool = False,
             drop_features: tuple[str, ...] = (), drives: bool = False, independents_separate: bool = False,
-            tau_phases: bool = False, heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT) -> str:
-    """Order: split, conf, ind, proj, drv, gw, tph, ht, drop."""
+            tau_phases: bool = False, heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT,
+            extensions: tuple[str, ...] = ()) -> str:
+    """Order: split, conf, ind, proj, drv, gw, tph, ht, cpl, fcs, fin, drop."""
     if garbage_weight != GARBAGE_WEIGHT and not drives:
         raise ValueError("a garbage-time weight only applies with drives=True")
+    ext = "".join(EXTENSION_SUFFIX[e] for e in canonical_extensions(extensions, drives))
     return (("" if units == UNITS_ALL else SPLIT_SUFFIX) + (CONF_SUFFIX if conference else "")
             + (IND_SUFFIX if independents_separate else "") + (PROJ_SUFFIX if projection else "") + (DRIVES_SUFFIX if drives else "")
             + garbage_suffix(garbage_weight) + (TAU_PHASES_SUFFIX if tau_phases else "") + (HEAVY_TAILS_SUFFIX if heavy_tails else "")
-            + drop_suffix(drop_features))
+            + ext + drop_suffix(drop_features))
 
 
 def model_version(units: tuple[str, ...], conference: bool = False, projection: bool = False,
                   drives: bool = False, independents_separate: bool = False, tau_phases: bool = False,
-                  heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT) -> str:
+                  heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT,
+                  extensions: tuple[str, ...] = ()) -> str:
     suffix = _suffix(units, conference, projection, drives=drives, independents_separate=independents_separate,
-                     tau_phases=tau_phases, heavy_tails=heavy_tails, garbage_weight=garbage_weight)
+                     tau_phases=tau_phases, heavy_tails=heavy_tails, garbage_weight=garbage_weight,
+                     extensions=extensions)
     return f"dyn-eff{suffix.replace('_', '-')}-1"
 
 
@@ -92,18 +98,18 @@ MODEL_VERSION = model_version(UNITS_ALL)
 def hyper_name(likelihood: str, season: int, units: tuple[str, ...] = UNITS_ALL, conference: bool = False,
                projection: bool = False, drop_features: tuple[str, ...] = (), drives: bool = False,
                independents_separate: bool = False, tau_phases: bool = False, heavy_tails: bool = False,
-               garbage_weight: float = GARBAGE_WEIGHT) -> str:
+               garbage_weight: float = GARBAGE_WEIGHT, extensions: tuple[str, ...] = ()) -> str:
     suffix = _suffix(units, conference, projection, drop_features, drives, independents_separate, tau_phases,
-                     heavy_tails, garbage_weight)
+                     heavy_tails, garbage_weight, extensions)
     return f"{likelihood}{suffix}_{FIRST_TRAIN_SEASON}_{season - 1}"
 
 
 def draws_name(season: int, units: tuple[str, ...] = UNITS_ALL, conference: bool = False,
                projection: bool = False, drop_features: tuple[str, ...] = (), drives: bool = False,
                independents_separate: bool = False, tau_phases: bool = False, heavy_tails: bool = False,
-               garbage_weight: float = GARBAGE_WEIGHT) -> str:
+               garbage_weight: float = GARBAGE_WEIGHT, extensions: tuple[str, ...] = ()) -> str:
     sfx = _suffix(units, conference, projection, drop_features, drives, independents_separate, tau_phases, heavy_tails,
-                  garbage_weight)
+                  garbage_weight, extensions)
     return f"cfb_team_week_draws{sfx}_{season}"
 
 
@@ -111,15 +117,16 @@ def ensure_hyperparameters(inputs: Inputs, likelihood: str, season: int, units: 
                            conference: bool = False, projection: bool = False,
                            drop_features: tuple[str, ...] = (), drives: bool = False,
                            independents_separate: bool = False, tau_phases: bool = False,
-                           heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT) -> str:
+                           heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT,
+                           extensions: tuple[str, ...] = ()) -> str:
     name = hyper_name(likelihood, season, units, conference, projection, drop_features, drives,
-                      independents_separate, tau_phases, heavy_tails, garbage_weight)
+                      independents_separate, tau_phases, heavy_tails, garbage_weight, extensions)
     if not (HYPER_DIR / f"{name}.json").exists():
         h, diag = fit_hyperparameters(inputs, list(range(FIRST_TRAIN_SEASON, season)), likelihood, units=units,
                                       conference=conference, projection=projection, drop_features=drop_features,
                                       drives=drives, independents_separate=independents_separate,
                                       tau_phases=tau_phases, heavy_tails=heavy_tails,
-                                      garbage_weight=garbage_weight)
+                                      garbage_weight=garbage_weight, extensions=extensions)
         save_hyperparameters(h, diag, name)
         print(f"fitted {name}: {diag['hyper']}", flush=True)
     return name
@@ -137,10 +144,11 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
                     drop_features: tuple[str, ...] = (), drives: bool = False,
                     independents_separate: bool = False, tau_phases: bool = False,
                     heavy_tails: bool = False, mcmc: dict | None = None,
-                    garbage_weight: float = GARBAGE_WEIGHT) -> tuple[pd.DataFrame, Path]:
+                    garbage_weight: float = GARBAGE_WEIGHT,
+                    extensions: tuple[str, ...] = ()) -> tuple[pd.DataFrame, Path]:
     """mcmc: draws/tune/chains of each cutoff's MCMC fit under heavy_tails (default HEAVY_TAILS_MCMC)."""
     name = ensure_hyperparameters(inputs, likelihood, season, units, conference, projection, drop_features, drives,
-                                  independents_separate, tau_phases, heavy_tails, garbage_weight)
+                                  independents_separate, tau_phases, heavy_tails, garbage_weight, extensions)
     h = load_hyperparameters(name)
     rng = np.random.default_rng(seed)
     summaries, draws = [], {}
@@ -159,6 +167,9 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
         draws[f"{key}__def"] = post.de[keep].astype(np.float32)
         draws[f"{key}__alpha"] = post.alpha[keep].astype(np.float32)
         draws[f"{key}__team_ids"] = post.team_ids
+        if post.fin_off is not None:
+            draws[f"{key}__fin_off"] = post.fin_off[keep].astype(np.float32)
+            draws[f"{key}__fin_def"] = post.fin_def[keep].astype(np.float32)
         seen = e[(e["available_at"] < p.cutoff) & (e["season"] == season) & e["usable"]]
         shares = rush_share(seen, season)
         lg = league_rush_share(seen, season)
@@ -178,11 +189,11 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
                                   divergences=post.diagnostics["divergences"]))
         print(f"{season} {key}: rhat {post.diagnostics['max_rhat']:.3f} div {post.diagnostics['divergences']}", flush=True)
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{draws_name(season, units, conference, projection, drop_features, drives, independents_separate, tau_phases, heavy_tails, garbage_weight)}.npz"
+    path = out_dir / f"{draws_name(season, units, conference, projection, drop_features, drives, independents_separate, tau_phases, heavy_tails, garbage_weight, extensions)}.npz"
     np.savez_compressed(path, **draws)
     out = pd.concat(summaries, ignore_index=True).assign(
         model_version=model_version(units, conference, projection, drives, independents_separate, tau_phases, heavy_tails,
-                                    garbage_weight),
+                                    garbage_weight, extensions),
         hyperparameters=name, likelihood=likelihood,
         training_data_version=f"{PRESEASON_FEATURES},{EFFICIENCY}@{inputs.as_of.isoformat()}",
         created_at=datetime.now(timezone.utc).isoformat(),
@@ -197,7 +208,8 @@ def snapshot_seasons(inputs: Inputs, first: int, last: int, likelihood: str,
                      independents_separate: bool = False,
                      tau_phases: bool = False, heavy_tails: bool = False,
                      garbage_weight: float = GARBAGE_WEIGHT,
-                     mcmc: dict | None = None) -> tuple[pd.DataFrame, list[tuple[int, Path]]]:
+                     mcmc: dict | None = None,
+                     extensions: tuple[str, ...] = ()) -> tuple[pd.DataFrame, list[tuple[int, Path]]]:
     """The team-week table for seasons first..last, and each season's draws file under out_dir."""
     if first <= FIRST_TRAIN_SEASON:
         raise ValueError(f"first snapshot season must be after {FIRST_TRAIN_SEASON}")
@@ -208,12 +220,13 @@ def snapshot_seasons(inputs: Inputs, first: int, last: int, likelihood: str,
         df, path = snapshot_season(inputs, season, likelihood, out_dir=out_dir, units=units, conference=conference,
                                      projection=projection, drop_features=drop_features, drives=drives,
                                      independents_separate=independents_separate, tau_phases=tau_phases,
-                                     heavy_tails=heavy_tails, garbage_weight=garbage_weight, mcmc=mcmc)
+                                     heavy_tails=heavy_tails, garbage_weight=garbage_weight, mcmc=mcmc,
+                                     extensions=extensions)
         frames.append(df)
         paths.append((season, path))
     table = pd.concat(frames, ignore_index=True)
     sfx = _suffix(units, conference, projection, drop_features, drives, independents_separate, tau_phases, heavy_tails,
-                  garbage_weight)
+                  garbage_weight, extensions)
     table.to_parquet(out_dir / f"cfb_team_week_posterior{sfx}_{first}_{last}.parquet", index=False)
     return table, paths
 
@@ -240,6 +253,7 @@ def snapshot_options(argv: list[str] | None = None) -> dict:
     ap.add_argument("--mcmc-tune", type=int, default=HEAVY_TAILS_MCMC["tune"])
     ap.add_argument("--mcmc-chains", type=int, default=HEAVY_TAILS_MCMC["chains"])
     ap.add_argument("--drop-features-from", type=Path, default=None)
+    ap.add_argument("--extensions", default="", help=f"comma-separated subset of {','.join(EXTENSIONS)}")
     args = ap.parse_args(argv)
     return {"first": args.first, "last": args.last, "likelihood": args.likelihood,
             "units": UNITS_ALL if args.units == "all" else UNITS_SPLIT, "form": args.form,
@@ -247,7 +261,8 @@ def snapshot_options(argv: list[str] | None = None) -> dict:
             "independents_separate": args.independents_separate, "tau_phases": args.tau_phases,
             "heavy_tails": args.heavy_tails, "garbage_weight": args.garbage_weight,
             "mcmc": {"draws": args.mcmc_draws, "tune": args.mcmc_tune, "chains": args.mcmc_chains},
-            "drop_features": read_drop_features(args.drop_features_from) if args.drop_features_from else ()}
+            "drop_features": read_drop_features(args.drop_features_from) if args.drop_features_from else (),
+            "extensions": canonical_extensions([e for e in args.extensions.split(",") if e], args.drives)}
 
 
 def main() -> None:
@@ -261,7 +276,8 @@ def main() -> None:
                                 conference=o["conference"], projection=o["projection"],
                                 drop_features=o["drop_features"], drives=o["drives"],
                                 independents_separate=o["independents_separate"], tau_phases=o["tau_phases"],
-                                heavy_tails=o["heavy_tails"], garbage_weight=o["garbage_weight"], mcmc=o["mcmc"])
+                                heavy_tails=o["heavy_tails"], garbage_weight=o["garbage_weight"], mcmc=o["mcmc"],
+                                extensions=o["extensions"])
     print(f"{len(table):,} team-week rows")
 
 

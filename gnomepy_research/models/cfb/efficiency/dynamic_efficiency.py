@@ -13,6 +13,12 @@ Optional drive channel (drives=True), a second observation of the same states:
                     sqrt(s_game_ppd^2 + s_drive_ppd^2 / n_eff))
 with Ocomb/Dcomb the pass-share-weighted mean of a team's unit states (= O/D with units ("all",)).
 
+Optional observation-model extensions (data.EXTENSIONS):
+    couple: ppd[g] | PPA rows of the same (game, offense) adds sum_u kappa_ppd[u] * (y_u - mu_u) to its mean,
+            the Gaussian conditional when ppd's game noise loads on that game's PPA noise
+    fcs:    sigma^2 += s_fcs^2 on PPA rows with an FCS side (s_fcs_ppd^2 on drive rows)
+    finish: ppd mean += FIN_O[off team-season] - FIN_D[def team-season], FIN ~ Normal(0, s_fin_off / s_fin_def)
+
 Identifiability: features are centred within season, there is no intercept in the state priors,
 and alpha[season] carries the league baseline. A season seen for the first time in a cutoff fit
 gets alpha as its prior mean, so its baseline is learned from its own games.
@@ -31,13 +37,15 @@ import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
 
-from gnomepy_research.models.cfb.efficiency.data import TAU_PHASES, ModelData, step_phases
+from gnomepy_research.models.cfb.efficiency.data import (
+    EXT_COUPLE, EXT_FCS, EXT_FINISH, TAU_PHASES, ModelData, step_phases)
 from gnomepy_research.models.cfb.features.drives import GARBAGE_WEIGHT
 
 LIKELIHOODS = ("studentt", "normal")
 CONFERENCE_FIELDS = ("s_conf_off", "s_conf_def", "conference")
 TAU_PHASE_PRIORS = (0.03, 0.03, 0.03, 0.06)
 DRIVE_FIELDS = ("alpha_ppd", "sigma_alpha_ppd", "lam_ppd", "hfa_ppd", "s_game_ppd", "s_drive_ppd", "drives")
+EXTENSION_FIELDS = {EXT_COUPLE: ("kappa_ppd",), EXT_FCS: ("s_fcs", "s_fcs_ppd"), EXT_FINISH: ("s_fin_off", "s_fin_def")}
 
 
 @dataclass
@@ -76,9 +84,21 @@ class Hyperparameters:
     heavy_tails: bool = False
     nu_team: float = float("inf")
     garbage_weight: float = GARBAGE_WEIGHT
+    extensions: list[str] = field(default_factory=list)
+    kappa_ppd: list[float] = field(default_factory=list)
+    s_fcs: float = 0.0
+    s_fcs_ppd: float = 0.0
+    s_fin_off: float = 0.0
+    s_fin_def: float = 0.0
 
     def to_dict(self) -> dict:
         d = asdict(self)
+        if not self.extensions:
+            d.pop("extensions")
+        for ext, keys in EXTENSION_FIELDS.items():
+            if ext not in self.extensions:
+                for k in keys:
+                    d.pop(k)
         if not self.conference:
             for k in CONFERENCE_FIELDS:
                 d.pop(k)
@@ -113,6 +133,8 @@ class Hyperparameters:
         if d.get("tau_phases"):
             d["tau_off"] = np.asarray(d["tau_off"], dtype=float)
             d["tau_def"] = np.asarray(d["tau_def"], dtype=float)
+        if "kappa_ppd" in d:
+            d["kappa_ppd"] = [float(v) for v in d["kappa_ppd"]]
         return cls(**d)
 
 
@@ -124,15 +146,20 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
     the start states a StudentT(nu_team) prior so genuine outliers are shrunk less."""
     if likelihood not in LIKELIHOODS:
         raise ValueError(likelihood)
+    if hypers is not None and tuple(hypers.extensions) != tuple(data.extensions):
+        raise ValueError(f"hyperparameter extensions {hypers.extensions} != data extensions {data.extensions}")
     n_ts, n_k = len(data.ts_keys), data.n_periods
     has_conf = len(data.conf_keys) > 0
+    ext = set(data.extensions)
     coords = {"ts": np.arange(n_ts), "period": np.arange(n_k), "step": np.arange(n_k - 1), "alpha_group": np.arange(len(data.alpha_keys)), "unit": list(data.units),
-              
+
               "f_off": data.off_names, "f_def": data.def_names, "unc": np.arange(data.z_unc.shape[1])}
     if has_conf:
         coords["conf"] = np.arange(len(data.conf_keys))
     if data.drives:
         coords["season"] = list(data.seasons)
+    if EXT_FINISH in ext:
+        coords["base"] = np.arange(data.n_base)
     if hypers is not None:
         tau_phases = hypers.tau_phases
         heavy_tails = hypers.heavy_tails
@@ -168,6 +195,14 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
                 hfa_ppd = pm.Normal("hfa_ppd", 0.2, 0.2)
                 s_game_ppd = pm.HalfNormal("s_game_ppd", 1.0)
                 s_drive_ppd = pm.HalfNormal("s_drive_ppd", 3.0)
+            if EXT_COUPLE in ext:
+                kappa_ppd = pm.Normal("kappa_ppd", 2.0, 2.0, dims="unit")
+            if EXT_FCS in ext:
+                s_fcs = pm.HalfNormal("s_fcs", 0.1)
+                s_fcs_ppd = pm.HalfNormal("s_fcs_ppd", 1.0) if data.drives else 0.0
+            if EXT_FINISH in ext:
+                s_fin_off = pm.HalfNormal("s_fin_off", 0.5)
+                s_fin_def = pm.HalfNormal("s_fin_def", 0.5)
         else:
             h = hypers
             alpha, sigma_alpha, hfa = pt.as_tensor_variable(np.asarray(h.alpha, dtype=float)), h.sigma_alpha, h.hfa
@@ -180,6 +215,8 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
             s_conf_off, s_conf_def = h.s_conf_off, h.s_conf_def
             alpha_ppd, sigma_alpha_ppd, lam_ppd = h.alpha_ppd, h.sigma_alpha_ppd, h.lam_ppd
             hfa_ppd, s_game_ppd, s_drive_ppd = h.hfa_ppd, h.s_game_ppd, h.s_drive_ppd
+            kappa_ppd = pt.as_tensor_variable(np.asarray(h.kappa_ppd, dtype=float))
+            s_fcs, s_fcs_ppd, s_fin_off, s_fin_def = h.s_fcs, h.s_fcs_ppd, h.s_fin_off, h.s_fin_def
 
         group_unit = data.alpha_keys["unit"].map({u: i for i, u in enumerate(data.units)}).to_numpy(int)
         z_alpha = pm.Normal("z_alpha", 0.0, 1.0, dims="alpha_group")
@@ -217,7 +254,10 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
 
         mu = (alpha_season[data.obs_alpha] + off[data.obs_off, data.obs_period] - de[data.obs_def, data.obs_period]
               + hfa * data.obs_venue)
-        sigma = pt.sqrt(sigma_game ** 2 + sigma_play ** 2 / data.obs_plays)
+        var = sigma_game ** 2 + sigma_play ** 2 / data.obs_plays
+        if EXT_FCS in ext:
+            var = var + s_fcs ** 2 * data.obs_fcs
+        sigma = pt.sqrt(var)
         if likelihood == "studentt":
             pm.StudentT("y", nu=nu, mu=mu, sigma=sigma, observed=data.obs_y)
         else:
@@ -229,8 +269,21 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
             o_comb = (off[data.drv_off, k] * data.drv_off_w).sum(axis=1)
             d_comb = (de[data.drv_def, k] * data.drv_def_w).sum(axis=1)
             mu_ppd = alpha_ppd_season[data.drv_season] + lam_ppd * (o_comb - d_comb) + hfa_ppd * data.drv_venue
-            sigma_ppd = pt.sqrt(s_game_ppd ** 2 + s_drive_ppd ** 2 / data.drv_n)
-            pm.Normal("ppd", mu=mu_ppd, sigma=sigma_ppd, observed=data.drv_y)
+            if EXT_FINISH in ext:
+                fin_o = s_fin_off * pm.Normal("z_fin_off", 0.0, 1.0, dims="base")
+                fin_d = s_fin_def * pm.Normal("z_fin_def", 0.0, 1.0, dims="base")
+                if store_states:
+                    fin_o = pm.Deterministic("FIN_O", fin_o, dims="base")
+                    fin_d = pm.Deterministic("FIN_D", fin_d, dims="base")
+                mu_ppd = mu_ppd + fin_o[data.drv_base_off] - fin_d[data.drv_base_def]
+            if EXT_COUPLE in ext:
+                resid = pt.concatenate([data.obs_y - mu, pt.zeros(1)])
+                link = np.where(data.drv_obs < 0, len(data.obs_y), data.drv_obs)
+                mu_ppd = mu_ppd + (resid[link] * kappa_ppd[None, :]).sum(axis=1)
+            var_ppd = s_game_ppd ** 2 + s_drive_ppd ** 2 / data.drv_n
+            if EXT_FCS in ext:
+                var_ppd = var_ppd + s_fcs_ppd ** 2 * data.drv_fcs
+            pm.Normal("ppd", mu=mu_ppd, sigma=pt.sqrt(var_ppd), observed=data.drv_y)
     return model
 
 
@@ -262,7 +315,21 @@ def hyperparameters_from(idata: az.InferenceData, data: ModelData, likelihood: s
         independents_separate=data.independents_separate, tau_phases=tau_phases,
         **({"heavy_tails": True, "nu_team": float(m("nu_team"))} if heavy_tails else {}),
         garbage_weight=garbage_weight,
+        **_extension_values(m, data),
     )
+
+
+def _extension_values(m, data: ModelData) -> dict:
+    ext = list(data.extensions)
+    out = {"extensions": ext} if ext else {}
+    if EXT_COUPLE in ext:
+        out["kappa_ppd"] = [float(v) for v in np.atleast_1d(m("kappa_ppd"))]
+    if EXT_FCS in ext:
+        out["s_fcs"] = float(m("s_fcs"))
+        out["s_fcs_ppd"] = float(m("s_fcs_ppd")) if data.drives else 0.0
+    if EXT_FINISH in ext:
+        out["s_fin_off"], out["s_fin_def"] = float(m("s_fin_off")), float(m("s_fin_def"))
+    return out
 
 
 def diagnostics(idata: az.InferenceData, var_names: list[str]) -> dict:

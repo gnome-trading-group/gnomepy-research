@@ -38,6 +38,22 @@ UNITS_ALL = ("all",)
 UNITS_SPLIT = ("pass", "rush")
 UNIT_COLUMNS = {"all": ("plays", "off_ppa"), "pass": ("pass_plays", "off_pass_ppa"),
                 "rush": ("rush_plays", "off_rush_ppa")}
+# Observation-model extensions, in canonical order. couple: a drive observation is conditioned on the PPA
+# residuals of the same (game, offense), whose noise it shares. fcs: extra noise on rows with an FCS side.
+# finish: a static team-season scoring effect beyond per-play efficiency, seen only by drives.
+EXT_COUPLE, EXT_FCS, EXT_FINISH = "couple", "fcs", "finish"
+EXTENSIONS = (EXT_COUPLE, EXT_FCS, EXT_FINISH)
+DRIVE_EXTENSIONS = (EXT_COUPLE, EXT_FINISH)
+
+
+def canonical_extensions(extensions, drives: bool) -> tuple[str, ...]:
+    ext = set(extensions)
+    unknown = ext - set(EXTENSIONS)
+    if unknown:
+        raise ValueError(f"unknown extensions {sorted(unknown)}; available {EXTENSIONS}")
+    if ext & set(DRIVE_EXTENSIONS) and not drives:
+        raise ValueError(f"extensions {sorted(ext & set(DRIVE_EXTENSIONS))} need drives=True")
+    return tuple(e for e in EXTENSIONS if e in ext)
 
 
 def _empty_conf_keys() -> pd.DataFrame:
@@ -83,6 +99,13 @@ class ModelData:
     drv_y: np.ndarray = field(default_factory=lambda: np.zeros(0))  # points per drive
     drv_season: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=int))  # index into `seasons`
     drv_game: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=int))
+    extensions: tuple[str, ...] = ()
+    n_base: int = 0                # team-seasons per unit block; ts row i belongs to team-season i % n_base
+    obs_fcs: np.ndarray = field(default_factory=lambda: np.zeros(0))  # (N,) 1 where a side is the pooled FCS row
+    drv_fcs: np.ndarray = field(default_factory=lambda: np.zeros(0))  # (M,)
+    drv_obs: np.ndarray = field(default_factory=lambda: np.zeros((0, 1), dtype=int))  # (M, U) PPA row per unit, -1 none
+    drv_base_off: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=int))  # (M,) offense team-season
+    drv_base_def: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=int))
 
 
 def season_periods(games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
@@ -224,13 +247,16 @@ def _drive_observations(drives: pd.DataFrame, e: pd.DataFrame, periods: pd.DataF
 def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: pd.DataFrame,
                      seasons: list[int], units: tuple[str, ...] = UNITS_ALL, conference: bool = False,
                      projection: pd.DataFrame | None = None, drop_features: tuple[str, ...] = (),
-                     drives: pd.DataFrame | None = None, independents_separate: bool = False) -> ModelData:
+                     drives: pd.DataFrame | None = None, independents_separate: bool = False,
+                     extensions: tuple[str, ...] = ()) -> ModelData:
     """`efficiency` (and `drives`, features.drives.team_game_drives rows) must already be point-in-time
     filtered (as_of the fit's cutoff). `projection` (projection.project output) adds each unit's
     projected rating to that unit's block only, plus the low_continuity uncertainty flag. With split
-    units a drive observes the pass/rush states mixed by the team's pass share in `efficiency`."""
+    units a drive observes the pass/rush states mixed by the team's pass share in `efficiency`.
+    `extensions` (EXTENSIONS) adds the index arrays the observation-model extensions need."""
     if independents_separate and not conference:
         raise ValueError("independents_separate needs conference=True")
+    extensions = canonical_extensions(extensions, drives is not None)
     if projection is not None and tuple(units) == UNITS_ALL:
         raise ValueError("the preseason projection is per pass/rush unit; use split units")
     pre = preseason[preseason["season"].isin(seasons)].sort_values(["season", "team_id"]).reset_index(drop=True)
@@ -324,6 +350,8 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
         }))
     obs = pd.concat(parts, ignore_index=True)
     drv = {} if drives is None else _drive_observations(drives, e, periods, seasons, tuple(units), idx)
+    if extensions:
+        drv.update(_extension_arrays(obs, drv, ts_keys, len(base_keys), n_u))
 
     return ModelData(
         ts_keys=ts_keys,
@@ -336,5 +364,23 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
         units=tuple(units), alpha_keys=alpha_keys, obs_alpha=obs["alpha"].to_numpy(int), obs_unit=obs["unit"].to_numpy(int),
         conf_keys=conf_keys, ts_conf=ts_conf, projection=projection is not None,
         drop_features=tuple(sorted(drop_features)),
-        independents_separate=independents_separate, **drv,
+        independents_separate=independents_separate, extensions=extensions, **drv,
     )
+
+
+def _extension_arrays(obs: pd.DataFrame, drv: dict, ts_keys: pd.DataFrame, n_base: int, n_u: int) -> dict:
+    """FCS flags per row, each drive row's PPA row per unit (same game and offense), and the drive rows'
+    team-seasons. ts rows are unit-major, so unit 0's ts index is the team-season index."""
+    is_fcs = (ts_keys["team_id"] == FCS_TEAM).to_numpy()
+    out = {"n_base": n_base, "obs_fcs": (is_fcs[obs["off"]] | is_fcs[obs["def"]]).astype(float)}
+    if not drv:
+        return out
+    row = {}
+    for i, (g, o) in enumerate(zip(obs["game"], obs["off"])):
+        row.setdefault((g, o), i)
+    off, de = drv["drv_off"], drv["drv_def"]
+    out["drv_obs"] = np.array([[row.get((g, off[m, u]), -1) for u in range(n_u)]
+                               for m, g in enumerate(drv["drv_game"])], dtype=int).reshape(len(off), n_u)
+    out["drv_fcs"] = (is_fcs[off[:, 0]] | is_fcs[de[:, 0]]).astype(float)
+    out["drv_base_off"], out["drv_base_def"] = off[:, 0].astype(int), de[:, 0].astype(int)
+    return out
