@@ -86,21 +86,23 @@ def resolve_config(model: str, features_path: Path = J_FEATURES) -> dict:
     return {**cfg, "keep_terms": list(feats["keep_terms"]), "drop_features": tuple(feats["drop_features"])}
 
 
-def load_calibrator(cfg: dict, seasons: list[int], results: Path = RESULTS,
-                    n_boot: int = CALIBRATOR_BOOT) -> tuple[TailCalibrator | None, dict | None]:
-    """Fit the tail calibrator on the base model's out-of-sample 2021-22 predictions; never on test seasons."""
+def load_calibrator(cfg: dict, seasons: list[int], results: Path = RESULTS, n_boot: int = CALIBRATOR_BOOT,
+                    cal_seasons: list[int] = CALIBRATOR_SEASONS) -> tuple[TailCalibrator | None, dict | None]:
+    """Fit the tail calibrator on the base model's out-of-sample predictions for cal_seasons (default 2021-22);
+    never on test seasons."""
     if cfg.get("calibrator") != "tail":
         return None, None
-    if any(s <= max(CALIBRATOR_SEASONS) for s in seasons):
-        raise SystemExit(f"the calibrator is fitted on {CALIBRATOR_SEASONS}; score only later seasons")
-    name = f"predictions_{'_'.join(map(str, CALIBRATOR_SEASONS))}_{cfg['calibrator_base']}.parquet"
+    cal_seasons = sorted(cal_seasons)
+    if any(s <= max(cal_seasons) for s in seasons):
+        raise SystemExit(f"the calibrator is fitted on {cal_seasons}; score only later seasons")
+    name = f"predictions_{'_'.join(map(str, cal_seasons))}_{cfg['calibrator_base']}.parquet"
     path = Path(results) / name
     if not path.exists():
-        raise SystemExit(f"{path} is missing; run backtest {' '.join(map(str, CALIBRATOR_SEASONS))} "
+        raise SystemExit(f"{path} is missing; run backtest {' '.join(map(str, cal_seasons))} "
                          f"--model {cfg['calibrator_base']} first")
     df = pd.read_parquet(path).dropna(subset=["home_win", "p_home"])
-    if sorted(df["season"].unique()) != CALIBRATOR_SEASONS:
-        raise SystemExit(f"{name} holds seasons {sorted(df['season'].unique())}, expected {CALIBRATOR_SEASONS}")
+    if sorted(df["season"].unique()) != cal_seasons:
+        raise SystemExit(f"{name} holds seasons {sorted(df['season'].unique())}, expected {cal_seasons}")
     p, y, post = df["p_home"].to_numpy(), df["home_win"].to_numpy(), (df["season_type"] == "postseason").to_numpy()
     cal = fit_tail_calibrator(p, y, post)
     return cal, {"source": name, "n": len(df), "n_post": int(post.sum()), "ci": bootstrap_ci(p, y, post, n=n_boot)}
@@ -119,6 +121,13 @@ def calibrator_report(cal: TailCalibrator, info: dict) -> str:
     return (f"tail calibrator logit(p') = a z + b z|z| + c post z, fitted on {info['source']} "
             f"({info['n']} games, {info['n_post']} postseason); 95% game-bootstrap CI:\n" + "\n".join(rows)
             + "\n(refit log losses above are before calibration)")
+
+
+def expected_starters(qb: pd.DataFrame, games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
+    """QB deltas zeroed for games in `seasons`: the starter is assumed to be the one the ratings reflect."""
+    scored = qb["game_id"].isin(games.loc[games["season"].isin(seasons), "game_id"])
+    return qb.assign(home_qb_delta=qb["home_qb_delta"].where(~scored, 0.0),
+                     away_qb_delta=qb["away_qb_delta"].where(~scored, 0.0))
 
 
 def phase(df: pd.DataFrame) -> pd.Series:
@@ -347,13 +356,18 @@ def main() -> None:
     ap.add_argument("--model", choices=sorted(MODEL_CONFIGS), default="A")
     ap.add_argument("--holdout", action="store_true")
     ap.add_argument("--validate", action="store_true")
+    ap.add_argument("--calibrator-seasons", type=int, nargs="+", default=CALIBRATOR_SEASONS,
+                    help="seasons whose out-of-sample predictions fit the tail calibrator (Kc)")
+    ap.add_argument("--qb-expected", action="store_true",
+                    help="score as if each team's expected starter plays (QB deltas zeroed in the scored seasons); "
+                         "writes *_qbexp outputs")
     args = ap.parse_args()
     if HOLDOUT in args.seasons and not args.holdout:
         raise SystemExit(f"{HOLDOUT} is the holdout season; pass --holdout to score it")
     if args.validate and (args.model != "F" or args.seasons != [VALIDATION_SEASON]):
         raise SystemExit(f"--validate is only for model F on {VALIDATION_SEASON}")
     cfg = resolve_config(args.model)
-    cal, cal_info = load_calibrator(cfg, args.seasons)
+    cal, cal_info = load_calibrator(cfg, args.seasons, cal_seasons=args.calibrator_seasons)
     f_config = None
     if cfg["learner"] == "residual" and not args.validate:
         if not F_CONFIG.exists():
@@ -384,6 +398,8 @@ def main() -> None:
     if cfg["qb"]:
         starters = apply_overrides(historical_starters(src_full), load_qb_status(QB_STATUS_CSV, src_full))
         qb = qb_deltas(src_full, games[games["season"].between(FIRST_OUTCOME_SEASON, max(args.seasons))], starters)
+        if args.qb_expected:
+            qb = expected_starters(qb, games, args.seasons)
     frames, metas = [], []
     for s in args.seasons:
         df, meta = run_season(s, games, pregame, lines, units=cfg["units"], form=cfg["form"],
@@ -396,7 +412,7 @@ def main() -> None:
     if cal is not None:
         out = apply_calibrator(out, cal)
     RESULTS.mkdir(parents=True, exist_ok=True)
-    tag = "_".join(map(str, args.seasons)) + f"_{args.model}"
+    tag = "_".join(map(str, args.seasons)) + f"_{args.model}" + ("_qbexp" if args.qb_expected else "")
     out.to_parquet(RESULTS / f"predictions_{tag}.parquet", index=False)
     text = report(out, metas)
     if cfg["qb"]:

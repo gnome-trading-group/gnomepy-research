@@ -84,3 +84,22 @@ def test_naming_configs_and_frozen_ladder():
     assert MODEL_CONFIGS["Np"] == {**MODEL_CONFIGS["N"], "extensions": ("couple", "fcs", "finish", "prior")}
     assert n_selection.LADDER == ("couple", "fcs", "finish")
     assert n_selection.ladder_step(("couple", "fcs"), "finish") == ("couple", "fcs", "finish")
+
+
+def test_expected_starters_zeroes_only_scored_seasons():
+    from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import expected_starters
+    games = pd.DataFrame({"game_id": [1, 2, 3], "season": [2024, 2025, 2025]})
+    qb = pd.DataFrame({"game_id": [1, 2, 3], "home_qb_delta": [0.1, 0.2, -0.3], "away_qb_delta": [-0.1, 0.0, 0.4]})
+    out = expected_starters(qb, games, [2025])
+    assert out["home_qb_delta"].tolist() == [0.1, 0.0, 0.0] and out["away_qb_delta"].tolist() == [-0.1, 0.0, 0.0]
+    assert qb["home_qb_delta"].tolist() == [0.1, 0.2, -0.3]
+
+
+def test_calibrator_seasons_guard(tmp_path):
+    import pytest
+    from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import load_calibrator
+    cfg = {"calibrator": "tail", "calibrator_base": "K"}
+    with pytest.raises(SystemExit, match="2023, 2024"):
+        load_calibrator(cfg, [2024], results=tmp_path, cal_seasons=[2023, 2024])
+    with pytest.raises(SystemExit, match="missing"):
+        load_calibrator(cfg, [2025], results=tmp_path, cal_seasons=[2024, 2023])
