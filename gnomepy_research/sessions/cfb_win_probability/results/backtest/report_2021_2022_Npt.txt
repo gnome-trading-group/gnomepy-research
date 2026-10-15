@@ -1,0 +1,103 @@
+overall:
+                                            n  log_loss   brier     ece  accuracy  calib_slope  calib_intercept
+p_bayes                                1546.0    0.5629  0.1906  0.0415    0.7212       0.8434           0.0609
+p_logistic                             1546.0    0.5752  0.1953  0.0476    0.7025       0.8000           0.0732
+p_elo                                  1546.0    0.5775  0.1975  0.0289    0.6889       0.9385           0.0579
+p_home_field                           1546.0    0.6801  0.2435  0.0110    0.5809       1.5089          -0.0886
+p_market_close (closing, post-cutoff)  1546.0    0.5429  0.1837  0.0222    0.7141       0.9217           0.0069
+
+log loss by season:
+                2021    2022
+p_bayes       0.5633  0.5626
+p_logistic    0.5782  0.5724
+p_elo         0.5605  0.5944
+p_home_field  0.6806  0.6796
+
+log loss by phase:
+                post   wk1-2   wk10+   wk3-5   wk6-9
+p_bayes       0.6757  0.4963  0.5597  0.5503  0.5868
+p_logistic    0.6933  0.5218  0.5780  0.5612  0.5856
+p_elo         0.6222  0.5669  0.5617  0.5782  0.5932
+p_home_field  0.6931  0.6709  0.6889  0.6628  0.6851
+
+paired log-loss differences (negative = Bayes better; game bootstrap):
+                        diff      se    lo95    hi95  p_a_worse
+bayes - logistic     -0.0123  0.0072 -0.0266  0.0015     0.0435
+bayes - elo          -0.0146  0.0084 -0.0313  0.0021     0.0410
+bayes - home_field   -0.1172  0.0130 -0.1416 -0.0906     0.0000
+bayes - market_close  0.0200  0.0070  0.0063  0.0336     0.9990
+
+refit noise (Bayes log loss across refits): 2021: [0.5633, 0.5626, 0.5627] (sd 0.0003); 2022: [0.5626, 0.562, 0.5623] (sd 0.0002)
+
+log loss by market-favourite band:
+            (0.499, 0.6]  (0.6, 0.7]  (0.7, 0.8]  (0.8, 0.9]  (0.9, 1.0]
+p_bayes           0.6924      0.6891      0.6064      0.4547      0.2399
+p_logistic        0.7271      0.6946      0.6075      0.4548      0.2692
+p_elo             0.7482      0.6850      0.6119      0.4591      0.2524
+n               320.0000    316.0000    392.0000    321.0000    197.0000
+
+Bayes reliability:
+           n  mean_p  observed
+0.0-0.1   55   0.058     0.091
+0.1-0.2   96   0.154     0.219
+0.2-0.3  114   0.248     0.281
+0.3-0.4  156   0.351     0.359
+0.4-0.5  185   0.451     0.416
+0.5-0.6  208   0.550     0.601
+0.6-0.7  189   0.652     0.720
+0.7-0.8  183   0.749     0.689
+0.8-0.9  181   0.848     0.818
+0.9-1.0  179   0.949     0.922
+
+90% interval on P(home): median width 0.489; widest phase {'post': 0.5, 'wk1-2': 0.488, 'wk10+': 0.497, 'wk3-5': 0.477, 'wk6-9': 0.486}
+
+outcome coefficients (log-odds; posterior mean, 90% interval; first refit):
+2021:
+                       mean    lo5    hi95
+pass_edge             3.696 -1.311   8.517
+rush_edge             9.581  3.688  15.511
+venue                 0.291  0.098   0.487
+bowl_edge             0.306 -5.781   7.006
+early_success_diff    0.227  0.037   0.422
+late_down_luck_diff   0.257  0.086   0.433
+finishing_luck_diff  -0.011 -0.193   0.174
+field_position_diff   0.187  0.018   0.358
+pace_x_edge          -0.034 -2.980   2.781
+qb_delta_diff         2.898 -0.296   6.121
+edge_abs_edge        10.935 -8.435  34.203
+option_diff           0.095 -0.368   0.560
+pass_edge_early       0.789 -5.326   7.285
+rush_edge_early       1.833 -5.747   9.656
+finish_edge           1.281 -0.380   2.897
+2022:
+                      mean    lo5    hi95
+pass_edge            4.557  0.405   8.318
+rush_edge            7.299  3.043  11.563
+venue                0.318  0.196   0.440
+bowl_edge           -2.730 -7.202   2.469
+early_success_diff   0.108 -0.004   0.219
+late_down_luck_diff  0.091 -0.009   0.189
+finishing_luck_diff  0.073 -0.049   0.199
+field_position_diff  0.123  0.022   0.224
+pace_x_edge          0.645 -1.299   2.627
+qb_delta_diff        2.092  0.217   3.964
+edge_abs_edge        9.507 -5.736  28.554
+option_diff          0.077 -0.286   0.452
+pass_edge_early      3.650 -0.544   8.186
+rush_edge_early      0.937 -5.083   7.277
+finish_edge          1.131 -0.453   2.709
+
+Starters are the actual first passer of each game (ex-post); this is an upper bound on what pregame QB news can deliver.
+
+qb_delta_diff distribution (test games):
+0.00   -0.4726
+0.01   -0.2083
+0.05   -0.1150
+0.25   -0.0233
+0.50    0.0000
+0.75    0.0211
+0.95    0.1143
+0.99    0.2031
+1.00    0.4634
+
+predictions_2021_2022_C.parquet missing; D - C subset comparison skipped
