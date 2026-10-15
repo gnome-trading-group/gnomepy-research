@@ -1,0 +1,154 @@
+Np: ensuring snapshots
+NUTS[nutpie]: [gamma]
+NUTS[nutpie]: [gamma]
+NUTS[nutpie]: [gamma]
+Np: {"overall": 0.5621407048927235, "big_favorites": 0.39100698413382967, "toss_ups": 0.6783224509045226, "overall_by_seed": [0.5621271001792423, 0.5617215276005553, 0.5625734868983729], "n": 776, "hypers": {"tau_off": 0.01711123671849207, "tau_def": 0.02076548766336045, "s_off": 0.07007686800993342, "s_def": 0.04451760402109599, "sigma_game": 0.011787354506980624, "lam_ppd": 5.774890225651824, "s_game_ppd": 0.04231669378046086, "s_drive_ppd": 2.203719402152366, "kappa_ppd": [1.5673917296935351, 1.7803162166607256], "s_fcs": 0.038262562697140505, "s_fcs_ppd": 0.32970439005467783, "s_fin_off": 0.034679336143789465, "s_fin_def": 0.04590215795620363}}
+Np+results: ensuring snapshots
+NUTS[nutpie]: [gamma]
+NUTS[nutpie]: [gamma]
+NUTS[nutpie]: [gamma]
+Np+results: {"overall": 0.5653361234099541, "big_favorites": 0.3991613899890762, "toss_ups": 0.6884199291514701, "overall_by_seed": [0.5656385216417645, 0.5654221901695923, 0.5649476584185055], "n": 776, "hypers": {"tau_off": 0.01711123671849207, "tau_def": 0.02076548766336045, "s_off": 0.07007686800993342, "s_def": 0.04451760402109599, "sigma_game": 0.011787354506980624, "lam_ppd": 5.774890225651824, "s_game_ppd": 0.04231669378046086, "s_drive_ppd": 2.203719402152366, "kappa_ppd": [1.5673917296935351, 1.7803162166607256], "s_fcs": 0.038262562697140505, "s_fcs_ppd": 0.32970439005467783, "s_fin_off": 0.034679336143789465, "s_fin_def": 0.04590215795620363}}
+Np+qb_change: ensuring snapshots
+NUTS[nutpie]: [gamma]
+NUTS[nutpie]: [gamma]
+NUTS[nutpie]: [gamma]
+Np+qb_change: {"overall": 0.5625955612111121, "big_favorites": 0.3906473268002458, "toss_ups": 0.6824055338445341, "overall_by_seed": [0.563186106834704, 0.5623683448891704, 0.5622322319094618], "n": 776, "hypers": {"tau_off": 0.01711123671849207, "tau_def": 0.02076548766336045, "s_off": 0.07007686800993342, "s_def": 0.04451760402109599, "sigma_game": 0.011787354506980624, "lam_ppd": 5.774890225651824, "s_game_ppd": 0.04231669378046086, "s_drive_ppd": 2.203719402152366, "kappa_ppd": [1.5673917296935351, 1.7803162166607256], "s_fcs": 0.038262562697140505, "s_fcs_ppd": 0.32970439005467783, "s_fin_off": 0.034679336143789465, "s_fin_def": 0.04590215795620363}}
+Np+qb_change+g5: ensuring snapshots
+NUTS[nutpie]: [alpha, sigma_alpha, hfa, beta_off, beta_def, gamma, s_off, s_def, tau_off, tau_def, sigma_game, sigma_play, s_conf_off, s_conf_def, alpha_ppd, sigma_alpha_ppd, lam_ppd, hfa_ppd, s_game_ppd, s_drive_ppd, kappa_ppd, s_fcs, s_fcs_ppd, s_fin_off, s_fin_def, z_alpha, z0_off, z0_def, eps_off, eps_def, z_conf_off, z_conf_def, z_alpha_ppd, z_fin_off, z_fin_def]
+fitted normal_split_conf_ind_drv_cpl_fcs_fin_pfx_g5w_2019_2019: {'max_rhat': 1.0208593851138394, 'worst_rhat_param': 'alpha_ppd', 'min_ess_bulk': 266.2059681849614, 'worst_ess_param': 'tau_off', 'min_ess_tail': 277.4173428623536, 'divergences': 31}
+2020 regular_1: rhat 1.000 div 0
+2020 regular_2: rhat 1.000 div 0
+2020 regular_3: rhat 1.000 div 0
+2020 regular_4: rhat 1.000 div 0
+2020 regular_5: rhat 1.000 div 0
+2020 regular_6: rhat 1.000 div 0
+2020 regular_7: rhat 1.000 div 0
+2020 regular_8: rhat 1.000 div 0
+2020 regular_9: rhat 1.000 div 0
+2020 regular_10: rhat 1.000 div 0
+2020 regular_11: rhat 1.000 div 0
+2020 regular_12: rhat 1.000 div 0
+2020 regular_13: rhat 1.000 div 0
+2020 regular_14: rhat 1.000 div 0
+2020 regular_15: rhat 1.000 div 0
+2020 regular_16: rhat 1.000 div 0
+2020 postseason_1: rhat 1.000 div 0
+NUTS[nutpie]: [alpha, sigma_alpha, hfa, beta_off, beta_def, gamma, s_off, s_def, tau_off, tau_def, sigma_game, sigma_play, s_conf_off, s_conf_def, alpha_ppd, sigma_alpha_ppd, lam_ppd, hfa_ppd, s_game_ppd, s_drive_ppd, kappa_ppd, s_fcs, s_fcs_ppd, s_fin_off, s_fin_def, z_alpha, z0_off, z0_def, eps_off, eps_def, z_conf_off, z_conf_def, z_alpha_ppd, z_fin_off, z_fin_def]
+fitted normal_split_conf_ind_drv_cpl_fcs_fin_pfx_g5w_2019_2020: {'max_rhat': 1.0117023073752085, 'worst_rhat_param': 'tau_off', 'min_ess_bulk': 354.6872132378346, 'worst_ess_param': 'tau_off', 'min_ess_tail': 450.1467416258435, 'divergences': 2}
+2021 regular_1: rhat 1.000 div 0
+2021 regular_2: rhat 1.000 div 0
+2021 regular_3: rhat 1.000 div 0
+2021 regular_4: rhat 1.000 div 0
+2021 regular_5: rhat 1.000 div 0
+2021 regular_6: rhat 1.000 div 0
+2021 regular_7: rhat 1.000 div 0
+2021 regular_8: rhat 1.000 div 0
+2021 regular_9: rhat 1.000 div 0
+2021 regular_10: rhat 1.000 div 0
+2021 regular_11: rhat 1.000 div 0
+2021 regular_12: rhat 1.000 div 0
+2021 regular_13: rhat 1.000 div 0
+2021 regular_14: rhat 1.000 div 0
+2021 regular_15: rhat 1.000 div 0
+2021 postseason_1: rhat 1.000 div 0
+NUTS[nutpie]: [alpha, sigma_alpha, hfa, beta_off, beta_def, gamma, s_off, s_def, tau_off, tau_def, sigma_game, sigma_play, s_conf_off, s_conf_def, alpha_ppd, sigma_alpha_ppd, lam_ppd, hfa_ppd, s_game_ppd, s_drive_ppd, kappa_ppd, s_fcs, s_fcs_ppd, s_fin_off, s_fin_def, z_alpha, z0_off, z0_def, eps_off, eps_def, z_conf_off, z_conf_def, z_alpha_ppd, z_fin_off, z_fin_def]
+fitted normal_split_conf_ind_drv_cpl_fcs_fin_pfx_g5w_2019_2021: {'max_rhat': 1.013532441715133, 'worst_rhat_param': 'tau_off', 'min_ess_bulk': 464.0754473893937, 'worst_ess_param': 'tau_off', 'min_ess_tail': 583.6100435970965, 'divergences': 7}
+2022 regular_1: rhat 1.000 div 0
+2022 regular_2: rhat 1.000 div 0
+2022 regular_3: rhat 1.000 div 0
+2022 regular_4: rhat 1.000 div 0
+2022 regular_5: rhat 1.000 div 0
+2022 regular_6: rhat 1.000 div 0
+2022 regular_7: rhat 1.000 div 0
+2022 regular_8: rhat 1.000 div 0
+2022 regular_9: rhat 1.000 div 0
+2022 regular_10: rhat 1.000 div 0
+2022 regular_11: rhat 1.000 div 0
+2022 regular_12: rhat 1.000 div 0
+2022 regular_13: rhat 1.000 div 0
+2022 regular_14: rhat 1.000 div 0
+2022 regular_15: rhat 1.000 div 0
+2022 postseason_1: rhat 1.000 div 0
+NUTS[nutpie]: [gamma]
+NUTS[nutpie]: [gamma]
+NUTS[nutpie]: [gamma]
+Np+qb_change+g5: {"overall": 0.5627470522437316, "big_favorites": 0.39134231379755785, "toss_ups": 0.6818494503917555, "overall_by_seed": [0.5625628991587707, 0.5625510340843398, 0.563127223488084], "n": 776, "hypers": {"tau_off": 0.017545105790363367, "tau_def": 0.020609009819173612, "s_off": 0.06748064676600649, "s_def": 0.043495988528408115, "sigma_game": 0.011936125344690138, "lam_ppd": 5.781050132032159, "s_game_ppd": 0.042422889223972075, "s_drive_ppd": 2.2035990433864234, "kappa_ppd": [1.5668672732272928, 1.7793355247738172], "s_fcs": 0.0378038424926017, "s_fcs_ppd": 0.32783110854094255, "s_fin_off": 0.03409408363361187, "s_fin_def": 0.04454076452941893}}
+Np+qb_change+g5+coach: ensuring snapshots
+NUTS[nutpie]: [alpha, sigma_alpha, hfa, beta_off, beta_def, gamma, s_off, s_def, tau_off, tau_def, sigma_game, sigma_play, s_conf_off, s_conf_def, alpha_ppd, sigma_alpha_ppd, lam_ppd, hfa_ppd, s_game_ppd, s_drive_ppd, kappa_ppd, s_fcs, s_fcs_ppd, s_fin_off, s_fin_def, z_alpha, z0_off, z0_def, eps_off, eps_def, z_conf_off, z_conf_def, z_alpha_ppd, z_fin_off, z_fin_def]
+fitted normal_split_conf_ind_drv_cpl_fcs_fin_pfx_g5w_cch_2019_2019: {'max_rhat': 1.01065169104947, 'worst_rhat_param': 'tau_off', 'min_ess_bulk': 291.1383999336108, 'worst_ess_param': 'alpha_ppd', 'min_ess_tail': 323.39314316664684, 'divergences': 15}
+2020 regular_1: rhat 1.000 div 0
+2020 regular_2: rhat 1.000 div 0
+2020 regular_3: rhat 1.000 div 0
+2020 regular_4: rhat 1.000 div 0
+2020 regular_5: rhat 1.000 div 0
+2020 regular_6: rhat 1.000 div 0
+2020 regular_7: rhat 1.000 div 0
+2020 regular_8: rhat 1.000 div 0
+2020 regular_9: rhat 1.000 div 0
+2020 regular_10: rhat 1.000 div 0
+2020 regular_11: rhat 1.000 div 0
+2020 regular_12: rhat 1.000 div 0
+2020 regular_13: rhat 1.000 div 0
+2020 regular_14: rhat 1.000 div 0
+2020 regular_15: rhat 1.000 div 0
+2020 regular_16: rhat 1.000 div 0
+2020 postseason_1: rhat 1.000 div 0
+NUTS[nutpie]: [alpha, sigma_alpha, hfa, beta_off, beta_def, gamma, s_off, s_def, tau_off, tau_def, sigma_game, sigma_play, s_conf_off, s_conf_def, alpha_ppd, sigma_alpha_ppd, lam_ppd, hfa_ppd, s_game_ppd, s_drive_ppd, kappa_ppd, s_fcs, s_fcs_ppd, s_fin_off, s_fin_def, z_alpha, z0_off, z0_def, eps_off, eps_def, z_conf_off, z_conf_def, z_alpha_ppd, z_fin_off, z_fin_def]
+fitted normal_split_conf_ind_drv_cpl_fcs_fin_pfx_g5w_cch_2019_2020: {'max_rhat': 1.0120588987813866, 'worst_rhat_param': 'tau_off', 'min_ess_bulk': 358.2464858198028, 'worst_ess_param': 'tau_def', 'min_ess_tail': 384.55817018289025, 'divergences': 11}
+2021 regular_1: rhat 1.000 div 0
+2021 regular_2: rhat 1.000 div 0
+2021 regular_3: rhat 1.000 div 0
+2021 regular_4: rhat 1.000 div 0
+2021 regular_5: rhat 1.000 div 0
+2021 regular_6: rhat 1.000 div 0
+2021 regular_7: rhat 1.000 div 0
+2021 regular_8: rhat 1.000 div 0
+2021 regular_9: rhat 1.000 div 0
+2021 regular_10: rhat 1.000 div 0
+2021 regular_11: rhat 1.000 div 0
+2021 regular_12: rhat 1.000 div 0
+2021 regular_13: rhat 1.000 div 0
+2021 regular_14: rhat 1.000 div 0
+2021 regular_15: rhat 1.000 div 0
+2021 postseason_1: rhat 1.000 div 0
+NUTS[nutpie]: [alpha, sigma_alpha, hfa, beta_off, beta_def, gamma, s_off, s_def, tau_off, tau_def, sigma_game, sigma_play, s_conf_off, s_conf_def, alpha_ppd, sigma_alpha_ppd, lam_ppd, hfa_ppd, s_game_ppd, s_drive_ppd, kappa_ppd, s_fcs, s_fcs_ppd, s_fin_off, s_fin_def, z_alpha, z0_off, z0_def, eps_off, eps_def, z_conf_off, z_conf_def, z_alpha_ppd, z_fin_off, z_fin_def]
+fitted normal_split_conf_ind_drv_cpl_fcs_fin_pfx_g5w_cch_2019_2021: {'max_rhat': 1.0178089457377644, 'worst_rhat_param': 'tau_off', 'min_ess_bulk': 292.7957063743285, 'worst_ess_param': 'tau_off', 'min_ess_tail': 327.3353596359793, 'divergences': 1}
+2022 regular_1: rhat 1.000 div 0
+2022 regular_2: rhat 1.000 div 0
+2022 regular_3: rhat 1.000 div 0
+2022 regular_4: rhat 1.000 div 0
+2022 regular_5: rhat 1.000 div 0
+2022 regular_6: rhat 1.000 div 0
+2022 regular_7: rhat 1.000 div 0
+2022 regular_8: rhat 1.000 div 0
+2022 regular_9: rhat 1.000 div 0
+2022 regular_10: rhat 1.000 div 0
+2022 regular_11: rhat 1.000 div 0
+2022 regular_12: rhat 1.000 div 0
+2022 regular_13: rhat 1.000 div 0
+2022 regular_14: rhat 1.000 div 0
+2022 regular_15: rhat 1.000 div 0
+2022 postseason_1: rhat 1.000 div 0
+NUTS[nutpie]: [gamma]
+NUTS[nutpie]: [gamma]
+NUTS[nutpie]: [gamma]
+Np+qb_change+g5+coach: {"overall": 0.5648554657040494, "big_favorites": 0.39136014556332926, "toss_ups": 0.685775227812281, "overall_by_seed": [0.5650941198613776, 0.564872315819733, 0.5645999614310377], "n": 776, "hypers": {"tau_off": 0.017124755388392348, "tau_def": 0.02044503391769566, "s_off": 0.06833194645118285, "s_def": 0.04405499252283163, "sigma_game": 0.011779788184269847, "lam_ppd": 5.775330432988404, "s_game_ppd": 0.0431129433783004, "s_drive_ppd": 2.204258074356172, "kappa_ppd": [1.5675422454955246, 1.779108197898293], "s_fcs": 0.03732418326976157, "s_fcs_ppd": 0.3282117428866733, "s_fin_off": 0.03418027754407769, "s_fin_def": 0.04324132815162059}}
+model O ladder on Np: train 2020-2021, score 2022; keep a step unless it worsens log loss by more than 0.002 vs the last kept config
+
+2022 log loss:
+                       overall  big_favorites  toss_ups
+Np                     0.56214        0.39101   0.67832
+Np+results             0.56534        0.39916   0.68842
+Np+qb_change           0.56260        0.39065   0.68241
+Np+qb_change+g5        0.56275        0.39134   0.68185
+Np+qb_change+g5+coach  0.56486        0.39136   0.68578
+
+ladder:
+            candidate  log_loss  vs_kept  kept
+           Np+results   0.56534  0.00320 False
+         Np+qb_change   0.56260  0.00045  True
+      Np+qb_change+g5   0.56275  0.00015  True
+Np+qb_change+g5+coach   0.56486  0.00211 False
+
+chosen: Np+qb_change+g5
+EXIT 0

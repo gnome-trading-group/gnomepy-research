@@ -38,9 +38,12 @@ PHYSICAL_TERMS = ["talent_diff", "bluechip_diff", "trench_diff", "gap_x_edge"]
 FINISH_TERM = "finish_edge"
 RESULTS_TERM = "results_diff"
 QB_CHANGE_TERM = "qb_change_diff"
-# Fixed map from a past game's pregame net rating edge to the win probability the efficiency ratings implied
-# (about the fitted pass/rush coefficients), so results_diff never depends on the outcome layer it feeds.
-RESULT_SCALE = 5.0
+# Fixed map from a past game's pregame net rating edge to the win probability the efficiency ratings implied, so
+# results_diff never depends on the outcome layer it feeds. Calibrated by logistic fit of outcomes on pregame
+# posterior-mean net edge over the 2020-21 training seasons (scale 7.96, hfa 0.28). A smaller scale (5.0, the first
+# version) under-predicts favourites, so strong teams accumulate "wins above expectation" and the term mostly
+# re-measures strength (corr with net edge +0.27 to +0.36); that version worsened 2022 by 0.0032.
+RESULT_SCALE = 8.0
 RESULT_HFA = 0.3
 FORM_TERMS = ["early_success_diff", "late_down_luck_diff", "finishing_luck_diff", "field_position_diff", "pace_x_edge"]
 # Ratings are in PPA/play; a 0.1 net edge is roughly a 10-point favourite.

@@ -1,0 +1,18 @@
+model O ladder on Np: train 2020-2021, score 2022; keep a step unless it worsens log loss by more than 0.002 vs the last kept config
+
+2022 log loss:
+                       overall  big_favorites  toss_ups
+Np                     0.56214        0.39101   0.67832
+Np+results             0.56599        0.40016   0.68847
+Np+qb_change           0.56260        0.39065   0.68241
+Np+qb_change+g5        0.56275        0.39134   0.68185
+Np+qb_change+g5+coach  0.56486        0.39136   0.68578
+
+ladder:
+            candidate  log_loss  vs_kept  kept
+           Np+results   0.56599  0.00385 False
+         Np+qb_change   0.56260  0.00045  True
+      Np+qb_change+g5   0.56275  0.00015  True
+Np+qb_change+g5+coach   0.56486  0.00211 False
+
+chosen: Np+qb_change+g5
