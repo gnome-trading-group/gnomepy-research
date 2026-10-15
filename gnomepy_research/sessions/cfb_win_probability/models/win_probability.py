@@ -23,7 +23,7 @@ from scipy.special import stdtr
 
 from gnomepy_research.models.cfb.features.physical import zscore_by_season
 from gnomepy_research.models.cfb.features.ratings import FCS_TEAM
-from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL
+from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, season_periods
 from gnomepy_research.models.cfb.efficiency.posterior_snapshots import DRAWS_DIR, draws_name
 from gnomepy_research.models.cfb.features.drives import GARBAGE_WEIGHT
 
@@ -36,6 +36,12 @@ PHASE_TERMS = ["pass_edge_early", "rush_edge_early"]
 EARLY_LAST_WEEK = 4
 PHYSICAL_TERMS = ["talent_diff", "bluechip_diff", "trench_diff", "gap_x_edge"]
 FINISH_TERM = "finish_edge"
+RESULTS_TERM = "results_diff"
+QB_CHANGE_TERM = "qb_change_diff"
+# Fixed map from a past game's pregame net rating edge to the win probability the efficiency ratings implied
+# (about the fitted pass/rush coefficients), so results_diff never depends on the outcome layer it feeds.
+RESULT_SCALE = 5.0
+RESULT_HFA = 0.3
 FORM_TERMS = ["early_success_diff", "late_down_luck_diff", "finishing_luck_diff", "field_position_diff", "pace_x_edge"]
 # Ratings are in PPA/play; a 0.1 net edge is roughly a 10-point favourite.
 PRIORS: dict[str, tuple[float, float]] = {
@@ -62,6 +68,10 @@ PRIORS: dict[str, tuple[float, float]] = {
     "rush_edge_early": (0.0, 5.0),
     # Finishing effects are in points per drive; one point per drive is roughly a 12-point favourite.
     "finish_edge": (1.0, 1.0),
+    # Season-to-date wins above what the efficiency ratings expected, home minus away (in wins).
+    "results_diff": (0.0, 0.3),
+    # Starter differs from the team's previous game, home minus away.
+    "qb_change_diff": (0.0, 0.5),
 }
 # Margin model priors in points: a 0.1 net PPA edge is about 12 points, so edge-type log-odds priors
 # are scaled by 100/8; z-scored diffs (form, qb, option, physical) get N(0, 6); venue N(3, 3).
@@ -163,10 +173,13 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                drives: bool = False, independents_separate: bool = False, phase: bool = False,
                tau_phases: bool = False, exclude_terms: list[str] | None = None,
                heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT,
-               extensions: tuple[str, ...] = ()) -> GameDraws:
+               extensions: tuple[str, ...] = (), results: bool = False,
+               qb_change: pd.DataFrame | None = None) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff). Draws with the "finish" extension add
-    finish_edge, the home-minus-away finishing matchup in points per drive."""
+    finish_edge, the home-minus-away finishing matchup in points per drive. results adds results_diff: each
+    team's wins this season above what its efficiency ratings expected at each earlier game (RESULT_SCALE map
+    of that game's own pregame posterior-mean edge). qb_change (qb_status.qb_changes) adds qb_change_diff."""
     if form and units == UNITS_ALL:
         raise ValueError("form terms are defined on the split model only")
     if (stretch or option or phase or physical is not None) and units == UNITS_ALL:
@@ -175,7 +188,8 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
     g = games[games["season"].isin(seasons) & (games["home_classification"] == "fbs")
               & (games["away_classification"] == "fbs")].copy()
     finish = "finish" in extensions
-    rows, xs, tails, phases, fins = [], [], [], [], []
+    rows, xs, tails, phases, fins, surprises, game_periods = [], [], [], [], [], [], []
+    period_of = season_periods(games, seasons).set_index(["season", "season_type", "week"])["period"] if results else None
     for season in seasons:
         draws = load_season_draws(season, directory, units, conference, projection, drop_features, drives,
                                   independents_separate, tau_phases, heavy_tails, garbage_weight, extensions)
@@ -221,6 +235,20 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                 cols = np.arange(len(ids)) if units == UNITS_ALL else p_cols
                 fo, fd = draws[f"{key}__fin_off"][pick][:, cols], draws[f"{key}__fin_def"][pick][:, cols]
                 fins.append(((fo[:, hi] - fd[:, ai]) - (fo[:, ai] - fd[:, hi])).T[..., None])
+            if results:
+                per = int(period_of.loc[(season, st, wk)])
+                if units == UNITS_ALL:
+                    net = ((off[:, hi] - off[:, ai]) + (de[:, hi] - de[:, ai])).mean(0)
+                else:
+                    pas, rus = edge_terms(off[:, p_cols], de[:, p_cols], off[:, r_cols], de[:, r_cols], share_all[p_cols], hi, ai)
+                    net = (pas + rus).mean(1)
+                p_exp = 1 / (1 + np.exp(-(RESULT_SCALE * net + RESULT_HFA * venue[:, 0])))
+                done = gg["completed"].fillna(False).to_numpy(bool) & gg["home_points"].notna().to_numpy() \
+                    & gg["away_points"].notna().to_numpy()
+                won = (gg["home_points"] > gg["away_points"]).to_numpy(float)
+                surprises.append(pd.DataFrame({"season": season, "period": per, "home_id": gg["home_id"].to_numpy(),
+                                               "away_id": gg["away_id"].to_numpy(), "s": won - p_exp})[done])
+                game_periods.append(np.full(len(gg), per))
             rows.append(gg)
     out = pd.concat(rows, ignore_index=True)
     out["venue"] = np.where(out["neutral_site"], 0, 1)
@@ -245,6 +273,15 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
     if finish:
         x = np.concatenate([x, np.concatenate(fins, axis=0)], axis=-1)
         terms = terms + [FINISH_TERM]
+    if results:
+        rd = results_diffs(out, np.concatenate(game_periods), pd.concat(surprises, ignore_index=True))
+        x = np.concatenate([x, np.broadcast_to(rd[:, None, None], (*x.shape[:2], 1))], axis=-1)
+        terms = terms + [RESULTS_TERM]
+    if qb_change is not None:
+        q = out[["game_id"]].merge(qb_change, on="game_id", how="left").fillna(0.0)
+        qc = (q["home_qb_change"] - q["away_qb_change"]).to_numpy()[:, None, None]
+        x = np.concatenate([x, np.broadcast_to(qc, (*x.shape[:2], 1))], axis=-1)
+        terms = terms + [QB_CHANGE_TERM]
     if exclude_terms:
         unknown = [t for t in exclude_terms if t not in terms]
         if unknown:
@@ -258,6 +295,23 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
         x = x[..., [terms.index(t) for t in keep_terms]]
         terms = list(keep_terms)
     return GameDraws(games=out, x=x, terms=terms)
+
+
+def results_diffs(out: pd.DataFrame, periods: np.ndarray, surprises: pd.DataFrame) -> np.ndarray:
+    """Home minus away of each team's summed (won - expected) over its completed games in earlier periods of the
+    same season."""
+    long = pd.concat([surprises[["season", "period", "home_id", "s"]].rename(columns={"home_id": "team"}),
+                      surprises[["season", "period", "away_id"]].rename(columns={"away_id": "team"}).assign(s=-surprises["s"])])
+    by_team = {k: (v["period"].to_numpy(), v["s"].to_numpy()) for k, v in long.groupby(["season", "team"])}
+
+    def before(season, team, period):
+        if (season, team) not in by_team:
+            return 0.0
+        p, v = by_team[(season, team)]
+        return float(v[p < period].sum())
+
+    return np.array([before(s, h, p) - before(s, a, p)
+                     for s, h, a, p in zip(out["season"], out["home_id"], out["away_id"], periods)])
 
 
 @dataclass

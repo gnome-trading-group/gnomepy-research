@@ -1859,6 +1859,28 @@ Added 2026-10-15.
 
 ---
 
+## Phase 16: Lower-half-of-FBS ladder (model O)
+
+Added 2026-10-15.
+
+**Diagnosis.** Over 2022–24, with 2021 excluded as a training-window artifact, Np's gap to the open sits in the lower half of FBS:
+- G5-vs-G5 games carry 77% of it, and games with a bottom-35 team carry 67%.
+- When both teams are top-40, Np beats the open.
+- AAC conference games are the worst cut in every season, at +0.039 per game.
+- In bad-team games, season-to-date wins above efficiency expectation correlate +0.40 with the market's disagreement and +0.14 with Np's residual. QB churn is higher in those games, and G5 coaching transitions recur.
+
+**Ladder on Np.** Keep a step unless 2022 log loss worsens by more than 0.002 against the last kept config:
+1. **results:** outcome term `results_diff`, the season-to-date (won − expected) where expected = sigmoid(5·pregame posterior-mean net edge + 0.3·venue) at each earlier game. The mapping is fixed so the term does not depend on the outcome layer.
+2. **qb_change:** outcome term `qb_change_diff`, the starter versus the team's previous game.
+3. **g5:** an extension adding a G5 uncertainty flag that widens the prior through a learned gamma.
+4. **coach:** an extension adding a second-year-coach feature and flag, plus a new-coach × portal-arrivals feature.
+
+**Selection and scoring.**
+- The chosen config is frozen in `O_selection.json` as model "O".
+- Then 2023–24 is scored once, plus 2021–22, followed by the Error Lab update and the holdout.
+
+---
+
 ## Weekly operating procedure (after this ships)
 
 1. Before each slate, add one row per known QB change to `sessions/cfb_win_probability/data/qb_status.csv`, with `recorded_at` set to when you learned it.

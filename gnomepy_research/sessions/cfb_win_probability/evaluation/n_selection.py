@@ -62,9 +62,9 @@ def ensure_snapshots(inputs: Inputs, cfg: dict) -> None:
             snapshot_season(inputs, season, LIKELIHOOD, **kw)
 
 
-def score(games: pd.DataFrame, qb: pd.DataFrame, cfg: dict, p_open: pd.Series) -> dict:
+def score(games: pd.DataFrame, qb: pd.DataFrame, cfg: dict, p_open: pd.Series, extra: dict | None = None) -> dict:
     flags = {k: cfg[k] for k in OUTCOME_FLAGS if k in cfg}
-    kw = dict(units=cfg["units"], form=cfg["form"], qb=qb, **flags)
+    kw = dict(units=cfg["units"], form=cfg["form"], qb=qb, **flags, **(extra or {}))
     test = game_draws(games, [VALIDATION_SEASON], **kw)
     rows = test.games["home_win"].notna().to_numpy()
     y = test.games.loc[rows, "home_win"].to_numpy()

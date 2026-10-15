@@ -51,7 +51,13 @@ EXT_PRIOR = "prior"
 # 2021-22: s_off/s_def x TIGHT_PRIOR_SCALE). Applied to fixed hyperparameters only; hyper fits are shared.
 EXT_TIGHT = "tight"
 TIGHT_PRIOR_SCALE = 0.75
-EXTENSIONS = (EXT_COUPLE, EXT_FCS, EXT_FINISH, EXT_PRIOR, EXT_TIGHT)
+# g5: an uncertainty flag widening the preseason prior of Group-of-5 teams (learned gamma), so their ratings move
+# faster when the season contradicts the preseason view. coach: a second-year-coach indicator (prior feature and
+# uncertainty flag) and a new-coach x transfer-arrivals interaction (prior feature).
+EXT_G5, EXT_COACH = "g5", "coach"
+P4_CONFERENCES = {"SEC", "Big Ten", "Big 12", "ACC", "Pac-12"}
+P4_INDEPENDENTS = {"Notre Dame"}
+EXTENSIONS = (EXT_COUPLE, EXT_FCS, EXT_FINISH, EXT_PRIOR, EXT_G5, EXT_COACH, EXT_TIGHT)
 FIT_TIME_ONLY = (EXT_TIGHT,)
 DRIVE_EXTENSIONS = (EXT_COUPLE, EXT_FINISH)
 TRANSITION_SEASONS = 3
@@ -193,6 +199,22 @@ def prior_fixes(pre: pd.DataFrame, games: pd.DataFrame) -> pd.DataFrame:
     return pre
 
 
+def group_of_five(pre: pd.DataFrame, games: pd.DataFrame, seasons: list[int]) -> np.ndarray:
+    """1.0 for team-seasons outside the Power 4 conferences (Pac-12 counted while it existed) and Notre Dame."""
+    conf = pre[["season", "team_id"]].merge(team_conferences(games, seasons), on=["season", "team_id"], how="left")["conference"]
+    names = pd.concat([games[["home_id", "home_team"]].set_axis(["team_id", "team"], axis=1),
+                       games[["away_id", "away_team"]].set_axis(["team_id", "team"], axis=1)]).drop_duplicates("team_id")
+    p4_ind = set(names.loc[names["team"].isin(P4_INDEPENDENTS), "team_id"])
+    return (~conf.isin(P4_CONFERENCES).to_numpy() & ~pre["team_id"].isin(p4_ind).to_numpy()).astype(float)
+
+
+def coach_features(pre: pd.DataFrame) -> pd.DataFrame:
+    pre = pre.copy()
+    pre["coach_year2"] = (pre["coach_tenure"].astype(float) == 1).astype(float)
+    pre["coach_new_x_portal"] = pre["coach_new"].astype(float) * pre["portal_in_stars"].astype(float)
+    return pre
+
+
 def team_conferences(games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
     """Each team-season's most frequent conference over that season's games (ties: alphabetical)."""
     g = games[games["season"].isin(seasons)]
@@ -300,6 +322,9 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
     if EXT_PRIOR in extensions:
         pre = prior_fixes(pre, games)
         off_cols, def_cols = off_cols + ["talent_missing"], def_cols + ["talent_missing"]
+    if EXT_COACH in extensions:
+        pre = coach_features(pre)
+        off_cols, def_cols = off_cols + ["coach_year2", "coach_new_x_portal"], def_cols + ["coach_year2", "coach_new_x_portal"]
     if conference:
         pre = with_conference_means(pre, games, seasons, independents_separate)
         off_cols, def_cols = off_cols + CONF_OFF_FEATURES, def_cols + CONF_DEF_FEATURES
@@ -325,8 +350,15 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
         "qb_not_returning": 1.0 - pre["qb_returning_starter"].fillna(0.0),
         "prior_missing": pre["prior_off_rating"].isna().astype(float),
     })
+    unc_flags = list(UNCERTAINTY_FLAGS)
+    if EXT_G5 in extensions:
+        unc["g5"] = group_of_five(pre, games, seasons)
+        unc_flags.append("g5")
+    if EXT_COACH in extensions:
+        unc["coach_year2"] = pre["coach_year2"].to_numpy(float)
+        unc_flags.append("coach_year2")
     base_x_off, base_x_def = with_fcs(xo), with_fcs(xd)
-    base_z = np.vstack([unc[UNCERTAINTY_FLAGS].to_numpy(float), np.ones((len(seasons), len(UNCERTAINTY_FLAGS)))])
+    base_z = np.vstack([unc[unc_flags].to_numpy(float), np.ones((len(seasons), len(unc_flags)))])
 
     n_u = len(units)
     ts_keys = pd.concat([base_keys.assign(unit=u) for u in units], ignore_index=True)

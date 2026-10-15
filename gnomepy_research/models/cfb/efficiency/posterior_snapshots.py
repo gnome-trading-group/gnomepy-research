@@ -52,7 +52,7 @@ PROJ_SUFFIX = "_proj"
 DRIVES_SUFFIX = "_drv"
 TAU_PHASES_SUFFIX = "_tph"
 HEAVY_TAILS_SUFFIX = "_ht"
-EXTENSION_SUFFIX = {"couple": "_cpl", "fcs": "_fcs", "finish": "_fin", "prior": "_pfx", "tight": "_tgt"}
+EXTENSION_SUFFIX = {"couple": "_cpl", "fcs": "_fcs", "finish": "_fin", "prior": "_pfx", "g5": "_g5w", "coach": "_cch", "tight": "_tgt"}
 FIRST_TRAIN_SEASON = 2019
 N_DRAWS_KEPT = 400
 HEAVY_TAILS_MCMC = {"draws": 300, "tune": 300, "chains": 2}
@@ -75,7 +75,7 @@ def _suffix(units: tuple[str, ...], conference: bool = False, projection: bool =
             drop_features: tuple[str, ...] = (), drives: bool = False, independents_separate: bool = False,
             tau_phases: bool = False, heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT,
             extensions: tuple[str, ...] = ()) -> str:
-    """Order: split, conf, ind, proj, drv, gw, tph, ht, cpl, fcs, fin, pfx, tgt, drop."""
+    """Order: split, conf, ind, proj, drv, gw, tph, ht, cpl, fcs, fin, pfx, g5w, cch, tgt, drop."""
     if garbage_weight != GARBAGE_WEIGHT and not drives:
         raise ValueError("a garbage-time weight only applies with drives=True")
     ext = "".join(EXTENSION_SUFFIX[e] for e in canonical_extensions(extensions, drives))

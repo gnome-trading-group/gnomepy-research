@@ -72,6 +72,22 @@ def qb_deltas(src_full: SourceData, games: pd.DataFrame, starters: pd.DataFrame)
     return pd.DataFrame(rows, columns=["game_id", "home_qb_delta", "away_qb_delta"])
 
 
+def qb_changes(starters: pd.DataFrame, games: pd.DataFrame) -> pd.DataFrame:
+    """Per game: whether each side's starter differs from its starter in its previous game this season (1/0).
+    A team's first game of the season, or a game whose starter is unknown, counts as no change."""
+    g = games[["game_id", "season", "kickoff", "home_id", "away_id"]]
+    long = pd.concat([g.rename(columns={"home_id": "team_id"})[["game_id", "season", "kickoff", "team_id"]],
+                      g.rename(columns={"away_id": "team_id"})[["game_id", "season", "kickoff", "team_id"]]])
+    long = long.merge(starters[["game_id", "team_id", "qb_id"]], on=["game_id", "team_id"], how="left")
+    long = long.sort_values(["team_id", "season", "kickoff"], kind="stable")
+    prev = long.groupby(["team_id", "season"])["qb_id"].shift()
+    long["qb_change"] = (long["qb_id"].notna() & prev.notna() & (long["qb_id"] != prev)).astype(float)
+    ch = long.set_index(["game_id", "team_id"])["qb_change"]
+    return pd.DataFrame({"game_id": g["game_id"].to_numpy(),
+                         "home_qb_change": ch.reindex(pd.MultiIndex.from_arrays([g["game_id"], g["home_id"]])).fillna(0.0).to_numpy(),
+                         "away_qb_change": ch.reindex(pd.MultiIndex.from_arrays([g["game_id"], g["away_id"]])).fillna(0.0).to_numpy()})
+
+
 OVERRIDE_COLUMNS = ["game_id", "team_id", "qb_id", "recorded_at"]
 
 

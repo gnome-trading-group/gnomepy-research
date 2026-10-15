@@ -39,7 +39,7 @@ import pymc as pm
 import pytensor.tensor as pt
 
 from gnomepy_research.models.cfb.efficiency.data import (
-    EXT_COUPLE, EXT_FCS, EXT_FINISH, EXT_PRIOR, EXT_TIGHT, TAU_PHASES, ModelData, step_phases)
+    EXT_COACH, EXT_COUPLE, EXT_FCS, EXT_FINISH, EXT_G5, EXT_PRIOR, EXT_TIGHT, TAU_PHASES, ModelData, step_phases)
 from gnomepy_research.models.cfb.features.drives import GARBAGE_WEIGHT
 
 LIKELIHOODS = ("studentt", "normal")
@@ -47,7 +47,7 @@ CONFERENCE_FIELDS = ("s_conf_off", "s_conf_def", "conference")
 TAU_PHASE_PRIORS = (0.03, 0.03, 0.03, 0.06)
 DRIVE_FIELDS = ("alpha_ppd", "sigma_alpha_ppd", "lam_ppd", "hfa_ppd", "s_game_ppd", "s_drive_ppd", "drives")
 EXTENSION_FIELDS = {EXT_COUPLE: ("kappa_ppd",), EXT_FCS: ("s_fcs", "s_fcs_ppd"), EXT_FINISH: ("s_fin_off", "s_fin_def"),
-                    EXT_PRIOR: (), EXT_TIGHT: ()}
+                    EXT_PRIOR: (), EXT_TIGHT: (), EXT_G5: (), EXT_COACH: ()}
 
 
 @dataclass

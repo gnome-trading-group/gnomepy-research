@@ -22,7 +22,8 @@ import pandas as pd
 from gnomepy.data import DatasetStore
 from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, UNITS_SPLIT
 from gnomepy_research.models.cfb.features.physical import physical_table
-from gnomepy_research.models.cfb.features.qb_status import apply_overrides, historical_starters, load_qb_status, qb_deltas
+from gnomepy_research.models.cfb.features.qb_status import (
+    apply_overrides, historical_starters, load_qb_status, qb_changes, qb_deltas)
 from gnomepy_research.models.cfb.features.source import SourceData
 from gnomepy_research.sessions.cfb_win_probability.evaluation import baselines
 from gnomepy_research.sessions.cfb_win_probability.evaluation.metrics import paired_bootstrap, reliability, summarize
@@ -68,9 +69,15 @@ MODEL_CONFIGS["Kp"] = {**MODEL_CONFIGS["K"], "extensions": ("prior",)}
 MODEL_CONFIGS["Np"] = {**MODEL_CONFIGS["K"], "extensions": ("couple", "fcs", "finish", "prior")}
 # Forecast-calibrated prior width (Phase 15) on top of Np.
 MODEL_CONFIGS["Npt"] = {**MODEL_CONFIGS["K"], "extensions": ("couple", "fcs", "finish", "prior", "tight")}
+# Phase 16 ladder on Np: results above efficiency, QB churn, Group-of-5 prior width, coach transitions.
+MODEL_CONFIGS["O1"] = {**MODEL_CONFIGS["Np"], "results": True}
+MODEL_CONFIGS["O2"] = {**MODEL_CONFIGS["O1"], "qb_change": True}
+MODEL_CONFIGS["O3"] = {**MODEL_CONFIGS["O2"], "extensions": ("couple", "fcs", "finish", "prior", "g5")}
+MODEL_CONFIGS["O4"] = {**MODEL_CONFIGS["O2"], "extensions": ("couple", "fcs", "finish", "prior", "g5", "coach")}
+O_SELECTION = RESULTS / "O_selection.json"
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
                 "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails", "garbage_weight",
-                "extensions")
+                "extensions", "results")
 VALIDATION_SEASON = 2022
 F_CONFIG = RESULTS / "F_config.json"
 J_FEATURES = RESULTS / "J_features.json"
@@ -79,8 +86,14 @@ CALIBRATOR_BOOT = 500
 PROB_COLUMNS = ("p_home", "p_bayes", "p_bayes_lo", "p_bayes_hi")
 
 
-def resolve_config(model: str, features_path: Path = J_FEATURES) -> dict:
-    """J0/J read the frozen 2022-validation feature selection at run time; other configs pass through."""
+def resolve_config(model: str, features_path: Path = J_FEATURES, o_selection: Path = O_SELECTION) -> dict:
+    """J0/J read the frozen 2022-validation feature selection at run time, O the frozen Phase 16 ladder choice;
+    other configs pass through."""
+    if model == "O":
+        if not Path(o_selection).exists():
+            raise SystemExit(f"{o_selection} is missing; run o_selection --validate 2022 first")
+        cfg = json.loads(Path(o_selection).read_text())["config"]
+        return {**cfg, "units": tuple(cfg["units"]), "extensions": tuple(cfg.get("extensions", ()))}
     cfg = dict(MODEL_CONFIGS[model])
     if not cfg.pop("j_features", False):
         return cfg
@@ -130,6 +143,13 @@ def expected_starters(qb: pd.DataFrame, games: pd.DataFrame, seasons: list[int])
     scored = qb["game_id"].isin(games.loc[games["season"].isin(seasons), "game_id"])
     return qb.assign(home_qb_delta=qb["home_qb_delta"].where(~scored, 0.0),
                      away_qb_delta=qb["away_qb_delta"].where(~scored, 0.0))
+
+
+def expected_changes(changes: pd.DataFrame, games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
+    """QB changes zeroed for games in `seasons` (the expected starter plays), like expected_starters."""
+    scored = changes["game_id"].isin(games.loc[games["season"].isin(seasons), "game_id"])
+    return changes.assign(home_qb_change=changes["home_qb_change"].where(~scored, 0.0),
+                          away_qb_change=changes["away_qb_change"].where(~scored, 0.0))
 
 
 def phase(df: pd.DataFrame) -> pd.Series:
@@ -355,7 +375,7 @@ def qb_report(df: pd.DataFrame, qb: pd.DataFrame, base: str = "C") -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("seasons", type=int, nargs="+")
-    ap.add_argument("--model", choices=sorted(MODEL_CONFIGS), default="A")
+    ap.add_argument("--model", choices=sorted([*MODEL_CONFIGS, "O"]), default="A")
     ap.add_argument("--holdout", action="store_true")
     ap.add_argument("--validate", action="store_true")
     ap.add_argument("--calibrator-seasons", type=int, nargs="+", default=CALIBRATOR_SEASONS,
@@ -402,6 +422,9 @@ def main() -> None:
         qb = qb_deltas(src_full, games[games["season"].between(FIRST_OUTCOME_SEASON, max(args.seasons))], starters)
         if args.qb_expected:
             qb = expected_starters(qb, games, args.seasons)
+        if cfg.get("qb_change"):
+            changes = qb_changes(starters, games[games["season"].between(FIRST_OUTCOME_SEASON, max(args.seasons))])
+            flags["qb_change"] = expected_changes(changes, games, args.seasons) if args.qb_expected else changes
     frames, metas = [], []
     for s in args.seasons:
         df, meta = run_season(s, games, pregame, lines, units=cfg["units"], form=cfg["form"],
