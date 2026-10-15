@@ -1,9 +1,10 @@
 """
-Pure entry logic for the pre-match strategy: no engine, no registry, no JVM.
+Pure entry logic for the CS2 series strategy: no engine, no registry, no JVM.
 
-Polymarket outcomes are separate tokens, so taking a view on team B means buying
-team B's token, never selling team A's. Each side is therefore priced off its own
-ask book, and an entry is only ever a taker buy.
+On every venue each team's outcome is its own listing - a Polymarket token, a Kalshi
+team market, a Polymarket US long or short side - so taking a view on team B means
+buying team B's listing, never selling team A's. Each side is therefore priced off its
+own ask book, and an entry is only ever a taker buy.
 
 Prices here are plain probabilities in [0, 1] and sizes are shares; the strategy
 converts to the engine's scaled integers at the edge.
@@ -22,7 +23,7 @@ class Level:
 
 @dataclass(frozen=True)
 class Entry:
-    side: int            # 0 = team A token, 1 = team B token
+    side: int            # 0 = team A's listing, 1 = team B's
     fair: float          # probability this side wins
     best_ask: float
     edge_at_best: float  # fair - best_ask - fee(best_ask)
@@ -31,7 +32,7 @@ class Entry:
 
 
 def taker_fee(price: float, rate: float) -> float:
-    """Polymarket's parametric taker fee per share: rate * p * (1 - p)."""
+    """The venues' parametric taker fee per share, rate * p * (1 - p), before each venue's cent rounding."""
     return rate * price * (1.0 - price)
 
 

@@ -1,0 +1,403 @@
+"""
+CS2Series: entry maths, the match feed's view of time, windows, lineups, budgets, restart safety.
+
+The strategy resolves listings through RegistryClient and loads its model in __init__, so the
+registry and the model loader are replaced with in-memory stand-ins; the match feed reads real
+parquet extracts; positions and market data are plain objects with the engine's interface.
+Nothing here needs a JVM.
+"""
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from unittest.mock import patch
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from gnomepy import OrderStatus, OrderType, Scales, Side
+from gnomepy.data import ArtifactRef
+from gnomepy_research.models.cs2.win_probability.series_pricing import price
+from gnomepy_research.sessions.cs2_series import strategy as mod
+from gnomepy_research.sessions.cs2_series.decision import (
+    Level,
+    choose_entry,
+    cost_per_share,
+    evaluate_side,
+    max_entry_price,
+    shares_to_buy,
+    taker_fee,
+)
+from gnomepy_research.sessions.cs2_series.match_feed import MatchFeed
+
+P, S = Scales.PRICE, Scales.SIZE
+HOUR = 3_600_000_000_000
+KICKOFF = pd.Timestamp("2026-10-05T18:00:00Z")
+K_NS = KICKOFF.value
+LISTINGS = {101: (5, 1101), 102: (5, 1102)}
+LINEUP_A, LINEUP_B = [1, 2, 3, 4, 5], [6, 7, 8, 9, 10]
+
+
+# ---- decision maths ------------------------------------------------------------------
+
+def test_taker_fee_is_the_parametric_formula():
+    assert taker_fee(0.5, 0.07) == pytest.approx(0.0175)
+    assert taker_fee(0.9, 0.07) == pytest.approx(0.0063)
+
+
+def test_max_entry_price_leaves_exactly_the_threshold():
+    for fair, edge in ((0.6, 0.05), (0.75, 0.10), (0.35, 0.03)):
+        cap = max_entry_price(fair, edge, 0.07)
+        assert fair - cap - taker_fee(cap, 0.07) == pytest.approx(edge, abs=1e-9)
+
+
+def test_max_entry_price_without_fee_is_fair_minus_edge():
+    assert max_entry_price(0.6, 0.05, 0.0) == pytest.approx(0.55)
+
+
+def test_no_entry_when_best_ask_does_not_clear_the_threshold():
+    assert evaluate_side(0, 0.6, [Level(0.58, 100)], min_edge=0.05, fee_rate=0.07, max_slippage=0.02, tick=0.01) is None
+
+
+def test_limit_is_capped_by_slippage_and_floored_to_tick():
+    asks = [Level(0.40, 50), Level(0.41, 50), Level(0.43, 50)]
+    e = evaluate_side(0, 0.70, asks, min_edge=0.05, fee_rate=0.07, max_slippage=0.02, tick=0.01)
+    assert e.limit_price == pytest.approx(0.42)
+    assert e.shares_available == pytest.approx(100)
+
+
+def test_limit_is_capped_by_the_threshold_price_when_that_is_lower():
+    e = evaluate_side(0, 0.58, [Level(0.50, 50), Level(0.53, 50)], min_edge=0.05, fee_rate=0.07,
+                      max_slippage=0.05, tick=0.01)
+    assert e.limit_price <= max_entry_price(0.58, 0.05, 0.07)
+    assert e.shares_available == pytest.approx(50), "the 0.53 level is above the cap"
+
+
+def test_choose_entry_buys_the_underpriced_side_and_respects_allowed_sides():
+    asks_a, asks_b = [Level(0.62, 100)], [Level(0.30, 100)]
+    e = choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rate=0.07, max_slippage=0.02, tick=0.01)
+    assert e.side == 1 and e.fair == pytest.approx(0.40)
+    assert choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rate=0.07, max_slippage=0.02,
+                        tick=0.01, allowed_sides=(0,)) is None
+
+
+def test_shares_to_buy_includes_the_fee_in_the_budget():
+    e = evaluate_side(0, 0.80, [Level(0.50, 10_000)], min_edge=0.05, fee_rate=0.07, max_slippage=0.0, tick=0.01)
+    assert shares_to_buy(e, 50.0, 0.07) * cost_per_share(e.limit_price, 0.07) == pytest.approx(50.0)
+
+
+# ---- the match's rows ----------------------------------------------------------------
+
+class _MapModel:
+    """Prices every map at the row's p_map, so a test sets the series price through it."""
+
+    feature_names = ["p_map"]
+
+    def predict_batch(self, X):
+        return X[:, 0]
+
+
+def series_of(p_map: float) -> float:
+    return float(price(_MapModel(), pd.DataFrame([{"match_id": 7, "p_map": p_map}])).series.iloc[0])
+
+
+# A map price whose series price is about 0.40: team B looks underpriced against a 0.45 ask.
+LOW = 0.43
+
+
+def _feature(at, p_map=LOW, known=1.0, lineup_a=LINEUP_A, match_id=7):
+    return {"match_id": match_id, "map_name": "", "generated_at": at, "p_map": p_map, "form_known_min": known,
+            "team_a_lineup_ids": lineup_a, "team_b_lineup_ids": LINEUP_B}
+
+
+def _state(at, kickoff=KICKOFF, status="upcoming"):
+    return {"match_id": 7, "generated_at": at, "kickoff": kickoff, "status": status}
+
+
+EARLY = KICKOFF - pd.Timedelta(hours=24)
+
+
+def _write(tmp_path, features, states):
+    f, m = tmp_path / "features.parquet", tmp_path / "matches.parquet"
+    pd.DataFrame(features).to_parquet(f)
+    pd.DataFrame(states).to_parquet(m)
+    return str(f), str(m)
+
+
+def _pricer(calls):
+    def pricer(rows):
+        calls.append(len(rows))
+        return price(_MapModel(), rows)["series"].tolist()
+    return pricer
+
+
+def test_the_feed_is_point_in_time(tmp_path):
+    t0 = KICKOFF - pd.Timedelta(hours=10)
+    f, m = _write(tmp_path, [_feature(t0, p_map=0.5), _feature(t0 + pd.Timedelta(hours=1), p_map=0.6)],
+                  [_state(t0), _state(t0 + pd.Timedelta(hours=2), kickoff=KICKOFF + pd.Timedelta(hours=2))])
+    feed = MatchFeed(7, _pricer([]), f, m, reload_seconds=0)
+    assert feed.quote(t0.value - 1) is None and feed.state(t0.value - 1) is None, "nothing before it was written"
+    assert feed.quote(t0.value).p_team_a == pytest.approx(series_of(0.5))
+    assert feed.quote((t0 + pd.Timedelta(hours=5)).value).p_team_a == pytest.approx(series_of(0.6))
+    assert feed.state((t0 + pd.Timedelta(hours=1)).value).kickoff_ns == K_NS
+    assert feed.state((t0 + pd.Timedelta(hours=3)).value).kickoff_ns == (KICKOFF + pd.Timedelta(hours=2)).value
+
+
+def test_the_feed_reads_only_its_match_and_carries_lineups(tmp_path):
+    f, m = _write(tmp_path, [_feature(EARLY, known=0.0), _feature(EARLY, p_map=0.9, match_id=8)], [_state(EARLY)])
+    q = MatchFeed(7, _pricer([]), f, m, reload_seconds=0).quote(K_NS)
+    assert q.p_team_a == pytest.approx(series_of(LOW)) and not q.lineup_known
+    assert q.lineups == (tuple(LINEUP_A), tuple(LINEUP_B))
+
+
+def test_reload_prices_only_new_rows_and_survives_a_bad_read(tmp_path):
+    calls = []
+    f, m = _write(tmp_path, [_feature(EARLY, p_map=0.5)], [_state(EARLY)])
+    feed = MatchFeed(7, _pricer(calls), f, m, reload_seconds=0.05)
+    later = EARLY + pd.Timedelta(hours=1)
+    _write(tmp_path, [_feature(EARLY, p_map=0.5), _feature(later, p_map=0.6)], [_state(EARLY)])
+    deadline = time.monotonic() + 5
+    while feed.quote(K_NS).at_ns != later.value and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert feed.quote(K_NS).p_team_a == pytest.approx(series_of(0.6))
+    assert calls == [1, 1], "the first row is not priced again"
+    (tmp_path / "features.parquet").write_bytes(b"not a parquet file")
+    time.sleep(0.2)
+    assert feed.quote(K_NS).at_ns == later.value, "a failed reload keeps the rows already held"
+    # The reload thread outlives the test (it is a daemon, as in production); give it a readable file.
+    _write(tmp_path, [_feature(EARLY, p_map=0.5)], [_state(EARLY)])
+
+
+# ---- strategy ------------------------------------------------------------------------
+
+@dataclass
+class _Listing:
+    exchange_id: int
+    security_id: int
+
+
+@dataclass
+class _Spec:
+    tick_size: int = P // 100
+    lot_size: int = S // 100
+    min_size: int = 0
+
+
+class _Registry:
+    def __init__(self, spec):
+        self.spec = spec
+
+    def get_listing(self, *, listing_id, **_):
+        return [_Listing(*LISTINGS[listing_id])]
+
+    def get_listing_spec(self, *, listing_id, **_):
+        return [self.spec]
+
+
+@dataclass
+class _Pos:
+    net_quantity: int
+    avg_entry_price: int
+    total_fees: float
+
+
+class _Positions:
+    """Engine position view: filled quantity, average entry, fees, plus pending orders."""
+
+    def __init__(self):
+        self.filled: dict = {}
+        self.pending: dict = {}
+
+    def fill(self, key, shares, price, fee=0.0):
+        q, avg, fees = self.filled.get(key, (0, 0, 0.0))
+        nq = q + int(shares * S)
+        self.filled[key] = (nq, int((q * avg + int(shares * S) * int(price * P)) / nq), fees + fee)
+
+    def get_position(self, exchange_id, security_id):
+        f = self.filled.get((exchange_id, security_id))
+        return _Pos(*f) if f else None
+
+    def get_effective_quantity(self, exchange_id, security_id):
+        key = (exchange_id, security_id)
+        return self.filled.get(key, (0, 0, 0.0))[0] + self.pending.get(key, 0)
+
+
+class _Book:
+    def __init__(self, key, asks, ts):
+        self.exchange_id, self.security_id = key
+        self.event_timestamp = ts
+        self._asks = asks
+
+    def ask_price(self, i):
+        return int(self._asks[i][0] * P) if i < len(self._asks) else 0
+
+    def ask_size(self, i):
+        return int(self._asks[i][1] * S) if i < len(self._asks) else 0
+
+
+@dataclass
+class _Report:
+    exchange_id: int
+    security_id: int
+    order_status: OrderStatus
+
+
+@pytest.fixture
+def make(tmp_path):
+    def _make(features=None, states=None, spec=None, **kw):
+        f, m = _write(tmp_path, features or [_feature(EARLY)], states or [_state(EARLY)])
+        with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry(spec or _Spec())), \
+                patch.object(mod, "load_model", lambda path: (_MapModel(), path)):
+            strat = mod.CS2Series(match_id=7, listing_team_a=101, listing_team_b=102, fee_rate=0.07,
+                                  reload_minutes=0, features_source=f, matches_source=m, **kw)
+        strat._position_view = _Positions()
+        return strat
+    return _make
+
+
+def _tick(strat, listing, asks, hours_before):
+    return strat.on_market_data(_Book(LISTINGS[listing], asks, K_NS - int(hours_before * HOUR)))
+
+
+def test_buys_the_underpriced_team_with_an_ioc_limit(make):
+    out = _tick(make(), 102, [(0.45, 1000)], hours_before=6)
+    assert len(out) == 1
+    o = out[0]
+    assert (o.exchange_id, o.security_id) == LISTINGS[102], "team B is underpriced, so buy team B's listing"
+    assert o.take_side == Side.BID and o.take_order_type == OrderType.LIMIT
+    assert 0.45 * P <= o.take_limit_price <= 0.47 * P
+
+
+def test_nothing_outside_the_entry_window(make):
+    s = make()
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=13) == [], "the window opens 12h out"
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=-0.1) == [], "nothing after kickoff"
+
+
+def test_the_window_follows_the_latest_kickoff(make):
+    s = make(states=[_state(EARLY), _state(EARLY + pd.Timedelta(hours=1), kickoff=KICKOFF + pd.Timedelta(hours=3))])
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=-1) != [], "past the first kickoff, 2h before the new one"
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=-3.1) == [], "and closed at the new kickoff"
+
+
+@pytest.mark.parametrize("status", ["live", "missing"])
+def test_no_trading_once_hltv_says_live_or_drops_the_match(make, status):
+    s = make(states=[_state(EARLY), _state(KICKOFF - pd.Timedelta(hours=2), status=status)])
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=3) != []
+    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=1) == []
+
+
+def test_no_trade_before_the_first_features_row(make):
+    s = make(features=[_feature(KICKOFF - pd.Timedelta(hours=3))])
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=6) == [], "a replay must not trade on a future row"
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=2.9) != []
+
+
+def test_no_trade_until_both_lineups_are_announced(make):
+    s = make(features=[_feature(EARLY, known=0.0), _feature(KICKOFF - pd.Timedelta(hours=3))])
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=6) == []
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=2.9) != []
+
+
+def test_a_lineup_change_stops_top_ups(make):
+    changed = [9, 2, 3, 4, 5]
+    s = make(features=[_feature(EARLY), _feature(KICKOFF - pd.Timedelta(hours=3), lineup_a=changed)])
+    assert _tick(s, 102, [(0.45, 10)], hours_before=6)
+    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
+    s.positions.fill(LISTINGS[102], shares=10, price=0.45)
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=5) != [], "same lineups: topping up is fine"
+    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=2) == [], "a stand-in is news the model cannot price"
+
+
+def test_a_lineup_change_before_any_fill_does_not_block_entry(make):
+    s = make(features=[_feature(EARLY), _feature(KICKOFF - pd.Timedelta(hours=3), lineup_a=[9, 2, 3, 4, 5])])
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=6)
+    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=2) != [], "nothing was bought on the old lineups"
+
+
+def test_no_second_order_while_one_is_in_flight(make):
+    s = make()
+    assert _tick(s, 102, [(0.45, 10)], hours_before=6)
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=5.9) == []
+    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=5.8), "a terminal report frees the market to top up"
+
+
+def test_stake_is_respected_including_fees(make):
+    o = _tick(make(stake_usd=50.0), 102, [(0.45, 10_000)], hours_before=6)[0]
+    assert o.take_size / S * cost_per_share(o.take_limit_price / P, 0.07) <= 50.0 + 1e-6
+
+
+def test_stake_already_spent_blocks_further_orders(make):
+    s = make(stake_usd=50.0)
+    s.positions.fill(LISTINGS[102], shares=105, price=0.45, fee=1.8)
+    assert _tick(s, 102, [(0.45, 10_000)], hours_before=6) == []
+
+
+def test_never_buys_the_other_side_once_holding_one(make):
+    s = make(features=[_feature(EARLY, p_map=0.6)])
+    s.positions.fill(LISTINGS[102], shares=10, price=0.30)
+    assert _tick(s, 101, [(0.50, 1000)], hours_before=6) == [], "holding team B; team A now looks cheap - no hedge"
+
+
+def test_adverse_move_stops_top_ups(make):
+    s = make(adverse_move=0.08)
+    s.positions.fill(LISTINGS[102], shares=10, price=0.45)
+    assert _tick(s, 102, [(0.36, 1000)], hours_before=6) == [], "price fell 9c below entry: likely news"
+    assert _tick(s, 102, [(0.44, 1000)], hours_before=6) != []
+
+
+def test_restart_reads_committed_money_from_positions(make):
+    """A fresh instance must see an earlier session's fills and not buy them again."""
+    first = make(stake_usd=50.0)
+    first.positions.fill(LISTINGS[102], shares=110, price=0.45, fee=1.9)
+    restarted = make(stake_usd=50.0)
+    restarted._position_view = first.positions
+    assert _tick(restarted, 102, [(0.45, 10_000)], hours_before=6) == []
+
+
+def test_restart_takes_the_lineups_it_finds_as_the_reference(make):
+    s = make(features=[_feature(EARLY), _feature(KICKOFF - pd.Timedelta(hours=3), lineup_a=[9, 2, 3, 4, 5])])
+    s.positions.fill(LISTINGS[102], shares=10, price=0.45)
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=6) != []
+    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=2) == []
+
+
+def test_an_order_under_the_venues_minimum_size_is_not_sent(make):
+    s = make(spec=_Spec(min_size=5 * S))
+    assert _tick(s, 102, [(0.45, 4)], hours_before=6) == [], "only 4 shares at the price; the venue wants 5"
+    assert _tick(s, 102, [(0.45, 10)], hours_before=6) != []
+
+
+def test_unknown_listing_data_is_ignored(make):
+    assert make().on_market_data(_Book((5, 99999), [(0.01, 10)], K_NS - HOUR)) == []
+
+
+def test_the_model_is_logged_at_the_version_it_resolved_to(monkeypatch):
+    found = []
+
+    class _Store:
+        def find(self, query):
+            found.append(query)
+            return ArtifactRef(query.artifact_type, query.name, "20261015T163515680176Z", "s3://b/model.joblib")
+
+        def resolve(self, ref):
+            return "/tmp/model.joblib"
+    monkeypatch.setattr(mod, "ArtifactStore", _Store)
+    monkeypatch.setattr(mod, "CS2PreMapModel", lambda path: path)
+    model, resolved = mod.load_model(mod.DEFAULT_MODEL + "@production")
+    assert model == "/tmp/model.joblib" and found[0].alias == "production"
+    assert resolved == "artifact://xgboost_model/cs2_prematch_preveto:20261015T163515680176Z"
+    monkeypatch.setattr(mod, "resolve_artifact_path", lambda path: "/local/model.joblib")
+    assert mod.load_model("/local/model.joblib") == ("/local/model.joblib", "/local/model.joblib")
+
+
+def test_series_pricing_goes_through_the_map_model():
+    assert series_of(0.5) == pytest.approx(0.5)
+    assert series_of(LOW) < LOW < 0.5, "a BO3 is more lopsided than one map"
+    assert np.isclose(series_of(LOW), 0.40, atol=0.01)

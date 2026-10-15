@@ -102,7 +102,7 @@ gnome-pipelines and live strategies depend on this package (pinned by git tag) a
 ```
 models/cs2/hltv/             HLTV point-in-time features and priors
 models/cs2/win_probability/  pre-map, round and series models
-models/cs2/prematch/         predictions table, Polymarket market lookup, HLTV team identity
+models/cs2/prematch/         Polymarket market lookup, HLTV team identity
 models/cfb/features/         CFB point-in-time features
 models/cfb/efficiency/       dynamic efficiency model and posteriors
 models/cfb/hyperparameters/  its fitted hyperparameters

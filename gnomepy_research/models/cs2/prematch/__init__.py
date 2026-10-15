@@ -1,1 +1,1 @@
-"""Prematch predictions table, Polymarket market lookup and HLTV team identity, shared by the strategy and gnome-pipelines."""
+"""Polymarket market lookup and HLTV team identity, used by gnome-pipelines to find each match's markets."""
