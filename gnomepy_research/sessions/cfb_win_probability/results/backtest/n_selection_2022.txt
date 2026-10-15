@@ -1,0 +1,23 @@
+model N extension ladder on K: train 2020-2021, score 2022 (776 games); 3 outcome seeds averaged; keep a step unless it worsens log loss by more than 0.002 vs the last kept config
+
+2022 log loss:
+                     overall  big_favorites  toss_ups
+K                    0.56674        0.40781   0.67396
+K+couple             0.56395        0.39123   0.67880
+K+couple+fcs         0.56390        0.39161   0.67829
+K+couple+fcs+finish  0.56415        0.39143   0.67903
+
+ladder:
+          candidate  log_loss  vs_kept  kept
+           K+couple   0.56395 -0.00279  True
+       K+couple+fcs   0.56390 -0.00005  True
+K+couple+fcs+finish   0.56415  0.00025  True
+
+hyperparameters fitted on 2019_2021 seasons:
+                    tau_off tau_def   s_off   s_def sigma_game lam_ppd s_game_ppd s_drive_ppd         kappa_ppd   s_fcs s_fcs_ppd s_fin_off s_fin_def
+K                     0.034  0.0355  0.0668  0.0427     0.0107  6.0998     0.0567      2.7941                                                        
+K+couple             0.0172  0.0207    0.07  0.0446     0.0118  5.7881     0.0411      2.2391  [1.5614, 1.7771]                                      
+K+couple+fcs         0.0169  0.0207  0.0704  0.0449     0.0118  5.8036     0.0429      2.2095  [1.5639, 1.7737]  0.0384    0.3267                    
+K+couple+fcs+finish   0.017  0.0208  0.0699  0.0441     0.0117  5.7779     0.0431      2.2038  [1.5678, 1.7807]  0.0375    0.3302    0.0337    0.0451
+
+chosen extensions: ['couple', 'fcs', 'finish']
