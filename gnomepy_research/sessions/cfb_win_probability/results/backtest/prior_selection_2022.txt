@@ -1,0 +1,13 @@
+prior extension: train 2020-2021, score 2022; keep unless worse than the base by more than 0.002
+
+2022 log loss:
+    overall  big_favorites  toss_ups
+K   0.56674        0.40781   0.67396
+Kp  0.56547        0.40739   0.67392
+N   0.56415        0.39143   0.67903
+Np  0.56214        0.39101   0.67832
+
+decisions:
+   base     delta  kept
+Kp    K -0.001277  True
+Np    N  -0.00201  True
