@@ -16,9 +16,10 @@ files = [
 name = "anthropic"
 version = "0.117.0"
 description = "The official Python library for the anthropic API"
-optional = false
+optional = true
 python-versions = ">=3.9"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "anthropic-0.117.0-py3-none-any.whl", hash = "sha256:451a0a6905f11dff7663d13e4ee5dbf909eb8942b1d049803c7b937a13ac47ec"},
     {file = "anthropic-0.117.0.tar.gz", hash = "sha256:98107f2b76439641e0ae2a1754087534b8f178dbab99d6eb1bc4b7bc8c744496"},
@@ -54,6 +55,7 @@ files = [
     {file = "anyio-4.13.0-py3-none-any.whl", hash = "sha256:08b310f9e24a9594186fd75b4f73f4a4152069e3853f1ed8bfbf58369f4ad708"},
     {file = "anyio-4.13.0.tar.gz", hash = "sha256:334b70e641fd2221c1505b3890c69882fe4a2df910cba14d97019b90b24439dc"},
 ]
+markers = {main = "extra == \"research\""}
 
 [package.dependencies]
 idna = ">=2.8"
@@ -132,9 +134,10 @@ cffi = {version = ">=1.0.1", markers = "python_version < \"3.14\""}
 name = "arro3-core"
 version = "0.9.0"
 description = ""
-optional = false
+optional = true
 python-versions = ">=3.11"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "arro3_core-0.9.0-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:7b76f08c88a86e4c84a13d835ae9101edc3452a70d2d0ed2241392f060b170e9"},
     {file = "arro3_core-0.9.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:878c1c15c609f50f7559ccc9fa20769121344c443fabcfd339dd78aec5437c7b"},
@@ -205,9 +208,10 @@ test = ["dateparser (==1.*)", "pre-commit", "pytest", "pytest-cov", "pytest-mock
 name = "arviz"
 version = "1.3.0"
 description = "Expose features from _ArviZverse_ refactored packages together in the ``arviz`` namespace."
-optional = false
+optional = true
 python-versions = ">=3.12"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "arviz-1.3.0-py3-none-any.whl", hash = "sha256:16ab348e94c80295d205ea65e695d835b66daef8b31eddf71b88fd9b48490a85"},
     {file = "arviz-1.3.0.tar.gz", hash = "sha256:9e332c0a0da370cb1c00823678065e9b0462fbdf1efa0f38c37485cc78c8a576"},
@@ -233,9 +237,10 @@ zarr = ["arviz_base[zarr]"]
 name = "arviz-base"
 version = "1.3.1"
 description = "Base ArviZ features and converters."
-optional = false
+optional = true
 python-versions = ">=3.12"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "arviz_base-1.3.1-py3-none-any.whl", hash = "sha256:4b4d60807f0e136af295a3c64aa13d87d3b7ba78b54acb015f6cb515ffd4b8fd"},
     {file = "arviz_base-1.3.1.tar.gz", hash = "sha256:f83c49d1842ca93821d38bc03f1d75df18d56d507694804a07ce6c1b3bbf2d6c"},
@@ -260,9 +265,10 @@ zarr = ["zarr"]
 name = "arviz-plots"
 version = "1.3.2"
 description = "ArviZ-plots provides ready to use and composable plots for Bayesian Workflow."
-optional = false
+optional = true
 python-versions = ">=3.12"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "arviz_plots-1.3.2-py3-none-any.whl", hash = "sha256:17d66e373eef7340ca25d8a318a4eebe29532ea76dc4723924d4608e21ed3c64"},
     {file = "arviz_plots-1.3.2.tar.gz", hash = "sha256:040b5672f186e39ea21554f8fa60c01786798bd10eb0853cab1fc09e54eacead"},
@@ -283,9 +289,10 @@ test = ["h5netcdf[h5py]", "hypothesis", "kaleido", "pytest", "pytest-cov"]
 name = "arviz-stats"
 version = "1.3.3"
 description = "Statistical computation and diagnostics for ArviZ."
-optional = false
+optional = true
 python-versions = ">=3.12"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "arviz_stats-1.3.3-py3-none-any.whl", hash = "sha256:2fdd79ac91a95235c3820343a31ada37437a195a6d544b7561122429ba54771d"},
     {file = "arviz_stats-1.3.3.tar.gz", hash = "sha256:3fed50cc2a9bb8e2719fd675691b1c332c15394e13d4b7a2bef64f6a6c2a6ccf"},
@@ -406,9 +413,10 @@ css = ["tinycss2 (>=1.1.0,<1.5)"]
 name = "blinker"
 version = "1.9.0"
 description = "Fast, simple object-to-object and broadcast signaling"
-optional = false
+optional = true
 python-versions = ">=3.9"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "blinker-1.9.0-py3-none-any.whl", hash = "sha256:ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc"},
     {file = "blinker-1.9.0.tar.gz", hash = "sha256:b4ce2265a7abece45e7cc896e98dbebe6cead56bcf805a3d23136d145f5445bf"},
@@ -438,9 +446,10 @@ crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
 name = "boto3-stubs"
 version = "1.42.97"
 description = "Type annotations for boto3 1.42.97 generated with mypy-boto3-builder 8.12.0"
-optional = false
+optional = true
 python-versions = ">=3.9"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "boto3_stubs-1.42.97-py3-none-any.whl", hash = "sha256:47539eaab612d63b5b828657ee0977237725f7608f19563a2ae7f784042411bc"},
     {file = "boto3_stubs-1.42.97.tar.gz", hash = "sha256:f7f4775b0851ff6db0e3fb097064af6437e4de31b797d874a737104998e028c6"},
@@ -903,9 +912,10 @@ crt = ["awscrt (==0.36.0)"]
 name = "botocore-stubs"
 version = "1.43.14"
 description = "Type annotations and code completion for botocore"
-optional = false
+optional = true
 python-versions = ">=3.9"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "botocore_stubs-1.43.14-py3-none-any.whl", hash = "sha256:fb98f1475c92fd718644e786b5c543a20f1b1f610e89e0a7191c3f1f429c75aa"},
     {file = "botocore_stubs-1.43.14.tar.gz", hash = "sha256:9e3bc1fdd51da7473f0df726c82747a1b0ae913449d629659765c247fecc2039"},
@@ -1197,9 +1207,10 @@ colorama = {version = "*", markers = "platform_system == \"Windows\""}
 name = "cloudpickle"
 version = "3.1.2"
 description = "Pickler class to extend the standard pickle.Pickler functionality"
-optional = false
+optional = true
 python-versions = ">=3.8"
 groups = ["main"]
+markers = "extra == \"xgboost\" or extra == \"pymc\""
 files = [
     {file = "cloudpickle-3.1.2-py3-none-any.whl", hash = "sha256:9acb47f6afd73f60dc1df93bb801b472f05ff42fa6c84167d25cb206be1fbf4a"},
     {file = "cloudpickle-3.1.2.tar.gz", hash = "sha256:7fda9eb655c9c230dab534f1983763de5835249750e85fbcef43aaa30a9a2414"},
@@ -1237,9 +1248,10 @@ test = ["pytest"]
 name = "dash"
 version = "2.18.2"
 description = "A Python framework for building reactive web-apps. Developed by Plotly."
-optional = false
+optional = true
 python-versions = ">=3.8"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "dash-2.18.2-py3-none-any.whl", hash = "sha256:0ce0479d1bc958e934630e2de7023b8a4558f23ce1f9f5a4b34b65eb3903a869"},
     {file = "dash-2.18.2.tar.gz", hash = "sha256:20e8404f73d0fe88ce2eae33c25bbc513cbe52f30d23a401fa5f24dbb44296c8"},
@@ -1271,9 +1283,10 @@ testing = ["beautifulsoup4 (>=4.8.2)", "cryptography", "dash-testing-stub (>=0.0
 name = "dash-bootstrap-components"
 version = "1.7.1"
 description = "Bootstrap themed components for use in Plotly Dash"
-optional = false
+optional = true
 python-versions = "<4,>=3.9"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "dash_bootstrap_components-1.7.1-py3-none-any.whl", hash = "sha256:5e8eae7ee1d013f69e272c68c1015b53ab71802460152088f33fffa90d245199"},
     {file = "dash_bootstrap_components-1.7.1.tar.gz", hash = "sha256:30d48340d6dc89831d6c06e400cd4236f0d5363562c05b2a922f21545695a082"},
@@ -1289,9 +1302,10 @@ pandas = ["numpy (>=2.0.2)", "pandas (>=2.2.3)"]
 name = "dash-core-components"
 version = "2.0.0"
 description = "Core component suite for Dash"
-optional = false
+optional = true
 python-versions = "*"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "dash_core_components-2.0.0-py3-none-any.whl", hash = "sha256:52b8e8cce13b18d0802ee3acbc5e888cb1248a04968f962d63d070400af2e346"},
     {file = "dash_core_components-2.0.0.tar.gz", hash = "sha256:c6733874af975e552f95a1398a16c2ee7df14ce43fa60bb3718a3c6e0b63ffee"},
@@ -1301,9 +1315,10 @@ files = [
 name = "dash-html-components"
 version = "2.0.0"
 description = "Vanilla HTML components for Dash"
-optional = false
+optional = true
 python-versions = "*"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "dash_html_components-2.0.0-py3-none-any.whl", hash = "sha256:b42cc903713c9706af03b3f2548bda4be7307a7cf89b7d6eae3da872717d1b63"},
     {file = "dash_html_components-2.0.0.tar.gz", hash = "sha256:8703a601080f02619a6390998e0b3da4a5daabe97a1fd7a9cebc09d015f26e50"},
@@ -1313,9 +1328,10 @@ files = [
 name = "dash-table"
 version = "5.0.0"
 description = "Dash table"
-optional = false
+optional = true
 python-versions = "*"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "dash_table-5.0.0-py3-none-any.whl", hash = "sha256:19036fa352bb1c11baf38068ec62d172f0515f73ca3276c79dee49b95ddc16c9"},
     {file = "dash_table-5.0.0.tar.gz", hash = "sha256:18624d693d4c8ef2ddec99a6f167593437a7ea0bf153aa20f318c170c5bc7308"},
@@ -1389,9 +1405,10 @@ files = [
 name = "distro"
 version = "1.9.0"
 description = "Distro - an OS platform information API"
-optional = false
+optional = true
 python-versions = ">=3.6"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2"},
     {file = "distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed"},
@@ -1401,9 +1418,10 @@ files = [
 name = "docstring-parser"
 version = "0.18.0"
 description = "Parse Python docstrings in reST, Google and Numpydoc format"
-optional = false
+optional = true
 python-versions = ">=3.8"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "docstring_parser-0.18.0-py3-none-any.whl", hash = "sha256:b3fcbed555c47d8479be0796ef7e19c2670d428d72e96da63f3a40122860374b"},
     {file = "docstring_parser-0.18.0.tar.gz", hash = "sha256:292510982205c12b1248696f44959db3cdd1740237a968ea1e2e7a900eeb2015"},
@@ -1418,9 +1436,10 @@ test = ["pytest"]
 name = "donfig"
 version = "0.8.1.post1"
 description = "Python package for configuring a python package"
-optional = false
+optional = true
 python-versions = ">=3.8"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "donfig-0.8.1.post1-py3-none-any.whl", hash = "sha256:2a3175ce74a06109ff9307d90a230f81215cbac9a751f4d1c6194644b8204f9d"},
     {file = "donfig-0.8.1.post1.tar.gz", hash = "sha256:3bef3413a4c1c601b585e8d297256d0c1470ea012afa6e8461dc28bfb7c23f52"},
@@ -1467,9 +1486,10 @@ devel = ["colorama", "json-spec", "jsonschema", "pylint", "pytest", "pytest-benc
 name = "filelock"
 version = "4.1.0"
 description = "A platform independent file lock."
-optional = false
+optional = true
 python-versions = ">=3.10"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "filelock-4.1.0-py3-none-any.whl", hash = "sha256:2ce9818e3e2d8f284c1a964414447ef148d42a5fd5e2a477a7118e574b293ec1"},
     {file = "filelock-4.1.0.tar.gz", hash = "sha256:ad7f724afef953e731b1cc39bcd3a09166d72ed7fcdf29e6e88b1c3235c6715d"},
@@ -1479,9 +1499,10 @@ files = [
 name = "flask"
 version = "3.0.3"
 description = "A simple framework for building complex web applications."
-optional = false
+optional = true
 python-versions = ">=3.8"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "flask-3.0.3-py3-none-any.whl", hash = "sha256:34e815dfaa43340d1d15a5c3a02b8476004037eb4840b34910c6e21679d288f3"},
     {file = "flask-3.0.3.tar.gz", hash = "sha256:ceb27b0af3823ea2737928a4d99d125a06175b8512c445cbd9a9ce200ef76842"},
@@ -1570,16 +1591,31 @@ click = ">=8.1,<9.0"
 dash = {version = ">=2.18.0,<3.0.0", optional = true, markers = "extra == \"backtest\""}
 dash-bootstrap-components = {version = ">=1.6.0,<2.0.0", optional = true, markers = "extra == \"backtest\""}
 jpype1 = ">=1.5.0,<2.0.0"
-numpy = {version = ">=2.2.4,<3.0.0", optional = true, markers = "extra == \"backtest\""}
-pandas = {version = ">=2.2.3,<3.0.0", optional = true, markers = "extra == \"backtest\" or extra == \"live-data\""}
+numpy = [
+    {version = ">=2.2.4,<3.0.0", optional = true, markers = "extra == \"backtest\""},
+    {version = ">=2.2.4,<3.0.0", optional = true, markers = "extra == \"strategy\""},
+]
+pandas = [
+    {version = ">=2.2.3,<3.0.0", optional = true, markers = "extra == \"backtest\""},
+    {version = ">=2.2.3,<3.0.0", optional = true, markers = "extra == \"live-data\""},
+]
 pandas-stubs = {version = ">=2.3.3,<2.4.0", optional = true, markers = "extra == \"backtest\""}
 plotly = {version = ">=6.6.0,<6.7.0", optional = true, markers = "extra == \"backtest\""}
-pyarrow = {version = ">=23.0.1,<24.0.0", optional = true, markers = "extra == \"backtest\" or extra == \"live-data\""}
-pyiceberg = {version = ">=0.12.0,<0.13.0", extras = ["pyiceberg-core"], optional = true, markers = "extra == \"backtest\" or extra == \"live-data\""}
+pyarrow = [
+    {version = ">=23.0.1,<24.0.0", optional = true, markers = "extra == \"backtest\""},
+    {version = ">=23.0.1,<24.0.0", optional = true, markers = "extra == \"live-data\""},
+]
+pyiceberg = [
+    {version = ">=0.12.0,<0.13.0", extras = ["pyiceberg-core"], optional = true, markers = "extra == \"backtest\""},
+    {version = ">=0.12.0,<0.13.0", extras = ["pyiceberg-core"], optional = true, markers = "extra == \"live-data\""},
+]
 pytz = ">=2025.1,<2026.0"
 pyyaml = ">=6.0,<7.0"
 requests = ">=2.32.3,<3.0.0"
-scipy = {version = ">=1.15.0,<2.0.0", optional = true, markers = "extra == \"backtest\""}
+scipy = [
+    {version = ">=1.15.0,<2.0.0", optional = true, markers = "extra == \"backtest\""},
+    {version = ">=1.15.0,<2.0.0", optional = true, markers = "extra == \"strategy\""},
+]
 zstandard = ">=0.23.0,<0.24.0"
 
 [package.extras]
@@ -1592,9 +1628,10 @@ tardis = ["tardis-dev (>=4.0.0,<5.0.0)"]
 name = "google-crc32c"
 version = "1.9.0"
 description = "A python wrapper of the C library 'Google CRC32C'"
-optional = false
+optional = true
 python-versions = ">=3.10"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "google_crc32c-1.9.0-cp310-cp310-macosx_12_0_arm64.whl", hash = "sha256:e6b529a6a287104ec79d281c411685231200ce954a29c28ab8e5093cb6e130fb"},
     {file = "google_crc32c-1.9.0-cp310-cp310-macosx_12_0_x86_64.whl", hash = "sha256:51cb4e23a38ad4f495f35f87c233ca3ea6b9c4559e7ac383cdef786fab0f7977"},
@@ -1640,6 +1677,7 @@ files = [
     {file = "h11-0.16.0-py3-none-any.whl", hash = "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86"},
     {file = "h11-0.16.0.tar.gz", hash = "sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1"},
 ]
+markers = {main = "extra == \"research\""}
 
 [[package]]
 name = "httpcore"
@@ -1652,6 +1690,7 @@ files = [
     {file = "httpcore-1.0.9-py3-none-any.whl", hash = "sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55"},
     {file = "httpcore-1.0.9.tar.gz", hash = "sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8"},
 ]
+markers = {main = "extra == \"research\""}
 
 [package.dependencies]
 certifi = "*"
@@ -1674,6 +1713,7 @@ files = [
     {file = "httpx-0.28.1-py3-none-any.whl", hash = "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad"},
     {file = "httpx-0.28.1.tar.gz", hash = "sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc"},
 ]
+markers = {main = "extra == \"research\""}
 
 [package.dependencies]
 anyio = "*"
@@ -1707,9 +1747,10 @@ all = ["flake8 (>=7.1.1)", "mypy (>=1.11.2)", "pytest (>=8.3.2)", "ruff (>=0.6.2
 name = "importlib-metadata"
 version = "9.0.0"
 description = "Read metadata from Python packages"
-optional = false
+optional = true
 python-versions = ">=3.10"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "importlib_metadata-9.0.0-py3-none-any.whl", hash = "sha256:2d21d1cc5a017bd0559e36150c21c830ab1dc304dedd1b7ea85d20f45ef3edd7"},
     {file = "importlib_metadata-9.0.0.tar.gz", hash = "sha256:a4f57ab599e6a2e3016d7595cfd72eb4661a5106e787a95bcc90c7105b831efc"},
@@ -1839,9 +1880,10 @@ arrow = ">=0.15.0"
 name = "itsdangerous"
 version = "2.2.0"
 description = "Safely pass data to untrusted environments and back."
-optional = false
+optional = true
 python-versions = ">=3.8"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "itsdangerous-2.2.0-py3-none-any.whl", hash = "sha256:c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef"},
     {file = "itsdangerous-2.2.0.tar.gz", hash = "sha256:e0050c0b7da1eea53ffaf149c0cfbb5c6e2e2b69c4bef22c81fa6eb73e5f6173"},
@@ -1878,6 +1920,7 @@ files = [
     {file = "jinja2-3.1.6-py3-none-any.whl", hash = "sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67"},
     {file = "jinja2-3.1.6.tar.gz", hash = "sha256:0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d"},
 ]
+markers = {main = "extra == \"research\""}
 
 [package.dependencies]
 MarkupSafe = ">=2.0"
@@ -1889,9 +1932,10 @@ i18n = ["Babel (>=2.7)"]
 name = "jiter"
 version = "0.16.0"
 description = "Fast iterable JSON parser."
-optional = false
+optional = true
 python-versions = ">=3.9"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "jiter-0.16.0-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:c5fc4f8def331036a7b8e981b4347ebe409981edbc8308a5ea842b8c3614fa6c"},
     {file = "jiter-0.16.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:5a71d0d2014c3275043e1170bf3d4e771493cb0dcf07be54c567155f4d8ee64b"},
@@ -2016,9 +2060,10 @@ files = [
 name = "joblib"
 version = "1.6.0"
 description = "Lightweight pipelining with Python functions"
-optional = false
+optional = true
 python-versions = ">=3.10"
 groups = ["main"]
+markers = "extra == \"xgboost\""
 files = [
     {file = "joblib-1.6.0-py3-none-any.whl", hash = "sha256:3dbbf9f6e4b592a2357b854608e980fe6390d131d7a82f011a377ef2ebef7aba"},
     {file = "joblib-1.6.0.tar.gz", hash = "sha256:2ccc96785b12046c08fd6d55839c12857831b54a3c1673ffadd2f04bfc4eda03"},
@@ -2399,9 +2444,10 @@ regex = ["regex"]
 name = "lazy-loader"
 version = "0.6"
 description = "Makes it easy to load subpackages and functions on demand."
-optional = false
+optional = true
 python-versions = ">=3.9"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "lazy_loader-0.6-py3-none-any.whl", hash = "sha256:77253be3391b06124a0e16105bd663b6c54470af1a9ca8e1cf026f38d58ed056"},
     {file = "lazy_loader-0.6.tar.gz", hash = "sha256:2f4b7824d6401958639008a0cae20c776b61dff619accd6890693e2de8260167"},
@@ -2419,9 +2465,10 @@ test = ["coverage[toml] (>=7.2)", "pytest (>=8.0)", "pytest-cov (>=5.0)"]
 name = "llvmlite"
 version = "0.49.0"
 description = "lightweight wrapper around basic LLVM functionality"
-optional = false
+optional = true
 python-versions = ">=3.10"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "llvmlite-0.49.0-cp310-cp310-macosx_12_0_arm64.whl", hash = "sha256:ee81e96c15a6f870918f1eb60c913551c16aa23defb4f5f1acfa660d6a0aaac2"},
     {file = "llvmlite-0.49.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:854941c2267fd4fc5b2ce02b8af8ecdffa79fb7784591d3a89370322039ea09f"},
@@ -2573,6 +2620,7 @@ files = [
     {file = "markupsafe-3.0.3-cp39-cp39-win_arm64.whl", hash = "sha256:38664109c14ffc9e7437e86b4dceb442b0096dfe3541d7864d9cbe1da4cf36c8"},
     {file = "markupsafe-3.0.3.tar.gz", hash = "sha256:722695808f4b6457b320fdc131280796bdceb04ab50fe1795cd540799ebe1698"},
 ]
+markers = {main = "extra == \"research\""}
 
 [[package]]
 name = "matplotlib-inline"
@@ -2798,9 +2846,10 @@ type = ["mypy (==2.3.1)"]
 name = "msgspec"
 version = "0.22.0"
 description = "A fast serialization and validation library, with builtin support for JSON, MessagePack, YAML, and TOML."
-optional = false
+optional = true
 python-versions = ">=3.10"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "msgspec-0.22.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:f3413e3647275f787b21b4dfb4836a59a1a5acf1018ab1d45843b1d7edf15c22"},
     {file = "msgspec-0.22.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:38c5b9bd347bc9abbcee40752be3c5117854e891ea7a1881a56d4b3dec58c5e7"},
@@ -2894,9 +2943,10 @@ yaml = ["pyyaml"]
 name = "narwhals"
 version = "2.18.1"
 description = "Extremely lightweight compatibility layer between dataframe libraries"
-optional = false
+optional = true
 python-versions = ">=3.9"
 groups = ["main"]
+markers = "extra == \"xgboost\" or extra == \"research\""
 files = [
     {file = "narwhals-2.18.1-py3-none-any.whl", hash = "sha256:a0a8bb80205323851338888ba3a12b4f65d352362c8a94be591244faf36504ad"},
     {file = "narwhals-2.18.1.tar.gz", hash = "sha256:652a1fcc9d432bbf114846688884c215f17eb118aa640b7419295d2f910d2a8b"},
@@ -3009,6 +3059,7 @@ files = [
     {file = "nest_asyncio-1.6.0-py3-none-any.whl", hash = "sha256:87af6efd6b5e897c81050477ef65c62e2b2f35d51703cae01aff2905b1852e1c"},
     {file = "nest_asyncio-1.6.0.tar.gz", hash = "sha256:6f172d5449aca15afd6c646851f4e31e02c598d553a667e38cafa997cfec55fe"},
 ]
+markers = {main = "extra == \"research\""}
 
 [[package]]
 name = "notebook"
@@ -3056,9 +3107,10 @@ test = ["pytest", "pytest-console-scripts", "pytest-jupyter", "pytest-tornasync"
 name = "numba"
 version = "0.67.0"
 description = "compiling Python code using LLVM"
-optional = false
+optional = true
 python-versions = ">=3.10"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "numba-0.67.0-cp310-cp310-macosx_12_0_arm64.whl", hash = "sha256:8c0e88acd4341ddf40779db3c0228b9188aca7fcab5f5f3ce9949a1fc71e9a02"},
     {file = "numba-0.67.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:d6c8e9ba3f9602471e8c6f563ffcce8db8046741f0bafb782a052e41dc6b6861"},
@@ -3096,9 +3148,10 @@ numpy = ">=1.22,<2.6"
 name = "numcodecs"
 version = "0.17.0"
 description = "A Python package providing buffer compression and transformation codecs for use in data storage and communication applications."
-optional = false
+optional = true
 python-versions = ">=3.12"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "numcodecs-0.17.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:2e29732c5e3a83663e51b40007819d8fd0aae16a2322f7044ce13a2460a99e23"},
     {file = "numcodecs-0.17.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:d30c69b4bdb1755af1022fa913e184eaadc4fc0cd38f736e483e8ad205e130d1"},
@@ -3223,9 +3276,10 @@ files = [
 name = "nutpie"
 version = "0.16.11"
 description = "Sample Stan or PyMC models"
-optional = false
+optional = true
 python-versions = ">=3.12"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "nutpie-0.16.11-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:4c888815e35936a510570dc31bca00ad716aec035b8d5975b00fd056c2cb431b"},
     {file = "nutpie-0.16.11-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:33fca4a297b06881945c75bab0e6466d5b428d4fd7955c6f90c62f39fa277952"},
@@ -3248,10 +3302,12 @@ files = [
 [package.dependencies]
 arro3-core = ">=0.6.0"
 arviz = ">=0.23.0,<2.0"
+numba = {version = ">=0.60.0", optional = true, markers = "extra == \"pymc\""}
 obstore = ">=0.8.0"
 pandas = ">=2.0"
 platformdirs = ">=3.0.0"
 pyarrow = ">=12.0.0"
+pymc = {version = ">=5.20.1", optional = true, markers = "extra == \"pymc\""}
 xarray = ">=2025.1.2"
 zarr = ">=3.1.0"
 
@@ -3268,10 +3324,10 @@ stan = ["bridgestan (>=2.7.0)", "stanio (>=0.5.1)"]
 name = "nvidia-nccl-cu13"
 version = "2.32.3"
 description = "NVIDIA Collective Communication Library (NCCL) Runtime"
-optional = false
+optional = true
 python-versions = ">=3"
 groups = ["main"]
-markers = "platform_system == \"Linux\""
+markers = "sys_platform != \"linux\" and extra == \"xgboost\" and platform_system == \"Linux\""
 files = [
     {file = "nvidia_nccl_cu13-2.32.3-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:a5bee92b2f4af218c109f8d221c3c9adcc752b94ae0ffcb0ed5abf9341a7724c"},
     {file = "nvidia_nccl_cu13-2.32.3-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:1459723080ac889d73a26edfa3e04383a7928ab31ac8f0ec43b3ea9548b04ff3"},
@@ -3281,9 +3337,10 @@ files = [
 name = "obstore"
 version = "0.11.1"
 description = ""
-optional = false
+optional = true
 python-versions = ">=3.10"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "obstore-0.11.1-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:a8cc4681d45196645b0567cf7259730fcb0edba751ecad8c4c3a6ccc63fabe24"},
     {file = "obstore-0.11.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:3e657c600b90f465ef43d00e6dd921e676a1bec34713dad1fc09ef6715e30658"},
@@ -3451,9 +3508,10 @@ xml = ["lxml (>=4.9.2)"]
 name = "pandas-stubs"
 version = "2.3.3.260113"
 description = "Type annotations for pandas"
-optional = false
+optional = true
 python-versions = ">=3.10"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "pandas_stubs-2.3.3.260113-py3-none-any.whl", hash = "sha256:ec070b5c576e1badf12544ae50385872f0631fc35d99d00dc598c2954ec564d3"},
     {file = "pandas_stubs-2.3.3.260113.tar.gz", hash = "sha256:076e3724bcaa73de78932b012ec64b3010463d377fa63116f4e6850643d93800"},
@@ -3518,14 +3576,16 @@ files = [
     {file = "platformdirs-4.9.4-py3-none-any.whl", hash = "sha256:68a9a4619a666ea6439f2ff250c12a853cd1cbd5158d258bd824a7df6be2f868"},
     {file = "platformdirs-4.9.4.tar.gz", hash = "sha256:1ec356301b7dc906d83f371c8f487070e99d3ccf9e501686456394622a01a934"},
 ]
+markers = {main = "extra == \"pymc\""}
 
 [[package]]
 name = "plotly"
 version = "6.6.0"
 description = "An open-source interactive data visualization library for Python"
-optional = false
+optional = true
 python-versions = ">=3.8"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "plotly-6.6.0-py3-none-any.whl", hash = "sha256:8d6daf0f87412e0c0bfe72e809d615217ab57cc715899a1e5145135a7800d1d0"},
     {file = "plotly-6.6.0.tar.gz", hash = "sha256:b897f15f3b02028d69f755f236be890ba950d0a42d7dfc619b44e2d8cea8748c"},
@@ -4005,9 +4065,10 @@ files = [
 name = "pymc"
 version = "6.3.2"
 description = "Probabilistic Programming in Python: Bayesian Modeling and Probabilistic Machine Learning with PyTensor"
-optional = false
+optional = true
 python-versions = ">=3.12"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "pymc-6.3.2-py3-none-any.whl", hash = "sha256:f3eef7d1637d4bac243562abcd087a5363e99103ae984c69ab72d081f2eb0a1e"},
     {file = "pymc-6.3.2.tar.gz", hash = "sha256:3cd58e55249b3650786e2c717078de5595811e17187a666868072d15e3a931a1"},
@@ -4166,9 +4227,10 @@ files = [
 name = "pytensor"
 version = "3.3.3"
 description = "Optimizing compiler for evaluating mathematical expressions on CPUs and GPUs."
-optional = false
+optional = true
 python-versions = "<3.15,>=3.12"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "pytensor-3.3.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:c999073a50766bf792e5a891799dfeaa1f31b810a5b85eaf087825a5db523398"},
     {file = "pytensor-3.3.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:dfa38f985cc44007ddebaebe64d78d87f42ea0e090668776a6fbd368d2587078"},
@@ -4527,9 +4589,10 @@ use-chardet-on-py3 = ["chardet (>=3.0.2,<8)"]
 name = "retrying"
 version = "1.4.2"
 description = "Retrying"
-optional = false
+optional = true
 python-versions = ">=3.6"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "retrying-1.4.2-py3-none-any.whl", hash = "sha256:bbc004aeb542a74f3569aeddf42a2516efefcdaff90df0eb38fbfbf19f179f59"},
     {file = "retrying-1.4.2.tar.gz", hash = "sha256:d102e75d53d8d30b88562d45361d6c6c934da06fab31bd81c0420acb97a8ba39"},
@@ -4746,9 +4809,10 @@ crt = ["botocore[crt] (>=1.37.4,<2.0a.0)"]
 name = "scikit-learn"
 version = "1.9.1"
 description = "A set of python modules for machine learning and data mining"
-optional = false
+optional = true
 python-versions = ">=3.11"
 groups = ["main"]
+markers = "extra == \"xgboost\""
 files = [
     {file = "scikit_learn-1.9.1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:326c188f92084bf58664229f4578eeab6176313b37cd5dfc85abd92b94130c58"},
     {file = "scikit_learn-1.9.1-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:b48b2b5b41d9c5fbafef5f37b042f61110df3318ad2a45baf57287ea5b9ba5a2"},
@@ -4908,6 +4972,7 @@ files = [
     {file = "setuptools-82.0.1-py3-none-any.whl", hash = "sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb"},
     {file = "setuptools-82.0.1.tar.gz", hash = "sha256:7d872682c5d01cfde07da7bccc7b65469d3dca203318515ada1de5eda35efbf9"},
 ]
+markers = {main = "extra == \"pymc\" or extra == \"research\""}
 
 [package.extras]
 check = ["pytest-checkdocs (>=2.4)", "pytest-ruff (>=0.2.1) ; sys_platform != \"cygwin\"", "ruff (>=0.13.0) ; sys_platform != \"cygwin\""]
@@ -4934,9 +4999,10 @@ files = [
 name = "sniffio"
 version = "1.3.1"
 description = "Sniff out which async library your code is running under"
-optional = false
+optional = true
 python-versions = ">=3.7"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2"},
     {file = "sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc"},
@@ -5031,9 +5097,10 @@ typing = ["mypy (>=1.6,<2.0)", "traitlets (>=5.11.1)"]
 name = "threadpoolctl"
 version = "3.7.0"
 description = "threadpoolctl"
-optional = false
+optional = true
 python-versions = ">=3.9"
 groups = ["main"]
+markers = "extra == \"xgboost\" or extra == \"pymc\""
 files = [
     {file = "threadpoolctl-3.7.0-py3-none-any.whl", hash = "sha256:cd8b60b5641b45c67bbf73c64c843235fc2d8a480c87389f52f5dbee893b86be"},
     {file = "threadpoolctl-3.7.0.tar.gz", hash = "sha256:61348cfb77d53b9242e0017029244b559b810c142ced65b4e21eeca1843959a7"},
@@ -5098,9 +5165,10 @@ test = ["argcomplete (>=3.0.3)", "mypy (>=1.7.0)", "pre-commit", "pytest (>=7.0,
 name = "types-awscrt"
 version = "0.34.1"
 description = "Type annotations and code completion for awscrt"
-optional = false
+optional = true
 python-versions = ">=3.8"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "types_awscrt-0.34.1-py3-none-any.whl", hash = "sha256:20c752b6031544d8f694803c35174aee129f1be5ddf886ae46d22f7ffd9b7d75"},
     {file = "types_awscrt-0.34.1.tar.gz", hash = "sha256:559aa04250f6a419a617dfb788f3e10903aaf74700ef23e521b64a411b83b803"},
@@ -5110,9 +5178,10 @@ files = [
 name = "types-pytz"
 version = "2026.1.1.20260408"
 description = "Typing stubs for pytz"
-optional = false
+optional = true
 python-versions = ">=3.10"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "types_pytz-2026.1.1.20260408-py3-none-any.whl", hash = "sha256:c7e4dec76221fb7d0c97b91ad8561d689bebe39b6bcb7b728387e7ffd8cde788"},
     {file = "types_pytz-2026.1.1.20260408.tar.gz", hash = "sha256:89b6a34b9198ea2a4b98a9d15cbca987053f52a105fd44f7ce3789cae4349408"},
@@ -5122,9 +5191,10 @@ files = [
 name = "types-s3transfer"
 version = "0.16.0"
 description = "Type annotations and code completion for s3transfer"
-optional = false
+optional = true
 python-versions = ">=3.9"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "types_s3transfer-0.16.0-py3-none-any.whl", hash = "sha256:1c0cd111ecf6e21437cb410f5cddb631bfb2263b77ad973e79b9c6d0cb24e0ef"},
     {file = "types_s3transfer-0.16.0.tar.gz", hash = "sha256:b4636472024c5e2b62278c5b759661efeb52a81851cde5f092f24100b1ecb443"},
@@ -5244,11 +5314,12 @@ version = "1.9.0"
 description = "WebSocket client for Python with low level API options"
 optional = false
 python-versions = ">=3.9"
-groups = ["dev"]
+groups = ["main", "dev"]
 files = [
     {file = "websocket_client-1.9.0-py3-none-any.whl", hash = "sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef"},
     {file = "websocket_client-1.9.0.tar.gz", hash = "sha256:9e813624b6eb619999a97dc7958469217c3176312b3a16a4bd1bc7e08a46ec98"},
 ]
+markers = {main = "extra == \"websocket\""}
 
 [package.extras]
 docs = ["Sphinx (>=6.0)", "myst-parser (>=2.0.0)", "sphinx_rtd_theme (>=1.1.0)"]
@@ -5259,9 +5330,10 @@ test = ["pytest", "websockets"]
 name = "werkzeug"
 version = "3.0.6"
 description = "The comprehensive WSGI web application library."
-optional = false
+optional = true
 python-versions = ">=3.8"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "werkzeug-3.0.6-py3-none-any.whl", hash = "sha256:1bc0c2310d2fbb07b1dd1105eba2f7af72f322e1e455f2f93c993bee8c8a5f17"},
     {file = "werkzeug-3.0.6.tar.gz", hash = "sha256:a8dd59d4de28ca70471a34cba79bed5f7ef2e036a76b3ab0835474246eb41f8d"},
@@ -5277,9 +5349,10 @@ watchdog = ["watchdog (>=2.3)"]
 name = "xarray"
 version = "2026.9.0"
 description = "N-D labeled arrays and datasets in Python"
-optional = false
+optional = true
 python-versions = ">=3.11"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "xarray-2026.9.0-py3-none-any.whl", hash = "sha256:fe349fa871628b1a0a5217af3fe1283a2862d5485156e6eda354fffb81c3bb7c"},
     {file = "xarray-2026.9.0.tar.gz", hash = "sha256:6abc69694c22fa1f0fb2f357ff4e41d88beb4477ed71091f944b7dbf67ed54fe"},
@@ -5304,9 +5377,10 @@ viz = ["cartopy (>=0.24)", "matplotlib (>=3.10)", "nc-time-axis", "seaborn"]
 name = "xarray-einstats"
 version = "0.11.0"
 description = "Stats, linear algebra and einops for xarray"
-optional = false
+optional = true
 python-versions = ">=3.12"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "xarray_einstats-0.11.0-py3-none-any.whl", hash = "sha256:9dc8372aeb5db233054ddde4e57cbbcd1eee6c2e1b6bbe85863881c09b4421b3"},
     {file = "xarray_einstats-0.11.0.tar.gz", hash = "sha256:69f48a60f62151d40c49fd6d9a6dc0b970aecef2813a33209e4dcde897fca48b"},
@@ -5327,9 +5401,10 @@ test = ["hypothesis", "packaging", "preliz (>=0.19)", "pytest", "pytest-cov", "s
 name = "xgboost"
 version = "3.4.1"
 description = "XGBoost Python Package"
-optional = false
+optional = true
 python-versions = ">=3.12"
 groups = ["main"]
+markers = "sys_platform != \"linux\" and extra == \"xgboost\""
 files = [
     {file = "xgboost-3.4.1-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:1ea15f15f661825b6a67d87674fb9604a1abb38dd0d4c5cf0486fc85f5203e83"},
     {file = "xgboost-3.4.1-py3-none-macosx_12_0_arm64.whl", hash = "sha256:a7afd7dbace0951c93aa85ffe046e54bc40893f5b51cd3e7991eb157bf9c7c7c"},
@@ -5353,12 +5428,40 @@ pyspark = ["cloudpickle", "pyspark (>=4.0)", "scikit-learn"]
 scikit-learn = ["scikit-learn"]
 
 [[package]]
+name = "xgboost-cpu"
+version = "3.4.1"
+description = "XGBoost Python Package"
+optional = true
+python-versions = ">=3.12"
+groups = ["main"]
+markers = "sys_platform == \"linux\" and extra == \"xgboost\""
+files = [
+    {file = "xgboost_cpu-3.4.1-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:47b81860b18056f9425b34fe2905343bc7ee0118122ae09cf2e31c305ed49877"},
+    {file = "xgboost_cpu-3.4.1-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:1f16331f5c6beb2b40fbd4bf2834333062d93c9eb38b76186a5c206841dc1809"},
+    {file = "xgboost_cpu-3.4.1-py3-none-win_amd64.whl", hash = "sha256:ceb0f7c786511e1876df6ca83a6f837a3187159bde51d8dcc5cdf5e2de76e366"},
+    {file = "xgboost_cpu-3.4.1-py3-none-win_arm64.whl", hash = "sha256:24347f435ba6e9919c9102684f8b353bf43d9951184ef0e71b148673ed14306d"},
+    {file = "xgboost_cpu-3.4.1.tar.gz", hash = "sha256:ee0b249eaa962837cdc4e67adfec54567bfe7386337f3c3a3ce5d68909492e81"},
+]
+
+[package.dependencies]
+numpy = "*"
+scipy = "*"
+
+[package.extras]
+dask = ["dask", "distributed", "pandas"]
+pandas = ["pandas (>=1.2)"]
+plotting = ["graphviz", "matplotlib"]
+pyspark = ["cloudpickle", "pyspark (>=4.0)", "scikit-learn"]
+scikit-learn = ["scikit-learn"]
+
+[[package]]
 name = "zarr"
 version = "3.4.1"
 description = "An implementation of chunked, compressed, N-dimensional arrays for Python"
-optional = false
+optional = true
 python-versions = ">=3.12"
 groups = ["main"]
+markers = "extra == \"pymc\""
 files = [
     {file = "zarr-3.4.1-py3-none-any.whl", hash = "sha256:38b540578a119352bdce02a720d7bfd99846e77f0728c58b1bab3d1f547526a0"},
     {file = "zarr-3.4.1.tar.gz", hash = "sha256:b34bda11ceb199c81ee78ecd42cd02f46c7f67a6d8a1e9bc501cafd5a1795356"},
@@ -5384,9 +5487,10 @@ remote = ["fsspec (>=2023.10.0)", "obstore (>=0.5.1)"]
 name = "zipp"
 version = "4.1.0"
 description = "Backport of pathlib-compatible object wrapper for zip files"
-optional = false
+optional = true
 python-versions = ">=3.10"
 groups = ["main"]
+markers = "extra == \"research\""
 files = [
     {file = "zipp-4.1.0-py3-none-any.whl", hash = "sha256:25ad4e16390cd314347dd8f1de67a2ac538ae658ed4ab9db16029c07c188e97f"},
     {file = "zipp-4.1.0.tar.gz", hash = "sha256:4cb57381f544315db7688e976e922a2b18cdb513d21cc194eb42232ba2a3e602"},
@@ -5513,7 +5617,13 @@ cffi = {version = ">=1.11", markers = "platform_python_implementation == \"PyPy\
 [package.extras]
 cffi = ["cffi (>=1.11)"]
 
+[extras]
+pymc = ["nutpie", "pymc"]
+research = ["gnomepy"]
+websocket = ["websocket-client"]
+xgboost = ["joblib", "scikit-learn", "xgboost", "xgboost-cpu"]
+
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<3.14"
-content-hash = "13c125d09d6cb1ca6d291b0ce5e2bee1b29ef5e02e5d7201f80261ff851055d9"
+content-hash = "f5d40cbf07c5f01ee102d1cf422496407bec05ef48002dd0bd4b5f4acaf80b61"

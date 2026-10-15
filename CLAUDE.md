@@ -3,9 +3,10 @@
 ## Commands
 
 ```bash
-poetry install          # install dev environment
+poetry install --all-extras   # install dev environment (every dependency family)
 poetry run pytest       # run all tests
 scripts/release.sh patch|minor|major   # from main: bump, commit, tag vX.Y.Z, push; gnome-pipelines pins the tag
+python3 gnomepy_research/dependencies.py constraints   # after every `poetry lock`: rewrite constraints.txt
 ```
 
 ## Strategy Research Sessions
@@ -40,13 +41,13 @@ the first iteration. Sessions not driven by it commit wherever you are working.
 1. Create a base session: `/research-new my_arb`
 2. Run a few iterations to establish a working strategy: `/research my_arb`
 3. Branch into parallel explorations: `/research-branch my_arb approach_a`, `/research-branch my_arb approach_b`
-4. Each branch gets its own worktree — open separate terminals, cd to each worktree, run `poetry install`, then `/loop /research my_arb__approach_a` and `/loop /research my_arb__approach_b`
+4. Each branch gets its own worktree — open separate terminals, cd to each worktree, run `poetry install --all-extras`, then `/loop /research my_arb__approach_a` and `/loop /research my_arb__approach_b`
 5. Monitor all branches: `/research-status`
 
 ### Session structure
 ```
 gnomepy_research/sessions/<name>/
-  __init__.py       # empty — makes the session importable as a Python module
+  __init__.py       # makes the session importable; declares EXTRAS if its code needs a dependency family
   spec.yaml         # user-authored goals and constraints — DO NOT MODIFY
   strategy.py       # current working strategy (modified each iteration)
   *.py              # session-local signals or utilities, if needed
@@ -111,6 +112,40 @@ models/cfb/hyperparameters/  its fitted hyperparameters
 Sessions build on `models/`, never the other way round: nothing in `models/` imports from
 `sessions/`. When session code goes to production, promote it into `models/` first, and treat
 changes there as production changes: tested, and released by tagging this repo.
+
+## Dependency families
+
+The base install (`dependencies` in pyproject.toml) is what every live strategy needs. Heavier
+libraries are extras named for what they provide, not for a sport, so a session or pipeline
+installs only what its code uses:
+
+| Extra | Brings |
+|---|---|
+| `xgboost` | xgboost (`xgboost-cpu` on Linux), scikit-learn, joblib |
+| `pymc` | pymc, `nutpie[pymc]` (our models sample with nutpie; it brings numba) |
+| `websocket` | websocket-client |
+| `research` | gnomepy[backtest] (plotly, dash, ...) for analysis, reporting, explore, CLI, validation |
+
+- A package declares the extras its code needs in its `__init__.py`: `EXTRAS = ("xgboost",)`.
+  The nearest enclosing package that declares EXTRAS decides for every module in it; code with
+  none runs on the base. Today: `models/cs2/win_probability` → xgboost, `models/cfb/efficiency`
+  → pymc, and the sessions that run them. `models/cs2/hltv`, `models/cs2/prematch` and
+  `models/cfb/features` are base-only.
+- gnome-orchestrator's `start-session.sh` runs
+  `python3 gnomepy_research/dependencies.py extras <strategy class>` and installs
+  `gnomepy-research[<extras>]` pinned by `constraints.txt`.
+- gnome-pipelines groups pipelines into images by domain (cs2, cfb), and each image installs
+  the extras its pipelines use.
+- `tests/test_dependency_families.py` follows every module's imports through the package and fails
+  if one reaches a library its extras don't install. A new heavy import means adding it to an
+  extra (or a new one) and declaring that extra on the package.
+- `constraints.txt` pins every package to its poetry.lock version. Regenerate it after `poetry lock`;
+  the test fails while it is stale.
+- Models a live session loads are saved in formats that outlive library versions (xgboost's own
+  UBJ format, plain numbers for calibrators), never pickles: a pickle only loads in the exact
+  versions that wrote it, and training (gnome-pipelines) and live sessions resolve their
+  environments separately. The pre-map bundle (`pre_map_model.write_bundle`) is the example; the
+  round model (`win_probability/model.py`) is still a pickle and must be converted before it goes live.
 
 ## Artifacts and Datasets
 

@@ -11,21 +11,30 @@ validation block instead of the test set it then reported on; and training is
 augmented with A/B-mirrored rows while inference averages both orientations, so
 the model cannot exploit HLTV's habit of listing the favourite first.
 
+A bundle is one JSON file: the booster in xgboost's own UBJ format plus the
+calibrator as plain numbers. A pickle would tie the file to the exact xgboost and
+scikit-learn versions that wrote it; xgboost's model format loads in any later
+xgboost, so training and live sessions need only agree on a minimum version.
+
 Usage:
     poetry run python -m gnomepy_research.models.cs2.win_probability.pre_map_model \
-        --out /tmp/cs2_pre_map_model.xgb
+        --out /tmp/cs2_pre_map_model.json
 """
 from __future__ import annotations
 
 import argparse
+import base64
+import json
 import logging
+import re
+from pathlib import Path
 
-import joblib
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize_scalar
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
+import xgboost
 from xgboost import XGBClassifier
 
 from gnomepy.data import DatasetStore
@@ -57,6 +66,8 @@ _ELO_FEATURES = ("elo_diff", "elo_map_diff", "elo_map_resid_diff", "elo_side_asy
 # This lives in one place because the single-row path used to clip and the batch
 # path did not, which is a train/serve skew by another name.
 _PROB_EPS = 0.01
+
+BUNDLE_FORMAT = "cs2_pre_map/1"
 
 
 def _logit(p: np.ndarray) -> np.ndarray:
@@ -110,15 +121,26 @@ class Calibrator:
     temperature scaling is symmetric by construction.
     """
 
-    def __init__(self, kind: str, temperature: float, isotonic):
+    def __init__(self, kind: str, temperature: float, isotonic_x: np.ndarray, isotonic_y: np.ndarray):
         self.kind = kind
         self.temperature = temperature
-        self.isotonic = isotonic
+        self.isotonic_x = np.asarray(isotonic_x, dtype=float)
+        self.isotonic_y = np.asarray(isotonic_y, dtype=float)
 
     def predict(self, raw: np.ndarray) -> np.ndarray:
         if self.kind == "temperature":
             return _calibrated(self.temperature, raw)
-        return np.clip(self.isotonic.predict(raw), _PROB_EPS, 1.0 - _PROB_EPS)
+        # A fitted IsotonicRegression(out_of_bounds="clip") is exactly this interpolation over its thresholds,
+        # so the file holds numbers rather than a scikit-learn object.
+        return np.clip(np.interp(raw, self.isotonic_x, self.isotonic_y), _PROB_EPS, 1.0 - _PROB_EPS)
+
+    def to_dict(self) -> dict:
+        return {"kind": self.kind, "temperature": self.temperature,
+                "isotonic_x": self.isotonic_x.tolist(), "isotonic_y": self.isotonic_y.tolist()}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Calibrator:
+        return cls(d["kind"], d["temperature"], d["isotonic_x"], d["isotonic_y"])
 
 
 def _fit_isotonic(p_cal: np.ndarray, y_cal: np.ndarray) -> IsotonicRegression:
@@ -146,7 +168,8 @@ def fit_calibrator(p_cal: np.ndarray, y_cal: np.ndarray, seed: int = 0) -> Calib
     kind = min(scores, key=scores.get)
     logger.info("calibrator: %s (cross-fit log-loss temp=%.4f iso=%.4f)",
                 kind, scores["temperature"], scores["isotonic"])
-    return Calibrator(kind, _fit_temperature(p_cal, y_cal), _fit_isotonic(p_cal, y_cal))
+    iso = _fit_isotonic(p_cal, y_cal)
+    return Calibrator(kind, _fit_temperature(p_cal, y_cal), iso.X_thresholds_, iso.y_thresholds_)
 
 
 def load_training_frame(ds: DatasetStore | None = None) -> pd.DataFrame:
@@ -253,8 +276,8 @@ def train(
         metrics["symmetry_residual"] = float(np.abs(p_te + mirror - 1).mean())
 
     if out_path:
-        joblib.dump({"model": model, "calibrator": calibrator,
-                     "feature_names": names, "symmetric": symmetric}, out_path)
+        write_bundle({"model": model, "calibrator": calibrator, "feature_names": list(names),
+                      "symmetric": symmetric}, out_path)
         logger.info("saved bundle to %s", out_path)
     return metrics
 
@@ -278,6 +301,49 @@ def fit_production(df: pd.DataFrame, names: list[str], n_estimators: int = 1000,
             "trained_through": pd.Timestamp(df["match_date"].max()), "n_maps": int(len(df))}
 
 
+def write_bundle(bundle: dict, path: str | Path) -> None:
+    """Write a bundle from train() or fit_production() as one JSON file."""
+    trained_through = bundle.get("trained_through")
+    Path(path).write_text(json.dumps({
+        "format": BUNDLE_FORMAT,
+        "xgboost_version": xgboost.__version__,
+        "booster": base64.b64encode(bundle["model"].get_booster().save_raw("ubj")).decode("ascii"),
+        "calibrator": bundle["calibrator"].to_dict(),
+        "feature_names": list(bundle["feature_names"]),
+        "symmetric": bool(bundle["symmetric"]),
+        "trained_through": pd.Timestamp(trained_through).isoformat() if trained_through is not None else None,
+        "n_maps": bundle.get("n_maps"),
+    }))
+
+
+def _version(v: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", v)[:3])
+
+
+def read_bundle(path: str | Path) -> dict:
+    """
+    A bundle written by write_bundle. Refuses one trained on a newer xgboost than this
+    environment's: model files load forwards across versions, not backwards.
+    """
+    raw = json.loads(Path(path).read_text())
+    if raw.get("format") != BUNDLE_FORMAT:
+        raise ValueError(f"{path}: not a {BUNDLE_FORMAT} bundle (format {raw.get('format')!r})")
+    if _version(xgboost.__version__) < _version(raw["xgboost_version"]):
+        raise ValueError(f"{path} was trained with xgboost {raw['xgboost_version']} but this environment has "
+                         f"{xgboost.__version__}; install xgboost >= {raw['xgboost_version']}")
+    model = XGBClassifier()
+    model.load_model(bytearray(base64.b64decode(raw["booster"])))
+    return {
+        "model": model,
+        "calibrator": Calibrator.from_dict(raw["calibrator"]),
+        "feature_names": raw["feature_names"],
+        "symmetric": raw["symmetric"],
+        "trained_through": pd.Timestamp(raw["trained_through"]) if raw["trained_through"] else None,
+        "n_maps": raw["n_maps"],
+        "xgboost_version": raw["xgboost_version"],
+    }
+
+
 def _matrix(df: pd.DataFrame, names: list[str]) -> np.ndarray:
     """Feature matrix restricted to `names`, so ablations drop columns without reshaping."""
     scalars = [n for n in names if n not in _MAP_OHE_NAMES]
@@ -293,8 +359,8 @@ def _matrix(df: pd.DataFrame, names: list[str]) -> np.ndarray:
 class CS2PreMapModel:
     """Inference wrapper. Always order-invariant when the bundle was trained symmetric."""
 
-    def __init__(self, model_path: str):
-        bundle = joblib.load(model_path)
+    def __init__(self, model_path: str | Path):
+        bundle = read_bundle(model_path)
         self._model = bundle["model"]
         self._calibrator = bundle["calibrator"]
         self._names = bundle["feature_names"]

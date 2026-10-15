@@ -5,7 +5,7 @@ Signals library for the gnome trading system.
 ## Install
 
 ```bash
-poetry install
+poetry install --all-extras
 ```
 
 Requires Python 3.13 and `gnomepy`.

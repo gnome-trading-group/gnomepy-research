@@ -9,7 +9,7 @@ This tutorial takes you from zero to your first backtest result.
 **Environment setup:**
 ```bash
 cd gnomepy-research
-poetry install
+poetry install --all-extras
 ```
 
 **AWS credentials** must be configured — the backtest engine reads market data from S3 (`gnome-market-data-dev`). Run `aws configure` or set `AWS_PROFILE` if you haven't already.

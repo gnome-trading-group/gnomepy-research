@@ -120,7 +120,7 @@ Write spec.yaml to `$SESSION_DIR/spec.yaml`. If "copy strategy" was selected, co
 
 ### 7. Register in the API
 
-Run from the main repo (the worktree has no venv yet — `poetry install` is in the user's instructions). Use an absolute `--spec` path so it resolves correctly regardless of whether `SESSION_DIR` points into the worktree or the main repo:
+Run from the main repo (the worktree has no venv yet — `poetry install --all-extras` is in the user's instructions). Use an absolute `--spec` path so it resolves correctly regardless of whether `SESSION_DIR` points into the worktree or the main repo:
 
 ```bash
 poetry run research sessions create <parent>__<suffix> \
@@ -143,7 +143,7 @@ Tell the user:
 Provide the exact commands to start iterating in the new worktree:
 ```
 cd <WORKTREE_PATH>
-poetry install
+poetry install --all-extras
 claude
 # then inside claude:
 /loop /research <parent>__<suffix>

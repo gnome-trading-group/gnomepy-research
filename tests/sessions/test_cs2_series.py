@@ -384,17 +384,17 @@ def test_the_model_is_logged_at_the_version_it_resolved_to(monkeypatch):
     class _Store:
         def find(self, query):
             found.append(query)
-            return ArtifactRef(query.artifact_type, query.name, "20261015T163515680176Z", "s3://b/model.joblib")
+            return ArtifactRef(query.artifact_type, query.name, "20261015T163515680176Z", "s3://b/model.json")
 
         def resolve(self, ref):
-            return "/tmp/model.joblib"
+            return "/tmp/model.json"
     monkeypatch.setattr(mod, "ArtifactStore", _Store)
     monkeypatch.setattr(mod, "CS2PreMapModel", lambda path: path)
     model, resolved = mod.load_model(mod.DEFAULT_MODEL + "@production")
-    assert model == "/tmp/model.joblib" and found[0].alias == "production"
+    assert model == "/tmp/model.json" and found[0].alias == "production"
     assert resolved == "artifact://xgboost_model/cs2_prematch_preveto:20261015T163515680176Z"
-    monkeypatch.setattr(mod, "resolve_artifact_path", lambda path: "/local/model.joblib")
-    assert mod.load_model("/local/model.joblib") == ("/local/model.joblib", "/local/model.joblib")
+    monkeypatch.setattr(mod, "resolve_artifact_path", lambda path: "/local/model.json")
+    assert mod.load_model("/local/model.json") == ("/local/model.json", "/local/model.json")
 
 
 def test_series_pricing_goes_through_the_map_model():

@@ -1,26 +1,43 @@
-[tool.poetry]
+[project]
 name = "gnomepy-research"
 version = "1.0.0"
 description = "Signal research, replay, metrics, and strategy modules for gnomepy"
-authors = ["mprey <masonprey7@gmail.com>"]
+authors = [{name = "mprey", email = "masonprey7@gmail.com"}]
 readme = "README.md"
+requires-python = ">=3.13,<3.14"
+# The base is what every live strategy needs. Heavier libraries are extras named for what they provide,
+# so a session or pipeline installs only what its code uses (see "Dependency families" in CLAUDE.md).
+dependencies = [
+    "gnomepy[strategy,live-data] (>=2.25.2,<3.0.0)",
+]
 
-[tool.poetry.dependencies]
-python = ">=3.13,<3.14"
-gnomepy = {version = "^2.25.2", extras = ["backtest", "live-data"]}
-joblib = "^1.6.0"
-scikit-learn = "^1.9.1"
-xgboost = "^3.4.1"
-pymc = "^6.3.2"
-nutpie = "^0.16.11"
-numba = ">=0.61,<0.68"
+[project.optional-dependencies]
+xgboost = [
+    "joblib (>=1.6.0,<2.0.0)",
+    "scikit-learn (>=1.9.1,<2.0.0)",
+    # The same library without its GPU build, whose NCCL dependency is ~300 MB; it only ships for Linux.
+    "xgboost-cpu (>=3.4.1,<4.0.0) ; sys_platform == 'linux'",
+    "xgboost (>=3.4.1,<4.0.0) ; sys_platform != 'linux'",
+]
+pymc = [
+    "pymc (>=6.3.2,<7.0.0)",
+    # Our models sample with nuts_sampler="nutpie"; its pymc extra brings the numba it compiles them with.
+    "nutpie[pymc] (>=0.16.11,<0.17.0)",
+]
+websocket = [
+    "websocket-client (>=1.9.0,<2.0.0)",
+]
+research = [
+    "gnomepy[backtest] (>=2.25.2,<3.0.0)",
+]
+
+[project.scripts]
+research = "gnomepy_research.cli:main"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"
 notebook = "^7.5.5"
-
-[tool.poetry.scripts]
-research = "gnomepy_research.cli:main"
+packaging = "*"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

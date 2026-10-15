@@ -1,11 +1,10 @@
 """Series pricing: every BO3 score priced as an unknown map, composed by the series DP."""
-import joblib
 import numpy as np
 import pandas as pd
 import pytest
 
 from gnomepy_research.models.cs2.win_probability.pre_map_features import PREVETO_FEATURE_NAMES
-from gnomepy_research.models.cs2.win_probability.pre_map_model import CS2PreMapModel, _matrix, fit_production
+from gnomepy_research.models.cs2.win_probability.pre_map_model import CS2PreMapModel, _matrix, fit_production, write_bundle
 from gnomepy_research.models.cs2.win_probability.series_pricing import node_frame, price
 from gnomepy_research.models.cs2.win_probability.symmetry import build_swap_plan, swap_features
 
@@ -19,8 +18,8 @@ def model(tmp_path_factory):
     df["match_date"] = pd.Timestamp("2026-01-01") + pd.to_timedelta(df.match_id // 4, unit="D")
     df["map_name"] = ""
     df["team_a_won"] = (rng.uniform(size=n) < 1 / (1 + np.exp(-df.elo_diff))).astype(int)
-    path = tmp_path_factory.mktemp("m") / "model.joblib"
-    joblib.dump(fit_production(df, PREVETO_FEATURE_NAMES, n_estimators=60, max_depth=3), path)
+    path = tmp_path_factory.mktemp("m") / "model.json"
+    write_bundle(fit_production(df, PREVETO_FEATURE_NAMES, n_estimators=60, max_depth=3), path)
     return CS2PreMapModel(str(path))
 
 
