@@ -330,3 +330,14 @@ def test_selection_ladder_rule():
     assert ns.candidate(("fcs",)) == {**MODEL_CONFIGS["K"], "extensions": ("fcs",)}
     assert ns.label(()) == "K" and ns.label(("couple", "fcs")) == "K+couple+fcs"
     assert ns.snapshot_kwargs(ns.candidate(ALL_EXT))["extensions"] == ALL_EXT
+
+
+def test_disagreement_table_buckets_on_base_model():
+    from gnomepy_research.sessions.cfb_win_probability.evaluation.n_report import disagreement_table
+    g = pd.DataFrame({"home_win": [1, 0, 1, 1], "p_open": [0.6, 0.6, 0.9, 0.5],
+                      "p_K": [0.6, 0.45, 0.5, 0.52], "p_N": [0.7, 0.5, 0.8, 0.5]})
+    t = disagreement_table(g, ["K", "N"]).set_index("|logit open - logit K|")
+    assert t["n"].tolist() == [2, 0, 1, 1]
+    ll = lambda y, p: -np.log(p) if y else -np.log(1 - p)
+    assert t.loc[">1", "K total"] == pytest.approx(ll(1, 0.5) - ll(1, 0.9), abs=0.01)
+    assert t.loc["<0.25", "N mean"] == pytest.approx(((ll(1, 0.7) - ll(1, 0.6)) + 0.0) / 2, abs=1e-4)

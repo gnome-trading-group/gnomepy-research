@@ -15,6 +15,7 @@ import pandas as pd
 from gnomepy_research.models.cfb.efficiency.data import TAU_PHASES, UNITS_SPLIT
 from gnomepy_research.models.cfb.efficiency.inference import HYPER_DIR
 from gnomepy_research.models.cfb.efficiency.posterior_snapshots import _suffix, hyper_name
+from gnomepy_research.models.cfb.features.drives import GARBAGE_WEIGHT
 from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import RESULTS, resolve_config
 from gnomepy_research.sessions.cfb_win_probability.evaluation.g_report import P4, append_extras, cut_frame
 from gnomepy_research.sessions.cfb_win_probability.evaluation.metrics import log_loss
@@ -107,7 +108,7 @@ def _posterior_path(model: str, first: int, last: int):
     c = resolve_config(model)
     sfx = _suffix(c["units"], c.get("conference", False), c.get("projection", False), tuple(c.get("drop_features", ())),
                   c.get("drives", False), c.get("independents_separate", False), c.get("tau_phases", False),
-                  c.get("heavy_tails", False))
+                  c.get("heavy_tails", False), c.get("garbage_weight", GARBAGE_WEIGHT), tuple(c.get("extensions", ())))
     return POSTERIOR_DIR / f"cfb_team_week_posterior{sfx}_{first}_{last}.parquet"
 
 
