@@ -9,7 +9,8 @@ so the posterior is N(m, P^-1) with P = I + A' W A and m = P^-1 A' W (y - c). On
 of a ~4.5k x 4.5k matrix replaces an MCMC run. Must agree with the PyMC fit of the same model
 (tests/sessions/test_cfb_win_probability_models.py and the validation report check it).
 
-The couple extension stays linear: ppd - sum_u kappa_u (y_u - c_u) = c_d + (A_d - sum_u kappa_u A_u) theta + e_d.
+The couple extension stays linear: with the matchup part of each PPA row (no league baseline) written
+m_u = c_u + A_u theta, ppd - sum_u kappa_u (y_u - c_u) = c_d + (A_d - sum_u kappa_u A_u) theta + e_d.
 """
 from __future__ import annotations
 
@@ -117,6 +118,7 @@ def solve(data: ModelData, h: Hyperparameters) -> tuple[np.ndarray, tuple, dict[
     c_off, A_off = _state_map(data, h, lay, data.obs_off, data.obs_period, offense=True)
     c_def, A_def = _state_map(data, h, lay, data.obs_def, data.obs_period, offense=False)
     A = A_off - A_def
+    A_match = A.copy() if EXT_COUPLE in data.extensions else None
     A[np.arange(len(data.obs_y)), lay["alpha"] + data.obs_alpha] = h.sigma_alpha
     c = np.asarray(h.alpha)[_group_unit(data)][data.obs_alpha] + c_off - c_def + h.hfa * data.obs_venue
     var = h.sigma_game ** 2 + h.sigma_play ** 2 / data.obs_plays
@@ -128,7 +130,7 @@ def solve(data: ModelData, h: Hyperparameters) -> tuple[np.ndarray, tuple, dict[
         A_d, c_d, w_d = _drive_rows(data, h, lay)
         y_d = data.drv_y
         if EXT_COUPLE in data.extensions:
-            A_d, y_d = _couple(data, h, A_d, y_d, A, c, y)
+            A_d, y_d = _couple(data, h, A_d, y_d, A_match, c_off - c_def + h.hfa * data.obs_venue, y)
         A, c, w, y = np.vstack([A, A_d]), np.r_[c, c_d], np.r_[w, w_d], np.r_[y, y_d]
     P = np.eye(lay["size"]) + A.T @ (A * w[:, None])
     chol = cho_factor(P, lower=True)

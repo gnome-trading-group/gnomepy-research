@@ -14,8 +14,9 @@ Optional drive channel (drives=True), a second observation of the same states:
 with Ocomb/Dcomb the pass-share-weighted mean of a team's unit states (= O/D with units ("all",)).
 
 Optional observation-model extensions (data.EXTENSIONS):
-    couple: ppd[g] | PPA rows of the same (game, offense) adds sum_u kappa_ppd[u] * (y_u - mu_u) to its mean,
-            the Gaussian conditional when ppd's game noise loads on that game's PPA noise
+    couple: ppd[g] | PPA rows of the same (game, offense) adds sum_u kappa_ppd[u] * (y_u - mu_u + alpha_u) to its
+            mean, the Gaussian conditional when ppd's game noise loads on that game's PPA noise (the league
+            baseline alpha_u is folded into alpha_ppd's season intercepts)
     fcs:    sigma^2 += s_fcs^2 on PPA rows with an FCS side (s_fcs_ppd^2 on drive rows)
     finish: ppd mean += FIN_O[off team-season] - FIN_D[def team-season], FIN ~ Normal(0, s_fin_off / s_fin_def)
 
@@ -277,7 +278,9 @@ def build_model(data: ModelData, hypers: Hyperparameters | None = None, likeliho
                     fin_d = pm.Deterministic("FIN_D", fin_d, dims="base")
                 mu_ppd = mu_ppd + fin_o[data.drv_base_off] - fin_d[data.drv_base_def]
             if EXT_COUPLE in ext:
-                resid = pt.concatenate([data.obs_y - mu, pt.zeros(1)])
+                # Residual net of the league baseline: alpha_ppd's season intercepts absorb kappa * alpha, which
+                # otherwise ties kappa to both intercepts (a funnel with few seasons).
+                resid = pt.concatenate([data.obs_y - (mu - alpha_season[data.obs_alpha]), pt.zeros(1)])
                 link = np.where(data.drv_obs < 0, len(data.obs_y), data.drv_obs)
                 mu_ppd = mu_ppd + (resid[link] * kappa_ppd[None, :]).sum(axis=1)
             var_ppd = s_game_ppd ** 2 + s_drive_ppd ** 2 / data.drv_n

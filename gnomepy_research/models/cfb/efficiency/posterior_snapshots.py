@@ -55,6 +55,8 @@ EXTENSION_SUFFIX = {"couple": "_cpl", "fcs": "_fcs", "finish": "_fin"}
 FIRST_TRAIN_SEASON = 2019
 N_DRAWS_KEPT = 400
 HEAVY_TAILS_MCMC = {"draws": 300, "tune": 300, "chains": 2}
+# Hyperparameter fits with observation-model extensions mix tau more slowly; a longer tune keeps rhat < 1.02.
+EXTENSION_HYPER_MCMC = {"draws": 1500, "tune": 3000}
 DRAWS_DIR = Path(__file__).resolve().parents[3] / "sessions" / "cfb_win_probability" / "results" / "posterior_draws"
 
 
@@ -126,7 +128,8 @@ def ensure_hyperparameters(inputs: Inputs, likelihood: str, season: int, units: 
                                       conference=conference, projection=projection, drop_features=drop_features,
                                       drives=drives, independents_separate=independents_separate,
                                       tau_phases=tau_phases, heavy_tails=heavy_tails,
-                                      garbage_weight=garbage_weight, extensions=extensions)
+                                      garbage_weight=garbage_weight, extensions=extensions,
+                                      **(EXTENSION_HYPER_MCMC if extensions else {}))
         save_hyperparameters(h, diag, name)
         print(f"fitted {name}: {diag['hyper']}", flush=True)
     return name

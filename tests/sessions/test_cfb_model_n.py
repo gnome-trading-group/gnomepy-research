@@ -341,3 +341,15 @@ def test_disagreement_table_buckets_on_base_model():
     ll = lambda y, p: -np.log(p) if y else -np.log(1 - p)
     assert t.loc[">1", "K total"] == pytest.approx(ll(1, 0.5) - ll(1, 0.9), abs=0.01)
     assert t.loc["<0.25", "N mean"] == pytest.approx(((ll(1, 0.7) - ll(1, 0.6)) + 0.0) / 2, abs=1e-4)
+
+
+def test_extension_hyper_fits_use_longer_tuning(monkeypatch, tmp_path):
+    from gnomepy_research.models.cfb.efficiency import posterior_snapshots as ps
+    seen = []
+    monkeypatch.setattr(ps, "HYPER_DIR", tmp_path)
+    monkeypatch.setattr(ps, "fit_hyperparameters", lambda *a, **k: seen.append(k) or (None, {"hyper": {}}))
+    monkeypatch.setattr(ps, "save_hyperparameters", lambda *a, **k: None)
+    ps.ensure_hyperparameters(None, "normal", 2023, UNITS_SPLIT, True, drives=True, extensions=("couple",))
+    ps.ensure_hyperparameters(None, "normal", 2023, UNITS_SPLIT, True, drives=True)
+    assert (seen[0]["draws"], seen[0]["tune"]) == (1500, 3000)
+    assert "draws" not in seen[1] and "tune" not in seen[1]
