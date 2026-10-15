@@ -1,11 +1,11 @@
 SUMMARY
-- Best model by log loss: K (0.5387); open 0.5286; close 0.5229.
-- Gap to open (model - open, negative = model better): +0.0101  [-0.0006, +0.0199]  P(first worse)=0.97
-- Gap to close (model - close): +0.0157  [+0.0061, +0.0250]  P(first worse)=1.00
-- Blend weight a on the model vs the open (a > 0 = information beyond the open): G a=+0.24 [-0.04, +0.49], K a=+0.33 [+0.10, +0.59], L a=+0.31 [+0.07, +0.54], Kc a=+0.39 [+0.11, +0.68], M a=+0.33 [+0.08, +0.58]
-- Carries information beyond the open (95% CI of a above 0): K, L, Kc, M
+- Best model by log loss: N1 (0.5374); open 0.5286; close 0.5229.
+- Gap to open (model - open, negative = model better): +0.0088  [-0.0010, +0.0176]  P(first worse)=0.96
+- Gap to close (model - close): +0.0145  [+0.0050, +0.0236]  P(first worse)=1.00
+- Blend weight a on the model vs the open (a > 0 = information beyond the open): G a=+0.24 [-0.04, +0.49], K a=+0.33 [+0.10, +0.59], M a=+0.33 [+0.08, +0.58], N1 a=+0.32 [+0.04, +0.61], N2 a=+0.32 [+0.03, +0.59], N a=+0.32 [+0.03, +0.60]
+- Carries information beyond the open (95% CI of a above 0): K, M, N1, N2, N
 
-models: G K L Kc M; games scored: 1590; dropped 0 games present in every model but missing an opening or closing line
+models: G K M N1 N2 N; games scored: 1590; dropped 0 games present in every model but missing an opening or closing line
 sanity: 0 of 1590 games have |backtest p_market_close - p_close| > 0.02
 
 PER-SOURCE SCORES (calib_slope: 1 = calibrated)
@@ -16,15 +16,18 @@ PER-SOURCE SCORES (calib_slope: 1 = calibrated)
  model K    all 1590    0.5387 0.1822       1.0405
  model K   2023  792    0.5304 0.1790       1.0801
  model K   2024  798    0.5469 0.1853       1.0019
- model L    all 1590    0.5397 0.1826       1.0403
- model L   2023  792    0.5307 0.1791       1.0928
- model L   2024  798    0.5486 0.1861       0.9907
-model Kc    all 1590    0.5427 0.1831       1.2300
-model Kc   2023  792    0.5354 0.1801       1.2767
-model Kc   2024  798    0.5499 0.1860       1.1847
  model M    all 1590    0.5390 0.1822       1.0491
  model M   2023  792    0.5307 0.1789       1.0871
  model M   2024  798    0.5472 0.1855       1.0116
+model N1    all 1590    0.5374 0.1815       1.0578
+model N1   2023  792    0.5251 0.1769       1.1082
+model N1   2024  798    0.5496 0.1861       1.0081
+model N2    all 1590    0.5374 0.1816       1.0549
+model N2   2023  792    0.5259 0.1772       1.0995
+model N2   2024  798    0.5488 0.1859       1.0105
+ model N    all 1590    0.5376 0.1816       1.0562
+ model N   2023  792    0.5260 0.1772       1.1058
+ model N   2024  798    0.5491 0.1859       1.0072
     open    all 1590    0.5286 0.1786       1.0698
     open   2023  792    0.5206 0.1751       1.1141
     open   2024  798    0.5366 0.1821       1.0275
@@ -34,38 +37,44 @@ model Kc   2024  798    0.5499 0.1860       1.1847
 
 PAIRED LOG-LOSS DIFFERENCES (first - second; negative = first better; game-bootstrap 95% CI)
 diff K - G  -0.0051  [-0.0130, +0.0029]  P(first worse)=0.11
-diff L - K  +0.0010  [-0.0005, +0.0025]  P(first worse)=0.90
-diff L - G  -0.0041  [-0.0120, +0.0037]  P(first worse)=0.17
-diff Kc - K  +0.0040  [+0.0008, +0.0072]  P(first worse)=0.99
-diff Kc - L  +0.0030  [-0.0005, +0.0066]  P(first worse)=0.96
 diff M - K  +0.0003  [-0.0017, +0.0021]  P(first worse)=0.62
 diff M - G  -0.0048  [-0.0131, +0.0036]  P(first worse)=0.13
+diff N1 - K  -0.0013  [-0.0076, +0.0047]  P(first worse)=0.35
+diff N2 - K  -0.0013  [-0.0073, +0.0046]  P(first worse)=0.35
+diff N - K  -0.0011  [-0.0073, +0.0049]  P(first worse)=0.36
+diff N2 - N1  +0.0000  [-0.0006, +0.0006]  P(first worse)=0.51
+diff N - N2  +0.0002  [-0.0002, +0.0005]  P(first worse)=0.82
 diff G - open  +0.0151  [+0.0043, +0.0254]  P(first worse)=1.00
 diff K - open  +0.0101  [-0.0006, +0.0199]  P(first worse)=0.97
-diff L - open  +0.0110  [+0.0003, +0.0209]  P(first worse)=0.98
-diff Kc - open  +0.0141  [+0.0037, +0.0236]  P(first worse)=1.00
 diff M - open  +0.0103  [-0.0001, +0.0199]  P(first worse)=0.97
+diff N1 - open  +0.0088  [-0.0010, +0.0176]  P(first worse)=0.96
+diff N2 - open  +0.0088  [-0.0008, +0.0177]  P(first worse)=0.96
+diff N - open  +0.0090  [-0.0007, +0.0179]  P(first worse)=0.96
 diff G - close  +0.0208  [+0.0105, +0.0310]  P(first worse)=1.00
 diff K - close  +0.0157  [+0.0061, +0.0250]  P(first worse)=1.00
-diff L - close  +0.0167  [+0.0072, +0.0259]  P(first worse)=1.00
-diff Kc - close  +0.0197  [+0.0101, +0.0289]  P(first worse)=1.00
 diff M - close  +0.0160  [+0.0065, +0.0253]  P(first worse)=1.00
+diff N1 - close  +0.0145  [+0.0050, +0.0236]  P(first worse)=1.00
+diff N2 - close  +0.0145  [+0.0051, +0.0236]  P(first worse)=1.00
+diff N - close  +0.0146  [+0.0052, +0.0239]  P(first worse)=1.00
 
 BLEND: logit(y) ~ a*logit(model) + b*logit(ref); a > 0 = model carries information the reference lacks
 G vs open:  a=+0.237 [-0.035, +0.493]  b=+0.869
 G vs close: a=+0.110 [-0.149, +0.391]  b=+0.989  (reference)
 K vs open:  a=+0.328 [+0.100, +0.593]  b=+0.781
 K vs close: a=+0.168 [-0.070, +0.426]  b=+0.934  (reference)
-L vs open:  a=+0.308 [+0.073, +0.542]  b=+0.799
-L vs close: a=+0.144 [-0.090, +0.405]  b=+0.956  (reference)
-Kc vs open:  a=+0.390 [+0.114, +0.682]  b=+0.779
-Kc vs close: a=+0.191 [-0.106, +0.505]  b=+0.940  (reference)
 M vs open:  a=+0.326 [+0.082, +0.576]  b=+0.784
 M vs close: a=+0.165 [-0.089, +0.430]  b=+0.938  (reference)
+N1 vs open:  a=+0.325 [+0.040, +0.606]  b=+0.781
+N1 vs close: a=+0.173 [-0.102, +0.466]  b=+0.929  (reference)
+N2 vs open:  a=+0.319 [+0.030, +0.590]  b=+0.784
+N2 vs close: a=+0.165 [-0.105, +0.466]  b=+0.935  (reference)
+N vs open:  a=+0.316 [+0.032, +0.595]  b=+0.788
+N vs close: a=+0.162 [-0.108, +0.458]  b=+0.939  (reference)
 
 BET-LIKE SUBSET: |p_model - p_open| > 0.05 (log loss; open scored on the same games)
 G: n=843  model=0.6052  open=0.5794
 K: n=833  model=0.6095  open=0.5911
-L: n=832  model=0.6030  open=0.5854
-Kc: n=903  model=0.5582  open=0.5354
 M: n=830  model=0.5945  open=0.5777
+N1: n=786  model=0.6100  open=0.5946
+N2: n=774  model=0.6120  open=0.5981
+N: n=775  model=0.6093  open=0.5950
