@@ -353,3 +353,15 @@ def test_extension_hyper_fits_use_longer_tuning(monkeypatch, tmp_path):
     ps.ensure_hyperparameters(None, "normal", 2023, UNITS_SPLIT, True, drives=True)
     assert (seen[0]["draws"], seen[0]["tune"]) == (1500, 3000)
     assert "draws" not in seen[1] and "tune" not in seen[1]
+
+
+def test_ambiguous_pooled_links_are_left_unlinked():
+    games, eff, pre, o, de = synthetic()
+    pre_missing = pre[pre["team_id"] != 1]  # team 1 pools with FCS, so game 999 has two pooled offenses
+    extra = eff[eff["game_id"] == 999].assign(team_id=5000, opponent_id=1, team_classification="fcs",
+                                               opponent_classification="fbs", venue=-1)
+    eff2 = pd.concat([eff, extra], ignore_index=True)
+    drv2 = coupled_drives(eff2, o, de)
+    d = build_model_data(pre_missing, eff2, games, [SEASON], drives=drv2, extensions=("couple",))
+    fcs_game = d.drv_game == 999
+    assert (d.drv_obs[fcs_game] == -1).all() and (d.drv_obs[~fcs_game] >= 0).all()

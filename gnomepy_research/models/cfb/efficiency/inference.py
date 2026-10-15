@@ -164,6 +164,8 @@ def fit_hyperparameters(inputs: Inputs, seasons: list[int], likelihood: str, dra
     if drives:
         diag["n_drive_obs"] = int(len(data.drv_y))
         diag["garbage_weight"] = garbage_weight
+    if data.extensions and drives:
+        diag["drive_link_rate"] = [float(v) for v in (data.drv_obs >= 0).mean(axis=0)]
     return hyperparameters_from(idata, data, likelihood, tau_phases=tau_phases, heavy_tails=heavy_tails,
                                 garbage_weight=garbage_weight), diag
 

@@ -375,9 +375,10 @@ def _extension_arrays(obs: pd.DataFrame, drv: dict, ts_keys: pd.DataFrame, n_bas
     out = {"n_base": n_base, "obs_fcs": (is_fcs[obs["off"]] | is_fcs[obs["def"]]).astype(float)}
     if not drv:
         return out
+    # Two offenses of one game pooled into the FCS row share a key; leave those drives unlinked.
     row = {}
     for i, (g, o) in enumerate(zip(obs["game"], obs["off"])):
-        row.setdefault((g, o), i)
+        row[(g, o)] = -1 if (g, o) in row else i
     off, de = drv["drv_off"], drv["drv_def"]
     out["drv_obs"] = np.array([[row.get((g, off[m, u]), -1) for u in range(n_u)]
                                for m, g in enumerate(drv["drv_game"])], dtype=int).reshape(len(off), n_u)
