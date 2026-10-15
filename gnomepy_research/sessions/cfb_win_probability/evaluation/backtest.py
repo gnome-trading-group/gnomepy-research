@@ -63,6 +63,9 @@ MODEL_CONFIGS["M"] = {**MODEL_CONFIGS["K"], "heavy_tails": True}
 MODEL_CONFIGS["N1"] = {**MODEL_CONFIGS["K"], "extensions": ("couple",)}
 MODEL_CONFIGS["N2"] = {**MODEL_CONFIGS["K"], "extensions": ("couple", "fcs")}
 MODEL_CONFIGS["N"] = {**MODEL_CONFIGS["K"], "extensions": ("couple", "fcs", "finish")}
+# Preseason-feature hygiene (Phase 14) on top of K and N.
+MODEL_CONFIGS["Kp"] = {**MODEL_CONFIGS["K"], "extensions": ("prior",)}
+MODEL_CONFIGS["Np"] = {**MODEL_CONFIGS["K"], "extensions": ("couple", "fcs", "finish", "prior")}
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
                 "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails", "garbage_weight",
                 "extensions")

@@ -42,8 +42,15 @@ UNIT_COLUMNS = {"all": ("plays", "off_ppa"), "pass": ("pass_plays", "off_pass_pp
 # residuals of the same (game, offense), whose noise it shares. fcs: extra noise on rows with an FCS side.
 # finish: a static team-season scoring effect beyond per-play efficiency, seen only by drives.
 EXT_COUPLE, EXT_FCS, EXT_FINISH = "couple", "fcs", "finish"
-EXTENSIONS = (EXT_COUPLE, EXT_FCS, EXT_FINISH)
+# prior: preseason-feature hygiene (prior_fixes) - returning production is unknown without a prior season, FCS
+# move-ups' talent/recruiting/returning numbers aren't comparable for their first TRANSITION_SEASONS FBS seasons,
+# and a talent_missing indicator replaces the silent league-average fill (service academies).
+EXT_PRIOR = "prior"
+EXTENSIONS = (EXT_COUPLE, EXT_FCS, EXT_FINISH, EXT_PRIOR)
 DRIVE_EXTENSIONS = (EXT_COUPLE, EXT_FINISH)
+TRANSITION_SEASONS = 3
+RETURNING_FEATURES = ["returning_pct_ppa", "returning_pct_passing_ppa"]
+TRANSITION_MASKED = ["talent_offense", "talent_defense", "talent_qb", "recruiting_points", *RETURNING_FEATURES]
 
 
 def canonical_extensions(extensions, drives: bool) -> tuple[str, ...]:
@@ -159,6 +166,27 @@ def _standardize(pre: pd.DataFrame, cols: list[str]) -> tuple[pd.DataFrame, list
     return out, names
 
 
+def first_fbs_seasons(games: pd.DataFrame) -> pd.Series:
+    rows = pd.concat([
+        games.loc[games["home_classification"] == "fbs", ["season", "home_id"]].set_axis(["season", "team_id"], axis=1),
+        games.loc[games["away_classification"] == "fbs", ["season", "away_id"]].set_axis(["season", "team_id"], axis=1),
+    ])
+    return rows.groupby("team_id")["season"].min()
+
+
+def prior_fixes(pre: pd.DataFrame, games: pd.DataFrame) -> pd.DataFrame:
+    """Preseason-feature hygiene for the prior extension. A team first seen as FBS after the games table's first
+    season is an FCS move-up; a team without a prior-season rating has no production to return."""
+    pre = pre.copy()
+    pre["talent_missing"] = pre["talent_offense"].isna().astype(float)
+    first = pre["team_id"].map(first_fbs_seasons(games))
+    since = pre["season"] - first
+    transition = (first > games["season"].min()) & (since >= 0) & (since < TRANSITION_SEASONS)
+    pre.loc[transition.to_numpy(), TRANSITION_MASKED] = np.nan
+    pre.loc[pre["prior_off_rating"].isna().to_numpy(), RETURNING_FEATURES] = np.nan
+    return pre
+
+
 def team_conferences(games: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
     """Each team-season's most frequent conference over that season's games (ties: alphabetical)."""
     g = games[games["season"].isin(seasons)]
@@ -263,9 +291,12 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
     pre["qb_returning_starter"] = pre["qb_returning_starter"].astype(float)
     pre["coach_new"] = pre["coach_new"].astype(float)
     off_cols, def_cols = OFF_FEATURES, DEF_FEATURES
+    if EXT_PRIOR in extensions:
+        pre = prior_fixes(pre, games)
+        off_cols, def_cols = off_cols + ["talent_missing"], def_cols + ["talent_missing"]
     if conference:
         pre = with_conference_means(pre, games, seasons, independents_separate)
-        off_cols, def_cols = OFF_FEATURES + CONF_OFF_FEATURES, DEF_FEATURES + CONF_DEF_FEATURES
+        off_cols, def_cols = off_cols + CONF_OFF_FEATURES, def_cols + CONF_DEF_FEATURES
     unknown = set(drop_features) - set(off_cols) - set(def_cols)
     if unknown:
         raise ValueError(f"unknown drop_features: {sorted(unknown)}")

@@ -1818,6 +1818,30 @@ Added 2026-10-14.
 
 ---
 
+## Phase 14: Preseason-feature hygiene ("prior" extension, models Kp and Np)
+
+Added 2026-10-15.
+
+**Diagnosis.** The 15 worst weeks 1–4 games of 2021–24 carry +13.6 of N's +14.2 early-season log-loss gap to the open. Recurring causes:
+- **An FCS move-up rated by FCS-era inputs.** James Madison's 4 games are 26% of the gap. Its talent sat in the bottom 1–9% of FBS and its returning production read 4–11%, while it went 8–3, 11–1 and 9–4.
+- **A 2020-COVID artifact.** NMSU 2021 had no prior rating but returning production of 100%.
+- **Academies.** Their missing talent was silently filled with the league average.
+
+**Fix (opt-in extension `prior`, suffix `_pfx`; default unchanged).** `data.prior_fixes`, applied before conference means:
+- (a) No prior-season rating → returning production is unknown (NaN, so the season mean).
+- (b) A team first seen as FBS after the games table's first season has, for its first 3 FBS seasons, talent, recruiting and returning production set to NaN.
+- (c) A `talent_missing` indicator is added to the offense and defense prior features.
+
+**Task 35p: selection and scoring.** The rule is fixed before any run:
+- **Candidates:** Kp = K + prior and Np = N + prior.
+- **Validation:** for each, snapshots 2020–22 (hyperparameters 2019..S−1), outcome layer trained on 2020–21, scored on 2022 with 3 seeds.
+- **Keep rule:** keep unless 2022 log loss is worse than the base model (K or N) by more than 0.002.
+- **Scoring:** then score 2023–24 once, plus 2021–22. Report weeks 1–4 and the 15-game list.
+- Both kept or reverted models enter the 2025 holdout comparison.
+- No tuning on 2023–24.
+
+---
+
 ## Weekly operating procedure (after this ships)
 
 1. Before each slate, add one row per known QB change to `sessions/cfb_win_probability/data/qb_status.csv`, with `recorded_at` set to when you learned it.

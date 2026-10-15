@@ -17,7 +17,6 @@ import numpy as np
 import pandas as pd
 
 from gnomepy.data import DatasetStore
-from gnomepy_research.models.cfb.efficiency.data import EXTENSIONS
 from gnomepy_research.models.cfb.efficiency.inference import HYPER_DIR, Inputs
 from gnomepy_research.models.cfb.efficiency.posterior_snapshots import DRAWS_DIR, draws_name, hyper_name, snapshot_season
 from gnomepy_research.models.cfb.features.qb_status import apply_overrides, historical_starters, load_qb_status, qb_deltas
@@ -30,6 +29,8 @@ from gnomepy_research.sessions.cfb_win_probability.evaluation.garbage_weight imp
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import N_FIT_DRAWS, fit, game_draws
 
 BASE_MODEL = "K"
+# The frozen Phase 13 ladder; later extensions (prior) are evaluated separately.
+LADDER = ("couple", "fcs", "finish")
 KEEP_TOLERANCE = 0.002
 N_SELECTION = RESULTS / "N_selection.json"
 REPORT_TXT = RESULTS / f"n_selection_{VALIDATION_SEASON}.txt"
@@ -42,7 +43,7 @@ def candidate(extensions: tuple[str, ...]) -> dict:
 
 
 def ladder_step(kept: tuple[str, ...], ext: str) -> tuple[str, ...]:
-    return tuple(e for e in EXTENSIONS if e in set(kept) | {ext})
+    return tuple(e for e in LADDER if e in set(kept) | {ext})
 
 
 def keep(score: float, kept_score: float, tolerance: float = KEEP_TOLERANCE) -> bool:
@@ -113,7 +114,7 @@ def main() -> None:
     kept = ()
     kept_score = run(kept)["overall"]
     steps = []
-    for ext in EXTENSIONS:
+    for ext in LADDER:
         cand = ladder_step(kept, ext)
         s = run(cand)["overall"]
         ok = keep(s, kept_score)
