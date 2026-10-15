@@ -103,3 +103,46 @@ def test_calibrator_seasons_guard(tmp_path):
         load_calibrator(cfg, [2024], results=tmp_path, cal_seasons=[2023, 2024])
     with pytest.raises(SystemExit, match="missing"):
         load_calibrator(cfg, [2025], results=tmp_path, cal_seasons=[2024, 2023])
+
+
+class TestTightPrior:
+    def test_names_share_hyperparameters_but_not_draws(self):
+        np_ext = ("couple", "fcs", "finish", "prior")
+        kw = dict(units=UNITS_SPLIT, conference=True, drives=True, independents_separate=True)
+        assert hyper_name("normal", 2023, **kw, extensions=np_ext + ("tight",)) == hyper_name("normal", 2023, **kw, extensions=np_ext)
+        assert draws_name(2024, **kw, extensions=np_ext + ("tight",)) == \
+            "cfb_team_week_draws_split_conf_ind_drv_cpl_fcs_fin_pfx_tgt_2024"
+        assert MODEL_CONFIGS["Npt"] == {**MODEL_CONFIGS["Np"], "extensions": np_ext + ("tight",)}
+
+    def test_model_data_ignores_fit_time_extension(self):
+        games, eff, pre, _, _ = synthetic()
+        a = build_model_data(pre, eff, games, [SEASON], extensions=("prior",))
+        b = build_model_data(pre, eff, games, [SEASON], extensions=("prior", "tight"))
+        assert a.extensions == b.extensions == ("prior",)
+        np.testing.assert_array_equal(a.x_off, b.x_off)
+
+    def test_snapshot_scales_prior_spread_only_with_tight(self, monkeypatch, tmp_path):
+        from dataclasses import replace
+        from gnomepy_research.models.cfb.efficiency import posterior_snapshots as ps
+        from gnomepy_research.models.cfb.efficiency.data import TIGHT_PRIOR_SCALE
+        from tests.sessions.test_cfb_win_probability_models import hypers
+        games, eff, pre, _, _ = synthetic()
+        h0 = replace(hypers(build_model_data(pre, eff, games, [SEASON])), likelihood="normal")
+        seen = []
+        monkeypatch.setattr(ps, "ensure_hyperparameters", lambda *a, **k: "x")
+        monkeypatch.setattr(ps, "load_hyperparameters", lambda name: h0)
+
+        def fake_fit(inputs, season, cutoff, h, seed=0):
+            seen.append((h.s_off, h.s_def))
+            raise StopIteration
+
+        monkeypatch.setattr(ps, "fit_cutoff_exact", fake_fit)
+        from gnomepy_research.models.cfb.efficiency.inference import Inputs
+        inputs = Inputs(pre, eff, games, as_of=pd.Timestamp("2025-01-01", tz="UTC").to_pydatetime())
+        for ext in ((), ("tight",)):
+            try:
+                ps.snapshot_season(inputs, SEASON, "normal", out_dir=tmp_path, extensions=ext)
+            except StopIteration:
+                pass
+        assert seen[0] == (h0.s_off, h0.s_def)
+        assert seen[1] == (h0.s_off * TIGHT_PRIOR_SCALE, h0.s_def * TIGHT_PRIOR_SCALE)

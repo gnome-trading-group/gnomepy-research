@@ -66,6 +66,8 @@ MODEL_CONFIGS["N"] = {**MODEL_CONFIGS["K"], "extensions": ("couple", "fcs", "fin
 # Preseason-feature hygiene (Phase 14) on top of K and N.
 MODEL_CONFIGS["Kp"] = {**MODEL_CONFIGS["K"], "extensions": ("prior",)}
 MODEL_CONFIGS["Np"] = {**MODEL_CONFIGS["K"], "extensions": ("couple", "fcs", "finish", "prior")}
+# Forecast-calibrated prior width (Phase 15) on top of Np.
+MODEL_CONFIGS["Npt"] = {**MODEL_CONFIGS["K"], "extensions": ("couple", "fcs", "finish", "prior", "tight")}
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
                 "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails", "garbage_weight",
                 "extensions")

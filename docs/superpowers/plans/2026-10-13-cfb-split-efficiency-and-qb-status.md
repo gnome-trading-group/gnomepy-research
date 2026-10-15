@@ -1842,6 +1842,23 @@ Added 2026-10-15.
 
 ---
 
+## Phase 15: Mid-season (weeks 5–9) gap
+
+Added 2026-10-15.
+
+**Diagnosis.** Np's remaining gap to the open is almost entirely weeks 5–9: +0.025 per game in 2021–22 and +0.015 in 2023–24, about 8 of 9 units. It is not a calibration bias, because the slope points in opposite directions in the two periods. Weeks 5–9 is when prior and data weigh about equally, so it is the phase most sensitive to wrong noise assumptions in the observation model.
+
+**Phase 1 diagnostics.** These are analysis only, on 2021–24 out-of-sample Np predictions and posteriors:
+- **D1, prior/data balance.** One-week-ahead predictive log density of unit PPA under τ ×{0.5, 1, 1.5, 2.5} and prior sd ×{0.75, 1, 1.5}, using each season's Np hyperparameters, scored by phase.
+- **D2, mismatch contamination.** (a) Does a team's season-to-date share of mismatch games (FCS, or Np ≥ 90%) explain Np's weeks 5–9 residuals and disagreement? (b) Are unit PPA residuals compressed for large predicted edges?
+- **D3, mid-season signal screen.** Season-to-date success rate, turnover margin and pace, as home − away differences, tested against Np's weeks 5–9 residuals. Fit on one period and score on the other.
+
+**Phase 2: build only what Phase 1 supports.**
+- Candidates: a success-rate channel (coupled), turnover-luck neutralisation, mismatch down-weighting, and phase-dependent updating.
+- Selection on 2022 with the harm rule, then score 2023–24 once, then the holdout.
+
+---
+
 ## Weekly operating procedure (after this ships)
 
 1. Before each slate, add one row per known QB change to `sessions/cfb_win_probability/data/qb_status.csv`, with `recorded_at` set to when you learned it.

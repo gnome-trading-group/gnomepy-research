@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,7 +26,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.models.cfb.efficiency.data import (
-    EXTENSIONS, UNITS_ALL, UNITS_SPLIT, canonical_extensions, season_periods)
+    EXT_TIGHT, EXTENSIONS, FIT_TIME_ONLY, TIGHT_PRIOR_SCALE, UNITS_ALL, UNITS_SPLIT, canonical_extensions, season_periods)
 from gnomepy_research.models.cfb.efficiency.gaussian_solver import fit_cutoff_exact
 from gnomepy_research.models.cfb.efficiency.projection import project_seasons, projection_table
 from gnomepy_research.models.cfb.features.drives import GARBAGE_WEIGHT
@@ -51,7 +52,7 @@ PROJ_SUFFIX = "_proj"
 DRIVES_SUFFIX = "_drv"
 TAU_PHASES_SUFFIX = "_tph"
 HEAVY_TAILS_SUFFIX = "_ht"
-EXTENSION_SUFFIX = {"couple": "_cpl", "fcs": "_fcs", "finish": "_fin", "prior": "_pfx"}
+EXTENSION_SUFFIX = {"couple": "_cpl", "fcs": "_fcs", "finish": "_fin", "prior": "_pfx", "tight": "_tgt"}
 FIRST_TRAIN_SEASON = 2019
 N_DRAWS_KEPT = 400
 HEAVY_TAILS_MCMC = {"draws": 300, "tune": 300, "chains": 2}
@@ -74,7 +75,7 @@ def _suffix(units: tuple[str, ...], conference: bool = False, projection: bool =
             drop_features: tuple[str, ...] = (), drives: bool = False, independents_separate: bool = False,
             tau_phases: bool = False, heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT,
             extensions: tuple[str, ...] = ()) -> str:
-    """Order: split, conf, ind, proj, drv, gw, tph, ht, cpl, fcs, fin, pfx, drop."""
+    """Order: split, conf, ind, proj, drv, gw, tph, ht, cpl, fcs, fin, pfx, tgt, drop."""
     if garbage_weight != GARBAGE_WEIGHT and not drives:
         raise ValueError("a garbage-time weight only applies with drives=True")
     ext = "".join(EXTENSION_SUFFIX[e] for e in canonical_extensions(extensions, drives))
@@ -101,8 +102,9 @@ def hyper_name(likelihood: str, season: int, units: tuple[str, ...] = UNITS_ALL,
                projection: bool = False, drop_features: tuple[str, ...] = (), drives: bool = False,
                independents_separate: bool = False, tau_phases: bool = False, heavy_tails: bool = False,
                garbage_weight: float = GARBAGE_WEIGHT, extensions: tuple[str, ...] = ()) -> str:
+    fitted = tuple(e for e in extensions if e not in FIT_TIME_ONLY)
     suffix = _suffix(units, conference, projection, drop_features, drives, independents_separate, tau_phases,
-                     heavy_tails, garbage_weight, extensions)
+                     heavy_tails, garbage_weight, fitted)
     return f"{likelihood}{suffix}_{FIRST_TRAIN_SEASON}_{season - 1}"
 
 
@@ -123,13 +125,14 @@ def ensure_hyperparameters(inputs: Inputs, likelihood: str, season: int, units: 
                            extensions: tuple[str, ...] = ()) -> str:
     name = hyper_name(likelihood, season, units, conference, projection, drop_features, drives,
                       independents_separate, tau_phases, heavy_tails, garbage_weight, extensions)
+    fitted = tuple(e for e in extensions if e not in FIT_TIME_ONLY)
     if not (HYPER_DIR / f"{name}.json").exists():
         h, diag = fit_hyperparameters(inputs, list(range(FIRST_TRAIN_SEASON, season)), likelihood, units=units,
                                       conference=conference, projection=projection, drop_features=drop_features,
                                       drives=drives, independents_separate=independents_separate,
                                       tau_phases=tau_phases, heavy_tails=heavy_tails,
-                                      garbage_weight=garbage_weight, extensions=extensions,
-                                      **(EXTENSION_HYPER_MCMC if extensions else {}))
+                                      garbage_weight=garbage_weight, extensions=fitted,
+                                      **(EXTENSION_HYPER_MCMC if fitted else {}))
         save_hyperparameters(h, diag, name)
         print(f"fitted {name}: {diag['hyper']}", flush=True)
     return name
@@ -153,6 +156,8 @@ def snapshot_season(inputs: Inputs, season: int, likelihood: str, seed: int = 0,
     name = ensure_hyperparameters(inputs, likelihood, season, units, conference, projection, drop_features, drives,
                                   independents_separate, tau_phases, heavy_tails, garbage_weight, extensions)
     h = load_hyperparameters(name)
+    if EXT_TIGHT in extensions:
+        h = replace(h, s_off=h.s_off * TIGHT_PRIOR_SCALE, s_def=h.s_def * TIGHT_PRIOR_SCALE)
     rng = np.random.default_rng(seed)
     summaries, draws = [], {}
     e = inputs.efficiency

@@ -46,7 +46,13 @@ EXT_COUPLE, EXT_FCS, EXT_FINISH = "couple", "fcs", "finish"
 # move-ups' talent/recruiting/returning numbers aren't comparable for their first TRANSITION_SEASONS FBS seasons,
 # and a talent_missing indicator replaces the silent league-average fill (service academies).
 EXT_PRIOR = "prior"
-EXTENSIONS = (EXT_COUPLE, EXT_FCS, EXT_FINISH, EXT_PRIOR)
+# tight: forecasting-time prior scaling. The hyperparameter fit (a smoothing fit over whole seasons) sets the
+# start-state spread; for one-week-ahead prediction a narrower prior was better in weeks 5-9 (Phase 15, D1 on
+# 2021-22: s_off/s_def x TIGHT_PRIOR_SCALE). Applied to fixed hyperparameters only; hyper fits are shared.
+EXT_TIGHT = "tight"
+TIGHT_PRIOR_SCALE = 0.75
+EXTENSIONS = (EXT_COUPLE, EXT_FCS, EXT_FINISH, EXT_PRIOR, EXT_TIGHT)
+FIT_TIME_ONLY = (EXT_TIGHT,)
 DRIVE_EXTENSIONS = (EXT_COUPLE, EXT_FINISH)
 TRANSITION_SEASONS = 3
 RETURNING_FEATURES = ["returning_pct_ppa", "returning_pct_passing_ppa"]
@@ -284,7 +290,7 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
     `extensions` (EXTENSIONS) adds the index arrays the observation-model extensions need."""
     if independents_separate and not conference:
         raise ValueError("independents_separate needs conference=True")
-    extensions = canonical_extensions(extensions, drives is not None)
+    extensions = tuple(e for e in canonical_extensions(extensions, drives is not None) if e not in FIT_TIME_ONLY)
     if projection is not None and tuple(units) == UNITS_ALL:
         raise ValueError("the preseason projection is per pass/rush unit; use split units")
     pre = preseason[preseason["season"].isin(seasons)].sort_values(["season", "team_id"]).reset_index(drop=True)

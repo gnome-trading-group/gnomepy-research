@@ -19,8 +19,8 @@ from gnomepy_research.models.cfb.features.drives import GARBAGE_WEIGHT
 from gnomepy_research.models.cfb.features.source import SourceData
 from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import HOLDOUT, RESULTS, resolve_config
 
-MODELS = ["A", "B", "C", "D", "E", "F", "G", "H", "I0", "I", "J0", "J", "K", "L", "Kc", "M", "N1", "N2", "N", "Kp", "Np"]
-QB_SENSITIVITY = ["K", "N", "Kp", "Np"]
+MODELS = ["A", "B", "C", "D", "E", "F", "G", "H", "I0", "I", "J0", "J", "K", "L", "Kc", "M", "N1", "N2", "N", "Kp", "Np", "Npt"]
+QB_SENSITIVITY = ["K", "N", "Kp", "Np", "Npt"]
 PREREGISTRATION = RESULTS / "holdout_2025_preregistration.md"
 HEAVY_TAILS_MCMC_HOLDOUT = {"draws": 500, "tune": 500, "chains": 2}
 
