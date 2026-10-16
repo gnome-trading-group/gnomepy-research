@@ -78,3 +78,10 @@ def test_phase20_configs():
     assert {"mov", "mov_late"} <= set(OUTCOME_FLAGS)
     assert MODEL_CONFIGS["Npv"] == {**MODEL_CONFIGS["Np"], "mov": True}
     assert MODEL_CONFIGS["Npvl"]["mov_late"] and MODEL_CONFIGS["Npvl"]["mov"]
+
+
+def test_every_extension_has_hyperparameter_fields_and_a_suffix():
+    from gnomepy_research.models.cfb.efficiency.data import EXTENSIONS
+    from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import EXTENSION_FIELDS
+    from gnomepy_research.models.cfb.efficiency.posterior_snapshots import EXTENSION_SUFFIX
+    assert set(EXTENSION_FIELDS) == set(EXTENSIONS) == set(EXTENSION_SUFFIX)
