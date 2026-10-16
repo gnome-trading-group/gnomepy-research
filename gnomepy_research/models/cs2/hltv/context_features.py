@@ -72,7 +72,7 @@ class ScheduleAccumulator:
         return float(len(recent)), _rest_days(sched, as_of)
 
     def snapshot(self, batch: SeriesBatch) -> dict:
-        row = next(batch.rows.itertuples())
+        row = batch.records[0]
         a_id, b_id = getattr(row, "team_a_id", None), getattr(row, "team_b_id", None)
         a_maps, a_rest = self._workload(a_id, batch.match_date)
         b_maps, b_rest = self._workload(b_id, batch.match_date)
@@ -95,7 +95,7 @@ class ScheduleAccumulator:
         }
 
     def update(self, batch: SeriesBatch) -> None:
-        row = next(batch.rows.itertuples())
+        row = batch.records[0]
         a_id, b_id = getattr(row, "team_a_id", None), getattr(row, "team_b_id", None)
         for team_id in (a_id, b_id):
             if team_id is None:
@@ -108,7 +108,7 @@ class ScheduleAccumulator:
             return
         key = (a_id, b_id) if a_id <= b_id else (b_id, a_id)
         bucket = self.pairs.setdefault(key, [])
-        for r in batch.rows.itertuples():
+        for r in batch.records:
             bucket.append(a_id if getattr(r, "team_a_won", 0) else b_id)
 
 

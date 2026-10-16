@@ -43,9 +43,16 @@ class SeriesBatch:
     match_date: pd.Timestamp
     rows: pd.DataFrame
     aux: dict[str, pd.DataFrame]
+    # rows and each aux slice as itertuples() records, made once per scan: itertuples on every
+    # series' small frame cost most of a scan's time.
+    records: list = ()
+    aux_records: dict[str, list] | None = None
 
     def aux_frame(self, name: str) -> pd.DataFrame:
         return self.aux.get(name, _EMPTY)
+
+    def aux_rows(self, name: str) -> list:
+        return (self.aux_records or {}).get(name, [])
 
 
 _EMPTY = pd.DataFrame()
@@ -69,16 +76,21 @@ class PitAccumulator(Protocol):
     def update(self, batch: SeriesBatch) -> None: ...
 
 
-def _group_aux(aux: dict[str, pd.DataFrame] | None) -> dict[str, dict]:
+def _group_aux(aux: dict[str, pd.DataFrame] | None) -> tuple[dict[str, dict], dict[str, dict]]:
     if not aux:
-        return {}
-    grouped = {}
+        return {}, {}
+    grouped, grouped_records = {}, {}
     for name, frame in aux.items():
         if frame is None or frame.empty or "match_id" not in frame.columns:
-            grouped[name] = {}
+            grouped[name], grouped_records[name] = {}, {}
             continue
         grouped[name] = {mid: sub for mid, sub in frame.groupby("match_id", sort=False)}
-    return grouped
+        records = list(frame.itertuples())
+        grouped_records[name] = {
+            mid: [records[i] for i in positions]
+            for mid, positions in frame.groupby("match_id", sort=False).indices.items()
+        }
+    return grouped, grouped_records
 
 
 def pit_scan(
@@ -97,9 +109,10 @@ def pit_scan(
     if history.empty:
         return pd.DataFrame(columns=list(key))
 
-    grouped_aux = _group_aux(aux)
+    grouped_aux, grouped_aux_records = _group_aux(aux)
     sort_cols = [c for c in ("match_date", "match_id", "map_position_in_series") if c in history.columns]
     hist = history.sort_values(sort_cols).reset_index(drop=True)
+    hist_records = list(hist.itertuples())
 
     out: list[dict] = []
     for match_date, day in hist.groupby("match_date", sort=True):
@@ -109,13 +122,15 @@ def pit_scan(
                 match_date=match_date,
                 rows=rows,
                 aux={name: by_id.get(mid, _EMPTY) for name, by_id in grouped_aux.items()},
+                records=[hist_records[i] for i in rows.index],
+                aux_records={name: by_id.get(mid, []) for name, by_id in grouped_aux_records.items()},
             )
             for mid, rows in day.groupby("match_id", sort=True)
         ]
         for batch in batches:
             emitted = accumulator.snapshot(batch)
             if isinstance(emitted, dict):
-                for row in batch.rows.itertuples():
+                for row in batch.records:
                     out.append({**{k: getattr(row, k) for k in key}, **emitted})
             else:
                 out.extend(emitted)

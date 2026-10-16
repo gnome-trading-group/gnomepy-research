@@ -115,7 +115,7 @@ class PlayerFormAccumulator:
         }
 
     def snapshot(self, batch: SeriesBatch) -> dict:
-        row = next(batch.rows.itertuples())
+        row = batch.records[0]
         a = self._aggregate(_lineup(row, "a"))
         b = self._aggregate(_lineup(row, "b"))
         out = {}
@@ -131,10 +131,7 @@ class PlayerFormAccumulator:
         return out
 
     def update(self, batch: SeriesBatch) -> None:
-        stats = batch.aux_frame(PLAYERS_AUX)
-        if stats.empty:
-            return
-        for rec in stats.itertuples():
+        for rec in batch.aux_rows(PLAYERS_AUX):
             pid = _num(getattr(rec, "player_id", None))
             if pid is None:
                 continue

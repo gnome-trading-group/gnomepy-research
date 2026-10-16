@@ -212,7 +212,7 @@ class _EloAccumulator:
     def snapshot(self, batch: SeriesBatch) -> list[dict]:
         snap = self._engine.snapshot_series(batch.rows)
         out = []
-        for row in batch.rows.itertuples():
+        for row in batch.records:
             map_elo = snap["map_elo_diff"].get(row.map_name, 0.0)
             out.append({
                 "match_id": batch.match_id,
