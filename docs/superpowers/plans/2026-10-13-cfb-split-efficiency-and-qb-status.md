@@ -2060,6 +2060,16 @@ Added 2026-10-16, pre-registered before any Phase 20 backtest.
 - **Go-live rule:** Npv goes live if its log loss is no worse than Np's by more than 0.003, the Task 48 threshold.
 - **Report:** the paired difference with its CI, and the weeks 5+ subset.
 
+**Confirmation result (2026-10-16, read once): Npv passes and becomes the live model.**
+
+| 2026 completed FBS games | n | Np | Npv | Npv − Np | 95% CI | P(worse) |
+|---|---|---|---|---|---|---|
+| Weeks 1–6 | 283 | 0.4736 | 0.4717 | −0.0019 | [−0.0130, +0.0099] | 0.38 |
+| Weeks 5+ | 68 | | | −0.0126 | [−0.0325, +0.0064] | |
+
+- The open is at 0.4290 on these mostly early-season games.
+- Npc stays on the watch list.
+
 ### Phase 21 (proposed): availability data
 
 - **No free historical college injury data exists.** Sports Info Solutions sells college injury data from 2016.
