@@ -2157,6 +2157,25 @@ Added 2026-10-16. Pre-registered before any Phase 23 backtest.
   - The clean test is 2026 weeks 7+, logged before kickoff.
   - 2025 is not used.
 
+**Phase 23 result (2026-10-16, `results/backtest/p23_selection.txt`): Npvk passes and is confirmed. Npvk is live.**
+
+| Comparison vs Npv (pooled 2021–24) | Δ log loss | 95% CI | P(worse) | 2021 | 2022 | 2023 | 2024 |
+|---|---|---|---|---|---|---|---|
+| Npvk | −0.0014 | [−0.0026, −0.0001] | 0.02 | −0.0024 | −0.0004 | −0.0009 | −0.0018 |
+| Npvk0 | −0.0011 | | 0.04 | | | | |
+
+- **Learned kf weight (per 10 points)** grows with training data: +0.11 (trained on 2020), +0.29, +0.41, +0.42, and +0.56 [0.32, 0.81] on 2020–25. The PPA edge weights shrink correspondingly, and mov_diff falls to about 0.05.
+- **2023–24,** where the weight is well trained: 0.5318 → 0.5304 against the open's 0.5286, closing 44% of the gap.
+- **Where it helps:** G5–G5 weeks 5–9 (0.5874 → 0.5842), G5–G5 weeks 10+ (0.5587, which beats the open's 0.5595) and P4–P4 weeks 10+ (0.5642 → 0.5601).
+- **Where it doesn't:** weeks 1–4 are unchanged, since that window is limited by the prior. Big favorites move only 0.3237 → 0.3231.
+
+**2026 confirmation (completed games, weeks 1–6, n=283, a reused set):**
+- Npvk − Npv = −0.0012 [−0.0076, +0.0052], which passes.
+- In weeks 5+ (n=68) it is +0.0074 [−0.004, +0.018], the opposite of the backtest pattern, but the interval covers zero.
+- The clean test is 2026 weeks 7+, logged before kickoff.
+
+**Remaining gap:** early-season G5 and P4-vs-G5 games, which are limited by the prior. The next lever is new preseason and late-summer information.
+
 ### Phase 21 (proposed): availability data
 
 - **No free historical college injury data exists.** Sports Info Solutions sells college injury data from 2016.
