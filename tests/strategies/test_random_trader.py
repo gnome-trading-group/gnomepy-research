@@ -155,3 +155,35 @@ def test_quotes_and_limit_takes_land_on_the_listing_tick():
 
     [take] = make(FakePositions(tick=tick), take_type="limit", take_through=0.20).on_market_data(book)
     assert take.take_limit_price % tick == 0
+
+
+class FakeControl:
+    def __init__(self):
+        self.exits = []
+
+    def requestExit(self, reason, flatten, timeout_millis):
+        self.exits.append((reason, flatten, timeout_millis))
+        return len(self.exits) == 1
+
+    def isExiting(self):
+        return bool(self.exits)
+
+
+def test_exits_after_the_configured_time_on_exchange_time():
+    strategy = make(FakePositions(), exit_after_seconds=30, exit_flatten=True, exit_timeout_seconds=5)
+    strategy._control = FakeControl()
+
+    assert strategy.on_market_data(Book(100 * SECOND))
+    strategy.on_market_data(Book(129 * SECOND))
+    assert strategy._control.exits == []
+
+    assert strategy.on_market_data(Book(130 * SECOND)) == []
+    assert strategy._control.exits == [("RandomTrader exit test after 30s", True, 5_000)]
+
+
+def test_never_exits_by_default():
+    strategy = make(FakePositions())
+    strategy._control = FakeControl()
+    for t in range(0, 10_000, 100):
+        strategy.on_market_data(Book(t * SECOND))
+    assert strategy._control.exits == []
