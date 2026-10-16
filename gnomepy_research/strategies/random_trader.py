@@ -13,12 +13,21 @@ Options for exercising risk controls:
 * ``take_type="limit"``: send takes as IOC limits ``take_through`` dollars through the
   touch rather than as market orders, so a price collar can judge them.
 
+Options for exercising a strategy ending its own session:
+
+* ``exit_after_seconds``: ask to exit this long after the first market data (exchange
+  time); 0 never does.
+* ``exit_flatten``: close every position on the way out rather than keep it.
+* ``exit_timeout_seconds``: how long closing may take; a short one on a thin book leaves
+  a position behind, which the session's exit alert should report.
+
 Every execution report is printed, rejects with their reason, so the session log shows
 what the OMS refused and why.
 """
 from __future__ import annotations
 
 import random
+from datetime import timedelta
 
 from gnomepy import ExecutionReport, Intent, OrderType, Scales, Side, Strategy
 from gnomepy.java.schemas import Schema
@@ -36,6 +45,9 @@ class RandomTrader(Strategy):
         quote_offset: float = 0.02,
         take_type: str = "market",
         take_through: float = 0.0,
+        exit_after_seconds: float = 0.0,
+        exit_flatten: bool = False,
+        exit_timeout_seconds: float = 300.0,
     ):
         if take_type not in ("market", "limit"):
             raise ValueError(f"take_type must be 'market' or 'limit', not {take_type!r}")
@@ -47,14 +59,28 @@ class RandomTrader(Strategy):
         self.quote_offset = quote_offset
         self.take_type = take_type
         self.take_through = take_through
+        self.exit_after_ns = int(exit_after_seconds * 1_000_000_000)
+        self.exit_flatten = exit_flatten
+        self.exit_timeout = timedelta(seconds=exit_timeout_seconds)
         self._rng = random.Random(seed)
         self._last_trade_ns: dict[tuple[int, int], int] = {}
+        self._first_ns: int | None = None
 
     def on_market_data(self, data: Schema) -> list[Intent]:
         exchange_id, security_id = data.exchange_id, data.security_id
 
         # Paced on exchange time, not the wall clock, so a backtest replay trades at the same rate.
         now = data.event_timestamp
+        if self._first_ns is None:
+            self._first_ns = now
+        if self.exit_after_ns and now - self._first_ns >= self.exit_after_ns:
+            print(f"RandomTrader: exiting (flatten={self.exit_flatten})", flush=True)
+            self.request_exit(
+                f"RandomTrader exit test after {self.exit_after_ns // 1_000_000_000}s",
+                flatten=self.exit_flatten,
+                timeout=self.exit_timeout,
+            )
+            return []
         last = self._last_trade_ns.get((exchange_id, security_id))
         if last is not None and now - last < self.interval_ns:
             return []
