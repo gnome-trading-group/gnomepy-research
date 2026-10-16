@@ -1881,6 +1881,59 @@ Added 2026-10-15.
 
 ---
 
+## Phase 17: Model Npm, "Confident when it should be"
+
+Added 2026-10-15. The diagnosis used 2021–24 only; 2025 is not used for any decision.
+
+**The miss:** on open > 80% favorites in 2024 (237 games), the favorites won 91.6%. The open said 89.6%, Np 87.0%, and Np sat below the open in 66% of them, for +0.017 log loss per game. 2021 and 2023 show the same; 2022 was an upset year (85.2%).
+
+**The diagnosis** (scratchpad `gap_decomp.py` / `decomp_analysis.py`, rebuilding the 2023 and 2024 backtests):
+
+- **The central estimate is not the problem.** Np's mean edge is more confident than the open in 69% of 2024 big-favorite games. The shortfall is the averaging of logistic(z) over rating draws: +0.29 logit on 80–90% favorites and +0.68 on 90%+.
+- **Claimed rating uncertainty is 1.4–1.8× the actual disagreement with the open in weeks 5+.** Per-team posterior sd stays about 0.07 from week 1 to week 13. One game of PPA is weak evidence, weekly drift (measured 0.02–0.03 from a game-efficiency semivariogram) erases the gain, and game-level noise is fitted near 0 (the data say about 0.08).
+- **The stretch term edge·|edge| (γ ≈ 11) is applied per draw.** It scales each game's draw spread with the size of the edge, so uncertainty grows from 0.77 logits in toss-ups to about 1.3–1.6 at 3+ logit edges, and averaging undoes the stretch exactly where it is meant to act. Matchup tier adds about nothing once the edge is controlled.
+- **Keeping the uncertainty helps close games** (2024: 0.6561 with it vs 0.6626 without) **and hurts big favorites** (0.2927 vs 0.2849). No single setting is right.
+- **Kc (Phase 12) could not fix this.** Its calibrator was fitted on 2021–22, where 2021's under-confidence and 2022's upsets cancel, and it rescales the final probability without each game's rating uncertainty.
+- **Separate issue, Phase 19:** Np's transition-team prior hides FCS-era numbers. Kennesaw St 2024 is 3 of the 4 worst big-favorite misses.
+
+### Task 47: Moment-link outcome layer (`learner="moment"`)
+
+- **Design:** per game, the posterior-mean design over rating draws, with the stretch term recomputed on the mean net edge, plus v = the variance of the net (pass + rush) edge across draws.
+- **Link:** P(home) = logistic(η / √(1 + (π/8)·κ²·v)), where η = mean design · γ.
+  - κ = exp(log κ0 + δ_phase [+ δ_tier]).
+  - log κ0 ~ N(log 6, 1); δ ~ N(0, 0.5).
+  - Phases: weeks 1–4, 5–9, 10+ including the postseason.
+  - Tiers: P4–P4, P4–G5, G5–G5. The Pac-12 counts as P4 through 2023 only, and Notre Dame counts as P4.
+- **Symmetry:** no intercept, and swap symmetry holds.
+- **Fitting:** trained on every rating draw's moments; refits differ only in the sampler seed.
+- **Interval:** logistic(η ∓ 1.645·κ·√v), the conditional win probability under rating uncertainty.
+- **Configs:**
+  - `Npm` = Np + moment (κ by phase);
+  - `Npmt` = Npm + κ by phase × tier (partial pooling across matchup types);
+  - `Km` = K + moment (for information).
+
+### Task 48: Selection (pre-registered before any Phase 17 result)
+
+- **Runs:** `backtest 2021 2022` and `backtest 2023 2024` for Npm, Npmt and Km, using the existing snapshots and the rolling-origin outcome layer.
+- **Adopt Npm over Np if all of these hold:**
+  - pooled 2021–24 Δ log loss ≤ −0.001, with paired-bootstrap P(Npm worse) ≤ 0.10;
+  - no season worse than Np by more than 0.003;
+  - the pooled big-favorite calibration gap (actual − mean predicted, open > 80%) shrinks.
+- **Adopt Npmt over Npm** only if it adds a further pooled gain of ≥ 0.0005 under the same conditions.
+- **Why not 2022 alone:** 2022's big favorites won 85.2% against about 90.5% in every other season (−2.4σ), so a tail fix chosen on 2022 would be rejected for the wrong reason. 2023–24 were already looked at during diagnosis, so the fresh test is the confirmation below.
+- **Confirmation (once):** `backtest 2026` for the adopted model and Np on the completed 2026 FBS games (weeks 0–7), which no model has been scored on. The adopted model goes live only if it is no worse than Np by more than 0.003 and its big-favorite calibration gap is smaller. 2025 is not used.
+
+### Later phases (not started)
+
+- **Phase 18, honest uncertainty in the efficiency model:** a game-level noise term, and a heavy-tailed play likelihood or a success-rate channel. The target is claimed/actual uncertainty ≈ 1, with posterior sd shrinking through the season.
+- **Phase 19, priors:**
+  - move-up teams rated from their FCS-era play instead of masked to average;
+  - returning production as a multiplier on last season's rating;
+  - defensive continuity from roster retention and portal departures.
+- **Phase 20, new data via gnome-pipelines:** injury and availability reports, depth charts, NFL draft departures, and player production shares, to close the information gap. Even the best uncertainty setting leaves big favorites at 0.285 vs the open's 0.276.
+
+---
+
 ## Known limitation: mid-season bad-team games (open issue)
 
 Recorded 2026-10-15.

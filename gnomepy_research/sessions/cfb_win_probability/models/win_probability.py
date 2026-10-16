@@ -19,7 +19,7 @@ import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
 from scipy.optimize import minimize_scalar
-from scipy.special import stdtr
+from scipy.special import ndtri, stdtr
 
 from gnomepy_research.models.cfb.features.physical import zscore_by_season
 from gnomepy_research.models.cfb.features.ratings import FCS_TEAM
@@ -88,6 +88,16 @@ MARGIN_PRIORS: dict[str, tuple[float, float]] = {
 }
 RECAL_BOUNDS = (0.5, 2.0)
 N_FIT_DRAWS = 50
+# Moment link (Phase 17): c makes logistic(eta / sqrt(1 + c s^2)) match E[logistic(eta + s e)]; kappa converts the
+# net-edge variance (PPA^2) into logit variance and is learned, its log offset by phase and matchup tier.
+MOMENT_C = np.pi / 8
+MOMENT_LOG_KAPPA = (float(np.log(6.0)), 1.0)
+MOMENT_GROUP_SD = 0.5
+MID_LAST_WEEK = 9
+N_PHASES, N_TIERS = 3, 3
+P4_STABLE = {"SEC", "Big Ten", "Big 12", "ACC"}
+P4_TEAMS = {"Notre Dame"}
+PAC12_LAST_P4_SEASON = 2023
 PHYSICAL_MIN_MATCH = 0.95
 
 
@@ -353,6 +363,78 @@ def fit(gd: GameDraws, draws: int = 1000, tune: int = 1000, seed: int = 0) -> Ou
                           progressbar=False)
     gamma = idata.posterior.to_dataset()["gamma"].stack(sample=("chain", "draw")).values.T
     return OutcomeModel(gamma=gamma)
+
+
+def moment_design(gd: GameDraws) -> tuple[np.ndarray, np.ndarray]:
+    """(G, T) posterior-mean design and (G,) variance of the net rating edge across rating draws. The stretch term
+    is recomputed on the mean net edge: applied per draw it scales the draw spread with the edge, and averaging
+    over that spread undoes the stretch exactly where it is meant to act."""
+    net_terms = ("pass_edge", "rush_edge") if "pass_edge" in gd.terms else ("off_diff", "def_diff")
+    net = gd.x[..., gd.terms.index(net_terms[0])] + gd.x[..., gd.terms.index(net_terms[1])]
+    x = gd.x.mean(1)
+    if STRETCH_TERM in gd.terms:
+        m = net.mean(1)
+        x[:, gd.terms.index(STRETCH_TERM)] = m * np.abs(m)
+    return x, net.var(1)
+
+
+def matchup_tier(games: pd.DataFrame) -> np.ndarray:
+    """0 Power 4 vs Power 4, 1 Power 4 vs Group of 5, 2 Group of 5 vs Group of 5 (Pac-12 is Power 4 through 2023)."""
+    def p4(side: str) -> np.ndarray:
+        conf = games.get(f"{side}_conference", pd.Series("", index=games.index))
+        team = games.get(f"{side}_team", pd.Series("", index=games.index))
+        pac = (conf == "Pac-12") & (games["season"] <= PAC12_LAST_P4_SEASON)
+        return (conf.isin(P4_STABLE) | pac | team.isin(P4_TEAMS)).to_numpy()
+    return 2 - p4("home").astype(int) - p4("away").astype(int)
+
+
+def moment_phase(games: pd.DataFrame) -> np.ndarray:
+    """0 weeks 1-4, 1 weeks 5-9, 2 weeks 10+ and the postseason."""
+    week = games["week"].to_numpy()
+    late = (games["season_type"] == "postseason").to_numpy() | (week > MID_LAST_WEEK)
+    return np.where(late, 2, np.where(week <= EARLY_LAST_WEEK, 0, 1))
+
+
+@dataclass
+class MomentModel:
+    gamma: np.ndarray          # (K, len(terms)) posterior draws of the coefficients
+    kappa: np.ndarray          # (K, phases, tiers) uncertainty scale per phase and matchup tier
+
+    def predict(self, gd: GameDraws, interval: float = 0.9, n_gamma: int = 200, seed: int = 0) -> pd.DataFrame:
+        """P(home) = logistic(eta / sqrt(1 + c kappa^2 v)), averaged over coefficient draws; the interval is the
+        conditional win probability at eta -/+ q kappa sqrt(v), i.e. under rating uncertainty."""
+        rng = np.random.default_rng(seed)
+        pick = rng.choice(len(self.gamma), size=min(n_gamma, len(self.gamma)), replace=False)
+        x, v = moment_design(gd)
+        eta = x @ self.gamma[pick].T
+        kap = self.kappa[pick][:, moment_phase(gd.games), matchup_tier(gd.games)].T
+        sd = kap * np.sqrt(v)[:, None]
+        q = ndtri(0.5 + interval / 2)
+        sig = lambda z: 1 / (1 + np.exp(-z))
+        return pd.DataFrame({"p_home": sig(eta / np.sqrt(1 + MOMENT_C * sd ** 2)).mean(1),
+                             "p_lo": sig(eta - q * sd).mean(1), "p_hi": sig(eta + q * sd).mean(1)})
+
+
+def fit_moment(gd: GameDraws, by_tier: bool = False, draws: int = 1000, tune: int = 1000, seed: int = 0) -> MomentModel:
+    """Logistic outcome model on posterior-mean edges with a learned penalty for rating uncertainty (probit-style
+    moment matching of E[logistic(z)]), the penalty scale varying by phase and, with by_tier, by matchup tier."""
+    sub = subset_draws(gd, gd.games["home_win"].notna().to_numpy())
+    x, v = moment_design(sub)
+    ph, ti = moment_phase(sub.games), matchup_tier(sub.games)
+    with pm.Model(coords={"term": gd.terms}):
+        g = pm.Normal("gamma", mu=[PRIORS[t][0] for t in gd.terms], sigma=[PRIORS[t][1] for t in gd.terms], dims="term")
+        log_kappa = pm.Normal("log_kappa", mu=MOMENT_LOG_KAPPA[0], sigma=MOMENT_LOG_KAPPA[1])
+        d_phase = pm.Normal("d_phase", 0.0, MOMENT_GROUP_SD, shape=N_PHASES)
+        d_tier = pm.Normal("d_tier", 0.0, MOMENT_GROUP_SD, shape=N_TIERS) if by_tier else pt.zeros(N_TIERS)
+        kappa = pt.exp(log_kappa + d_phase[ph] + d_tier[ti])
+        z = pt.dot(x, g) / pt.sqrt(1 + MOMENT_C * kappa ** 2 * v)
+        pm.Bernoulli("y", logit_p=z, observed=sub.games["home_win"].to_numpy())
+        idata = pm.sample(draws=draws, tune=tune, chains=4, random_seed=seed, nuts_sampler="nutpie", progressbar=False)
+    post = idata.posterior.to_dataset()
+    stack = lambda name: post[name].stack(sample=("chain", "draw")).values
+    lk, dp = stack("log_kappa"), stack("d_phase").T
+    dt = stack("d_tier").T if by_tier else np.zeros((len(lk), N_TIERS))
+    return MomentModel(gamma=stack("gamma").T, kappa=np.exp(lk[:, None, None] + dp[:, :, None] + dt[:, None, :]))
 
 
 @dataclass

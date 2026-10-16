@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -33,7 +34,8 @@ from gnomepy_research.sessions.cfb_win_probability.models.residual_wp import (
 from gnomepy_research.sessions.cfb_win_probability.models.tail_calibrator import (
     TailCalibrator, bootstrap_ci, fit_tail_calibrator)
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import (
-    N_FIT_DRAWS, apply_recal, cross_fitted_recal, fit, fit_margin, game_draws, physical_match_rate)
+    N_FIT_DRAWS, apply_recal, cross_fitted_recal, fit, fit_margin, fit_moment, game_draws, physical_match_rate,
+    subset_draws)
 
 FIRST_OUTCOME_SEASON = 2020
 HOLDOUT = 2025
@@ -74,6 +76,10 @@ MODEL_CONFIGS["O1"] = {**MODEL_CONFIGS["Np"], "results": True}
 MODEL_CONFIGS["O2"] = {**MODEL_CONFIGS["O1"], "qb_change": True}
 MODEL_CONFIGS["O3"] = {**MODEL_CONFIGS["O2"], "extensions": ("couple", "fcs", "finish", "prior", "g5")}
 MODEL_CONFIGS["O4"] = {**MODEL_CONFIGS["O2"], "extensions": ("couple", "fcs", "finish", "prior", "g5", "coach")}
+# Phase 17: moment-link outcome layer (stretch on the mean edge, learned uncertainty penalty by phase [and tier]).
+MODEL_CONFIGS["Npm"] = {**MODEL_CONFIGS["Np"], "learner": "moment"}
+MODEL_CONFIGS["Npmt"] = {**MODEL_CONFIGS["Npm"], "moment_tier": True}
+MODEL_CONFIGS["Km"] = {**MODEL_CONFIGS["K"], "learner": "moment"}
 O_SELECTION = RESULTS / "O_selection.json"
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
                 "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails", "garbage_weight",
@@ -216,26 +222,33 @@ def validate_residual(games: pd.DataFrame) -> tuple[str, dict]:
     return text, config
 
 
-def _bayes_season(season, games, train_seasons, units, form, qb=None, flags=None, margin=False, recal=False):
+def _bayes_season(season, games, train_seasons, units, form, qb=None, flags=None, margin=False, recal=False,
+                  moment=False, moment_tier=False):
+    """moment: the Phase 17 outcome layer (posterior-mean edges with a learned uncertainty penalty), which reads
+    every rating draw for its moments, so refits differ only in their sampler seed."""
     flags = flags or {}
-    fitter = fit_margin if margin else fit
-    train_gd = game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, units=units, form=form, qb=qb, **flags)
+    fitter = fit_margin if margin else partial(fit_moment, by_tier=moment_tier) if moment else fit
+    n_fit = None if moment else N_FIT_DRAWS
+    train_gd = game_draws(games, train_seasons, n_draws=n_fit, units=units, form=form, qb=qb, **flags)
     test_gd = game_draws(games, [season], units=units, form=form, qb=qb, **flags)
-    test = test_gd.games.loc[test_gd.games["home_win"].notna()].copy()
-    x_test = test_gd.x[test_gd.games["home_win"].notna().to_numpy()]
+    done = test_gd.games["home_win"].notna().to_numpy()
+    test = test_gd.games.loc[done].copy()
+    x_test = subset_draws(test_gd, done) if moment else test_gd.x[done]
     a, n_recal = cross_fitted_recal(train_gd) if recal else (1.0, 0)
 
     refits = []
     scale = {}
     for r in range(N_REFITS):
-        gd = train_gd if r == 0 else game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, seed=r, units=units, form=form, qb=qb,
-                                                  **flags)
+        gd = train_gd if r == 0 or moment else game_draws(games, train_seasons, n_draws=N_FIT_DRAWS, seed=r, units=units,
+                                                          form=form, qb=qb, **flags)
         model = fitter(gd, seed=r)
         if r == 0:
             coefs = model.beta if margin else model.gamma
             if margin:
                 scale = {"sigma": [float(model.sigma.mean()), *np.quantile(model.sigma, [0.05, 0.95]).tolist()],
                          "nu": [float(model.nu.mean()), *np.quantile(model.nu, [0.05, 0.95]).tolist()]}
+            if moment:
+                scale = {"kappa_mean": model.kappa.mean(0).round(3).tolist()}
         pred = model.predict(x_test)
         if recal:
             pred[["p_home", "p_lo", "p_hi"]] = apply_recal(pred[["p_home", "p_lo", "p_hi"]].to_numpy(), a)
@@ -253,13 +266,14 @@ def _bayes_season(season, games, train_seasons, units, form, qb=None, flags=None
                          "terms": train_gd.terms, "gamma_mean": coefs.mean(0).tolist(),
                          "gamma_lo": np.quantile(coefs, 0.05, axis=0).tolist(),
                          "gamma_hi": np.quantile(coefs, 0.95, axis=0).tolist(),
-                         **({"margin": scale, "recal_a": a, "recal_n": n_recal} if margin else {})}
+                         **({"margin": scale, "recal_a": a, "recal_n": n_recal} if margin else {}),
+                         **(scale if moment else {})}
 
 
 def run_season(season: int, games: pd.DataFrame, pregame: pd.DataFrame, lines: pd.DataFrame,
                units: tuple[str, ...] = UNITS_ALL, form: bool = False, learner: str = "bayes",
                qb: pd.DataFrame | None = None, config: dict | None = None,
-               flags: dict | None = None, recal: bool = False) -> tuple[pd.DataFrame, dict]:
+               flags: dict | None = None, recal: bool = False, moment_tier: bool = False) -> tuple[pd.DataFrame, dict]:
     train_seasons = list(range(FIRST_OUTCOME_SEASON, season))
     if learner == "catboost":
         train, test, extra = _catboost_season(season, games, train_seasons)
@@ -267,7 +281,8 @@ def run_season(season: int, games: pd.DataFrame, pregame: pd.DataFrame, lines: p
         train, test, extra = _residual_season(season, games, train_seasons, config)
     else:
         train, test, extra = _bayes_season(season, games, train_seasons, units, form, qb, flags,
-                                           margin=learner == "margin", recal=recal)
+                                           margin=learner == "margin", recal=recal,
+                                           moment=learner == "moment", moment_tier=moment_tier)
     test["p_home_field"] = baselines.home_field(train, test)
 
     elo_params = baselines.tune_elo(games, set(train["game_id"]))
@@ -429,7 +444,7 @@ def main() -> None:
     for s in args.seasons:
         df, meta = run_season(s, games, pregame, lines, units=cfg["units"], form=cfg["form"],
                               learner=cfg["learner"], qb=qb, config=f_config,
-                              flags=flags, recal=cfg.get("recal", False))
+                              flags=flags, recal=cfg.get("recal", False), moment_tier=cfg.get("moment_tier", False))
         frames.append(df)
         metas.append(meta)
         print(f"{s}: {len(df)} games", json.dumps(meta, default=str), flush=True)
