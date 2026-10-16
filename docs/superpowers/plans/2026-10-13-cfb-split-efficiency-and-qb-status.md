@@ -2043,6 +2043,18 @@ Added 2026-10-16, pre-registered before any Phase 20 backtest.
 - Leave-one-season-out, it hurts: +0.0005 to +0.0021.
 - **Decision:** no draft dataset in gnome-pipelines.
 
+### Phase 21 (proposed): availability data
+
+- **No free historical college injury data exists.** Sports Info Solutions sells college injury data from 2016.
+- **Conferences publish official availability reports for conference games:** the Big Ten (2023+), the SEC and MAC (2024+), and the ACC, Big 12 and Mountain West (2025+), plus the College Football Playoff (2025+).
+- **Proposal:**
+  - a gnome-pipelines scraper that logs each report with its publish timestamp, starting now;
+  - a backfill from whatever archives the conference sites still hold;
+  - player value from play-by-play production shares, which only matters once we know who is out.
+- **Evaluation:** after a season of logged reports, test whether "out" designations, weighted by player value, predict outcomes beyond the model, the way margin was screened.
+- **Known so far:** the QB part is worth about 0.001–0.002 (expected vs actual starter, 2025 sensitivity).
+- **Decision for the user:** the pipeline work in gnome-pipelines, and whether to price a commercial feed.
+
 ### Later phases (not started)
 
 - **Phase 18, honest uncertainty in the efficiency model:** a game-level noise term, and a heavy-tailed play likelihood or a success-rate channel. The target is claimed/actual uncertainty ≈ 1, with posterior sd shrinking through the season.
