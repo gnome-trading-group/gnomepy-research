@@ -270,6 +270,20 @@ class _Report:
     order_status: OrderStatus
 
 
+class _Control:
+    """Stands in for the session's StrategyControl, recording exit requests."""
+
+    def __init__(self):
+        self.exits = []
+
+    def requestExit(self, reason, flatten, timeout_millis):
+        self.exits.append((reason, flatten))
+        return len(self.exits) == 1
+
+    def isExiting(self):
+        return bool(self.exits)
+
+
 @pytest.fixture
 def make(tmp_path):
     def _make(features=None, states=None, spec=None, **kw):
@@ -279,6 +293,7 @@ def make(tmp_path):
             strat = mod.CS2Series(match_id=7, listing_team_a=101, listing_team_b=102, reload_minutes=0,
                                   features_source=f, matches_source=m, **kw)
         strat._position_view = _Positions()
+        strat._control = _Control()
         return strat
     return _make
 
@@ -305,6 +320,7 @@ def test_nothing_outside_the_entry_window(make):
 def test_the_window_follows_the_latest_kickoff(make):
     s = make(states=_states((EARLY + pd.Timedelta(hours=1), {"kickoff": KICKOFF + pd.Timedelta(hours=3)})))
     assert _tick(s, 102, [(0.45, 1000)], hours_before=-1) != [], "past the first kickoff, 2h before the new one"
+    assert not s.is_exiting, "a delayed kickoff isn't a start"
     assert _tick(s, 102, [(0.45, 1000)], hours_before=-3.1) == [], "and closed at the new kickoff"
 
 
@@ -314,6 +330,25 @@ def test_no_trading_once_hltv_says_live_or_drops_the_match(make, status):
     assert _tick(s, 102, [(0.45, 1000)], hours_before=3) != []
     s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
     assert _tick(s, 102, [(0.45, 1000)], hours_before=1) == []
+
+
+@pytest.mark.parametrize("status", ["live", "missing"])
+def test_the_session_ends_keeping_its_positions_once_the_match_is_no_longer_upcoming(make, status):
+    s = make(states=_states((KICKOFF - pd.Timedelta(hours=2), {"status": status})))
+    _tick(s, 102, [(0.45, 1000)], hours_before=3)
+    assert not s.is_exiting
+
+    _tick(s, 102, [(0.45, 1000)], hours_before=1)
+    assert s._control.exits == [(f"match 7 is {status}", False)]
+
+
+def test_the_session_ends_at_kickoff_even_on_stale_state(make):
+    s = make(states=_states(until=KICKOFF - pd.Timedelta(hours=4)))
+    _tick(s, 102, [(0.45, 1000)], hours_before=1)
+    assert not s.is_exiting, "stale state stops trading but isn't a start"
+
+    _tick(s, 102, [(0.45, 1000)], hours_before=0)
+    assert s._control.exits == [("match 7 kicked off", False)]
 
 
 def test_no_trading_on_stale_match_state(make):

@@ -10,7 +10,8 @@ Inside the entry window - from window_hours before HLTV's latest kickoff until k
 HLTV still lists the match as upcoming - it buys whichever team's listing is underpriced by at
 least min_edge after the venue's taker fee. Orders are IOC limits capped at the highest price
 that still clears the threshold, so it only ever takes liquidity it has already priced.
-Positions are held to settlement.
+Positions are held to settlement: once the match starts (HLTV no longer lists it as upcoming, or
+its kickoff has passed) the session ends itself, keeping what it holds.
 
 It does not trade until both lineups are announced: the model leans on player form, which is
 blank until then. Nor does it trade on stale match state: if the newest cs2_upcoming row is
@@ -192,7 +193,12 @@ class CS2Series(Strategy):
 
     def _evaluate(self, now_ns: int) -> list[Intent]:
         state, quote = self._feed.state(now_ns), self._feed.quote(now_ns)
-        if state is None or quote is None or state.status != UPCOMING:
+        if state is not None and (state.status != UPCOMING or now_ns >= state.kickoff_ns):
+            # Judged on the last state even when it's stale: a stalled pipeline can't make a passed kickoff upcoming.
+            self.request_exit(f"match {self.match_id} is {state.status}" if state.status != UPCOMING
+                              else f"match {self.match_id} kicked off")
+            return []
+        if state is None or quote is None:
             return []
         if now_ns - state.at_ns > self.max_state_age_ns:
             return []
