@@ -55,9 +55,15 @@ TIGHT_PRIOR_SCALE = 0.75
 # faster when the season contradicts the preseason view. coach: a second-year-coach indicator (prior feature and
 # uncertainty flag) and a new-coach x transfer-arrivals interaction (prior feature).
 EXT_G5, EXT_COACH = "g5", "coach"
+# trans (refines prior): FCS move-ups keep their own talent and recruiting numbers instead of being masked to the FBS
+# average, plus a learned move-up offset and a wider prior (uncertainty flag) for their first TRANSITION_SEASONS
+# FBS seasons. cont: last season's rating carries over in proportion to what returns (offense: returning PPA share;
+# defense: the class-weighted share of last season's defensive roster still on it), plus defensive continuity itself.
+EXT_TRANS, EXT_CONT = "trans", "cont"
 P4_CONFERENCES = {"SEC", "Big Ten", "Big 12", "ACC", "Pac-12"}
 P4_INDEPENDENTS = {"Notre Dame"}
-EXTENSIONS = (EXT_COUPLE, EXT_FCS, EXT_FINISH, EXT_PRIOR, EXT_G5, EXT_COACH, EXT_TIGHT)
+EXTENSIONS = (EXT_COUPLE, EXT_FCS, EXT_FINISH, EXT_PRIOR, EXT_G5, EXT_COACH, EXT_TRANS, EXT_CONT, EXT_TIGHT)
+DEFENSIVE_POSITIONS = {"DL", "DE", "DT", "NT", "EDGE", "LB", "OLB", "ILB", "DB", "CB", "S"}
 FIT_TIME_ONLY = (EXT_TIGHT,)
 DRIVE_EXTENSIONS = (EXT_COUPLE, EXT_FINISH)
 TRANSITION_SEASONS = 3
@@ -72,6 +78,8 @@ def canonical_extensions(extensions, drives: bool) -> tuple[str, ...]:
         raise ValueError(f"unknown extensions {sorted(unknown)}; available {EXTENSIONS}")
     if ext & set(DRIVE_EXTENSIONS) and not drives:
         raise ValueError(f"extensions {sorted(ext & set(DRIVE_EXTENSIONS))} need drives=True")
+    if EXT_TRANS in ext and EXT_PRIOR not in ext:
+        raise ValueError("the trans extension refines prior; add prior")
     return tuple(e for e in EXTENSIONS if e in ext)
 
 
@@ -186,16 +194,50 @@ def first_fbs_seasons(games: pd.DataFrame) -> pd.Series:
     return rows.groupby("team_id")["season"].min()
 
 
-def prior_fixes(pre: pd.DataFrame, games: pd.DataFrame) -> pd.DataFrame:
+def prior_fixes(pre: pd.DataFrame, games: pd.DataFrame, keep_transition: bool = False) -> pd.DataFrame:
     """Preseason-feature hygiene for the prior extension. A team first seen as FBS after the games table's first
-    season is an FCS move-up; a team without a prior-season rating has no production to return."""
+    season is an FCS move-up; a team without a prior-season rating has no production to return. keep_transition
+    (the trans extension) leaves move-ups' own numbers in place and adds a `transition` indicator instead."""
     pre = pre.copy()
     pre["talent_missing"] = pre["talent_offense"].isna().astype(float)
     first = pre["team_id"].map(first_fbs_seasons(games))
     since = pre["season"] - first
     transition = (first > games["season"].min()) & (since >= 0) & (since < TRANSITION_SEASONS)
-    pre.loc[transition.to_numpy(), TRANSITION_MASKED] = np.nan
+    if keep_transition:
+        pre["transition"] = transition.astype(float).to_numpy()
+    else:
+        pre.loc[transition.to_numpy(), TRANSITION_MASKED] = np.nan
     pre.loc[pre["prior_off_rating"].isna().to_numpy(), RETURNING_FEATURES] = np.nan
+    return pre
+
+
+def defensive_continuity(rosters: pd.DataFrame) -> pd.DataFrame:
+    """Per (season, team_id): the class-weighted share of the previous season's defensive roster (class year 1-5)
+    that is on this season's roster. Only team-seasons with a roster in both seasons get a value."""
+    r = rosters[rosters["position"].isin(DEFENSIVE_POSITIONS)][["season", "team_id", "player_id", "class_year"]].copy()
+    r["w"] = pd.to_numeric(r["class_year"], errors="coerce").where(lambda c: c.between(1, 5))
+    prev = r.dropna(subset=["w"]).drop_duplicates(["season", "team_id", "player_id"])
+    back = r[["season", "team_id", "player_id"]].drop_duplicates().assign(season=lambda d: d["season"] - 1, back=1.0)
+    m = prev.merge(back, on=["season", "team_id", "player_id"], how="left").fillna({"back": 0.0})
+    m["kept"] = m["w"] * m["back"]
+    out = m.groupby(["season", "team_id"])[["kept", "w"]].sum()
+    out = (out["kept"] / out["w"]).rename("def_returning_share").reset_index().assign(season=lambda d: d["season"] + 1)
+    have = r[["season", "team_id"]].drop_duplicates()
+    return out.merge(have, on=["season", "team_id"], how="inner")
+
+
+def continuity_features(pre: pd.DataFrame) -> pd.DataFrame:
+    """Within-season z-score products: last season's rating x what returns, for offense and defense."""
+    if "def_returning_share" not in pre:
+        raise ValueError("the cont extension needs preseason rows with def_returning_share (Inputs.load adds it)")
+    pre = pre.copy()
+
+    def z(col: str) -> pd.Series:
+        v = pre[col].astype(float)
+        return (v - v.groupby(pre["season"]).transform("mean")) / v.groupby(pre["season"]).transform("std")
+
+    pre["prior_off_x_returning"] = z("prior_off_rating") * z("returning_pct_ppa")
+    pre["prior_def_x_returning"] = z("prior_def_rating") * z("def_returning_share")
     return pre
 
 
@@ -320,8 +362,13 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
     pre["coach_new"] = pre["coach_new"].astype(float)
     off_cols, def_cols = OFF_FEATURES, DEF_FEATURES
     if EXT_PRIOR in extensions:
-        pre = prior_fixes(pre, games)
+        pre = prior_fixes(pre, games, keep_transition=EXT_TRANS in extensions)
         off_cols, def_cols = off_cols + ["talent_missing"], def_cols + ["talent_missing"]
+    if EXT_TRANS in extensions:
+        off_cols, def_cols = off_cols + ["transition"], def_cols + ["transition"]
+    if EXT_CONT in extensions:
+        pre = continuity_features(pre)
+        off_cols, def_cols = off_cols + ["prior_off_x_returning"], def_cols + ["def_returning_share", "prior_def_x_returning"]
     if EXT_COACH in extensions:
         pre = coach_features(pre)
         off_cols, def_cols = off_cols + ["coach_year2", "coach_new_x_portal"], def_cols + ["coach_year2", "coach_new_x_portal"]
@@ -357,6 +404,9 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
     if EXT_COACH in extensions:
         unc["coach_year2"] = pre["coach_year2"].to_numpy(float)
         unc_flags.append("coach_year2")
+    if EXT_TRANS in extensions:
+        unc["transition"] = pre["transition"].to_numpy(float)
+        unc_flags.append("transition")
     base_x_off, base_x_def = with_fcs(xo), with_fcs(xd)
     base_z = np.vstack([unc[unc_flags].to_numpy(float), np.ones((len(seasons), len(unc_flags)))])
 

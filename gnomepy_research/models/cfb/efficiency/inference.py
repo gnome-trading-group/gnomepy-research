@@ -15,7 +15,7 @@ import pandas as pd
 from scipy import stats
 
 from gnomepy.data import DatasetStore
-from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, ModelData, build_model_data
+from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, ModelData, build_model_data, defensive_continuity
 from gnomepy_research.models.cfb.features.drives import GARBAGE_WEIGHT, team_game_drives
 from gnomepy_research.models.cfb.features.team_form import team_game_form
 from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import (
@@ -37,6 +37,7 @@ PRESEASON_FEATURES = "cfb_team_preseason_features"
 EFFICIENCY = "cfb_team_game_efficiency"
 GAMES = "cfb_games"
 PLAYS = "cfb_plays"
+ROSTERS = "cfb_rosters"
 DRIVES = "cfb_drives"
 
 
@@ -67,7 +68,9 @@ class Inputs:
         if with_form:
             form_rows = team_game_form(ds.load(PLAYS, as_of=as_of), raw_drives, games)
         drives = team_game_drives(raw_drives, games, garbage_weight) if with_drives else None
-        return cls(ds.load(PRESEASON_FEATURES, as_of=as_of), ds.load(EFFICIENCY, as_of=as_of), games, as_of,
+        preseason = ds.load(PRESEASON_FEATURES, as_of=as_of).merge(
+            defensive_continuity(ds.load(ROSTERS, as_of=as_of)), on=["season", "team_id"], how="left")
+        return cls(preseason, ds.load(EFFICIENCY, as_of=as_of), games, as_of,
                    form_rows, drives=drives, raw_drives=raw_drives if with_drives else None,
                    garbage_weight=garbage_weight)
 

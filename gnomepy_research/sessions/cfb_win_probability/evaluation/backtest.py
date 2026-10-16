@@ -80,6 +80,11 @@ MODEL_CONFIGS["O4"] = {**MODEL_CONFIGS["O2"], "extensions": ("couple", "fcs", "f
 MODEL_CONFIGS["Npm"] = {**MODEL_CONFIGS["Np"], "learner": "moment"}
 MODEL_CONFIGS["Npmt"] = {**MODEL_CONFIGS["Npm"], "moment_tier": True}
 MODEL_CONFIGS["Km"] = {**MODEL_CONFIGS["K"], "learner": "moment"}
+# Phase 19: move-up teams keep their own numbers (trans), returning production scales last season's rating and
+# defensive roster continuity enters the prior (cont).
+MODEL_CONFIGS["Npx"] = {**MODEL_CONFIGS["Np"], "extensions": ("couple", "fcs", "finish", "prior", "trans")}
+MODEL_CONFIGS["Npc"] = {**MODEL_CONFIGS["Np"], "extensions": ("couple", "fcs", "finish", "prior", "cont")}
+MODEL_CONFIGS["Npxc"] = {**MODEL_CONFIGS["Np"], "extensions": ("couple", "fcs", "finish", "prior", "trans", "cont")}
 # Task 49: Np with the outcome layer trained without the 2020 COVID season.
 MODEL_CONFIGS["Np21"] = {**MODEL_CONFIGS["Np"], "outcome_first": 2021}
 O_SELECTION = RESULTS / "O_selection.json"

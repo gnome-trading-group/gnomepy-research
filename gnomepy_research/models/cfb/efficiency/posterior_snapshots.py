@@ -52,7 +52,8 @@ PROJ_SUFFIX = "_proj"
 DRIVES_SUFFIX = "_drv"
 TAU_PHASES_SUFFIX = "_tph"
 HEAVY_TAILS_SUFFIX = "_ht"
-EXTENSION_SUFFIX = {"couple": "_cpl", "fcs": "_fcs", "finish": "_fin", "prior": "_pfx", "g5": "_g5w", "coach": "_cch", "tight": "_tgt"}
+EXTENSION_SUFFIX = {"couple": "_cpl", "fcs": "_fcs", "finish": "_fin", "prior": "_pfx", "g5": "_g5w", "coach": "_cch", "trans": "_trx", "cont": "_cnt",
+                    "tight": "_tgt"}
 FIRST_TRAIN_SEASON = 2019
 N_DRAWS_KEPT = 400
 HEAVY_TAILS_MCMC = {"draws": 300, "tune": 300, "chains": 2}

@@ -1974,6 +1974,33 @@ That is why Kc, M, Npm and Np21 all failed. Reshaping the link cannot fix rankin
 
 Phase 18 is demoted from "honest uncertainty" to a ratings-accuracy experiment, judged by resolution (log loss, plus disagreement with the open), not by calibration.
 
+## Phase 19: Priors for resolution (models Npx, Npc, Npxc)
+
+Added 2026-10-16. Pre-registered before any Phase 19 result.
+
+### Task 50: Move-up teams and continuity (efficiency extensions `trans`, `cont`)
+
+- **`trans` (refines `prior`).**
+  - FCS move-ups keep their own talent and recruiting numbers instead of being masked to the FBS average.
+  - They get a `transition` prior feature (a learned offset) and a `transition` uncertainty flag (a wider prior) for their first 3 FBS seasons.
+  - Motivation: Kennesaw St 2024 was 3 of the 4 worst big-favorite misses. Np put it at about average FBS, while K, which keeps the numbers, was close to the open. Masking helped strong move-ups (JMU, Jacksonville St and Sam Houston in 2022–23 beat K by about 0.1 per game), so the wider prior is there to let their seasons speak quickly.
+- **`cont`.**
+  - `prior_off_x_returning` = z(prior_off_rating) × z(returning_pct_ppa).
+  - `prior_def_x_returning` = z(prior_def_rating) × z(def_returning_share).
+  - `def_returning_share` is also a defensive prior feature in its own right. It is the class-weighted share of last season's defensive roster (DL/DE/DT/NT/EDGE/LB/OLB/ILB/DB/CB/S, class 1–5) still on this season's roster, from `cfb_rosters`, which is available the day before each season's first kickoff.
+  - Motivation: the prior was additive, and defense had no continuity term. Returning production predicts outcomes beyond Np in weeks 5+ (t ≈ 2).
+- **Configs:** `Npx` = Np + trans; `Npc` = Np + cont; `Npxc` = Np + both. Each refits the efficiency hyperparameters per rolling window (2019..S−1) and rebuilds the 2020–24 snapshots.
+
+### Task 51: Selection
+
+- **Runs:** `backtest 2021 2022` and `2023 2024` for Npx, Npc and Npxc.
+- **A candidate passes against Np if:**
+  - pooled 2021–24 Δ log loss ≤ −0.001, with paired-bootstrap P(worse) ≤ 0.10;
+  - no season worse than Np by more than 0.003.
+- **Adoption:** among the passing candidates, adopt the one with the lowest pooled log loss. Npxc is preferred over the better single extension only if it is a further ≥ 0.0005 better.
+- **Reported:** phases (weeks 1–4 is where the priors act), transition-team games, and per-season results.
+- **Confirmation:** any adopted change is confirmed once, together with any other adopted Phase 19–20 change, on the completed 2026 games before it goes live. 2025 is not used.
+
 ### Later phases (not started)
 
 - **Phase 18, honest uncertainty in the efficiency model:** a game-level noise term, and a heavy-tailed play likelihood or a success-rate channel. The target is claimed/actual uncertainty ≈ 1, with posterior sd shrinking through the season.
