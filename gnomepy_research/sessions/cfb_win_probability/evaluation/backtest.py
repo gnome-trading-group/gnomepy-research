@@ -105,6 +105,10 @@ MODEL_CONFIGS["NpvkC"] = {**MODEL_CONFIGS["Npvk"], "kf": "games"}
 # Phase 25 on Npvk: first-year head coaches (reset toward average + learning curve), option-game edge discount.
 MODEL_CONFIGS["NpvkN"] = {**MODEL_CONFIGS["Npvk"], "newcoach": True}
 MODEL_CONFIGS["NpvkO"] = {**MODEL_CONFIGS["Npvk"], "option_edge": True}
+# Phase 26 on Npvk: the market's preseason win totals as a second regressor in the scoreboard channel's prior (W), and
+# the same with the channel split into prior and evidence terms (WA). Needs --win-totals (kept out of the repo).
+MODEL_CONFIGS["NpvkW"] = {**MODEL_CONFIGS["Npvk"], "kf_market": True}
+MODEL_CONFIGS["NpvkWA"] = {**MODEL_CONFIGS["NpvkW"], "kf_split": True}
 # Task 49: Np with the outcome layer trained without the 2020 COVID season.
 MODEL_CONFIGS["Np21"] = {**MODEL_CONFIGS["Np"], "outcome_first": 2021}
 O_SELECTION = RESULTS / "O_selection.json"
@@ -127,6 +131,13 @@ def coach_table(preseason: pd.DataFrame) -> pd.DataFrame:
     z = (s - s.groupby(p["season"]).transform("mean")) / s.groupby(p["season"]).transform("std")
     return pd.DataFrame({"season": p["season"], "team_id": p["team_id"], "coach_new": p["coach_new"].astype(float).fillna(0.0),
                          "prior_z": z.fillna(0.0)})
+
+
+def market_strength(path: Path) -> pd.Series:
+    """Preseason win-total strength (points vs the average FBS team) by (season, team_id), from a CSV with columns
+    season, team_id, wt_strength."""
+    w = pd.read_csv(path)
+    return w.set_index(["season", "team_id"])["wt_strength"].astype(float)
 
 
 def draw_kwargs(cfg: dict) -> dict:
@@ -445,12 +456,15 @@ def main() -> None:
     ap.add_argument("--qb-expected", action="store_true",
                     help="score as if each team's expected starter plays (QB deltas zeroed in the scored seasons); "
                          "writes *_qbexp outputs")
+    ap.add_argument("--win-totals", type=Path, help="CSV of preseason win-total strength (season, team_id, wt_strength)")
     args = ap.parse_args()
     if HOLDOUT in args.seasons and not args.holdout:
         raise SystemExit(f"{HOLDOUT} is the holdout season; pass --holdout to score it")
     if args.validate and (args.model != "F" or args.seasons != [VALIDATION_SEASON]):
         raise SystemExit(f"--validate is only for model F on {VALIDATION_SEASON}")
     cfg = resolve_config(args.model)
+    if cfg.get("kf_market") and args.win_totals is None:
+        raise SystemExit(f"model {args.model} needs --win-totals")
     cal, cal_info = load_calibrator(cfg, args.seasons, cal_seasons=args.calibrator_seasons)
     f_config = None
     if cfg["learner"] == "residual" and not args.validate:
@@ -491,7 +505,8 @@ def main() -> None:
         kf_seasons = list(range(FIRST_OUTCOME_SEASON, max(args.seasons) + 1))
         strengths = {s: preseason_strength(load_season_draws(s, **draw_kwargs(cfg))) for s in kf_seasons}
         srs = ds.load("cfb_coaches").groupby(["season", "team_id"])["srs"].mean()
-        flags["kf"] = kf_table(games, srs, strengths, tiered={"tier": "srs"}.get(cfg["kf"], cfg["kf"]))
+        flags["kf"] = kf_table(games, srs, strengths, tiered={"tier": "srs"}.get(cfg["kf"], cfg["kf"]),
+                               market=market_strength(args.win_totals) if cfg.get("kf_market") else None)
     if cfg.get("newcoach"):
         flags["coach"] = coach_table(ds.load("cfb_team_preseason_features"))
     if cfg.get("to"):

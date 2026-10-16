@@ -50,14 +50,16 @@ def preseason_strength(draws: dict) -> pd.Series:
     return s.groupby(level=0).sum().drop(FCS_TEAM, errors="ignore")
 
 
-def fit_prior_map(x: pd.DataFrame, tiered: bool) -> dict:
-    """x: strength s, p4 flag and end-of-season srs. OLS srs ~ a*s (+ b*p4) + c; tau = residual sd (per tier if tiered)."""
-    A = np.column_stack([x["s"], *([x["p4"].astype(float)] if tiered else []), np.ones(len(x))])
+def fit_prior_map(x: pd.DataFrame, tiered: bool, market: bool = False) -> dict:
+    """x: strength s, p4 flag, end-of-season srs and (market) win-total strength w. OLS srs ~ a*s (+ d*w) (+ b*p4) + c;
+    tau = residual sd (per tier if tiered)."""
+    A = np.column_stack([x["s"], *([x["w"]] if market else []), *([x["p4"].astype(float)] if tiered else []), np.ones(len(x))])
     coef, *_ = np.linalg.lstsq(A, x["srs"].to_numpy(float), rcond=None)
     res = x["srs"].to_numpy(float) - A @ coef
     p4 = x["p4"].to_numpy(bool)
     tau = (float(res[p4].std()), float(res[~p4].std())) if tiered else (float(res.std()),) * 2
-    return {"a": float(coef[0]), "b": float(coef[1]) if tiered else 0.0, "c": float(coef[-1]), "tau_p4": tau[0], "tau_g5": tau[1]}
+    return {"a": float(coef[0]), "d": float(coef[1]) if market else 0.0, "b": float(coef[-2]) if tiered else 0.0,
+            "c": float(coef[-1]), "tau_p4": tau[0], "tau_g5": tau[1]}
 
 
 def tier_offset_from_games(strength: pd.DataFrame, games: pd.DataFrame, m: dict, season: int) -> float:
@@ -78,10 +80,12 @@ def tier_offset_from_games(strength: pd.DataFrame, games: pd.DataFrame, m: dict,
 
 
 def season_priors(strength: pd.DataFrame, srs: pd.Series, season: int, tiered: bool | str,
-                  games: pd.DataFrame | None = None) -> tuple[dict, dict]:
+                  games: pd.DataFrame | None = None, market: pd.Series | None = None) -> tuple[dict, dict]:
     """Prior (mean, var) per FBS team for `season`, the map fitted on earlier seasons (the season itself if none),
     means centred on the FBS average. tiered: True/"srs" (P4 offset from the SRS fit), False/"flat" (none),
-    "games" (per-tier width from the untiered fit, P4 offset from earlier cross-tier games)."""
+    "games" (per-tier width from the untiered fit, P4 offset from earlier cross-tier games).
+    market: preseason win-total strength by (season, team_id). When earlier seasons have it, teams that have it this
+    season get the map with w added (fitted on those earlier seasons only); everyone else keeps the map without it."""
     mode = {True: "srs", False: "flat"}.get(tiered, tiered)
     have = strength.join(srs.rename("srs"), on=["season", "team_id"]).dropna(subset=["srs"])
     train = have[have["season"] < season]
@@ -93,8 +97,18 @@ def season_priors(strength: pd.DataFrame, srs: pd.Series, season: int, tiered: b
         m = {**m, "b": tier_offset_from_games(strength, games, m, season), "tau_p4": float(res[p4].std()), "tau_g5": float(res[~p4].std())}
     cur = strength[strength["season"] == season]
     mu = m["a"] * cur["s"] + m["b"] * cur["p4"].astype(float) + m["c"]
-    mu = mu - mu.mean()
     var = np.where(cur["p4"], m["tau_p4"] ** 2, m["tau_g5"] ** 2)
+    if market is not None:
+        w_train = train.join(market.rename("w"), on=["season", "team_id"]).dropna(subset=["w"])
+        w_cur = market.reindex(pd.MultiIndex.from_arrays([cur["season"], cur["team_id"]])).to_numpy(float)
+        if len(w_train) and mode != "games":
+            mw = fit_prior_map(w_train, mode == "srs", market=True)
+            has = ~np.isnan(w_cur)
+            mu_w = mw["a"] * cur["s"] + mw["d"] * np.nan_to_num(w_cur) + mw["b"] * cur["p4"].astype(float) + mw["c"]
+            mu = mu.where(~has, mu_w)
+            var = np.where(has, np.where(cur["p4"], mw["tau_p4"] ** 2, mw["tau_g5"] ** 2), var)
+            m = {**m, "market": mw}
+    mu = mu - mu.mean()
     return {int(t): (float(u), float(v)) for t, u, v in zip(cur["team_id"], mu, var)}, m
 
 
@@ -130,17 +144,18 @@ def run_filter(games: pd.DataFrame, priors: dict) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["game_id", "kf_diff", "kf_var", "kf_prior"])
 
 
-def kf_table(games: pd.DataFrame, srs: pd.Series, strengths: dict[int, pd.Series], tiered: bool | str) -> pd.DataFrame:
+def kf_table(games: pd.DataFrame, srs: pd.Series, strengths: dict[int, pd.Series], tiered: bool | str,
+             market: pd.Series | None = None) -> pd.DataFrame:
     """game_id -> kf_diff (points, home minus away, no home edge), kf_var and kf_prior (the season-start prior part of
     kf_diff) for every season in `strengths` (season -> preseason_strength). srs: end-of-season SRS by (season, team_id).
-    tiered: see season_priors."""
+    tiered, market: see season_priors."""
     seasons = sorted(strengths)
     tiers = team_tiers(games, seasons)
     strength = pd.concat([s.rename("s").rename_axis("team_id").reset_index().assign(season=y) for y, s in strengths.items()])
     strength = strength.merge(tiers, on=["season", "team_id"], how="inner")
     out = []
     for season in seasons:
-        priors, _ = season_priors(strength, srs, season, tiered, games)
+        priors, _ = season_priors(strength, srs, season, tiered, games, market)
         out.append(run_filter(games[games["season"] == season], priors))
     return pd.concat(out, ignore_index=True)
 

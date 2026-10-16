@@ -2293,6 +2293,46 @@ Added 2026-10-16. Pre-registered before any Phase 25 backtest.
 - **Reading:** the reset is right early but is applied at full strength all season. By week 10 the ratings have absorbed the new staff, so the constant term double-counts. A prior-like term should fade as the team's own evidence accumulates, the same lesson as the Kalman channel's evidence split in Phase 24.
 - **Option games** (academies, n=125): Npvk 0.6349, NpvkO 0.6355, open 0.6226. Phase 25's #4 is closed; the academy misses are not a slope problem the outcome layer can learn from 3 seasons.
 
+## Phase 26: The market's preseason view in the scoreboard prior (models NpvkW, NpvkWA)
+
+Added 2026-10-16. Pre-registered before any Phase 26 backtest.
+
+**Data.** Preseason FBS win totals come from Covers (SportsOddsHistory): 2019 (80 teams), 2021–2026 (all teams; 2020 has none).
+- **Expected wins:** line + 1.6·Φ⁻¹(no-vig over probability).
+- **Strength w** (points vs the average FBS team): solved so that Σ Φ((w − w_opp ± 2.5)/15) over the regular-season schedule equals expected wins, with FCS opponents at −24.
+- **Storage:** kept out of the repo; the CSV is passed with `--win-totals`.
+
+**Why** (scratchpad `win_totals_value.py`, 2021–24; 2025 not used):
+- Npvk's margin residual loads on (win-total gap − our margin): +0.44 (t 6.8) in weeks 1–4, +0.25 (t 4.3) in weeks 5–9, +0.03 in weeks 10+.
+  - In weeks 1–4 by tier: G5–G5 +0.60, P4–G5 +0.55, P4–P4 +0.03.
+  - The open's residual loads about 0, so the market already has this information and we don't.
+- At team level, R² for end-of-season SRS is 0.43 from win totals vs 0.33 from our prior (G5), and 0.38 vs 0.42 (P4).
+- **Caveat:** found by studying 2021–24, so the backtest flatters it.
+
+### Task 62: Candidates (baseline Npvk)
+
+- **`NpvkW` (`kf_market`):** the scoreboard prior becomes θ₀ ~ N(a·s + d·w + b·P4 + c, τ²_tier).
+  - The map is fitted on end-of-season SRS over **earlier** seasons that have both s and w. Teams without w keep the plain map.
+  - The filter fades the prior as margins arrive, which matches where the signal lives: weeks 1–9.
+  - Fitted maps (plumbing check, no outcomes scored):
+
+    | Season | Plain map: a | Plain map: τ P4/G5 | With w: a | With w: d | With w: τ P4/G5 |
+    |---|---|---|---|---|---|
+    | 2022 | 27.2 | 6.5 / 8.4 | 13.8 | 0.35 | 6.2 / 7.0 |
+    | 2023 | 26.3 | 6.6 / 7.5 | 15.1 | 0.29 | 6.6 / 6.2 |
+    | 2024 | 27.4 | 6.4 / 7.2 | 16.2 | 0.30 | 6.3 / 6.1 |
+
+  - The channel's prior difference moves by about 1.5–2 points per game (sd).
+- **`NpvkWA`:** NpvkW + `kf_split`, so the outcome layer can weight the improved prior separately from the evidence.
+
+### Task 63: Selection
+
+- **2021 is excluded by construction.** The first season with both s and w is 2021 (2019 has no draws: it is the first training season), so the 2021 prior is identical to Npvk. 2021 is run only as a plumbing check: Npvk − NpvkW should be 0 up to sampling noise.
+- **Pass rule:** pooled **2022–24** vs Npvk, Δ ≤ −0.001 with P(worse) ≤ 0.10, and no season worse by more than 0.003.
+- **Both pass:** their union is the same as NpvkWA, so the lower pooled log loss is adopted, and NpvkWA only if it is a further ≥ 0.0005 better.
+- **Reported:** tier × phase, the learned kf weights, and the G5–G5 and P4–G5 weeks 1–4 cells.
+- **2026:** a light sanity check only.
+
 ### Phase 21 (proposed): availability data
 
 - **No free historical college injury data exists.** Sports Info Solutions sells college injury data from 2016.

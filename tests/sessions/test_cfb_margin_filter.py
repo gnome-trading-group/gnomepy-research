@@ -61,6 +61,36 @@ def test_prior_map_recovers_coefficients_and_uses_earlier_seasons_only():
     assert srs is not None
 
 
+def test_market_prior_map_uses_earlier_seasons_and_falls_back_without_them(tmp_path):
+    from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import market_strength
+    rng = np.random.default_rng(1)
+    n = 600
+    x = pd.DataFrame({"season": np.repeat([2021, 2022, 2023], n // 3), "team_id": np.tile(np.arange(n // 3), 3),
+                      "s": rng.normal(0, 0.25, n), "p4": np.tile(np.arange(n // 3) < n // 6, 3)})
+    x["w"] = 20 * x.s + rng.normal(0, 5, n)
+    x["srs"] = 12 * x.s + 0.5 * x.w + 2 * x.p4 + rng.normal(0, 4, n)
+    m = mf.fit_prior_map(x, tiered=True, market=True)
+    assert m["a"] == pytest.approx(12, abs=3) and m["d"] == pytest.approx(0.5, abs=0.1) and m["b"] == pytest.approx(2, abs=1.2)
+    assert mf.fit_prior_map(x, tiered=True)["d"] == 0.0
+    srs = x.set_index(["season", "team_id"])["srs"].copy()
+    srs.loc[2023] = 1000.0                                                          # poison the predicted season
+    market = x.set_index(["season", "team_id"])["w"]
+    strength = x.drop(columns=["srs", "w"])
+    plain, _ = mf.season_priors(strength, srs, 2023, tiered=True)
+    priors, used = mf.season_priors(strength, srs, 2023, tiered=True, market=market)
+    assert used["market"]["d"] == pytest.approx(mf.fit_prior_map(x[x.season < 2023], tiered=True, market=True)["d"])
+    assert abs(np.mean([mu for mu, _ in priors.values()])) < 1e-9 and priors != plain
+    same, used = mf.season_priors(strength, srs, 2023, tiered=True, market=market[market.index.get_level_values(0) == 2023])
+    assert same == plain and "market" not in used                                  # no earlier season has w: unchanged
+    partial = market.drop(index=(2023, 0))
+    p2, _ = mf.season_priors(strength, srs, 2023, tiered=True, market=partial)
+    assert p2[0][1] == plain[0][1] and p2[1][1] != plain[1][1]                     # team without w keeps the plain width
+    path = tmp_path / "w.csv"
+    pd.DataFrame({"season": [2023], "team_id": [7], "wt_strength": [3.5], "line": [8.5]}).to_csv(path, index=False)
+    assert market_strength(path).to_dict() == {(2023, 7): 3.5}
+    assert MODEL_CONFIGS["NpvkW"] == {**MODEL_CONFIGS["Npvk"], "kf_market": True} and MODEL_CONFIGS["NpvkWA"]["kf_split"]
+
+
 def test_kf_term_wiring_and_configs(tmp_path):
     model_k.TestPhaseTerms.write(tmp_path)
     kf = pd.DataFrame({"game_id": [1, 2, 3], "kf_diff": [5.0, -10.0, 0.0], "kf_var": 50.0})
