@@ -289,13 +289,35 @@ def build_priors_for(
 
     The point-in-time scans are linear and run over everything; the legacy per-row
     priors are quadratic, so they run for the targets alone (seconds, not the
-    minutes a full rebuild takes every 30 min). Targets are only ever read by the
-    scans before their own day is observed, so their missing outcomes never leak.
+    minutes a full rebuild takes every 30 min).
+
+    Each day's targets are priced against history plus that day's targets only.
+    A target's outcome is unknown, so a later day's target must never see an
+    earlier one as played: its missing result would count as a win in h2h, turn
+    Elo into NaN, and crash recent form. Same-day targets can share a pass because
+    the scans score a whole day against the state at its start.
     """
+    rankings = team_rankings.sort_values("date").reset_index(drop=True)
+    targets = targets.assign(match_date=pd.to_datetime(targets["match_date"]))
+    days = [
+        _priors_for_day(match_history, rankings, day_targets, player_stats, veto, h2h)
+        for _, day_targets in targets.groupby("match_date", sort=True)
+    ]
+    days = [d for d in days if not d.empty]
+    return pd.concat(days, ignore_index=True) if days else pd.DataFrame()
+
+
+def _priors_for_day(
+    match_history: pd.DataFrame,
+    rankings: pd.DataFrame,
+    targets: pd.DataFrame,
+    player_stats: pd.DataFrame | None,
+    veto: pd.DataFrame | None,
+    h2h: pd.DataFrame | None,
+) -> pd.DataFrame:
     combined = pd.concat([match_history, targets], ignore_index=True)
     combined["match_date"] = pd.to_datetime(combined["match_date"])
     combined = combined.sort_values("match_date").reset_index(drop=True)
-    rankings = team_rankings.sort_values("date").reset_index(drop=True)
     keys = set(zip(targets.match_id, targets.map_name))
     is_target = [k in keys for k in zip(combined.match_id, combined.map_name)]
 
