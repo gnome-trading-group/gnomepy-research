@@ -2268,6 +2268,31 @@ Added 2026-10-16. Pre-registered before any Phase 25 backtest.
 - **Both pass:** the union is built and adopted only if a further ≥ 0.0005 better.
 - **Reported:** first-year-coach and option-game cuts, plus the learned weights.
 
+**Phase 25 result (2026-10-16, `results/backtest/p25_selection.txt`): neither passes; Npvk stays live.**
+
+| Comparison vs Npvk (pooled 2021–24) | Δ log loss | 95% CI | P(worse) | 2021 | 2022 | 2023 | 2024 |
+|---|---|---|---|---|---|---|---|
+| NpvkN | −0.0006 | [−0.0034, +0.0023] | 0.35 | −0.0041 | +0.0019 | −0.0021 | +0.0020 |
+| NpvkO | +0.0003 | [−0.0002, +0.0009] | 0.88 | +0.0013 | +0.0004 | +0.0004 | −0.0007 |
+
+- **Learned weights.**
+  - `nc_reg` is clearly positive once trained: +0.20 [−0.18, 0.57] (trained on 2020), then +0.48 [0.24, 0.73], +0.30 [0.14, 0.47] and +0.32 [0.17, 0.46]. The reset toward average is real.
+  - `nc_trend` is +0.15, +0.06, +0.17 and +0.09, with every interval covering 0.
+  - `option_edge` is +1.1, +2.2, +0.9 and −0.8, with intervals about ±3. It is not identified, and there is no stable option discount.
+- **First-year-coach games** (n=1,096; Npvk → NpvkN, open):
+
+  | Phase | Npvk | NpvkN | Open |
+  |---|---|---|---|
+  | All | 0.5440 | 0.5411 | 0.5335 |
+  | Weeks 1–4 | 0.4705 | 0.4670 | 0.4659 |
+  | Weeks 5–9 | 0.5540 | 0.5436 | 0.5433 (gap closed) |
+  | Weeks 10+ | 0.5718 | 0.5781 | 0.5619 (worse) |
+  | Bowls | 0.6977 | 0.6853 | |
+
+  The other 2,033 games are 0.5463 → 0.5469.
+- **Reading:** the reset is right early but is applied at full strength all season. By week 10 the ratings have absorbed the new staff, so the constant term double-counts. A prior-like term should fade as the team's own evidence accumulates, the same lesson as the Kalman channel's evidence split in Phase 24.
+- **Option games** (academies, n=125): Npvk 0.6349, NpvkO 0.6355, open 0.6226. Phase 25's #4 is closed; the academy misses are not a slope problem the outcome layer can learn from 3 seasons.
+
 ### Phase 21 (proposed): availability data
 
 - **No free historical college injury data exists.** Sports Info Solutions sells college injury data from 2016.
