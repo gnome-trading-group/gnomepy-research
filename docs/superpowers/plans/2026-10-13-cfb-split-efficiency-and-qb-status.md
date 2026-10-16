@@ -1944,6 +1944,36 @@ Added 2026-10-15. The diagnosis used 2021–24 only; 2025 is not used for any de
   - the big-favorite gap shrinks.
 - **Confirmation:** the same one-shot rule on the completed 2026 games as in Task 48.
 
+**Result: rejected.**
+- Pooled 2022–24 (n=2359), Np21 − Np = +0.0019 [+0.0000, +0.0038], P(worse) 0.98.
+- It is worse in every season: 2022 +0.0042, 2023 +0.0002, 2024 +0.0015.
+- More training seasons beat a cleaner window.
+
+### Reframing: resolution, not confidence (2026-10-15)
+
+Within its **own** probability bins (pooled 2021–24), Np is not under-confident:
+
+| Forecaster | Recalibration slope (pooled) | Np's 85–90% bin | Np's 90–95% bin |
+|---|---|---|---|
+| Np | **0.94** | 87.6% predicted, 81.0% won | 92.5% predicted, 86.9% won |
+| K | 0.92 | | |
+| Open | 1.00 | | |
+
+The big-favorite shortfall exists only when games are grouped by the **open's** call. A noisier forecaster regresses toward 50% on another forecaster's extreme calls even when it is perfectly calibrated.
+
+The real deficit is resolution: the market identifies which games are lopsided better than we do, in both directions.
+- When the open says lock and we don't, the open is right (Kennesaw St).
+- When we say 85–95% and the open is skeptical, the open is right again.
+
+That is why Kc, M, Npm and Np21 all failed. Reshaping the link cannot fix ranking error, and stretching only makes our own top bins more over-confident.
+
+**The levers are therefore better ratings and new information:**
+- priors, starting with the transition-team bug;
+- information per game: the model's game noise is 0.009 against about 0.06 measured, which shifts game weights by about 15%, a modest effect;
+- availability data.
+
+Phase 18 is demoted from "honest uncertainty" to a ratings-accuracy experiment, judged by resolution (log loss, plus disagreement with the open), not by calibration.
+
 ### Later phases (not started)
 
 - **Phase 18, honest uncertainty in the efficiency model:** a game-level noise term, and a heavy-tailed play likelihood or a success-rate channel. The target is claimed/actual uncertainty ≈ 1, with posterior sd shrinking through the season.
