@@ -1,0 +1,79 @@
+overall:
+                                           n  log_loss   brier     ece  accuracy  calib_slope  calib_intercept
+p_bayes                                808.0    0.5357  0.1815  0.0536    0.7290       1.0837           0.0702
+p_logistic                             808.0    0.5588  0.1902  0.0240    0.7017       1.0244           0.0793
+p_elo                                  808.0    0.5481  0.1860  0.0359    0.7079       1.1374           0.0958
+p_home_field                           808.0    0.6761  0.2415  0.0179    0.5829       0.2267           0.3151
+p_market_close (closing, post-cutoff)  808.0    0.5205  0.1757  0.0260    0.7327       1.0953           0.0837
+
+log loss by season:
+                2025
+p_bayes       0.5357
+p_logistic    0.5588
+p_elo         0.5481
+p_home_field  0.6761
+
+log loss by phase:
+                post   wk1-2   wk10+   wk3-5   wk6-9
+p_bayes       0.6405  0.4517  0.5475  0.5196  0.5460
+p_logistic    0.7268  0.5090  0.5519  0.5262  0.5774
+p_elo         0.6420  0.5669  0.5368  0.5453  0.5371
+p_home_field  0.6910  0.6354  0.6915  0.6800  0.6676
+
+paired log-loss differences (negative = Bayes better; game bootstrap):
+                        diff      se    lo95    hi95  p_a_worse
+bayes - logistic     -0.0231  0.0084 -0.0394 -0.0069     0.0035
+bayes - elo          -0.0124  0.0092 -0.0304  0.0060     0.0820
+bayes - home_field   -0.1404  0.0145 -0.1681 -0.1115     0.0000
+bayes - market_close  0.0151  0.0066  0.0016  0.0278     0.9885
+
+refit noise (Bayes log loss across refits): 2025: [0.5357, 0.5354, 0.5355] (sd 0.0001)
+
+log loss by market-favourite band:
+            (0.499, 0.6]  (0.6, 0.7]  (0.7, 0.8]  (0.8, 0.9]  (0.9, 1.0]
+p_bayes           0.6544      0.6883      0.5669      0.4239      0.1298
+p_logistic        0.6677      0.7344      0.5710      0.4578      0.1489
+p_elo             0.6662      0.6786      0.5604      0.4483      0.2026
+n               189.0000    189.0000    187.0000    141.0000    102.0000
+
+Bayes reliability:
+           n  mean_p  observed
+0.0-0.1   17   0.066     0.118
+0.1-0.2   38   0.155     0.263
+0.2-0.3   60   0.252     0.167
+0.3-0.4   88   0.356     0.398
+0.4-0.5   93   0.451     0.398
+0.5-0.6  118   0.550     0.636
+0.6-0.7  119   0.648     0.605
+0.7-0.8  102   0.747     0.755
+0.8-0.9   90   0.846     0.911
+0.9-1.0   83   0.944     0.976
+
+90% interval on P(home): median width 0.535; widest phase {'post': 0.62, 'wk1-2': 0.459, 'wk10+': 0.549, 'wk3-5': 0.497, 'wk6-9': 0.538}
+
+outcome coefficients (log-odds; posterior mean, 90% interval; first refit):
+2025:
+                      mean    lo5    hi95
+pass_edge            6.259  5.400   7.158
+rush_edge            8.670  7.226  10.196
+venue                0.340  0.266   0.414
+early_success_diff   0.085  0.019   0.152
+field_position_diff  0.088  0.027   0.149
+qb_delta_diff        1.250  0.160   2.348
+
+Starters are the actual first passer of each game (ex-post); this is an upper bound on what pregame QB news can deliver.
+
+qb_delta_diff distribution (test games):
+0.00   -0.2959
+0.01   -0.1871
+0.05   -0.1035
+0.25   -0.0149
+0.50    0.0000
+0.75    0.0181
+0.95    0.0914
+0.99    0.1814
+1.00    0.2686
+
+games with |qb_delta_diff| > 0.05: 188 of 808
+
+D - C paired log loss on that subset (negative = D better): {'diff': -0.0427, 'se': 0.0159, 'lo95': -0.0742, 'hi95': -0.0123, 'p_a_worse': 0.003}

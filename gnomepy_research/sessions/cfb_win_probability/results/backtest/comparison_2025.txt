@@ -1,0 +1,211 @@
+SUMMARY
+- Best model by log loss: Kp (0.5333); open 0.5211; close 0.5205.
+- Gap to open (model - open, negative = model better): +0.0121  [-0.0017, +0.0263]  P(first worse)=0.95
+- Gap to close (model - close): +0.0127  [-0.0001, +0.0259]  P(first worse)=0.97
+- Blend weight a on the model vs the open (a > 0 = information beyond the open): A a=-0.03 [-0.30, +0.30], B a=-0.17 [-0.48, +0.17], C a=-0.04 [-0.36, +0.31], D a=+0.00 [-0.32, +0.35], E a=-0.02 [-0.37, +0.28], F a=-0.04 [-0.36, +0.32], G a=+0.05 [-0.29, +0.45], H a=+0.02 [-0.32, +0.43], I0 a=-0.05 [-0.46, +0.36], I a=-0.04 [-0.41, +0.32], J0 a=+0.14 [-0.16, +0.47], J a=+0.31 [-0.04, +0.63], K a=+0.27 [-0.10, +0.62], L a=+0.24 [-0.15, +0.61], Kc a=+0.24 [-0.05, +0.56], M a=+0.24 [-0.11, +0.61], N1 a=+0.16 [-0.24, +0.57], N2 a=+0.16 [-0.24, +0.56], N a=+0.16 [-0.23, +0.56], Kp a=+0.32 [+0.00, +0.69], Np a=+0.27 [-0.06, +0.65], Npt a=+0.21 [-0.14, +0.57]
+- Carries information beyond the open (95% CI of a above 0): Kp
+
+models: A B C D E F G H I0 I J0 J K L Kc M N1 N2 N Kp Np Npt; games scored: 808; dropped 0 games present in every model but missing an opening or closing line
+sanity: 0 of 808 games have |backtest p_market_close - p_close| > 0.02
+
+PER-SOURCE SCORES (calib_slope: 1 = calibrated)
+   source season   n  log_loss  brier  calib_slope
+  model A    all 808    0.5524 0.1881       1.0846
+  model A   2025 808    0.5524 0.1881       1.0846
+  model B    all 808    0.5621 0.1921       1.0730
+  model B   2025 808    0.5621 0.1921       1.0730
+  model C    all 808    0.5527 0.1881       1.0901
+  model C   2025 808    0.5527 0.1881       1.0901
+  model D    all 808    0.5507 0.1872       1.1042
+  model D   2025 808    0.5507 0.1872       1.1042
+  model E    all 808    0.5549 0.1885       1.0946
+  model E   2025 808    0.5549 0.1885       1.0946
+  model F    all 808    0.5527 0.1881       1.0918
+  model F   2025 808    0.5527 0.1881       1.0918
+  model G    all 808    0.5471 0.1860       1.1257
+  model G   2025 808    0.5471 0.1860       1.1257
+  model H    all 808    0.5497 0.1869       1.1076
+  model H   2025 808    0.5497 0.1869       1.1076
+ model I0    all 808    0.5533 0.1882       1.2433
+ model I0   2025 808    0.5533 0.1882       1.2433
+  model I    all 808    0.5502 0.1873       1.0996
+  model I   2025 808    0.5502 0.1873       1.0996
+ model J0    all 808    0.5488 0.1868       1.0545
+ model J0   2025 808    0.5488 0.1868       1.0545
+  model J    all 808    0.5357 0.1815       1.0837
+  model J   2025 808    0.5357 0.1815       1.0837
+  model K    all 808    0.5346 0.1811       1.0789
+  model K   2025 808    0.5346 0.1811       1.0789
+  model L    all 808    0.5357 0.1817       1.0694
+  model L   2025 808    0.5357 0.1817       1.0694
+ model Kc    all 808    0.5350 0.1813       1.0154
+ model Kc   2025 808    0.5350 0.1813       1.0154
+  model M    all 808    0.5358 0.1817       1.0819
+  model M   2025 808    0.5358 0.1817       1.0819
+ model N1    all 808    0.5381 0.1824       1.0964
+ model N1   2025 808    0.5381 0.1824       1.0964
+ model N2    all 808    0.5379 0.1823       1.0962
+ model N2   2025 808    0.5379 0.1823       1.0962
+  model N    all 808    0.5379 0.1823       1.0960
+  model N   2025 808    0.5379 0.1823       1.0960
+ model Kp    all 808    0.5333 0.1805       1.0870
+ model Kp   2025 808    0.5333 0.1805       1.0870
+ model Np    all 808    0.5346 0.1808       1.1111
+ model Np   2025 808    0.5346 0.1808       1.1111
+model Npt    all 808    0.5393 0.1826       1.1114
+model Npt   2025 808    0.5393 0.1826       1.1114
+     open    all 808    0.5211 0.1759       1.1290
+     open   2025 808    0.5211 0.1759       1.1290
+    close    all 808    0.5205 0.1757       1.0953
+    close   2025 808    0.5205 0.1757       1.0953
+
+PAIRED LOG-LOSS DIFFERENCES (first - second; negative = first better; game-bootstrap 95% CI)
+diff B - A  +0.0098  [+0.0039, +0.0159]  P(first worse)=1.00
+diff C - B  -0.0094  [-0.0172, -0.0017]  P(first worse)=0.01
+diff C - A  +0.0004  [-0.0080, +0.0088]  P(first worse)=0.55
+diff D - C  -0.0020  [-0.0046, +0.0008]  P(first worse)=0.08
+diff E - C  +0.0022  [-0.0037, +0.0080]  P(first worse)=0.76
+diff F - C  -0.0000  [-0.0002, +0.0001]  P(first worse)=0.23
+diff F - E  -0.0022  [-0.0081, +0.0037]  P(first worse)=0.23
+diff G - D  -0.0036  [-0.0069, -0.0007]  P(first worse)=0.01
+diff G - C  -0.0056  [-0.0099, -0.0013]  P(first worse)=0.01
+diff H - G  +0.0026  [-0.0004, +0.0057]  P(first worse)=0.96
+diff H - D  -0.0010  [-0.0055, +0.0035]  P(first worse)=0.32
+diff I - G  +0.0031  [-0.0004, +0.0065]  P(first worse)=0.96
+diff I0 - G  +0.0062  [+0.0018, +0.0104]  P(first worse)=1.00
+diff I - I0  -0.0032  [-0.0061, -0.0002]  P(first worse)=0.02
+diff J0 - G  +0.0017  [-0.0062, +0.0091]  P(first worse)=0.66
+diff J - G  -0.0114  [-0.0246, +0.0018]  P(first worse)=0.05
+diff J - J0  -0.0131  [-0.0266, +0.0007]  P(first worse)=0.03
+diff K - G  -0.0125  [-0.0245, -0.0007]  P(first worse)=0.02
+diff K - J  -0.0011  [-0.0059, +0.0042]  P(first worse)=0.34
+diff L - K  +0.0011  [-0.0009, +0.0031]  P(first worse)=0.85
+diff L - G  -0.0114  [-0.0237, +0.0006]  P(first worse)=0.03
+diff Kc - K  +0.0004  [-0.0023, +0.0030]  P(first worse)=0.60
+diff Kc - L  -0.0007  [-0.0046, +0.0032]  P(first worse)=0.37
+diff M - K  +0.0012  [-0.0010, +0.0034]  P(first worse)=0.86
+diff M - G  -0.0113  [-0.0229, +0.0002]  P(first worse)=0.03
+diff N1 - K  +0.0035  [-0.0054, +0.0120]  P(first worse)=0.79
+diff N2 - K  +0.0033  [-0.0054, +0.0118]  P(first worse)=0.78
+diff N - K  +0.0034  [-0.0054, +0.0118]  P(first worse)=0.78
+diff N2 - N1  -0.0002  [-0.0010, +0.0007]  P(first worse)=0.37
+diff N - N2  +0.0000  [-0.0003, +0.0004]  P(first worse)=0.58
+diff Kp - K  -0.0013  [-0.0048, +0.0019]  P(first worse)=0.24
+diff Np - N  -0.0034  [-0.0080, +0.0011]  P(first worse)=0.08
+diff Np - Kp  +0.0013  [-0.0076, +0.0099]  P(first worse)=0.61
+diff Npt - Np  +0.0047  [+0.0021, +0.0074]  P(first worse)=1.00
+diff Npt - K  +0.0047  [-0.0068, +0.0158]  P(first worse)=0.79
+diff A - open  +0.0312  [+0.0163, +0.0457]  P(first worse)=1.00
+diff B - open  +0.0410  [+0.0259, +0.0566]  P(first worse)=1.00
+diff C - open  +0.0316  [+0.0171, +0.0467]  P(first worse)=1.00
+diff D - open  +0.0296  [+0.0150, +0.0444]  P(first worse)=1.00
+diff E - open  +0.0338  [+0.0192, +0.0484]  P(first worse)=1.00
+diff F - open  +0.0316  [+0.0170, +0.0466]  P(first worse)=1.00
+diff G - open  +0.0260  [+0.0118, +0.0401]  P(first worse)=1.00
+diff H - open  +0.0286  [+0.0138, +0.0437]  P(first worse)=1.00
+diff I0 - open  +0.0322  [+0.0183, +0.0458]  P(first worse)=1.00
+diff I - open  +0.0290  [+0.0150, +0.0435]  P(first worse)=1.00
+diff J0 - open  +0.0277  [+0.0108, +0.0432]  P(first worse)=1.00
+diff J - open  +0.0145  [-0.0006, +0.0284]  P(first worse)=0.97
+diff K - open  +0.0134  [-0.0006, +0.0270]  P(first worse)=0.97
+diff L - open  +0.0145  [+0.0003, +0.0283]  P(first worse)=0.98
+diff Kc - open  +0.0138  [-0.0007, +0.0279]  P(first worse)=0.97
+diff M - open  +0.0146  [+0.0007, +0.0279]  P(first worse)=0.98
+diff N1 - open  +0.0169  [+0.0036, +0.0297]  P(first worse)=0.99
+diff N2 - open  +0.0168  [+0.0038, +0.0295]  P(first worse)=0.99
+diff N - open  +0.0168  [+0.0037, +0.0295]  P(first worse)=0.99
+diff Kp - open  +0.0121  [-0.0017, +0.0263]  P(first worse)=0.95
+diff Np - open  +0.0135  [-0.0003, +0.0267]  P(first worse)=0.97
+diff Npt - open  +0.0182  [+0.0038, +0.0326]  P(first worse)=0.99
+diff A - close  +0.0318  [+0.0173, +0.0471]  P(first worse)=1.00
+diff B - close  +0.0416  [+0.0260, +0.0581]  P(first worse)=1.00
+diff C - close  +0.0322  [+0.0181, +0.0464]  P(first worse)=1.00
+diff D - close  +0.0302  [+0.0164, +0.0444]  P(first worse)=1.00
+diff E - close  +0.0344  [+0.0196, +0.0495]  P(first worse)=1.00
+diff F - close  +0.0322  [+0.0181, +0.0463]  P(first worse)=1.00
+diff G - close  +0.0266  [+0.0130, +0.0402]  P(first worse)=1.00
+diff H - close  +0.0292  [+0.0145, +0.0438]  P(first worse)=1.00
+diff I0 - close  +0.0328  [+0.0189, +0.0468]  P(first worse)=1.00
+diff I - close  +0.0296  [+0.0157, +0.0438]  P(first worse)=1.00
+diff J0 - close  +0.0282  [+0.0127, +0.0441]  P(first worse)=1.00
+diff J - close  +0.0151  [+0.0016, +0.0278]  P(first worse)=0.99
+diff K - close  +0.0140  [+0.0018, +0.0267]  P(first worse)=0.98
+diff L - close  +0.0151  [+0.0027, +0.0276]  P(first worse)=0.99
+diff Kc - close  +0.0144  [+0.0018, +0.0276]  P(first worse)=0.99
+diff M - close  +0.0152  [+0.0030, +0.0272]  P(first worse)=0.99
+diff N1 - close  +0.0175  [+0.0048, +0.0304]  P(first worse)=1.00
+diff N2 - close  +0.0174  [+0.0050, +0.0302]  P(first worse)=1.00
+diff N - close  +0.0174  [+0.0048, +0.0303]  P(first worse)=1.00
+diff Kp - close  +0.0127  [-0.0001, +0.0259]  P(first worse)=0.97
+diff Np - close  +0.0140  [+0.0009, +0.0275]  P(first worse)=0.98
+diff Npt - close  +0.0188  [+0.0048, +0.0332]  P(first worse)=0.99
+
+BLEND: logit(y) ~ a*logit(model) + b*logit(ref); a > 0 = model carries information the reference lacks
+A vs open:  a=-0.028 [-0.301, +0.299]  b=+1.162
+A vs close: a=-0.038 [-0.317, +0.292]  b=+1.141  (reference)
+B vs open:  a=-0.171 [-0.479, +0.165]  b=+1.269
+B vs close: a=-0.134 [-0.401, +0.170]  b=+1.209  (reference)
+C vs open:  a=-0.044 [-0.361, +0.314]  b=+1.176
+C vs close: a=-0.050 [-0.319, +0.270]  b=+1.150  (reference)
+D vs open:  a=+0.000 [-0.321, +0.348]  b=+1.140
+D vs close: a=-0.024 [-0.324, +0.326]  b=+1.130  (reference)
+E vs open:  a=-0.022 [-0.365, +0.282]  b=+1.158
+E vs close: a=-0.032 [-0.369, +0.302]  b=+1.136  (reference)
+F vs open:  a=-0.043 [-0.361, +0.317]  b=+1.174
+F vs close: a=-0.048 [-0.318, +0.271]  b=+1.148  (reference)
+G vs open:  a=+0.053 [-0.289, +0.455]  b=+1.098
+G vs close: a=+0.036 [-0.272, +0.427]  b=+1.083  (reference)
+H vs open:  a=+0.020 [-0.319, +0.433]  b=+1.124
+H vs close: a=+0.012 [-0.262, +0.418]  b=+1.101  (reference)
+I0 vs open:  a=-0.045 [-0.464, +0.364]  b=+1.172
+I0 vs close: a=-0.039 [-0.361, +0.382]  b=+1.138  (reference)
+I vs open:  a=-0.039 [-0.411, +0.322]  b=+1.171
+I vs close: a=-0.034 [-0.319, +0.338]  b=+1.137  (reference)
+J0 vs open:  a=+0.142 [-0.157, +0.467]  b=+1.025
+J0 vs close: a=+0.133 [-0.152, +0.460]  b=+1.006  (reference)
+J vs open:  a=+0.309 [-0.039, +0.627]  b=+0.873
+J vs close: a=+0.246 [-0.068, +0.556]  b=+0.899  (reference)
+K vs open:  a=+0.270 [-0.095, +0.618]  b=+0.902
+K vs close: a=+0.202 [-0.145, +0.561]  b=+0.933  (reference)
+L vs open:  a=+0.243 [-0.149, +0.614]  b=+0.925
+L vs close: a=+0.168 [-0.183, +0.535]  b=+0.963  (reference)
+Kc vs open:  a=+0.243 [-0.051, +0.561]  b=+0.915
+Kc vs close: a=+0.180 [-0.112, +0.520]  b=+0.944  (reference)
+M vs open:  a=+0.242 [-0.112, +0.607]  b=+0.928
+M vs close: a=+0.164 [-0.177, +0.532]  b=+0.968  (reference)
+N1 vs open:  a=+0.162 [-0.243, +0.570]  b=+1.001
+N1 vs close: a=+0.141 [-0.227, +0.527]  b=+0.991  (reference)
+N2 vs open:  a=+0.156 [-0.240, +0.557]  b=+1.006
+N2 vs close: a=+0.135 [-0.240, +0.521]  b=+0.996  (reference)
+N vs open:  a=+0.158 [-0.233, +0.556]  b=+1.004
+N vs close: a=+0.137 [-0.229, +0.522]  b=+0.995  (reference)
+Kp vs open:  a=+0.319 [+0.000, +0.691]  b=+0.862
+Kp vs close: a=+0.261 [-0.047, +0.603]  b=+0.883  (reference)
+Np vs open:  a=+0.274 [-0.056, +0.645]  b=+0.905
+Np vs close: a=+0.257 [-0.101, +0.617]  b=+0.893  (reference)
+Npt vs open:  a=+0.209 [-0.141, +0.566]  b=+0.966
+Npt vs close: a=+0.204 [-0.131, +0.565]  b=+0.944  (reference)
+
+BET-LIKE SUBSET: |p_model - p_open| > 0.05 (log loss; open scored on the same games)
+A: n=464  model=0.6086  open=0.5648
+B: n=480  model=0.6023  open=0.5415
+C: n=486  model=0.5962  open=0.5472
+D: n=474  model=0.5977  open=0.5558
+E: n=495  model=0.5716  open=0.5240
+F: n=486  model=0.5948  open=0.5460
+G: n=460  model=0.5996  open=0.5614
+H: n=475  model=0.6182  open=0.5741
+I0: n=495  model=0.5766  open=0.5300
+I: n=466  model=0.6114  open=0.5698
+J0: n=490  model=0.6063  open=0.5618
+J: n=462  model=0.5823  open=0.5582
+K: n=430  model=0.6038  open=0.5782
+L: n=427  model=0.6062  open=0.5775
+Kc: n=428  model=0.6107  open=0.5852
+M: n=424  model=0.6146  open=0.5863
+N1: n=412  model=0.6131  open=0.5809
+N2: n=415  model=0.6217  open=0.5909
+N: n=420  model=0.6197  open=0.5882
+Kp: n=432  model=0.6088  open=0.5888
+Np: n=418  model=0.6122  open=0.5890
+Npt: n=446  model=0.6079  open=0.5757
