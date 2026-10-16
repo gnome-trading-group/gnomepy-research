@@ -67,8 +67,27 @@ For loop-driven sessions, state (iterations, notes, status) is stored in the API
 
 **Diagnostics:** `/research` Step 5 runs mandatory per-strategy-type diagnostic checks every iteration via `gnomepy_research.reporting.backtest` (`compute_mm_stats`, `compute_adverse_selection`, `compute_rolling_sharpe`) rather than hand-rolling them from parquet. Results are included in the iteration analysis and directly inform the next hypothesis.
 
-### Exchange profiles
-Saved exchange profiles live in `gnomepy_research/profiles/`. Current profiles: `hyperliquid`, `lighter`, `polymarket_intl`, `polymarket_us`, `kalshi`. The `/research-new` wizard picks these up automatically so you don't re-specify fees and latency each time. New profiles created during `/research-new` are saved here for future reuse.
+### Simulation parameters
+Each exchange's simulation parameters (network and order latency, market data latency, queue model, self-trade prevention) live in the registry, under the controller's Security Master → Simulation tab. Every backtest and paper session simulates each listing with its exchange's parameters, so a config states nothing about simulation unless an experiment changes it. Fees always come from the registry's fee schedules.
+
+To change how a venue behaves for one experiment, override blocks by exchange code; a block is replaced whole, and the rest keep the registry's values:
+
+```yaml
+exchanges:
+  KALSHI:
+    queue_model: {type: optimistic}
+scenarios:
+  slow_polymarket:
+    exchanges:                       # this scenario only, laid over the top-level blocks for the exchange
+      POLYMARKET_INTL:
+        order_processing_latency: {type: maker_taker, base_nanos: 5000000, taker_delay_nanos: 3000000000, maker_delay_nanos: 0}
+listings:
+  - listing_id: 48212
+    overrides:                       # one listing, over its exchange's
+      network_latency: {type: static, latency_nanos: 1}
+```
+
+A run records the time it read the registry (`simulation_as_of` in its metadata) and each listing's resolved parameters; set `simulation_as_of` in a config to rerun with exactly the parameters an earlier run read. On 2026-10-16 every config's assumed latency and queue values (50ms network, the standard maker/taker delays, risk-averse queue) were removed so they simulate with the registry's; only deliberate ones remain (latency runs, optimistic queues, unusual values). Results recorded before then used the old assumptions.
 
 ### Iteration modes
 - **Local run**: for logic changes — writes a config YAML, runs via `poetry run gnomepy backtest run --config <path>`
@@ -76,7 +95,7 @@ Saved exchange profiles live in `gnomepy_research/profiles/`. Current profiles: 
 - **Multi-scenario run**: for testing across multiple events/listings simultaneously — writes a config with a `scenarios` key; each scenario has its own `listings`, `start_date`, `end_date`, and optional `strategy_args` overrides. Works for both local runs and remote sweeps; scenarios compose with sweep params (total jobs = scenarios × sweep combinations). Each scenario gets its own report and summary.
 
 ### Sweep config format
-Parameters to sweep are declared in a top-level `sweep:` section, keyed on `strategy` (for strategy args) and `profiles` (for profile values). Everything in `strategy.args` and `profiles` is always fixed — only the `sweep` section is expanded:
+Parameters to sweep are declared in a top-level `sweep:` section, keyed on `strategy` (for strategy args), `exchanges` (for an exchange's simulation blocks) and `listings` (for one listing's, by id). Everything outside `sweep` is always fixed — only the `sweep` section is expanded. A swept simulation block must name its model (`type`) in the config:
 
 ```yaml
 strategy:
@@ -89,10 +108,10 @@ sweep:
   strategy:
     gamma: [0.5, 1.0, 2.0, 4.0]             # list sweep
     delta: {min: 0.5, max: 3.0, step: 0.5}  # range sweep
-  profiles:
-    default:
+  exchanges:
+    KALSHI:
       network_latency:
-        latency_nanos: [5000000, 10000000]   # profile sweep
+        latency_nanos: [5000000, 10000000]   # simulation sweep; needs exchanges.KALSHI.network_latency.type
 ```
 
 ## Production code vs sessions

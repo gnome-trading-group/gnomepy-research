@@ -22,7 +22,7 @@ constraints:
   avoid:
     - trading during GRID feed disconnection (no signal = no edge)
     - taking against thick books without sufficient model confidence
-    - ignoring taker fees (Polymarket 7% parametric, Kalshi 7%)
+    - ignoring taker fees (each listing's registry fee schedule)
     - trading when model fair price is unavailable (no GRID state yet)
   notes:
     - Polymarket is a pure CLOB — no platform repricing, prices set by participants
@@ -31,7 +31,7 @@ constraints:
     - Simple XGBoost matches Transformers at 0.85 AUC (Huang et al. 2026 preprint)
     - Model edge lies at transition moments: freeze time, bomb plant, half-time
     - Maker-first: post at model fair price ± spread, let uninformed flow come to us
-    - Taker fees are 7% parametric on both PM and Kalshi — need >5% edge to profit taking
+    - Fees come from each listing's registry fee schedule — Kalshi takers pay 7% x p x (1-p) per contract (up to 1.75c at 50c), rounded up to the cent per fill; Polymarket International sets fees per market, and many are free — size the edge needed to take per listing
 
 meta:
   execution_mode: local

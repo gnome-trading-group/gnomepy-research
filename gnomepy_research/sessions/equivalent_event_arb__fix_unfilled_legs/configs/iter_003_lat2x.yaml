@@ -25,20 +25,12 @@ end_date: "2026-08-24T17:06:40"
 
 listings:
   - listing_id: 253844
-    profile: polymarket
   - listing_id: 253845
-    profile: polymarket
   - listing_id: 246127
-    profile: kalshi
   - listing_id: 246126
-    profile: kalshi
 
-profiles:
-  polymarket:
-    fee_model:
-      type: parametric
-      taker_fee_rate: 0.07
-      maker_fee_rate: 0.0
+exchanges:
+  POLYMARKET_INTL:
     network_latency:
       type: static
       latency_nanos: 100000000
@@ -47,13 +39,7 @@ profiles:
       base_nanos: 5000000
       taker_delay_nanos: 0
       maker_delay_nanos: 0
-    queue_model:
-      type: risk_averse
-  kalshi:
-    fee_model:
-      type: parametric
-      taker_fee_rate: 0.07
-      maker_fee_rate: 0.0175
+  KALSHI:
     network_latency:
       type: static
       latency_nanos: 100000000
@@ -62,5 +48,3 @@ profiles:
       base_nanos: 5000000
       taker_delay_nanos: 0
       maker_delay_nanos: 0
-    queue_model:
-      type: risk_averse

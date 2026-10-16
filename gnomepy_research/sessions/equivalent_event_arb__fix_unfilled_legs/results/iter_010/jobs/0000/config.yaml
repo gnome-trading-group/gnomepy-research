@@ -1,44 +1,9 @@
 end_date: '2026-08-24T17:06:40'
 listings:
-- listing_id: 253844
-  profile: polymarket
-- listing_id: 253845
-  profile: polymarket
-- listing_id: 246127
-  profile: kalshi
-- listing_id: 246126
-  profile: kalshi
-profiles:
-  kalshi:
-    fee_model:
-      maker_fee_rate: 0.0175
-      taker_fee_rate: 0.07
-      type: parametric
-    network_latency:
-      latency_nanos: 50000000
-      type: static
-    order_processing_latency:
-      base_nanos: 5000000
-      maker_delay_nanos: 0
-      taker_delay_nanos: 0
-      type: maker_taker
-    queue_model:
-      type: risk_averse
-  polymarket:
-    fee_model:
-      maker_fee_rate: 0.0
-      taker_fee_rate: 0.07
-      type: parametric
-    network_latency:
-      latency_nanos: 50000000
-      type: static
-    order_processing_latency:
-      base_nanos: 5000000
-      maker_delay_nanos: 0
-      taker_delay_nanos: 0
-      type: maker_taker
-    queue_model:
-      type: risk_averse
+  - listing_id: 253844
+  - listing_id: 253845
+  - listing_id: 246127
+  - listing_id: 246126
 record_depth: 10
 start_date: '2026-08-24T16:54:00'
 strategy:
@@ -47,8 +12,8 @@ strategy:
     cancel_grace_ns: 5000000000
     debug: true
     event_ids:
-    - 55038
-    - 53146
+      - 55038
+      - 53146
     exchange_fees:
       kalshi:
         maker: 0.0175

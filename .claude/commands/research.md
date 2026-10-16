@@ -145,25 +145,12 @@ end_date: "<spec.data.date_ranges[0].end>"
 
 listings:
   - listing_id: <spec.data.listings[0].listing_id>
-    profile: <spec.data.listings[0].profile>
   # repeat for each listing in spec
 
-profiles:
-  <profile_name>:
-    fee_model:
-      type: registry    # each listing pays its venue's fees as of each fill, from the registry's fee schedules
-    network_latency:
-      type: static
-      latency_nanos: <spec.profiles.<name>.network_latency.latency_nanos>
-    order_processing_latency:
-      type: static
-      latency_nanos: <spec.profiles.<name>.order_processing_latency.latency_nanos>
-    queue_model:
-      type: <spec.profiles.<name>.queue_model.type>
-  # repeat for each profile in spec
+exchanges: <spec.exchanges, if the spec has any; otherwise leave this key out>
 ```
 
-`network_latency` is only our order connection, each way: orders out and reports back. Market data reaches the strategy at the receive time recorded with each record, about 50ms after the venue event on Polymarket and Kalshi, so leave `market_data_latency` unset unless the experiment is about data staleness.
+Each listing simulates with its exchange's simulation parameters from the registry (network and order latency, market data latency, queue model, self-trade prevention) and pays its venue's fees from the fee schedules. Override a block only when the experiment is about it, by exchange code under `exchanges` or for one listing under its `overrides`; a block is replaced whole, so it names its model (`type`) and every field of it. `network_latency` is only our order connection, each way: orders out and reports back.
 
 When the strategy operates across multiple distinct events (e.g., different prediction market events with separate listing IDs and time windows), use a `scenarios` config instead of the flat format above. Each scenario provides its own `start_date`, `end_date`, `listings`, and optional `strategy_args` overrides (merged on top of the shared `strategy.args`):
 
@@ -179,7 +166,6 @@ scenarios:
     end_date: "<end>"
     listings:
       - listing_id: <id>
-        profile: <profile_name>
     strategy_args:       # optional — merged into strategy.args for this scenario only
       event_ids: [...]
   <event_name_2>:
@@ -189,8 +175,8 @@ scenarios:
     strategy_args:
       event_ids: [...]
 
-profiles:
-  # same profile definitions as flat format
+exchanges:
+  # same as the flat format; a scenario may also carry its own `exchanges`, laid over these per block
 ```
 
 Each scenario produces a separate backtest job with its own report and summary.json. The top-level `start_date`, `end_date`, and `listings` keys are omitted when using `scenarios`.
@@ -234,10 +220,10 @@ sweep:
   strategy:
     gamma: [0.5, 1.0, 2.0, 4.0]             # list sweep
     delta: {min: 0.5, max: 3.0, step: 0.5}  # range sweep
-  profiles:
-    default:
+  exchanges:
+    KALSHI:
       network_latency:
-        latency_nanos: [5000000, 10000000]   # profile sweep
+        latency_nanos: [5000000, 10000000]   # needs exchanges.KALSHI.network_latency.type in the config
 ```
 
 **Hard cap: the cartesian product of scenarios × sweep parameters must not exceed 100 jobs.** Before writing the config, calculate the total job count (`len(scenarios) × product(sweep_lengths)`). If it exceeds 100, reduce the parameter grid or the number of scenarios.
@@ -451,7 +437,7 @@ essentially never pass (see `tutorials/02_research_workflow.md`).
 this is the first iteration this strategy revision has passed thresholds — do not repeat on every
 iteration).
 
-**Generate the sweep configs, don't hand-edit profiles:**
+**Generate the sweep configs, don't hand-edit simulation blocks:**
 
 ```bash
 poetry run python3 - <<'EOF'
@@ -660,7 +646,7 @@ three sessions with contradictory verdicts (`informed_pmm` recorded as both comp
 Use exactly this shape, and place it below the `<!-- Entries updated in place here -->` marker:
 ```markdown
 ### [YYYY-MM-DD] $ARGUMENTS — <COMPLETED|STALLED> (best=iter_NNN)
-**Type**: <strategy_type> | **Venues**: <profiles> | **Listings**: <ids> | **Window**: <date range>
+**Type**: <strategy_type> | **Venues**: <exchange codes> | **Listings**: <ids> | **Window**: <date range>
 **Best**: iter_NNN — PnL $X, N fills, per-bar Sharpe Y
 
 **Worked:**

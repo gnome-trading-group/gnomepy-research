@@ -12,7 +12,7 @@ strategy:
     ct_team_is_team_a: true
     ct_score: 0
     t_score: 0
-    fair_value_series_path: null  # set to parquet path once model + GRID data are ready
+    fair_value_series_path:       # set to parquet path once model + GRID data are ready
     edge_threshold: 0.03
     half_spread: 0.02
     max_position: 100
@@ -28,23 +28,5 @@ end_date: "2026-01-01T14:00:00"
 
 listings:
   - listing_id: 253844
-    profile: polymarket
   - listing_id: 253845
-    profile: polymarket
 
-profiles:
-  polymarket:
-    fee_model:
-      type: parametric
-      taker_fee_rate: 0.07
-      maker_fee_rate: 0.0
-    network_latency:
-      type: static
-      latency_nanos: 50000000
-    order_processing_latency:
-      type: maker_taker
-      base_nanos: 5000000
-      taker_delay_nanos: 250000000
-      maker_delay_nanos: 0
-    queue_model:
-      type: risk_averse

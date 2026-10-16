@@ -49,7 +49,7 @@ description: >
   Original: <original description text>
 ```
 
-All other fields (data, profiles, goals, thresholds, targets, constraints, meta) are copied verbatim.
+All other fields (data, exchanges, goals, thresholds, targets, constraints, meta) are copied verbatim.
 
 Hold this modified spec in memory — do not write it yet.
 

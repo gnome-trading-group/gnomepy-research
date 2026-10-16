@@ -1,42 +1,14 @@
 end_date: '2026-08-19T19:32:00'
 listings:
-- listing_id: 127528
-  profile: polymarket
-- listing_id: 127529
-  profile: polymarket
-- listing_id: 122894
-  profile: kalshi
-- listing_id: 122895
-  profile: kalshi
-profiles:
-  kalshi:
-    fee_model:
-      maker_fee_rate: 0.0175
-      taker_fee_rate: 0.07
-      type: parametric
-    network_latency:
-      latency_nanos: 50000000
-      type: static
-    order_processing_latency:
-      base_nanos: 5000000
-      maker_delay_nanos: 0
-      taker_delay_nanos: 0
-      type: maker_taker
+  - listing_id: 127528
+  - listing_id: 127529
+  - listing_id: 122894
+  - listing_id: 122895
+exchanges:
+  POLYMARKET_INTL:
     queue_model:
       type: optimistic
-  polymarket:
-    fee_model:
-      maker_fee_rate: 0.0
-      taker_fee_rate: 0.07
-      type: parametric
-    network_latency:
-      latency_nanos: 50000000
-      type: static
-    order_processing_latency:
-      base_nanos: 5000000
-      maker_delay_nanos: 0
-      taker_delay_nanos: 50000000
-      type: maker_taker
+  KALSHI:
     queue_model:
       type: optimistic
 record_depth: 10

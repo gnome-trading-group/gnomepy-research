@@ -13,20 +13,31 @@ import pandas as pd
 import yaml
 
 
+def _exchanges_to_vary(config: dict, exchange_codes: list[str] | None) -> list[str]:
+    """The exchanges a sensitivity sweep varies: those named, else those the config already overrides."""
+    codes = exchange_codes if exchange_codes is not None else list(config.get("exchanges", {}))
+    if not codes:
+        raise ValueError(
+            "the config overrides no exchange, so name the ones to vary (exchange_codes=[\"KALSHI\"]): "
+            "its listings otherwise simulate with each exchange's registry parameters"
+        )
+    return codes
+
+
 def generate_latency_sweep_config(
     base_config_path: str | Path,
     output_path: str | Path,
     latency_values_nanos: list[int] | None = None,
-    profile_names: list[str] | None = None,
+    exchange_codes: list[str] | None = None,
 ) -> Path:
-    """Generate a sweep YAML varying each profile's network latency.
+    """Generate a sweep YAML varying each exchange's network latency.
 
-    Values go in the top-level ``sweep.profiles`` section, which is the only part
-    ``gnomepy.sweep.expand_sweep`` expands; ``profiles`` itself stays fixed and keeps a
+    Values go in the top-level ``sweep.exchanges`` section, which is the only part
+    ``gnomepy.sweep.expand_sweep`` expands; ``exchanges`` itself stays fixed and keeps a
     scalar default so the config is still runnable on its own.
 
-    Profiles sweep independently, so the job count is
-    ``len(latency_values_nanos) ** len(profile_names)``. Pass ``profile_names`` to vary one
+    Exchanges sweep independently, so the job count is
+    ``len(latency_values_nanos) ** len(exchange_codes)``. Pass ``exchange_codes`` to vary one
     venue at a time and keep that from exploding past the 100-job cap.
     """
     if latency_values_nanos is None:
@@ -35,17 +46,15 @@ def generate_latency_sweep_config(
     with open(base_config_path) as f:
         config = yaml.safe_load(f)
 
-    sweep_profiles: dict[str, Any] = {}
-    for profile_name, profile in config.get("profiles", {}).items():
-        if profile_names is not None and profile_name not in profile_names:
-            continue
-        network_latency = profile.setdefault("network_latency", {})
-        network_latency["type"] = "static"
-        network_latency.setdefault("latency_nanos", latency_values_nanos[0])
-        sweep_profiles[profile_name] = {"network_latency": {"latency_nanos": list(latency_values_nanos)}}
+    sweep_exchanges: dict[str, Any] = {}
+    for code in _exchanges_to_vary(config, exchange_codes):
+        overrides = config.setdefault("exchanges", {}).setdefault(code, {})
+        latency = overrides.get("network_latency", {})
+        default = latency.get("latency_nanos", latency_values_nanos[0]) if latency.get("type") == "static" else latency_values_nanos[0]
+        overrides["network_latency"] = {"type": "static", "latency_nanos": default}
+        sweep_exchanges[code] = {"network_latency": {"latency_nanos": list(latency_values_nanos)}}
 
-    if sweep_profiles:
-        config.setdefault("sweep", {})["profiles"] = sweep_profiles
+    config.setdefault("sweep", {})["exchanges"] = sweep_exchanges
 
     output_path = Path(output_path)
     with open(output_path, "w") as f:
@@ -58,15 +67,15 @@ def generate_queue_sweep_config(
     base_config_path: str | Path,
     output_path: str | Path,
     cancel_ahead_probs: list[float] | None = None,
-    profile_names: list[str] | None = None,
+    exchange_codes: list[str] | None = None,
 ) -> Path:
     """Generate a sweep YAML varying queue ``cancel_ahead_probability``.
 
-    Switches every profile to the probabilistic queue model and sweeps the
-    probability via the top-level ``sweep.profiles`` section.
+    Switches each exchange to the probabilistic queue model and sweeps the
+    probability via the top-level ``sweep.exchanges`` section.
 
-    Profiles sweep independently, so the job count is
-    ``len(cancel_ahead_probs) ** len(profile_names)``. Pass ``profile_names`` to vary one
+    Exchanges sweep independently, so the job count is
+    ``len(cancel_ahead_probs) ** len(exchange_codes)``. Pass ``exchange_codes`` to vary one
     venue at a time.
     """
     if cancel_ahead_probs is None:
@@ -75,20 +84,15 @@ def generate_queue_sweep_config(
     with open(base_config_path) as f:
         config = yaml.safe_load(f)
 
-    sweep_profiles: dict[str, Any] = {}
-    for profile_name, profile in config.get("profiles", {}).items():
-        if profile_names is not None and profile_name not in profile_names:
-            continue
-        profile["queue_model"] = {
+    sweep_exchanges: dict[str, Any] = {}
+    for code in _exchanges_to_vary(config, exchange_codes):
+        config.setdefault("exchanges", {}).setdefault(code, {})["queue_model"] = {
             "type": "probabilistic",
             "cancel_ahead_probability": cancel_ahead_probs[0],
         }
-        sweep_profiles[profile_name] = {
-            "queue_model": {"cancel_ahead_probability": list(cancel_ahead_probs)}
-        }
+        sweep_exchanges[code] = {"queue_model": {"cancel_ahead_probability": list(cancel_ahead_probs)}}
 
-    if sweep_profiles:
-        config.setdefault("sweep", {})["profiles"] = sweep_profiles
+    config.setdefault("sweep", {})["exchanges"] = sweep_exchanges
 
     output_path = Path(output_path)
     with open(output_path, "w") as f:

@@ -34,13 +34,14 @@ The wizard walks you through 5 rounds of questions:
 | Round | What it collects |
 |-------|-----------------|
 | 1 | Strategy type (`market_maker`, `momentum`, `arb`, `custom`), description, primary metric, direction |
-| 2 | Exchange profile(s) from `gnomepy_research/profiles/`, listing IDs per profile, loop for more profiles |
+| 2 | Listing IDs, and whether the experiment overrides an exchange's simulation parameters |
 | 3 | Dev date range (keep to 30 min–2 hr), max iterations |
 | 4 | Goals — thresholds and targets (accept the strategy-type defaults, or customize), signals to explore |
 | 5 | Design constraints, execution mode, interaction mode, final confirmation |
 
-Round 2 can create a new exchange profile (fees, latency, queue model) and saves it to
-`gnomepy_research/profiles/<name>.yaml` for reuse. Round 4's defaults are in **per-bar** Sharpe units
+Every listing simulates with its exchange's simulation parameters, recorded in the registry (controller →
+Security Master → Simulation), and pays its venue's fees from the fee schedules; Round 2 only asks whether
+this experiment needs an exchange to behave differently. Round 4's defaults are in **per-bar** Sharpe units
 — see "Reading Results" below.
 
 After confirmation, the wizard:
@@ -65,9 +66,7 @@ description: >
 data:
   listings:
     - listing_id: 1
-      profile: hyperliquid
     - listing_id: 36
-      profile: lighter
   date_ranges:
     - start: "2026-05-13T18:00:00"    # dev window — keep to 30min–2hr
       end:   "2026-05-13T19:50:00"
@@ -75,17 +74,11 @@ data:
     # - start: "2026-06-01T00:00:00"
     #   end:   "2026-06-07T00:00:00"
 
-profiles:
-  hyperliquid:
-    fee_model:
-      type: registry               # the venue's fees for each listing, from the registry
-    network_latency:
-      type: static
-      latency_nanos: 20000000      # 20ms
-    order_processing_latency:
-      type: static
-      latency_nanos: 5000000       # 5ms
-    queue_model: risk_averse       # conservative fill estimates
+# Optional: blocks an exchange simulates with in place of its registry parameters, for this experiment only.
+exchanges:
+  HYPERLIQUID:
+    queue_model:
+      type: optimistic             # what if every cancel ahead of us counted?
 
 goals:
   primary_metric: final_pnl        # what Claude optimizes

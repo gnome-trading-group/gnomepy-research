@@ -36,29 +36,23 @@ Use `AskUserQuestion` with exactly these 4 questions in a single call:
 
 ---
 
-### 3. Round 2 — Exchange profiles
-Read the available saved profiles by listing `gnomepy_research/profiles/*.yaml`. Each filename (without extension) is a profile name.
+### 3. Round 2 — Listings and simulation
+Each listing simulates with its exchange's simulation parameters, recorded in the registry (controller → Security Master → Simulation), and pays its venue's fees from the registry's fee schedules. Nothing about simulation needs asking unless the experiment is about it.
 
-Use `AskUserQuestion` with exactly these 3 questions in a single call:
+Use `AskUserQuestion` with exactly these 2 questions in a single call:
 
-1. **header: "Profile(s)"** — Which exchange profile(s) does this strategy trade on? (multi-select from saved profiles + "Create new")
-   - List each saved profile by name (e.g., `hyperliquid`, `polymarket_intl`, `polymarket_us`, `kalshi`, `lighter`)
-   - `Create new profile` — Use Other to type a new profile name
+1. **header: "Listing IDs"** — Which listing_id(s) does this strategy trade? Free-text as `id1,id2` (e.g., `97203,222852`). Use Other to type.
 
-   If "Create new profile" is selected, run a sub-round (AskUserQuestion with 3 questions):
-   - **"Profile name"** — What to call it (lowercase, e.g. `binance`)
-   - **"Network latency"** — Round-trip latency. Options: `1ms`, `5ms`, `20ms`, `50ms`, `200ms`. Use Other to type in nanos.
-   - **"Queue model"** — `risk_averse` (recommended), `optimistic`, `probabilistic`
+2. **header: "Simulation"** (single-select)
+   - `Registry parameters` (recommended) — every listing simulates as its exchange is recorded
+   - `Override an exchange` — this experiment needs a venue to behave differently
 
-   After collecting, write the new profile to `gnomepy_research/profiles/<name>.yaml` so it can be reused in future sessions. Its `fee_model` is always `type: registry`: fees come from the registry's fee schedules for each listing, so a venue whose schedule isn't in the registry needs one recorded there (`POST /fees`), not rates in the profile.
+   If "Override an exchange" is selected, run a sub-round (AskUserQuestion with 3 questions):
+   - **"Exchange"** — The exchange code to override (e.g. `KALSHI`, `POLYMARKET_INTL`, `POLYMARKET_US`, `HYPERLIQUID`, `LIGHTER`)
+   - **"Network latency"** — Options: `Registry's`, `1ms`, `5ms`, `20ms`, `50ms`, `200ms`. Use Other to type in nanos.
+   - **"Queue model"** — `Registry's` (recommended), `risk_averse`, `optimistic`, `probabilistic`
 
-2. **header: "Listing IDs"** — For each selected profile, which listing_id(s) map to it? Free-text as `profile_name: id1,id2` (e.g., `hyperliquid: 1,28` and `lighter: 36`). Use Other to type.
-
-3. **header: "Add another profile?"** (single-select)
-   - `Yes` — Configure another exchange
-   - `No` — Done with profiles
-
-**If "Yes", loop back and repeat Round 2 for the next profile. Continue until "No".**
+   Record only the blocks given a value other than the registry's; an exchange with none is left out.
 
 ---
 
@@ -152,9 +146,9 @@ Write `gnomepy_research/sessions/<name>/spec.yaml` with all collected values:
 
 - `name`: session name
 - `description`: from Round 1
-- `data.listings`: one entry per profile, with `listing_id` and `profile` name. Parse listing IDs from Round 2 — a profile can have multiple listing_ids.
+- `data.listings`: one entry per listing, with its `listing_id`, from Round 2.
 - `data.date_ranges`: single entry with start/end from Round 3
-- `profiles`: copy the full YAML content of each selected profile from `gnomepy_research/profiles/<name>.yaml`. For new profiles, use the values just collected.
+- `exchanges`: only if Round 2 overrode an exchange — by exchange code, each overridden block in the backtest config shape (e.g. `network_latency: {type: static, latency_nanos: 20000000}`).
 - `goals.primary_metric` and `goals.direction`: from Round 1
 - `goals.thresholds`: from Round 4 (defaults or customized)
 - `goals.targets`: from Round 4 (defaults or customized)

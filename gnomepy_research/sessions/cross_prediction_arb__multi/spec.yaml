@@ -17,20 +17,14 @@ description: >
 data:
   listings:
     - listing_id: 723614   # Polymarket - Manchester City
-      profile: polymarket
     - listing_id: 723615   # Polymarket - Draw
-      profile: polymarket
     - listing_id: 723616   # Polymarket - Sunderland
-      profile: polymarket
     - listing_id: 635464   # Kalshi - Manchester City
-      profile: kalshi
     - listing_id: 635466   # Kalshi - Tie
-      profile: kalshi
     - listing_id: 635465   # Kalshi - Sunderland
-      profile: kalshi
   date_ranges:
     - start: "2026-09-20T12:45:00"
-      end:   "2026-09-20T15:22:00"
+      end: "2026-09-20T15:22:00"
 
 goals:
   primary_metric: final_pnl
@@ -50,13 +44,9 @@ constraints:
     - "entering when the cartesian product leaves a leg unhedged at window end"
     - "assuming symmetric venue latency - Kalshi and Polymarket are ~37ms apart one way"
   notes:
-    - "At N=3 the cartesian product yields 6 pairings and each listing appears in 4 of
-       them, so _listing_is_busy serialises nearly everything. Fixing that concurrency
-       is the main lever this session has over its parent."
-    - "The chase is disabled by default (enable_chase=False); every variant measured on
-       the parent's NFL event lost money against no chase at all."
-    - "Registry reports a $0.001 tick for Kalshi; recorded books are 100% whole-cent.
-       The strategy floors at 1c until the security master is corrected."
+    - "At N=3 the cartesian product yields 6 pairings and each listing appears in 4 of them, so _listing_is_busy serialises nearly everything. Fixing that concurrency is the main lever this session has over its parent."
+    - "The chase is disabled by default (enable_chase=False); every variant measured on the parent's NFL event lost money against no chase at all."
+    - "Registry reports a $0.001 tick for Kalshi; recorded books are 100% whole-cent. The strategy floors at 1c until the security master is corrected."
 
 meta:
   execution_mode: local

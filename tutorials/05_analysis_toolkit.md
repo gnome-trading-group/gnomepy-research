@@ -110,10 +110,10 @@ from gnomepy_research.validation.monte_carlo import (
     bootstrap_pnl_paths, generate_latency_sweep_config, generate_queue_sweep_config, summarize_mc_paths,
 )
 
-# Profiles sweep independently, so job count is len(values) ** len(profiles).
-# Pass profile_names to vary one venue at a time.
-generate_latency_sweep_config(base, "configs/sens_latency.yaml", profile_names=["kalshi"])
-generate_queue_sweep_config(base, "configs/sens_queue.yaml", profile_names=["kalshi"])
+# Exchanges sweep independently, so job count is len(values) ** len(exchanges).
+# Pass exchange_codes to vary one venue at a time.
+generate_latency_sweep_config(base, "configs/sens_latency.yaml", exchange_codes=["KALSHI"])
+generate_queue_sweep_config(base, "configs/sens_queue.yaml", exchange_codes=["KALSHI"])
 
 # Path-luck check that needs no engine re-run:
 summarize_mc_paths(bootstrap_pnl_paths(report.fills, report.market_df))

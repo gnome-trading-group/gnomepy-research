@@ -1,23 +1,7 @@
 end_date: '2026-05-16T00:00:00'
 listings:
-- listing_id: 1
-  profile: default
-- listing_id: 28
-  profile: default
-profiles:
-  default:
-    fee_model:
-      maker_fee: 0.00012
-      taker_fee: 0.0004
-      type: static
-    network_latency:
-      latency_nanos: 5000000
-      type: static
-    order_processing_latency:
-      latency_nanos: 1000000
-      type: static
-    queue_model:
-      type: risk_averse
+  - listing_id: 1
+  - listing_id: 28
 start_date: '2026-05-13T00:00:00'
 strategy:
   args:
