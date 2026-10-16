@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import log_loss
 
+from gnomepy_research.sessions.cs2_win_probability.holding._fees import TakerFees
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 from gnomepy_research.models.cs2.win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
 from gnomepy_research.models.cs2.win_probability.pre_map_model import _fit, _matrix, fit_calibrator
@@ -29,7 +30,6 @@ from gnomepy_research.models.cs2.win_probability.symmetry import augment, build_
 logging.basicConfig(level=logging.WARNING)
 NAMES = list(PRE_MAP_FEATURE_NAMES)
 MONTHS = pd.date_range("2026-03-01", "2026-09-01", freq="MS")
-TAKER = 0.07
 
 history = pd.read_parquet(DATA_DIR / "cs2_match_history.parquet")
 history["match_date"] = pd.to_datetime(history.match_date)
@@ -96,6 +96,7 @@ paths = pd.read_parquet(DATA_DIR / "pm_all_paths.parquet").sort_values(["match_i
 matched = pd.read_parquet(DATA_DIR / "pm_all_matched.parquet")
 kick = dict(zip(matched.match_id, pd.to_datetime(matched.kickoff)))
 vol = dict(zip(zip(matched.match_id, matched.market), matched.volume))
+tokens = dict(zip(zip(matched.match_id, matched.market), zip(matched.token_a, matched.token_b)))
 by_key = {k: (g.t.to_numpy(), g.p_a.to_numpy()) for k, g in paths.groupby(["match_id", "market"])}
 
 
@@ -121,30 +122,34 @@ for r in P.itertuples():
         continue
     k = kick[r.match_id].timestamp()
     key = (r.match_id, r.market)
+    token_a, token_b = tokens.get(key, (None, None))
     base = {"month": r.month, "match_id": r.match_id, "market": r.market, "q": r.q, "y": r.y,
-            "volume": vol.get(key, np.nan)}
+            "volume": vol.get(key, np.nan), "token_a": token_a, "token_b": token_b}
     if r.market == "series":
         if key in by_key:
             base["open"] = float(by_key[key][1][0])
+            base["t_open"] = float(by_key[key][0][0])
         for h in (12, 6, 1, 0):
             base[f"k{h}"] = at(key, k - h * 3600)
+            base[f"t_k{h}"] = k - h * 3600
     elif r.market == "game1":
         for h in (6, 1, 0):
             base[f"k{h}"] = at(key, k - h * 3600)
+            base[f"t_k{h}"] = k - h * 3600
     else:
         m1 = decided((r.match_id, "game1"), k)
         base["m1end"] = at(key, m1) if m1 == m1 else np.nan
+        base["t_m1end"] = m1
     rows.append(base)
 E = pd.DataFrame(rows)
 E.to_parquet(DATA_DIR / "backtest_6mo_eval.parquet", index=False)
 
 
-def simulate(p, q, y, hs, th=0.05):
-    fee = TAKER * p * (1 - p)
-    ea, eb = q - (p + hs) - fee, (1 - q) - ((1 - p) + hs) - fee
+def simulate(p, q, y, fee_a, fee_b, hs, th=0.05):
+    ea, eb = q - (p + hs) - fee_a, (1 - q) - ((1 - p) + hs) - fee_b
     ba = ea > th
     bb = (eb > th) & ~ba
-    pnl = np.where(ba, y - (p + hs) - fee, 0.0) + np.where(bb, (1 - y) - ((1 - p) + hs) - fee, 0.0)
+    pnl = np.where(ba, y - (p + hs) - fee_a, 0.0) + np.where(bb, (1 - y) - ((1 - p) + hs) - fee_b, 0.0)
     cost = np.where(ba, p + hs, 0.0) + np.where(bb, 1 - p + hs, 0.0)
     t = ba | bb
     return pnl[t], cost[t]
@@ -162,11 +167,14 @@ CASES = [("series", "k12", "series, 12h before", 0.01), ("series", "k6", "series
          ("series", "k0", "series, kickoff", 0.01), ("game1", "k0", "map 1, kickoff", 0.0125),
          ("game1", "k0", "map 1, kickoff (5.5c spread)", 0.055), ("game2", "m1end", "map 2, at map-1 end", 0.0125)]
 
+fees = TakerFees(pd.concat([E.token_a, E.token_b]).dropna())
 summary = []
 for market, col, label, hs in CASES:
     print(f"\n=== {label}  (half-spread {hs*100:.2f}c, 5c edge threshold) ===")
     print(f"{'month':>8} {'n':>5} {'mkt LL':>7} {'mdl LL':>7} {'gap':>8} {'blend-mkt':>10} {'trades':>7} {'P&L':>8} {'95% CI':>17} {'per $':>7}")
     sub = E[(E.market == market) & E[col].notna()] if col in E else E.iloc[0:0]
+    fee_a, fee_b = fees.for_column(sub, col)
+    sub = sub.assign(fee_a=fee_a, fee_b=fee_b)
     for month, g in list(sub.groupby("month")) + [("POOLED", sub)]:
         if len(g) < 40:
             continue
@@ -174,7 +182,7 @@ for market, col, label, hs in CASES:
         mk = np.clip(g[col].to_numpy(), 1e-4, 1 - 1e-4)
         blend = 1 / (1 + np.exp(-(lg(mk) + lg(q)) / 2))
         db, blo, bhi = clustered_bootstrap_delta(y, blend, mk, g.match_id.to_numpy(), log_loss, n_boot=300)
-        pnl, cost = simulate(mk, q, y, hs)
+        pnl, cost = simulate(mk, q, y, g.fee_a.to_numpy(), g.fee_b.to_numpy(), hs)
         lo, hi = boot(pnl)
         roi = pnl.sum() / cost.sum() if cost.sum() else np.nan
         print(f"{month:>8} {len(g):5d} {log_loss(y, mk):7.4f} {log_loss(y, q):7.4f} {log_loss(y, q)-log_loss(y, mk):+8.4f} "

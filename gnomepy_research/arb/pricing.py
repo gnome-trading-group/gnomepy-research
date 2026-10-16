@@ -6,6 +6,7 @@ from typing import Protocol
 
 from gnomepy import Scales
 
+from gnomepy_research.arb.fees import FeeRates
 from gnomepy_research.arb.portfolio import ArbLeg
 from gnomepy_research.arb.types import Listing
 
@@ -38,13 +39,11 @@ class ArbBudgetConstraint:
         self,
         legs: list[ArbLeg],
         min_edge_bps: float,
-        maker_fee_rates: dict[int, float],
-        taker_fee_rates: dict[int, float] | None = None,
+        fee_rates: FeeRates,
     ) -> None:
         self._listings: list[Listing] = [leg.listing for leg in legs]
         self._min_edge_bps = min_edge_bps
-        self._maker_fee_rates = maker_fee_rates
-        self._taker_fee_rates: dict[int, float] = taker_fee_rates or {}
+        self._fee_rates = fee_rates
         self._last_known_bid: dict[Listing, int] = {}
         self._last_order_price: dict[Listing, int] = {}
         self._is_crossing: dict[Listing, bool] = {}
@@ -71,8 +70,12 @@ class ArbBudgetConstraint:
             return None
         return self._fill_cost[listing] / (qty / _SIZE_SCALE)
 
+    def _rate(self, listing: Listing) -> float:
+        taker_rate, maker_rate = self._fee_rates(listing)
+        return taker_rate if self._is_crossing.get(listing, False) else maker_rate
+
     def leg_cost(self, listing: Listing) -> float | None:
-        maker_rate = self._maker_fee_rates.get(listing[0], 0.0)
+        maker_rate = self._fee_rates(listing)[1]
         avg = self._avg_fill_price(listing)
         if avg is not None:
             return avg + _fee(maker_rate, avg)
@@ -83,8 +86,7 @@ class ArbBudgetConstraint:
         order_price = self._last_order_price.get(listing)
         if order_price is not None and order_price > 0:
             p = order_price / _PRICE_SCALE
-            rate = self._taker_fee_rates.get(listing[0], maker_rate) if self._is_crossing.get(listing, False) else maker_rate
-            return p + _fee(rate, p)
+            return p + _fee(self._rate(listing), p)
         bid = self._last_known_bid.get(listing)
         if bid is None:
             return None
@@ -131,8 +133,7 @@ class ArbBudgetConstraint:
         if budget <= 0.0:
             return 0
 
-        maker_rate = self._maker_fee_rates.get(listing[0], 0.0)
-        rate = self._taker_fee_rates.get(listing[0], maker_rate) if self._is_crossing.get(listing, False) else maker_rate
+        rate = self._rate(listing)
         if rate == 0.0:
             max_p = budget
         else:

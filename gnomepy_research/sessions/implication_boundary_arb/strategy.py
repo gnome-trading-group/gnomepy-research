@@ -7,6 +7,8 @@ from gnomepy import ExecutionReport, Intent, OrderType, Side, Strategy
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient, RelationshipGraph
 
+from gnomepy_research.arb import registry_fee_rates
+
 PRICE_SCALE = 1_000_000_000
 
 Listing = tuple[int, int]  # (exchange_id, security_id)
@@ -77,7 +79,6 @@ class ImplicationBoundaryArb(Strategy):
         self,
         event_ids: list[int],
         size: int = 1_000_000,
-        fee_rate: float = 0.07,
         min_edge_bps: float = 10.0,
         min_implies_confidence: float = 0.95,
         stale_threshold_ns: int = 2_000_000_000,
@@ -87,7 +88,7 @@ class ImplicationBoundaryArb(Strategy):
         processing_time_ns: int = 0,
     ):
         self.size = size
-        self.fee_rate = fee_rate
+        self._fee_rates = registry_fee_rates(self)
         self.min_edge_bps = min_edge_bps
         self.stale_threshold_ns = stale_threshold_ns
         self.imbalance_timeout_ns = imbalance_timeout_ns
@@ -182,7 +183,7 @@ class ImplicationBoundaryArb(Strategy):
         p_b = ask_b / PRICE_SCALE
         p_a = ask_a / PRICE_SCALE
         cost = p_b + p_a
-        fee = self.fee_rate * p_b * (1.0 - p_b) + self.fee_rate * p_a * (1.0 - p_a)
+        fee = self._fee_rates(lst_b)[0] * p_b * (1.0 - p_b) + self._fee_rates(lst_a)[0] * p_a * (1.0 - p_a)
         edge_bps = (1.0 - cost - fee) * 10_000
 
         return cost, edge_bps, lst_b, lst_a

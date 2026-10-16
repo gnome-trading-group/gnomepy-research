@@ -78,9 +78,10 @@ for r in first.itertuples():
             dropped[f"{market}:unsettled_or_mismatch"] = dropped.get(f"{market}:unsettled_or_mismatch", 0) + 1
             continue
         matched.append({"match_id": r.match_id, "market": market, "volume": float(mk.volume),
-                        "token_a": list(mk.tokens)[0 if a_is_o0 else 1], "kickoff": kickoff.get(r.match_id)})
+                        "token_a": str(list(mk.tokens)[0 if a_is_o0 else 1]),
+                        "token_b": str(list(mk.tokens)[1 if a_is_o0 else 0]), "kickoff": kickoff.get(r.match_id)})
 m = pd.DataFrame(matched).dropna(subset=["kickoff"])
-m.drop(columns=["token_a"]).to_parquet(MATCHED, index=False)
+m.to_parquet(MATCHED, index=False)
 print(f"matched: {m.market.value_counts().to_dict()}  dropped: {dropped}", flush=True)
 
 done = set()

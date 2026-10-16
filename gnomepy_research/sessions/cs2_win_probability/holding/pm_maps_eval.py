@@ -15,10 +15,10 @@ from gnomepy_research.sessions.cs2_win_probability.ablate import BASELINE_NAMES
 from gnomepy_research.models.cs2.win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
 from gnomepy_research.models.cs2.win_probability.pre_map_model import CS2PreMapModel, _matrix
 from gnomepy_research.models.cs2.win_probability.splits import calibration_slope, clustered_bootstrap_delta
+from gnomepy_research.sessions.cs2_win_probability.holding._fees import TakerFees
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 
 D = str(DATA_DIR)
-TAKER = 0.07
 
 history = pd.read_parquet(f"{D}/cs2_match_history.parquet")
 priors = pd.read_parquet(f"{D}/priors_full.parquet")
@@ -27,7 +27,7 @@ paths = pd.read_parquet(f"{D}/pm_maps_paths.parquet").sort_values(["match_id", "
 
 rows = priors.merge(history[["match_id", "map_name", "team_a_won"]],
                     on=["match_id", "map_name"], how="inner")
-rows = rows.merge(mm[["match_id", "map_pos", "volume", "kickoff"]],
+rows = rows.merge(mm[["match_id", "map_pos", "volume", "kickoff", "token_a", "token_b"]],
                   left_on=["match_id", "map_position_in_series"], right_on=["match_id", "map_pos"], how="inner")
 for label, names, path in (("harvested", list(PRE_MAP_FEATURE_NAMES), f"{D}/cs2_l1_harvested.xgb"),
                            ("baseline", list(BASELINE_NAMES), f"{D}/cs2_l1_baseline.xgb")):
@@ -56,16 +56,16 @@ recs = []
 for r in rows.itertuples():
     k = pd.Timestamp(r.kickoff).timestamp()
     rec = {"match_id": r.match_id, "map_pos": r.map_pos, "y": int(r.team_a_won), "volume": r.volume,
-           "q_h": r.q_harvested, "q_b": r.q_baseline}
+           "q_h": r.q_harvested, "q_b": r.q_baseline, "token_a": r.token_a, "token_b": r.token_b}
     if r.map_pos == 1:
-        rec["mk_pre"] = price_at((r.match_id, 1), k)
-        rec["mk_6h"] = price_at((r.match_id, 1), k - 6 * 3600)
-        rec["mk_1h"] = price_at((r.match_id, 1), k - 3600)
+        times = {"mk_pre": k, "mk_6h": k - 6 * 3600, "mk_1h": k - 3600}
     else:
         m1_end = decided_at((r.match_id, 1), k)
-        rec["mk_pre"] = price_at((r.match_id, 2), m1_end) if m1_end == m1_end else np.nan
-        rec["mk_pre5"] = price_at((r.match_id, 2), m1_end + 300) if m1_end == m1_end else np.nan
-        rec["gap_min"] = (m1_end - k) / 60 if m1_end == m1_end else np.nan
+        times = {"mk_pre": m1_end, "mk_pre5": m1_end + 300}
+        rec["gap_min"] = (m1_end - k) / 60
+    for col, ts in times.items():
+        rec[col] = price_at((r.match_id, r.map_pos), ts) if ts == ts else np.nan
+        rec[f"t_{col}"] = ts
     recs.append(rec)
 ev = pd.DataFrame(recs)
 print(f"maps with a model prediction and a market path: {len(ev)}  by position {ev.map_pos.value_counts().sort_index().to_dict()}")
@@ -74,12 +74,11 @@ print(f"map 1 decided at median {m2.gap_min.median():.0f} min after HLTV kickoff
       f"(IQR {m2.gap_min.quantile(.25):.0f}-{m2.gap_min.quantile(.75):.0f})")
 
 
-def simulate(p, q, y, half_spread, threshold):
-    fee = TAKER * p * (1 - p)
-    ea = q - (p + half_spread) - fee
-    eb = (1 - q) - ((1 - p) + half_spread) - fee
+def simulate(p, q, y, fee_a, fee_b, half_spread, threshold):
+    ea = q - (p + half_spread) - fee_a
+    eb = (1 - q) - ((1 - p) + half_spread) - fee_b
     ba, bb = ea > threshold, (eb > threshold) & ~(ea > threshold)
-    pnl = np.where(ba, y - (p + half_spread) - fee, 0.0) + np.where(bb, (1 - y) - ((1 - p) + half_spread) - fee, 0.0)
+    pnl = np.where(ba, y - (p + half_spread) - fee_a, 0.0) + np.where(bb, (1 - y) - ((1 - p) + half_spread) - fee_b, 0.0)
     cost = np.where(ba, p + half_spread, 0.0) + np.where(bb, 1 - p + half_spread, 0.0)
     t = ba | bb
     return pnl[t], cost[t]
@@ -109,14 +108,16 @@ for pos, col, lab in CASES:
           f"{roc_auc_score(y, qh):8.4f} {roc_auc_score(y, mk):8.4f}")
 print("  (* = 95% CI excludes zero; negative = model/blend better than market)")
 
-print(f"\nfee-aware P&L, 1 share per map, 5c edge threshold (taker fee 0.07*p*(1-p))")
+fees = TakerFees(pd.concat([ev.token_a, ev.token_b]))
+print(f"\nfee-aware P&L, 1 share per map, 5c edge threshold (registry taker fees)")
 print(f"{'case':>28} {'half-spread':>11} {'trades':>7} {'P&L $':>7} {'95% CI':>17} {'per $':>7}")
 for pos, col, lab in CASES:
     e = ev[(ev.map_pos == pos) & ev[col].notna()]
     if len(e) < 60:
         continue
+    fee_a, fee_b = fees.for_column(e, col)
     for hs in (0.01, 0.0125, 0.025):
-        pnl, cost = simulate(e[col].to_numpy(), e.q_h.to_numpy(), e.y.to_numpy(), hs, 0.05)
+        pnl, cost = simulate(e[col].to_numpy(), e.q_h.to_numpy(), e.y.to_numpy(), fee_a, fee_b, hs, 0.05)
         lo, hi = boot(pnl)
         print(f"{lab:>28} {hs:11.4f} {len(pnl):7d} {pnl.sum():+7.2f} [{lo:+6.2f},{hi:+6.2f}] {pnl.sum()/max(cost.sum(),1e-9):+7.1%}")
 

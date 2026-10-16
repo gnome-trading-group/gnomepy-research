@@ -151,9 +151,7 @@ listings:
 profiles:
   <profile_name>:
     fee_model:
-      type: static
-      taker_fee: <spec.profiles.<name>.fee_model.taker_fee>
-      maker_fee: <spec.profiles.<name>.fee_model.maker_fee>
+      type: registry    # each listing pays its venue's fees as of each fill, from the registry's fee schedules
     network_latency:
       type: static
       latency_nanos: <spec.profiles.<name>.network_latency.latency_nanos>

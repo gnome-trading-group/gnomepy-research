@@ -16,9 +16,9 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
+from gnomepy_research.sessions.cs2_win_probability.holding._fees import TakerFees
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 
-TAKER = 0.07
 lg = lambda p: np.log(np.clip(p, 1e-4, 1 - 1e-4) / (1 - np.clip(p, 1e-4, 1 - 1e-4)))
 sig = lambda z: 1 / (1 + np.exp(-z))
 
@@ -29,6 +29,8 @@ priors = pd.read_parquet(DATA_DIR / "priors_full.parquet")
 ctx = priors[priors.map_position_in_series == 1].drop_duplicates("match_id").set_index("match_id")[
     ["rank_known_both", "event_tier", "is_lan", "elo_games_min"]]
 E = E.join(ctx, on="match_id")
+traded = E[E.market.isin(["series", "game1"])]
+fees = TakerFees(pd.concat([traded.token_a, traded.token_b]).dropna())
 
 CASES = {  # name: (market, price column, half-spread)
     "series @ 6h": ("series", "k6", 0.010),
@@ -55,10 +57,9 @@ def with_fair(market, col):
     return pd.concat(out)
 
 
-def select(p, fair, hs, th):
+def select(p, fair, fee_a, fee_b, hs, th):
     """Side and per-share cost/edge for the better side, if it clears the threshold."""
     cost_a, cost_b = p + hs, (1 - p) + hs
-    fee_a, fee_b = TAKER * p * (1 - p), TAKER * p * (1 - p)
     edge_a, edge_b = fair - cost_a - fee_a, (1 - fair) - cost_b - fee_b
     side = np.where(edge_a >= edge_b, 1, -1)
     edge = np.maximum(edge_a, edge_b)
@@ -86,9 +87,10 @@ for name, d in frames.items():
     print(f"\n{name}: n={len(d)}  fitted weights (market, model) mean {d.w_market.mean():.2f}, {d.w_model.mean():.2f}")
     print(f"  {'signal':>8} {'thresh':>6} {'trades':>6} {'P&L':>8} {'95% CI':>17} {'per $':>7} {'months +':>8} {'avg edge':>8}")
     p, y, hs = d[CASES[name][1]].to_numpy(), d.y.to_numpy(), CASES[name][2]
+    fee_a, fee_b = fees.for_column(d, CASES[name][1])
     for sig_name, fair in (("raw", d.q.to_numpy()), ("blend", d.fair_blend.to_numpy())):
         for th in (0.02, 0.03, 0.05):
-            side, edge, cost, _, take = select(p, fair, hs, th)
+            side, edge, cost, _, take = select(p, fair, fee_a, fee_b, hs, th)
             pnl = realized(side, y, cost)[take]
             lo, hi = boot_sum(pnl)
             months = pd.Series(pnl, index=d.month.to_numpy()[take]).groupby(level=0).sum()
@@ -99,10 +101,12 @@ for name, d in frames.items():
 print("\n" + "=" * 100, "\n2. SIZING: fractional Kelly on blended fair, series @ 6h + map 1 @ kickoff\n", "=" * 100)
 s = frames["series @ 6h"].assign(leg="series", entry=lambda d: d.kickoff - pd.Timedelta(hours=6), price=lambda d: d.k6)
 m1 = frames["map 1 @ kickoff"].assign(leg="map1", entry=lambda d: d.kickoff, price=lambda d: d.k0)
+s["fee_a"], s["fee_b"] = fees.for_column(s, "k6")
+m1["fee_a"], m1["fee_b"] = fees.for_column(m1, "k0")
 legs = pd.concat([s, m1]).sort_values("entry").reset_index(drop=True)
 hs_of = {"series": 0.010, "map1": 0.0125}
-side, edge, cost, prob, take = select(legs.price.to_numpy(), legs.fair_blend.to_numpy(),
-                                      legs.leg.map(hs_of).to_numpy(), 0.03)
+side, edge, cost, prob, take = select(legs.price.to_numpy(), legs.fair_blend.to_numpy(), legs.fee_a.to_numpy(),
+                                      legs.fee_b.to_numpy(), legs.leg.map(hs_of).to_numpy(), 0.03)
 legs = legs.assign(side=side, edge=edge, cost=cost, prob=prob, go=take)
 legs = legs[legs.go].reset_index(drop=True)
 
@@ -148,13 +152,14 @@ for market, entries in (("series", ("k12", "k6", "k1")), ("game1", ("k6", "k1"))
     for col in entries:
         d = E[(E.market == market) & E[col].notna() & E.k0.notna()]
         hs = 0.010 if market == "series" else 0.0125
-        side, edge, cost, _, take = select(d[col].to_numpy(), d.q.to_numpy(), hs, 0.05)
+        side, edge, cost, _, take = select(d[col].to_numpy(), d.q.to_numpy(), *fees.for_column(d, col), hs, 0.05)
+        close_fee_a, close_fee_b = fees.for_column(d, "k0")
         p_in, p_close = d[col].to_numpy()[take], d.k0.to_numpy()[take]
         clv = np.where(side[take] == 1, p_close - p_in, p_in - p_close)
         rng = np.random.default_rng(0)
         bs = [rng.choice(clv, len(clv)).mean() for _ in range(1000)]
         pnl = realized(side, d.y.to_numpy(), cost)[take]
-        close_cost = np.where(side[take] == 1, p_close, 1 - p_close) + hs + TAKER * p_close * (1 - p_close)
+        close_cost = np.where(side[take] == 1, p_close + close_fee_a[take], 1 - p_close + close_fee_b[take]) + hs
         pnl_close = np.where(side[take] == 1, d.y.to_numpy()[take] == 1, d.y.to_numpy()[take] == 0) - close_cost
         print(f"  {('map 1' if market == 'game1' else market):>8} {col:>6} {take.sum():6d} {100 * clv.mean():+8.2f}c "
               f"[{100 * np.percentile(bs, 2.5):+5.2f},{100 * np.percentile(bs, 97.5):+5.2f}]c {np.mean(clv > 0):10.1%} "
@@ -165,7 +170,7 @@ print("\n" + "=" * 100, "\n4. SEGMENTS: where does the edge live?  (raw rule, 5c
 for name in ("series @ 6h", "map 1 @ kickoff"):
     market, col, hs = CASES[name]
     d = E[(E.market == market) & E[col].notna()].copy()
-    side, edge, cost, _, take = select(d[col].to_numpy(), d.q.to_numpy(), hs, 0.05)
+    side, edge, cost, _, take = select(d[col].to_numpy(), d.q.to_numpy(), *fees.for_column(d, col), hs, 0.05)
     d = d.assign(side=side, edge=edge, cost=cost, pnl=realized(side, d.y.to_numpy(), cost))[take]
     p = d[col]
     d["bought"] = np.where((d.side == 1) == (p > 0.5), "favourite", "underdog")

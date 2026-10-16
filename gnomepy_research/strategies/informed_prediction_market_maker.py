@@ -22,6 +22,7 @@ from gnomepy import ExecutionReport, Intent, Strategy
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
+from gnomepy_research.arb import registry_fee_rates
 from gnomepy_research.signals.fair_value.microprice import MicropriceFairValue
 from gnomepy_research.signals.operations.kalman import KalmanOperation
 from gnomepy.data import resolve_artifact_path
@@ -48,7 +49,6 @@ class InformedPredictionMarketMaker(Strategy):
         max_ref_staleness_ns: int = 5_000_000_000,
         kalman_Q: float = 1e-4,
         kalman_R: float = 1e-2,
-        maker_fee_rate: float = 0.0175,
         processing_time_ns: int = 0,
     ):
         self.size = size
@@ -56,7 +56,7 @@ class InformedPredictionMarketMaker(Strategy):
         self.inventory_fade = inventory_fade
         self.warmup_ticks = warmup_ticks
         self._max_ref_staleness_ns = max_ref_staleness_ns
-        self._maker_fee_rate = maker_fee_rate
+        self._fee_rates = registry_fee_rates(self)
         self._processing_time_ns = processing_time_ns
 
         self._V, self._tau_grid, self._p_grid, self._q_levels, self._params = (
@@ -205,7 +205,8 @@ class InformedPredictionMarketMaker(Strategy):
         vals = self._interp(pts)
         v_here = vals[0]
 
-        fee_shift = self._maker_fee_rate * p * (1.0 - p) * PRICE_SCALE
+        _, maker_fee_rate = self._fee_rates((self._quote_eid, self._quote_sid))
+        fee_shift = maker_fee_rate * p * (1.0 - p) * PRICE_SCALE
         tick = self._tick_size
 
         if can_bid:

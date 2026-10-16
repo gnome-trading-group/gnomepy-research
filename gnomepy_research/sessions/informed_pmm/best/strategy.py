@@ -12,6 +12,5 @@ strategy = InformedPredictionMarketMaker(
     max_ref_staleness_ns=5_000_000_000,
     kalman_Q=1e-4,
     kalman_R=1e-2,
-    maker_fee_rate=0.0,
     processing_time_ns=5_000_000,
 )

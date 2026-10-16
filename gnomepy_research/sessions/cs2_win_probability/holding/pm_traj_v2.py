@@ -91,7 +91,8 @@ s = requests.Session()
 s.headers["User-Agent"] = "research/1.0"
 rows = []
 for i, r in enumerate(m.itertuples()):
-    tok = list(r.tokens)[0 if r.team_a_is_outcome0 else 1]
+    tokens = list(r.tokens)
+    tok, tok_b = (tokens[0], tokens[1]) if r.team_a_is_outcome0 else (tokens[1], tokens[0])
     k = pd.Timestamp(r.kickoff)
     params = {"market": tok, "startTs": int((k - pd.Timedelta(days=4)).timestamp()),
               "endTs": int(k.timestamp()) + 60, "fidelity": 1}
@@ -104,10 +105,13 @@ for i, r in enumerate(m.itertuples()):
         continue
     t = np.array([x["t"] for x in hist])
     v = np.array([float(x["p"]) for x in hist])
-    rec = {"match_id": r.match_id, "volume": r.volume, "pm_open": float(v[0])}
+    rec = {"match_id": r.match_id, "volume": r.volume, "token_a": str(tok), "token_b": str(tok_b),
+           "pm_open": float(v[0]), "t_pm_open": float(t[0])}
     for h in HORIZONS_H:
-        prior = v[t <= k.timestamp() - h * 3600]
+        ts = k.timestamp() - h * 3600
+        prior = v[t <= ts]
         rec[f"k_{h}h"] = float(prior[-1]) if len(prior) else np.nan
+        rec[f"t_k_{h}h"] = ts
     rows.append(rec)
     if (i + 1) % 100 == 0:
         print(f"  {i+1}/{len(m)} fetched, kept {len(rows)}", flush=True)

@@ -32,6 +32,7 @@ from gnomepy.data import ArtifactQuery, ArtifactStore, resolve_artifact_path
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
+from gnomepy_research.arb import registry_fee_rates
 from gnomepy_research.models.cs2.win_probability.pre_map_model import CS2PreMapModel
 from gnomepy_research.models.cs2.win_probability.series_pricing import price
 from gnomepy_research.sessions.cs2_series.decision import Level, choose_entry, cost_per_share, shares_to_buy
@@ -76,7 +77,6 @@ class CS2Series(Strategy):
         match_id: the HLTV match.
         listing_team_a, listing_team_b: the venue's registry listings for each HLTV team
             winning the series.
-        fee_rate: the venue's taker fee rate; the fee per share is rate * p * (1 - p).
         model_path: the pre-veto model, an artifact URI or path; unpinned means the latest.
         min_edge: the least edge after the fee worth buying.
         window_hours: how long before kickoff the entry window opens.
@@ -97,7 +97,6 @@ class CS2Series(Strategy):
         match_id: int,
         listing_team_a: int,
         listing_team_b: int,
-        fee_rate: float,
         model_path: str = DEFAULT_MODEL,
         min_edge: float = 0.05,
         window_hours: float = 12.0,
@@ -115,7 +114,7 @@ class CS2Series(Strategy):
         matches_source: str = MATCHES,
     ):
         self.match_id = int(match_id)
-        self.fee_rate = fee_rate
+        self._fee_rates = registry_fee_rates(self)
         self.min_edge = min_edge
         self.window_ns = int(window_hours * HOUR_NS)
         self.stake_usd = stake_usd
@@ -166,6 +165,10 @@ class CS2Series(Strategy):
         buf.freeze()
         self._metrics_buf = buf
 
+    def _taker_rate(self, leg: _Leg) -> float:
+        """The leg's taker rate in the registry; the fee per share is rate * p * (1 - p)."""
+        return self._fee_rates((leg.exchange_id, leg.security_id))[0]
+
     # ---- state read from the engine's positions --------------------------------------
 
     def _leg_state(self, leg: _Leg) -> tuple[float, float, float]:
@@ -175,7 +178,7 @@ class CS2Series(Strategy):
         avg = pos.avg_entry_price / PRICE_SCALE if pos and pos.net_quantity else 0.0
         fees = float(pos.total_fees) if pos else 0.0
         pending = max(0.0, self.positions.get_effective_quantity(leg.exchange_id, leg.security_id) / SIZE_SCALE - filled)
-        return filled, filled * avg + fees + pending * cost_per_share(leg.last_limit, self.fee_rate), avg
+        return filled, filled * avg + fees + pending * cost_per_share(leg.last_limit, self._taker_rate(leg)), avg
 
     # ---- engine callbacks ----------------------------------------------------------------
 
@@ -206,8 +209,9 @@ class CS2Series(Strategy):
         if budget < self.min_order_usd:
             return []
 
+        fee_rates = (self._taker_rate(self._legs[0]), self._taker_rate(self._legs[1]))
         entry = choose_entry(quote.p_team_a, self._legs[0].asks, self._legs[1].asks,
-                             min_edge=self.min_edge, fee_rate=self.fee_rate, max_slippage=self.max_slippage,
+                             min_edge=self.min_edge, fee_rates=fee_rates, max_slippage=self.max_slippage,
                              tick=self._legs[0].tick, allowed_sides=tuple(held) if held else (0, 1))
         if entry is None:
             return []
@@ -216,9 +220,10 @@ class CS2Series(Strategy):
             return []
 
         leg = self._legs[entry.side]
-        shares = shares_to_buy(entry, budget, self.fee_rate)
+        fee_rate = fee_rates[entry.side]
+        shares = shares_to_buy(entry, budget, fee_rate)
         size = int(shares * SIZE_SCALE) // leg.lot * leg.lot
-        if size <= 0 or size < leg.min_size or shares * cost_per_share(entry.limit_price, self.fee_rate) < self.min_order_usd:
+        if size <= 0 or size < leg.min_size or shares * cost_per_share(entry.limit_price, fee_rate) < self.min_order_usd:
             return []
 
         if not held:

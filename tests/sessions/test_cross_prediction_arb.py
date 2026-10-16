@@ -66,6 +66,25 @@ class TestDivergenceGuard:
 
 
 # ---------------------------------------------------------------------------
+# Fees come from each listing's schedule in the registry
+# ---------------------------------------------------------------------------
+
+class TestRegistryFees:
+    def test_each_listing_pays_its_own_schedules_rates(self, strategy):
+        pm_leg, k_leg = sorted(strategy._pairings[0].legs)
+        strategy._position_view = FakePositions(fee_rates={pm_leg[0]: (0.03, 0.0), k_leg[0]: (0.07, 0.0175)})
+        half = PRICE_SCALE // 2
+        assert strategy._taker_fee(pm_leg, half) == pytest.approx(0.03 * 0.25)
+        assert strategy._taker_fee(k_leg, half) == pytest.approx(0.07 * 0.25)
+        assert strategy._maker_fee(k_leg, half) == pytest.approx(0.0175 * 0.25)
+
+    def test_a_listing_without_a_schedule_is_an_error(self, strategy):
+        strategy._position_view = FakePositions(fee_rates={})
+        with pytest.raises(ValueError, match="no fee schedule"):
+            strategy._taker_fee(strategy._pairings[0].legs[0], PRICE_SCALE // 2)
+
+
+# ---------------------------------------------------------------------------
 # 2.4 — min-notional predicate and price floor must agree
 # ---------------------------------------------------------------------------
 
@@ -140,6 +159,23 @@ class TestChaseCeiling:
         with_fee = strategy._compute_chase_ceiling(self._pairing_state(strategy, 0.52, filled_fee=10.0))
         without = strategy._compute_chase_ceiling(self._pairing_state(strategy, 0.52, filled_fee=0.0))
         assert with_fee < without, "fees already paid must reduce what we can still pay"
+
+    def test_ceiling_charges_the_unfilled_legs_maker_fee(self, strategy):
+        ps = self._pairing_state(strategy, 0.52)
+        unfilled = ps.legs[1].listing
+        strategy._position_view = FakePositions(fee_rates={unfilled[0]: (0.07, 0.0)})
+        free = strategy._compute_chase_ceiling(ps)
+        strategy._position_view = FakePositions(fee_rates={unfilled[0]: (0.07, 0.04)})
+        assert strategy._compute_chase_ceiling(ps) == free - int(0.04 / 4 * PRICE_SCALE)
+
+    def test_a_maker_rebate_does_not_raise_the_ceiling(self, strategy):
+        """The rebate shrinks to nothing at the edges of the price range, so it cannot be counted on."""
+        ps = self._pairing_state(strategy, 0.52)
+        unfilled = ps.legs[1].listing
+        strategy._position_view = FakePositions(fee_rates={unfilled[0]: (0.07, 0.0)})
+        free = strategy._compute_chase_ceiling(ps)
+        strategy._position_view = FakePositions(fee_rates={unfilled[0]: (0.07, -0.0125)})
+        assert strategy._compute_chase_ceiling(ps) == free
 
     def test_ceiling_splits_across_multiple_unfilled_legs(self, make_strategy):
         """With 2 unfilled siblings each bidding up to the same ceiling, total cost
@@ -397,10 +433,12 @@ class _Tick:
 
 def _multi(**kwargs):
     with patch.object(multi, "RegistryClient", lambda *a, **k: _FakeRegistry()):
-        return multi.CrossPredictionArbMulti(
+        s = multi.CrossPredictionArbMulti(
             outcomes=[{"pm": 222852}, {"pm": 222853}],
             dutch_book_labels=["pm"], taker_labels=[], **kwargs,
         )
+    s._position_view = FakePositions()
+    return s
 
 
 def _sell_into_bid(s, lg, ts, qty, queue=500):
@@ -472,10 +510,12 @@ class TestFillProbability:
 
 def _three_way(**kwargs):
     with patch.object(multi, "RegistryClient", lambda *a, **k: _FakeRegistry()):
-        return multi.CrossPredictionArbMulti(
+        s = multi.CrossPredictionArbMulti(
             outcomes=[{"pm": 222852}, {"pm": 222853}, {"pm": 900001}],
             dutch_book_labels=["pm"], taker_labels=[], **kwargs,
         )
+    s._position_view = FakePositions()
+    return s
 
 
 def _stuck_on_last_leg(s, paid=(0.50, 0.30), stuck_bid=0.12, stuck_ask=0.14, ask_depth=1000):

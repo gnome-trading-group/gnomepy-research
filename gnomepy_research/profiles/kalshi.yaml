@@ -1,7 +1,5 @@
 fee_model:
-  type: parametric
-  taker_fee_rate: 0.07
-  maker_fee_rate: 0.0175
+  type: registry
 network_latency:
   type: static
   latency_nanos: 50000000

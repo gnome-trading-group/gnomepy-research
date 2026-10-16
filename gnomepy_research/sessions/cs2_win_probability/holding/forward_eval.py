@@ -22,6 +22,7 @@ from sklearn.metrics import log_loss
 
 from gnomepy.data import DatasetStore
 from gnomepy_research.models.cs2.hltv.build_priors import build_priors
+from gnomepy_research.sessions.cs2_win_probability.holding._fees import TakerFees
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 from gnomepy_research.models.cs2.win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
 from gnomepy_research.models.cs2.win_probability.pre_map_model import _fit, _matrix, fit_calibrator
@@ -34,7 +35,6 @@ from gnomepy_research.models.cs2.win_probability.symmetry import augment, build_
 CUTOFF = pd.Timestamp(sys.argv[1] if len(sys.argv) > 1 else "2026-09-30")
 END = pd.Timestamp(sys.argv[2] if len(sys.argv) > 2 else "2026-10-02")
 NAMES = list(PRE_MAP_FEATURE_NAMES)
-TAKER = 0.07
 GAMMA = "https://gamma-api.polymarket.com"
 SLUG = re.compile(r"-(\d{4}-\d{2}-\d{2})(?:-game(\d))?$")
 
@@ -145,13 +145,13 @@ for r in P.itertuples():
         elif int((fin[0] > fin[1]) == a_is_o0) != r.y:
             reason = "settlement disagrees with HLTV"
         else:
-            tokens[(r.match_id, r.market)] = mk.tokens[0 if a_is_o0 else 1]
+            tokens[(r.match_id, r.market)] = (str(mk.tokens[0 if a_is_o0 else 1]), str(mk.tokens[1 if a_is_o0 else 0]))
     if reason:
         dropped[f"{r.market}: {reason}"] = dropped.get(f"{r.market}: {reason}", 0) + 1
 print(f"matched markets: {len(tokens)}   dropped: {dropped}", flush=True)
 
 paths = {}
-for (mid, market), tok in tokens.items():
+for (mid, market), (tok, _) in tokens.items():
     k = pd.Timestamp(kickoff[mid])
     resp = s.get("https://clob.polymarket.com/prices-history",
                  params={"market": tok, "startTs": int((k - pd.Timedelta(days=4)).timestamp()),
@@ -183,30 +183,34 @@ for r in P.itertuples():
     if (r.match_id, r.market) not in paths:
         continue
     k = pd.Timestamp(kickoff[r.match_id]).timestamp()
-    rec = {"match_id": r.match_id, "market": r.market, "q": r.q, "y": r.y}
+    token_a, token_b = tokens[(r.match_id, r.market)]
+    rec = {"match_id": r.match_id, "market": r.market, "q": r.q, "y": r.y, "token_a": token_a, "token_b": token_b}
     if r.market == "game2":
         m1 = decided((r.match_id, "game1"), k)
         rec["price"] = at((r.match_id, "game2"), m1) if m1 == m1 else np.nan
+        rec["t_price"] = m1
     else:
         rec["price"] = at((r.match_id, r.market), k)
+        rec["t_price"] = k
         if r.market == "series":
             rec["price_6h"] = at((r.match_id, "series"), k - 6 * 3600)
+            rec["t_price_6h"] = k - 6 * 3600
     ev.append(rec)
 E = pd.DataFrame(ev)
 E.to_parquet(DATA_DIR / f"forward_{CUTOFF:%Y%m%d}_{END:%Y%m%d}.parquet", index=False)
 
 
 # ---- 6. score -----------------------------------------------------------------------
-def simulate(p, q, yy, hs, th=0.05):
-    fee = TAKER * p * (1 - p)
-    ea, eb = q - (p + hs) - fee, (1 - q) - ((1 - p) + hs) - fee
+def simulate(p, q, yy, fee_a, fee_b, hs, th=0.05):
+    ea, eb = q - (p + hs) - fee_a, (1 - q) - ((1 - p) + hs) - fee_b
     ba = ea > th
     bb = (eb > th) & ~ba
-    pnl = np.where(ba, yy - (p + hs) - fee, 0.0) + np.where(bb, (1 - yy) - ((1 - p) + hs) - fee, 0.0)
+    pnl = np.where(ba, yy - (p + hs) - fee_a, 0.0) + np.where(bb, (1 - yy) - ((1 - p) + hs) - fee_b, 0.0)
     cost = np.where(ba, p + hs, 0.0) + np.where(bb, 1 - p + hs, 0.0)
     return pnl[ba | bb], cost[ba | bb]
 
 
+fees = TakerFees(pd.concat([E.token_a, E.token_b]))
 lg = lambda x: np.log(np.clip(x, 1e-4, 1 - 1e-4) / (1 - np.clip(x, 1e-4, 1 - 1e-4)))
 CASES = [("game1", "price", "map 1, at kickoff", 0.0125), ("game2", "price", "map 2, at map-1 end", 0.0125),
          ("series", "price_6h", "series, 6h before", 0.01), ("series", "price", "series, at kickoff", 0.01)]
@@ -220,7 +224,7 @@ for market, col, label, hs in CASES:
     yy, q, mk = e.y.to_numpy(), e.q.to_numpy(), np.clip(e[col].to_numpy(), 1e-4, 1 - 1e-4)
     d, lo, hi_ = clustered_bootstrap_delta(yy, q, mk, e.match_id.to_numpy(), log_loss, n_boot=1000)
     blend = 1 / (1 + np.exp(-(lg(mk) + lg(q)) / 2))
-    pnl, cost = simulate(mk, q, yy, hs)
+    pnl, cost = simulate(mk, q, yy, *fees.for_column(e, col), hs)
     print(f"{label:22s} {len(e):4d} {log_loss(yy, mk):9.4f} {log_loss(yy, q):8.4f} "
           f"{d:+.4f} [{lo:+.3f},{hi_:+.3f}]{'*' if (lo > 0) == (hi_ > 0) else ' '} "
           f"{log_loss(yy, blend) - log_loss(yy, mk):+11.4f} {np.mean((q > 0.5) == yy):9.1%} {np.mean((mk > 0.5) == yy):7.1%} "

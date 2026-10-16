@@ -93,7 +93,9 @@ def make_strategy():
         )
         defaults.update(kwargs)
         with patch.object(mod, "RegistryClient", lambda *a, **k: registry or _FakeRegistry()):
-            return mod.CrossPredictionArb(outcomes=outcomes, **defaults)
+            strategy = mod.CrossPredictionArb(outcomes=outcomes, **defaults)
+        strategy._position_view = FakePositions()
+        return strategy
     return _make
 
 
@@ -107,11 +109,31 @@ class _Position:
     net_quantity: int
 
 
+# The rate x p(1-p) curve rates the venues charged before the registry held their schedules.
+FEE_RATES = {PM: (0.07, 0.0), K: (0.07, 0.0175)}
+
+
+@dataclass(frozen=True)
+class FakeFeeSchedule:
+    """Stands in for gnomepy.fees.FeeSchedule, which the installed gnomepy predates."""
+
+    taker: float
+    maker: float
+
+    def price_curve_rates(self) -> tuple[float, float]:
+        return self.taker, self.maker
+
+
 class FakePositions:
     """Stands in for the engine's position view."""
 
-    def __init__(self, positions: dict | None = None):
+    def __init__(self, positions: dict | None = None, fee_rates: dict[int, tuple[float, float]] | None = None):
         self._pos = dict(positions or {})
+        self._fee_rates = FEE_RATES if fee_rates is None else fee_rates
+
+    def fee_schedule(self, exchange_id, security_id):
+        rates = self._fee_rates.get(exchange_id)
+        return FakeFeeSchedule(*rates) if rates is not None else None
 
     def set(self, listing, qty):
         self._pos[listing] = qty

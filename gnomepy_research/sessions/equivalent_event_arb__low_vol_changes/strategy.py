@@ -10,7 +10,6 @@ class LowVolEquivalentEventArb(EquivalentEventArb):
         self,
         event_ids: list[int],
         max_position: int = 0,
-        exchange_fees: dict[str, dict[str, float]] | None = None,
         min_pure_arb_bps: float = 2.0,
         taker_edge_threshold_bps: float = 99999.0,
         use_taker_orders: bool = False,
@@ -41,7 +40,6 @@ class LowVolEquivalentEventArb(EquivalentEventArb):
         super().__init__(
             event_ids=event_ids,
             max_position=max_position,
-            exchange_fees=exchange_fees,
             min_pure_arb_bps=min_pure_arb_bps,
             taker_edge_threshold_bps=taker_edge_threshold_bps,
             use_taker_orders=use_taker_orders,

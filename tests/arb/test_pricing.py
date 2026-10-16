@@ -43,8 +43,14 @@ def _fee(rate: float, price: float) -> float:
     return rate * price * (1.0 - price)
 
 
+def _rates(maker: dict, taker: dict | None = None):
+    """A fee-rate lookup by exchange; a listing's taker rate defaults to its maker rate."""
+    taker = taker or {}
+    return lambda listing: (taker.get(listing[0], maker.get(listing[0], 0.0)), maker.get(listing[0], 0.0))
+
+
 def _constraint(*legs: ArbLeg, rates: dict, bps: float = 5.0) -> ArbBudgetConstraint:
-    return ArbBudgetConstraint(list(legs), min_edge_bps=bps, maker_fee_rates=rates)
+    return ArbBudgetConstraint(list(legs), min_edge_bps=bps, fee_rates=_rates(rates))
 
 
 # ---------------------------------------------------------------------------
@@ -663,7 +669,7 @@ class TestArbBudgetConstraintTakerFees:
     def test_leg_cost_uses_taker_fee_when_crossing(self):
         leg_a = ArbLeg(listing=POLY, target_qty=q(5))
         leg_b = ArbLeg(listing=KALS, target_qty=q(5))
-        c = ArbBudgetConstraint([leg_a, leg_b], min_edge_bps=2.0, maker_fee_rates=POLY_RATES | KALS_RATES, taker_fee_rates=POLY_TAKER_RATES | KALS_TAKER_RATES)
+        c = ArbBudgetConstraint([leg_a, leg_b], min_edge_bps=2.0, fee_rates=_rates(POLY_RATES | KALS_RATES, POLY_TAKER_RATES | KALS_TAKER_RATES))
         c.update_order_price(POLY, p(0.43), is_crossing=True)
         cost = c.leg_cost(POLY)
         assert cost is not None
@@ -673,7 +679,7 @@ class TestArbBudgetConstraintTakerFees:
     def test_leg_cost_uses_maker_fee_when_not_crossing(self):
         leg_a = ArbLeg(listing=POLY, target_qty=q(5))
         leg_b = ArbLeg(listing=KALS, target_qty=q(5))
-        c = ArbBudgetConstraint([leg_a, leg_b], min_edge_bps=2.0, maker_fee_rates=POLY_RATES | KALS_RATES, taker_fee_rates=POLY_TAKER_RATES | KALS_TAKER_RATES)
+        c = ArbBudgetConstraint([leg_a, leg_b], min_edge_bps=2.0, fee_rates=_rates(POLY_RATES | KALS_RATES, POLY_TAKER_RATES | KALS_TAKER_RATES))
         c.update_order_price(POLY, p(0.42), is_crossing=False)
         cost = c.leg_cost(POLY)
         assert cost is not None
@@ -682,7 +688,7 @@ class TestArbBudgetConstraintTakerFees:
     def test_crossing_flag_cleared_on_new_noncrossing_order(self):
         leg_a = ArbLeg(listing=POLY, target_qty=q(5))
         leg_b = ArbLeg(listing=KALS, target_qty=q(5))
-        c = ArbBudgetConstraint([leg_a, leg_b], min_edge_bps=2.0, maker_fee_rates=POLY_RATES | KALS_RATES, taker_fee_rates=POLY_TAKER_RATES | KALS_TAKER_RATES)
+        c = ArbBudgetConstraint([leg_a, leg_b], min_edge_bps=2.0, fee_rates=_rates(POLY_RATES | KALS_RATES, POLY_TAKER_RATES | KALS_TAKER_RATES))
         c.update_order_price(POLY, p(0.43), is_crossing=True)
         c.update_order_price(POLY, p(0.42), is_crossing=False)
         cost = c.leg_cost(POLY)

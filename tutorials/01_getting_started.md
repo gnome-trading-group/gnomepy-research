@@ -78,9 +78,7 @@ data:
 profiles:
   hyperliquid:
     fee_model:
-      type: static
-      taker_fee: 0.0004      # 4 bps
-      maker_fee: 0.00012     # 1.2 bps
+      type: registry               # the venue's fees for each listing, from the registry
     network_latency:
       type: static
       latency_nanos: 20000000      # 20ms

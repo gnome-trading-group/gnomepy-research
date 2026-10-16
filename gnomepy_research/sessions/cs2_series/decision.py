@@ -92,17 +92,17 @@ def choose_entry(
     asks_team_b: list[Level],
     *,
     min_edge: float,
-    fee_rate: float,
+    fee_rates: tuple[float, float],
     max_slippage: float,
     tick: float,
     allowed_sides: tuple[int, ...] = (0, 1),
 ) -> Entry | None:
-    """The better of the two sides, if either clears the threshold."""
+    """The better of the two sides, if either clears the threshold; fee_rates are each side's listing's taker rate."""
     candidates = []
     for side, fair, asks in ((0, fair_team_a, asks_team_a), (1, 1.0 - fair_team_a, asks_team_b)):
         if side not in allowed_sides:
             continue
-        entry = evaluate_side(side, fair, asks, min_edge=min_edge, fee_rate=fee_rate,
+        entry = evaluate_side(side, fair, asks, min_edge=min_edge, fee_rate=fee_rates[side],
                               max_slippage=max_slippage, tick=tick)
         if entry is not None:
             candidates.append(entry)

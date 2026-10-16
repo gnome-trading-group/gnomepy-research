@@ -23,6 +23,7 @@ from sklearn.metrics import log_loss
 from gnomepy_research.models.cs2.hltv.build_priors import compute_priors_for_row
 from gnomepy_research.models.cs2.hltv.context_features import VETO_FEATURES
 from gnomepy_research.models.cs2.hltv.player_form import PLAYER_FORM_FEATURES
+from gnomepy_research.sessions.cs2_win_probability.holding._fees import TakerFees
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 from gnomepy_research.models.cs2.win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
 from gnomepy_research.models.cs2.win_probability.pre_map_model import _fit, _matrix, fit_calibrator
@@ -34,7 +35,6 @@ from gnomepy_research.models.cs2.win_probability.symmetry import augment, build_
 
 logging.basicConfig(level=logging.WARNING)
 MONTHS = pd.date_range("2026-03-01", "2026-09-01", freq="MS")
-TAKER = 0.07
 MAP_SPECIFIC = ["team_a_map_winrate_long", "team_b_map_winrate_long", "team_a_map_winrate_short",
                 "team_b_map_winrate_short", "elo_map_diff", "elo_map_resid_diff"]
 VETO_DEPENDENT = ["team_a_picked_map", "is_decider"] + VETO_FEATURES + MAP_SPECIFIC
@@ -138,19 +138,20 @@ Q.to_parquet(DATA_DIR / "leak_checks_preds.parquet", index=False)
 old = pd.read_parquet(DATA_DIR / "backtest_6mo_preds.parquet")
 old = old[old.market == "series"][["match_id", "q"]].rename(columns={"q": "q_original"})
 E = pd.read_parquet(DATA_DIR / "backtest_6mo_eval.parquet")
-E = E[E.market == "series"][["match_id", "open", "k12", "k6", "k1", "k0"]]
+E = E[E.market == "series"][["match_id", "token_a", "token_b", "open", "k12", "k6", "k1", "k0",
+                               "t_k12", "t_k6", "t_k0"]]
 J = Q.merge(old, on="match_id").merge(E, on="match_id")
+fees = TakerFees(pd.concat([J.token_a, J.token_b]))
 y = J.y.to_numpy()
 print(f"\nseries with all predictions and a Polymarket path: {len(J)}")
 print(f"original vs map-3-symmetric predictions: mean |diff| {np.abs(J.q_original - J.q_map3_sym).mean():.4f}")
 
 
-def simulate(p, q, yy, hs=0.01, th=0.05):
-    fee = TAKER * p * (1 - p)
-    ea, eb = q - (p + hs) - fee, (1 - q) - ((1 - p) + hs) - fee
+def simulate(p, q, yy, fee_a, fee_b, hs=0.01, th=0.05):
+    ea, eb = q - (p + hs) - fee_a, (1 - q) - ((1 - p) + hs) - fee_b
     ba = ea > th
     bb = (eb > th) & ~ba
-    pnl = np.where(ba, yy - (p + hs) - fee, 0.0) + np.where(bb, (1 - yy) - ((1 - p) + hs) - fee, 0.0)
+    pnl = np.where(ba, yy - (p + hs) - fee_a, 0.0) + np.where(bb, (1 - yy) - ((1 - p) + hs) - fee_b, 0.0)
     cost = np.where(ba, p + hs, 0.0) + np.where(bb, 1 - p + hs, 0.0)
     return pnl[ba | bb], cost[ba | bb]
 
@@ -163,9 +164,11 @@ for qcol, label in (("q_original", "original"), ("q_map3_sym", "map-3 symmetric"
         mk, q, yy, g = np.clip(J[hcol].to_numpy()[s], 1e-4, 1 - 1e-4), J[qcol].to_numpy()[s], y[s], J.match_id.to_numpy()[s]
         blend = 1 / (1 + np.exp(-(lg(mk) + lg(q)) / 2))
         db, lo, hi = clustered_bootstrap_delta(yy, blend, mk, g, log_loss, n_boot=300)
-        pnl, cost = simulate(mk, q, yy)
-        months = J[s].assign(q=q, mk=mk).groupby("month").apply(
-            lambda d: simulate(d.mk.to_numpy(), d.q.to_numpy(), d.y.to_numpy())[0].sum(), include_groups=False)
+        fee_a, fee_b = fees.for_column(J[s], hcol)
+        pnl, cost = simulate(mk, q, yy, fee_a, fee_b)
+        months = J[s].assign(q=q, mk=mk, fee_a=fee_a, fee_b=fee_b).groupby("month").apply(
+            lambda d: simulate(d.mk.to_numpy(), d.q.to_numpy(), d.y.to_numpy(), d.fee_a.to_numpy(),
+                               d.fee_b.to_numpy())[0].sum(), include_groups=False)
         print(f"{label:>22} {hcol:>8} {s.sum():5d} {log_loss(yy, q):7.4f} {log_loss(yy, mk):7.4f} "
               f"{db:+9.4f}{'*' if (lo>0)==(hi>0) else ' '} {len(pnl):7d} {pnl.sum():+8.2f} {pnl.sum()/cost.sum():+7.1%} "
               f"{int((months > 0).sum())}/{len(months)}")

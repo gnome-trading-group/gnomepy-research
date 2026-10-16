@@ -3,15 +3,14 @@
 Validate arb backtest debug output.
 
 Usage:
-    poetry run python validate_arb.py <log_file> [--fees eid:rate,eid:rate]
-
-    --fees  comma-separated exchange_id:maker_fee_rate pairs, e.g. "5:0.0175,4:0.0"
+    poetry run python validate_arb.py <log_file>
 
 For each ENTRY the script shows two price perspectives:
 
   BidEdge  — edge computed from TARGET_SET (bid) prices: what we'd capture if filled
              as makers. This is the *expected* profitability if all legs fill.
-             Formula: (1 - sum_bid_prices - fees_at_bid) * 10000
+             Formula: (1 - sum_bid_prices - fees_at_bid) * 10000, with each leg's maker
+             fee from the registry's schedule for that listing at the entry's time.
 
   AskEdge  — the edge the strategy actually used to make the entry decision, extracted
              from the EDGE_CHECK debug line just before the ENTRY. This uses ASK book
@@ -27,6 +26,8 @@ import argparse
 import re
 import sys
 from dataclasses import dataclass, field
+
+from gnomepy_research.sessions.equivalent_event_arb.analysis.listing_fees import ListingFees
 
 
 _ENTRY_RE = re.compile(
@@ -134,13 +135,8 @@ def parse_log(lines: list[str]) -> list[Entry]:
     return entries
 
 
-def parametric_fee(price: float, rate: float) -> float:
-    if rate == 0.0:
-        return 0.0
-    return rate * price * (1.0 - price)
-
-
-def validate(entries: list[Entry], fee_rates: dict[int, float]) -> None:
+def validate(entries: list[Entry]) -> None:
+    fees = ListingFees((leg.eid, leg.sid) for entry in entries for leg in entry.legs)
     print(
         f"{'Timestamp':>20}  {'Pair':>4}  {'Mode':>5}  "
         f"{'SumBid':>7}  {'BidEdge':>9}  {'AskEdge':>9}  {'Reported':>9}  {'OK?':>4}"
@@ -155,14 +151,11 @@ def validate(entries: list[Entry], fee_rates: dict[int, float]) -> None:
 
         sum_bid = sum(leg.price for leg in entry.legs)
 
-        if fee_rates:
-            bid_fees = sum(
-                parametric_fee(leg.price, fee_rates.get(leg.eid, 0.0))
-                for leg in entry.legs
-            )
-            bid_edge = (1.0 - sum_bid - bid_fees) * 10_000
-        else:
-            bid_edge = (1.0 - sum_bid) * 10_000
+        bid_fees = sum(
+            fees.at(leg.eid, leg.sid, entry.timestamp).fee_dollars(True, leg.price, leg.qty, True) / leg.qty
+            for leg in entry.legs
+        )
+        bid_edge = (1.0 - sum_bid - bid_fees) * 10_000
 
         ask_edge_str = f"{entry.ask_edge_bps:>9.2f}" if entry.ask_edge_bps is not None else f"{'?':>9}"
 
@@ -186,8 +179,6 @@ def validate(entries: list[Entry], fee_rates: dict[int, float]) -> None:
 
     print()
     print(f"Entries: {len(entries)}  Failures: {failures}")
-    if not fee_rates:
-        print("(Pass --fees eid:rate,eid:rate for fee-adjusted BidEdge)")
     print()
     print("BidEdge = expected profit if filled at maker bid prices (what we post at)")
     print("AskEdge = conservative arb check used for entry decision (ask-book prices)")
@@ -199,18 +190,7 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("log_file", nargs="?", help="Debug log file (default: stdin)")
-    parser.add_argument(
-        "--fees",
-        default="",
-        help='Maker fee rates per exchange_id, e.g. "5:0.0175,4:0.0"',
-    )
     args = parser.parse_args()
-
-    fee_rates: dict[int, float] = {}
-    if args.fees:
-        for pair in args.fees.split(","):
-            eid_str, rate_str = pair.strip().split(":")
-            fee_rates[int(eid_str)] = float(rate_str)
 
     if args.log_file:
         with open(args.log_file) as f:
@@ -219,7 +199,7 @@ def main() -> None:
         lines = sys.stdin.readlines()
 
     entries = parse_log(lines)
-    validate(entries, fee_rates)
+    validate(entries)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from gnomepy.java.enums import ExecType
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
+from gnomepy_research.arb import registry_fee_rates
 from gnomepy_research.signals.fair_value.microprice import MicropriceFairValue
 from gnomepy_research.signals.operations.kalman import KalmanOperation
 from gnomepy_research.solvers.prediction_market_hjb import (
@@ -37,7 +38,6 @@ class SpreadCapturePMM(Strategy):
         max_ref_staleness_ns: int = 5_000_000_000,
         kalman_Q: float = 1e-4,
         kalman_R: float = 1e-2,
-        maker_fee_rate: float = 0.0,
         processing_time_ns: int = 5_000_000,
         min_quote_interval_ns: int = 1_000_000_000,
         resolution_time_override_ns: int = 0,
@@ -52,7 +52,7 @@ class SpreadCapturePMM(Strategy):
         self.inventory_fade = inventory_fade
         self.warmup_ticks = warmup_ticks
         self._max_ref_staleness_ns = max_ref_staleness_ns
-        self._maker_fee_rate = maker_fee_rate
+        self._fee_rates = registry_fee_rates(self)
         self._processing_time_ns = processing_time_ns
         self._min_quote_interval_ns = min_quote_interval_ns
         self._last_quote_ts: int = 0
@@ -161,6 +161,7 @@ class SpreadCapturePMM(Strategy):
         position: int,
         book_bid: int,
         book_ask: int,
+        maker_fee_rate: float,
     ) -> tuple[int, int]:
         can_bid = position < self.max_position
         can_ask = position > 0
@@ -183,7 +184,7 @@ class SpreadCapturePMM(Strategy):
         vals = self._interp(pts)
         v_here = vals[0]
 
-        fee_shift = self._maker_fee_rate * p * (1.0 - p) * PRICE_SCALE
+        fee_shift = maker_fee_rate * p * (1.0 - p) * PRICE_SCALE
         tick = self._tick_size
 
         bid_price_int = 0
@@ -313,9 +314,11 @@ class SpreadCapturePMM(Strategy):
 
         yes_bid, yes_ask = self._compute_hjb_quotes(
             tau_norm, p, yes_qty_actual, self._yes_book_bid, self._yes_book_ask,
+            self._fee_rates((self._quote_eid, self._yes_sid))[1],
         )
         no_bid, no_ask = self._compute_hjb_quotes(
             tau_norm, p_no, no_qty_actual, self._no_book_bid, self._no_book_ask,
+            self._fee_rates((self._quote_eid, self._no_twin_sid))[1],
         )
 
         yes_bid_sz, yes_ask_sz = self._compute_side_sizes(yes_qty_eff)

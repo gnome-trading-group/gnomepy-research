@@ -5,6 +5,8 @@ from enum import IntEnum
 from gnomepy import ExecutionReport, Intent, OrderType, Side, Strategy
 from gnomepy.java.schemas import Schema
 
+from gnomepy_research.arb import registry_fee_rates
+
 PRICE_SCALE = 1_000_000_000
 SIZE_SCALE = 1_000_000
 
@@ -22,7 +24,6 @@ class DutchBookArb(Strategy):
     def __init__(
         self,
         size: int = 1_000_000,
-        fee_rate: float = 0.07,
         min_edge_bps: float = 10.0,
         stale_threshold_ns: int = 2_000_000_000,
         imbalance_timeout_ns: int = 30_000_000_000,
@@ -30,7 +31,7 @@ class DutchBookArb(Strategy):
         processing_time_ns: int = 0,
     ):
         self.size = size
-        self.fee_rate = fee_rate
+        self._fee_rates = registry_fee_rates(self)
         self.min_edge_bps = min_edge_bps
         self.stale_threshold_ns = stale_threshold_ns
         self.imbalance_timeout_ns = imbalance_timeout_ns
@@ -93,7 +94,8 @@ class DutchBookArb(Strategy):
         for lst in self._listings:
             p = self._best_ask[lst] / PRICE_SCALE
             sum_asks += p
-            total_fee += self.fee_rate * p * (1.0 - p)
+            taker_rate, _ = self._fee_rates(lst)
+            total_fee += taker_rate * p * (1.0 - p)
         edge_bps = (1.0 - sum_asks - total_fee) * 10_000
         return sum_asks, edge_bps
 

@@ -15,7 +15,6 @@ strategy = SpreadCapturePMM(
     max_ref_staleness_ns=5_000_000_000,
     kalman_Q=1e-3,
     kalman_R=1e-2,
-    maker_fee_rate=0.0,
     processing_time_ns=5_000_000,
     min_quote_interval_ns=1_000_000_000,
     resolution_time_override_ns=1_787_541_060_000_000_000,

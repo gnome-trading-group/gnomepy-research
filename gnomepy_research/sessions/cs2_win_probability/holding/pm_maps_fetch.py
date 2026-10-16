@@ -82,12 +82,13 @@ for r in maps.itertuples():
         dropped["settle_mismatch"] += 1
         continue
     matched.append({"match_id": r.match_id, "map_pos": r.map_position_in_series, "map_name": r.map_name,
-                    "token_a": list(mk.tokens)[0 if a_is_o0 else 1], "volume": float(mk.volume),
+                    "token_a": str(list(mk.tokens)[0 if a_is_o0 else 1]),
+                    "token_b": str(list(mk.tokens)[1 if a_is_o0 else 0]), "volume": float(mk.volume),
                     "kickoff": kickoff.get(r.match_id)})
 m = pd.DataFrame(matched).dropna(subset=["kickoff"])
 print(f"maps matched: {len(m)}  by position: {m.map_pos.value_counts().sort_index().to_dict()}  "
       f"dropped: {dropped}", flush=True)
-m.drop(columns=["token_a"]).to_parquet(f"{D}/pm_maps_matched.parquet", index=False)
+m.to_parquet(f"{D}/pm_maps_matched.parquet", index=False)
 
 s = requests.Session()
 s.headers["User-Agent"] = "research/1.0"

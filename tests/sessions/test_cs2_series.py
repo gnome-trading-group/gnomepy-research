@@ -30,6 +30,7 @@ from gnomepy_research.sessions.cs2_series.decision import (
     taker_fee,
 )
 from gnomepy_research.sessions.cs2_series.match_feed import MatchFeed
+from tests.sessions.conftest import FakeFeeSchedule
 
 P, S = Scales.PRICE, Scales.SIZE
 HOUR = 3_600_000_000_000
@@ -76,10 +77,18 @@ def test_limit_is_capped_by_the_threshold_price_when_that_is_lower():
 
 def test_choose_entry_buys_the_underpriced_side_and_respects_allowed_sides():
     asks_a, asks_b = [Level(0.62, 100)], [Level(0.30, 100)]
-    e = choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rate=0.07, max_slippage=0.02, tick=0.01)
+    e = choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.07, 0.07), max_slippage=0.02, tick=0.01)
     assert e.side == 1 and e.fair == pytest.approx(0.40)
-    assert choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rate=0.07, max_slippage=0.02,
+    assert choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.07, 0.07), max_slippage=0.02,
                         tick=0.01, allowed_sides=(0,)) is None
+
+
+def test_choose_entry_charges_each_side_its_own_listings_fee():
+    asks_a, asks_b = [Level(0.62, 100)], [Level(0.30, 100)]
+    e = choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.0, 0.07), max_slippage=0.0, tick=0.01)
+    assert e.edge_at_best == pytest.approx(0.40 - 0.30 - taker_fee(0.30, 0.07))
+    assert choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.07, 0.5), max_slippage=0.0,
+                        tick=0.01) is None, "side B's 10c gross edge does not survive a 0.5 rate"
 
 
 def test_shares_to_buy_includes_the_fee_in_the_budget():
@@ -237,6 +246,9 @@ class _Positions:
         key = (exchange_id, security_id)
         return self.filled.get(key, (0, 0, 0.0))[0] + self.pending.get(key, 0)
 
+    def fee_schedule(self, exchange_id, security_id):
+        return FakeFeeSchedule(taker=0.07, maker=0.0)
+
 
 class _Book:
     def __init__(self, key, asks, ts):
@@ -264,8 +276,8 @@ def make(tmp_path):
         f, m = _write(tmp_path, features or [_feature(EARLY)], states or _states())
         with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry(spec or _Spec())), \
                 patch.object(mod, "load_model", lambda path: (_MapModel(), path)):
-            strat = mod.CS2Series(match_id=7, listing_team_a=101, listing_team_b=102, fee_rate=0.07,
-                                  reload_minutes=0, features_source=f, matches_source=m, **kw)
+            strat = mod.CS2Series(match_id=7, listing_team_a=101, listing_team_b=102, reload_minutes=0,
+                                  features_source=f, matches_source=m, **kw)
         strat._position_view = _Positions()
         return strat
     return _make

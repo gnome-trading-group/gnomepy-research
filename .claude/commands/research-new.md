@@ -45,14 +45,12 @@ Use `AskUserQuestion` with exactly these 3 questions in a single call:
    - List each saved profile by name (e.g., `hyperliquid`, `polymarket_intl`, `polymarket_us`, `kalshi`, `lighter`)
    - `Create new profile` — Use Other to type a new profile name
 
-   If "Create new profile" is selected, run a sub-round (AskUserQuestion with 5 questions):
+   If "Create new profile" is selected, run a sub-round (AskUserQuestion with 3 questions):
    - **"Profile name"** — What to call it (lowercase, e.g. `binance`)
-   - **"Taker fee"** — Decimal fee rate (e.g. `0.0005` for 5 bps; negative for rebate). Use Other to type.
-   - **"Maker fee"** — Same format. Use Other to type.
    - **"Network latency"** — Round-trip latency. Options: `1ms`, `5ms`, `20ms`, `50ms`, `200ms`. Use Other to type in nanos.
    - **"Queue model"** — `risk_averse` (recommended), `optimistic`, `probabilistic`
 
-   After collecting, write the new profile to `gnomepy_research/profiles/<name>.yaml` so it can be reused in future sessions.
+   After collecting, write the new profile to `gnomepy_research/profiles/<name>.yaml` so it can be reused in future sessions. Its `fee_model` is always `type: registry`: fees come from the registry's fee schedules for each listing, so a venue whose schedule isn't in the registry needs one recorded there (`POST /fees`), not rates in the profile.
 
 2. **header: "Listing IDs"** — For each selected profile, which listing_id(s) map to it? Free-text as `profile_name: id1,id2` (e.g., `hyperliquid: 1,28` and `lighter: 36`). Use Other to type.
 

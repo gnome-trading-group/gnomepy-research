@@ -11,6 +11,8 @@ from gnomepy.java.enums import ExecType
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
+from gnomepy_research.arb import FeeRates, registry_fee_rates
+
 PRICE_SCALE = Scales.PRICE   # 1_000_000_000
 SIZE_SCALE = Scales.SIZE      # 1_000_000
 
@@ -121,19 +123,12 @@ class CostComponent:
 
 
 class FeeCost(CostComponent):
-    def __init__(
-        self,
-        maker_rates: dict[str, float],
-        taker_rates: dict[str, float],
-        exchange_id_to_label: dict[int, str],
-    ):
-        self._maker: dict[str, float] = {str(k): float(v) for k, v in maker_rates.items()}
-        self._taker: dict[str, float] = {str(k): float(v) for k, v in taker_rates.items()}
-        self._id_to_label = exchange_id_to_label
+    def __init__(self, fee_rates: FeeRates):
+        self._fee_rates = fee_rates
 
     def cost(self, listing, price_scaled, qty, maker=True, **kwargs) -> float:
-        label = self._id_to_label.get(listing[0], "")
-        rate = self._maker.get(label, 0.0) if maker else self._taker.get(label, 0.0)
+        taker_rate, maker_rate = self._fee_rates(listing)
+        rate = maker_rate if maker else taker_rate
         p = price_scaled / PRICE_SCALE
         return rate * p * (1.0 - p)
 
@@ -322,9 +317,6 @@ class CrossPredictionArb(Strategy):
         imbalance_timeout_ns: int = 30_000_000_000,
         max_staleness_ns: int = 60_000_000_000,
         processing_time_ns: int = 5_000_000,
-        # Fee rates keyed by exchange label (e.g. "pm", "k")
-        maker_fee_rates: dict[str, float] | None = None,
-        taker_fee_rates: dict[str, float] | None = None,
         # Cost model
         fill_risk_lambda: float = 0.0,
         unwind_spread_mult: float = 2.0,
@@ -350,12 +342,7 @@ class CrossPredictionArb(Strategy):
     ):
         registry = RegistryClient()
 
-        if maker_fee_rates is None:
-            maker_fee_rates = {"pm": 0.0, "k": 0.0175}
-        if taker_fee_rates is None:
-            taker_fee_rates = {"pm": 0.07, "k": 0.07}
-        self._maker_fee_rates: dict[str, float] = {str(k): float(v) for k, v in maker_fee_rates.items()}
-        self._taker_fee_rates: dict[str, float] = {str(k): float(v) for k, v in taker_fee_rates.items()}
+        self._fee_rates = registry_fee_rates(self)
         self._taker_labels: set[str] = set(str(x) for x in taker_labels) if taker_labels else set()
         self._dutch_book_labels: set[str] = set(str(x) for x in dutch_book_labels) if dutch_book_labels else set()
 
@@ -430,7 +417,7 @@ class CrossPredictionArb(Strategy):
 
         # Cost model
         cost_components: list[CostComponent] = [
-            FeeCost(maker_fee_rates, taker_fee_rates, self._exchange_id_to_label)
+            FeeCost(self._fee_rates)
         ]
         if fill_risk_lambda > 0.0:
             cost_components.append(FillRiskCost(fill_risk_lambda, unwind_spread_mult, use_cst_fill_model))
@@ -576,16 +563,12 @@ class CrossPredictionArb(Strategy):
     # ------------------------------------------------------------------
 
     def _maker_fee(self, listing: tuple[int, int], price_scaled: int) -> float:
-        label = self._exchange_id_to_label.get(listing[0], "")
-        rate = self._maker_fee_rates.get(label, 0.0)
         p = price_scaled / PRICE_SCALE
-        return rate * p * (1.0 - p)
+        return self._fee_rates(listing)[1] * p * (1.0 - p)
 
     def _taker_fee(self, listing: tuple[int, int], price_scaled: int) -> float:
-        label = self._exchange_id_to_label.get(listing[0], "")
-        rate = self._taker_fee_rates.get(label, 0.0)
         p = price_scaled / PRICE_SCALE
-        return rate * p * (1.0 - p)
+        return self._fee_rates(listing)[0] * p * (1.0 - p)
 
     # ------------------------------------------------------------------
     # Edge detection (walks ask books — entry uses asks only)

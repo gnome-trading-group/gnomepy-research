@@ -7,6 +7,7 @@ from typing import Callable, Protocol
 from gnomepy import Scales, Side
 from gnomepy.java.backtest.orders import ExecutionReport
 
+from gnomepy_research.arb.fees import FeeRates
 from gnomepy_research.arb.types import Listing
 
 
@@ -83,10 +84,11 @@ class CompositeCostModel:
 
 
 class FeeCost:
-    """Prediction market fee component: rate * p * (1 - p)."""
+    """Prediction market fee component: rate * p * (1 - p), at the listing's taker or maker rate."""
 
-    def __init__(self, rates: dict[int, float]):
-        self._rates = rates
+    def __init__(self, fee_rates: FeeRates, maker: bool):
+        self._fee_rates = fee_rates
+        self._maker = maker
 
     def on_book_update(self, listing: Listing, bids, asks, timestamp) -> None:
         pass
@@ -95,7 +97,8 @@ class FeeCost:
         pass
 
     def cost(self, listing: Listing, price: int, side: Side, qty: int) -> float:
-        rate = self._rates.get(listing[0], 0.0)
+        taker_rate, maker_rate = self._fee_rates(listing)
+        rate = maker_rate if self._maker else taker_rate
         if rate == 0.0:
             return 0.0
         p = price / Scales.PRICE

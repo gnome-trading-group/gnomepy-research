@@ -27,6 +27,7 @@ from gnomepy_research.arb import (
     PriceModel,
     VenuePairing,
     discover_group,
+    registry_fee_rates,
     walk_books,
 )
 from gnomepy_research.strategies.target_portfolio import (
@@ -42,7 +43,6 @@ class EquivalentEventArb(TargetPortfolioStrategy):
         self,
         event_ids: list[int],
         max_position: int = 0,
-        exchange_fees: dict[str, dict[str, float]] | None = None,
         min_pure_arb_bps: float = 5.0,
         taker_edge_threshold_bps: float = 20.0,
         use_taker_orders: bool = True,
@@ -78,38 +78,15 @@ class EquivalentEventArb(TargetPortfolioStrategy):
         registry = RegistryClient()
         self._group = discover_group(event_ids, registry)
 
-        all_exchanges = registry.get_exchange()
-        exchange_by_code = {e.exchange_code: e for e in all_exchanges}
-
-        if exchange_fees is None:
-            exchange_fees = {
-                "POLYMARKET_INTL": {"taker": 0.07, "maker": 0.0},
-                "KALSHI": {"taker": 0.07, "maker": 0.0175},
-            }
-
-        fee_rates: dict[int, tuple[float, float]] = {}
-        for code, rates in exchange_fees.items():
-            exchange = exchange_by_code.get(code)
-            if exchange is None:
-                raise ValueError(f"Exchange code '{code}' not found in registry")
-            fee_rates[exchange.exchange_id] = (rates["taker"], rates["maker"])
-
-        all_eids = {lst[0] for lst in self._group.all_listings}
-        unknown = all_eids - set(fee_rates)
-        if unknown:
-            raise ValueError(f"No fee model implemented for exchange_id(s): {unknown}")
-
-        maker_rates = {eid: rates[1] for eid, rates in fee_rates.items()}
-        taker_rates = {eid: rates[0] for eid, rates in fee_rates.items()}
-        self._maker_fee_rates = maker_rates
-        self._taker_fee_rates = taker_rates
-        maker_components = [FeeCost(maker_rates)]
+        # The rates each listing's fills are charged, from the registry at the strategy's time.
+        self._fee_rates = registry_fee_rates(self)
+        maker_components = [FeeCost(self._fee_rates, maker=True)]
         self._fill_risk: FillRiskCost | None = None
         if fill_risk_lambda > 0:
             self._fill_risk = FillRiskCost(fill_risk_lambda, unwind_spread_mult)
             maker_components.append(self._fill_risk)
 
-        taker_components = [FeeCost(taker_rates)]
+        taker_components = [FeeCost(self._fee_rates, maker=False)]
         self._depth_coverage: DepthCoverageCost | None = None
         if depth_coverage_mult > 0:
             self._depth_coverage = DepthCoverageCost(depth_coverage_mult, price_window_cents)
@@ -456,7 +433,7 @@ class EquivalentEventArb(TargetPortfolioStrategy):
         self._portfolio = ArbPortfolio(
             legs, pairing_index=best_pairing.index, order_mode=mode, cancel_grace_ns=self._cancel_grace_ns,
         )
-        self._constraint = ArbBudgetConstraint(legs, self.min_pure_arb_bps, self._maker_fee_rates, self._taker_fee_rates)
+        self._constraint = ArbBudgetConstraint(legs, self.min_pure_arb_bps, self._fee_rates)
         for _, lst in arb_legs:
             self._logged_at_target.pop(lst, None)
         self._debug(timestamp, "PHASE_CHANGE", old="IDLE", new="ENTERING", mode=mode.name)

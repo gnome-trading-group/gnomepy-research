@@ -3,12 +3,12 @@
 Validate intent prices and fill accounting from a backtest output directory.
 
 Usage:
-    poetry run python validate_fills.py <output_dir> [--fees eid:maker:taker,...]
+    poetry run python validate_fills.py <output_dir>
 
 Checks:
   1. Entry intent bid_price matches market bid at that timestamp
   2. Fill price matches the posted intent price
-  3. Fee = parametric formula with correct maker/taker rate
+  3. Fee = the registry's fee schedule for the listing at the fill's time, at the maker or taker rate
   4. PnL per listing adds up correctly
 """
 from __future__ import annotations
@@ -19,11 +19,8 @@ from pathlib import Path
 
 import pandas as pd
 
-
-def parametric_fee(price: float, rate: float, qty: float) -> float:
-    if rate == 0.0:
-        return 0.0
-    return rate * price * (1.0 - price) * qty
+from gnomepy.fees import PRICE_SCALE, SIZE_SCALE, OrderFeeState
+from gnomepy_research.sessions.equivalent_event_arb.analysis.listing_fees import ListingFees
 
 
 def infer_fill_type(row: pd.Series) -> str:
@@ -34,7 +31,7 @@ def infer_fill_type(row: pd.Series) -> str:
         return "taker" if row["fill_price"] <= row["book_bid_price"] else "maker"
 
 
-def validate(output_dir: Path, fee_rates: dict[int, dict[str, float]]) -> None:
+def validate(output_dir: Path) -> None:
     intents = pd.read_parquet(output_dir / "intents.parquet")
     fills = pd.read_parquet(output_dir / "fills.parquet")
     market = pd.read_parquet(output_dir / "market.parquet")
@@ -88,6 +85,9 @@ def validate(output_dir: Path, fee_rates: dict[int, dict[str, float]]) -> None:
     print(f"{'Timestamp':>26}  {'EID':>4}  {'SID':>8}  {'Side':>4}  {'Price':>6}  {'Qty':>5}  {'Type':>5}  {'FeeActual':>10}  {'FeeExpected':>11}  {'OK?':>4}")
     print("-" * 70)
 
+    fees = ListingFees(zip(fills["exchange_id"].astype(int), fills["security_id"].astype(int)))
+    # Kalshi rounds each order's fees together across its fills, so each order carries its own rounding state.
+    order_states: dict[int, OrderFeeState] = {}
     fee_failures = 0
     for ts, row in fills.iterrows():
         eid = int(row["exchange_id"])
@@ -97,11 +97,13 @@ def validate(output_dir: Path, fee_rates: dict[int, dict[str, float]]) -> None:
         actual_fee = row["fee"]
         fill_type = infer_fill_type(row)
 
-        rates = fee_rates.get(eid, {"maker": 0.0, "taker": 0.0})
-        rate = rates["taker"] if fill_type == "taker" else rates["maker"]
-        expected_fee = parametric_fee(price, rate, qty)
+        schedule = fees.at(eid, sid, pd.Timestamp(ts).value)
+        state = order_states.setdefault(int(row["client_oid"]), OrderFeeState())
+        expected_fee = schedule.fee(
+            row["side"] == "Bid", round(price * PRICE_SCALE), round(qty * SIZE_SCALE), fill_type == "maker", state,
+        ) / PRICE_SCALE
 
-        ok = abs(actual_fee - expected_fee) < 1e-5
+        ok = abs(actual_fee - expected_fee) < 1e-9
         if not ok:
             fee_failures += 1
 
@@ -140,7 +142,7 @@ def validate(output_dir: Path, fee_rates: dict[int, dict[str, float]]) -> None:
     if fee_failures:
         print(f"WARNING: {fee_failures} fee mismatch(es) found")
     else:
-        print("All fees match parametric formula")
+        print("All fees match the registry's fee schedules")
 
 
 def main() -> None:
@@ -148,19 +150,9 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("output_dir", help="Backtest job output directory")
-    parser.add_argument(
-        "--fees",
-        default="4:0.0:0.07,5:0.0175:0.07",
-        help='Fee rates: eid:maker:taker,... (default: polymarket=0/0.07, kalshi=0.0175/0.07)',
-    )
     args = parser.parse_args()
 
-    fee_rates: dict[int, dict[str, float]] = {}
-    for part in args.fees.split(","):
-        eid_str, maker_str, taker_str = part.strip().split(":")
-        fee_rates[int(eid_str)] = {"maker": float(maker_str), "taker": float(taker_str)}
-
-    validate(Path(args.output_dir), fee_rates)
+    validate(Path(args.output_dir))
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+from gnomepy_research.arb.fees import FeeRates, registry_fee_rates
 from gnomepy_research.arb.portfolio import ArbLeg, ArbPhase, ArbPortfolio
 from gnomepy_research.arb.book_walking import (
     CompositeCostModel,

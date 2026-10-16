@@ -23,6 +23,7 @@ from sklearn.metrics import log_loss
 
 from gnomepy_research.models.cs2.hltv.context_features import VETO_FEATURES
 from gnomepy_research.models.cs2.hltv.player_form import PLAYER_FORM_FEATURES
+from gnomepy_research.sessions.cs2_win_probability.holding._fees import TakerFees
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 from gnomepy_research.models.cs2.win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
 from gnomepy_research.models.cs2.win_probability.pre_map_model import _fit, _matrix, fit_calibrator
@@ -34,7 +35,6 @@ from gnomepy_research.models.cs2.win_probability.symmetry import augment, build_
 
 logging.basicConfig(level=logging.WARNING)
 MONTHS = pd.date_range("2026-03-01", "2026-09-01", freq="MS")
-TAKER = 0.07
 MAP_SPECIFIC = ["team_a_map_winrate_long", "team_b_map_winrate_long", "team_a_map_winrate_short",
                 "team_b_map_winrate_short", "elo_map_diff", "elo_map_resid_diff"]
 UNKNOWN_MAP = ["team_a_picked_map", "is_decider"] + VETO_FEATURES + MAP_SPECIFIC
@@ -116,12 +116,11 @@ full = full.pivot_table(index="match_id", columns="market", values="q").rename(
 Q = Q.join(full, on="match_id")
 
 
-def simulate(p, q, y, hs, th):
-    fee = TAKER * p * (1 - p)
-    ea, eb = q - (p + hs) - fee, (1 - q) - ((1 - p) + hs) - fee
+def simulate(p, q, y, fee_a, fee_b, hs, th):
+    ea, eb = q - (p + hs) - fee_a, (1 - q) - ((1 - p) + hs) - fee_b
     ba = ea > th
     bb = (eb > th) & ~ba
-    pnl = np.where(ba, y - (p + hs) - fee, 0.0) + np.where(bb, (1 - y) - ((1 - p) + hs) - fee, 0.0)
+    pnl = np.where(ba, y - (p + hs) - fee_a, 0.0) + np.where(bb, (1 - y) - ((1 - p) + hs) - fee_b, 0.0)
     cost = np.where(ba, p + hs, 0.0) + np.where(bb, 1 - p + hs, 0.0)
     return pnl[ba | bb], cost[ba | bb]
 
@@ -131,20 +130,24 @@ CASES = [("game1", "k0", "map1", "y_map1", 0.0125, 0.10, "map 1 @ kickoff"),
          ("series", "k12", "series", "y_series", 0.010, 0.05, "series @ 12h"),
          ("series", "k6", "series", "y_series", 0.010, 0.05, "series @ 6h"),
          ("series", "k0", "series", "y_series", 0.010, 0.05, "series @ kickoff")]
+traded = E[E.market.isin({market for market, *_ in CASES}) & E.match_id.isin(Q.match_id)]
+fees = TakerFees(pd.concat([traded.token_a, traded.token_b]).dropna())
 print(f"\n{'case':18s} {'model':12s} {'n':>5} {'mdl LL':>7} {'mkt LL':>7} {'gap':>8} {'blend-mkt':>10} "
       f"{'trades':>6} {'P&L':>8} {'per $':>7} {'months +':>8}")
 for market, col, prefix, ycol, hs, th, label in CASES:
-    e = E[(E.market == market) & E[col].notna()][["match_id", col]]
+    e = E[(E.market == market) & E[col].notna()][["match_id", "token_a", "token_b", col, f"t_{col}"]]
     j = Q.merge(e, on="match_id").dropna(subset=[ycol])
     y, mk, g = j[ycol].to_numpy().astype(int), np.clip(j[col].to_numpy(), 1e-4, 1 - 1e-4), j.match_id.to_numpy()
+    fee_a, fee_b = fees.for_column(j, col)
     for variant in ("full", "strict", "strict_form"):
         q = j[f"{prefix}_{variant}"].to_numpy()
         ok = ~np.isnan(q)
         blend = 1 / (1 + np.exp(-(lg(mk[ok]) + lg(q[ok])) / 2))
         db, lo, hi = clustered_bootstrap_delta(y[ok], blend, mk[ok], g[ok], log_loss, n_boot=300)
-        pnl, cost = simulate(mk[ok], q[ok], y[ok], hs, th)
-        months = j[ok].assign(q=q[ok], mk=mk[ok]).groupby("month").apply(
-            lambda d: simulate(d.mk.to_numpy(), d.q.to_numpy(), d[ycol].to_numpy().astype(int), hs, th)[0].sum(),
+        pnl, cost = simulate(mk[ok], q[ok], y[ok], fee_a[ok], fee_b[ok], hs, th)
+        months = j[ok].assign(q=q[ok], mk=mk[ok], fee_a=fee_a[ok], fee_b=fee_b[ok]).groupby("month").apply(
+            lambda d: simulate(d.mk.to_numpy(), d.q.to_numpy(), d[ycol].to_numpy().astype(int), d.fee_a.to_numpy(),
+                               d.fee_b.to_numpy(), hs, th)[0].sum(),
             include_groups=False)
         print(f"{label:18s} {variant:12s} {ok.sum():5d} {log_loss(y[ok], q[ok]):7.4f} {log_loss(y[ok], mk[ok]):7.4f} "
               f"{log_loss(y[ok], q[ok]) - log_loss(y[ok], mk[ok]):+8.4f} {db:+9.4f}{'*' if (lo > 0) == (hi > 0) else ' '} "
