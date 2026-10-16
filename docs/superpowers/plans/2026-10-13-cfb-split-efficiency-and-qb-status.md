@@ -2207,6 +2207,26 @@ Added 2026-10-16. Pre-registered before any Phase 24 backtest.
 - **Reported:** tier × phase, the games-played buckets, and the learned weights.
 - **2026:** a light sanity check only, per the user.
 
+**Phase 24 result (2026-10-16, `results/backtest/p24_selection.txt`): none pass; Npvk stays live.**
+
+| Comparison vs Npvk (pooled 2021–24) | Δ log loss | P(worse) | Notes |
+|---|---|---|---|
+| NpvkA | −0.0005 | 0.29 | 2022 is +0.0021 |
+| NpvkB | +0.0005 | 0.83 | |
+| NpvkC | −0.0003 | 0.18 | |
+
+Every mechanism shows up in the fitted weights, but each is too small to pass:
+- **A:** in 2023–24 the evidence weight is +0.40 and the early-evidence offset is −0.29/−0.13, so early evidence is trusted less. Weeks 1–4 are unchanged (0.4850 vs 0.4847). Bowls improve, 0.6634 → 0.6570.
+- **B:** the `to_diff` weight turns negative as training grows (+0.03, −0.04, −0.07, −0.10 [−0.17, −0.02]). Turnovers do regress, but the term doesn't improve out-of-sample log loss.
+- **C:** the kf weight rises to 0.47–0.49, with small gains in 3 of 4 seasons.
+
+**Conclusion:** early-season misses are limited by the prior and the information we have, not by how evidence is processed. The next lever is new preseason and late-summer information.
+
+**Betting-side finding** (Error Lab ranked-vs-unranked cut, 2021–24, n=897):
+- When Npvk is ≥3 points *below* the open on a preseason-ranked team, the unranked side returned about +7% to +12% after an assumed 2.25% vig (277 bets, about 1.5 SE).
+- When Npvk is above the open on the ranked team, there is no edge.
+- This was picked after looking, so it needs a live paper-trade test.
+
 ### Phase 21 (proposed): availability data
 
 - **No free historical college injury data exists.** Sports Info Solutions sells college injury data from 2016.
