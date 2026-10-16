@@ -22,6 +22,7 @@ import pandas as pd
 
 from gnomepy.data import DatasetStore
 from gnomepy_research.models.cfb.efficiency.data import UNITS_ALL, UNITS_SPLIT
+from gnomepy_research.models.cfb.features.drives import GARBAGE_WEIGHT
 from gnomepy_research.models.cfb.features.physical import physical_table
 from gnomepy_research.models.cfb.features.qb_status import (
     apply_overrides, historical_starters, load_qb_status, qb_changes, qb_deltas)
@@ -33,9 +34,10 @@ from gnomepy_research.sessions.cfb_win_probability.models.residual_wp import (
     FEATURE_SETS, GRID_DEPTHS, GRID_PARAMS, attach_baseline, c_baseline, fit_residual, sigmoid)
 from gnomepy_research.sessions.cfb_win_probability.models.tail_calibrator import (
     TailCalibrator, bootstrap_ci, fit_tail_calibrator)
+from gnomepy_research.sessions.cfb_win_probability.models.margin_filter import kf_table, preseason_strength
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import (
-    N_FIT_DRAWS, apply_recal, cross_fitted_recal, fit, fit_margin, fit_moment, game_draws, physical_match_rate,
-    subset_draws)
+    N_FIT_DRAWS, apply_recal, cross_fitted_recal, fit, fit_margin, fit_moment, game_draws, load_season_draws,
+    physical_match_rate, subset_draws)
 
 FIRST_OUTCOME_SEASON = 2020
 HOLDOUT = 2025
@@ -92,6 +94,9 @@ MODEL_CONFIGS["Npvl"] = {**MODEL_CONFIGS["Np"], "mov": True, "mov_late": True}
 MODEL_CONFIGS["Npv2"] = {**MODEL_CONFIGS["Npv"], "mov_shrink": True}
 MODEL_CONFIGS["Npvs"] = {**MODEL_CONFIGS["Npv"], "tier": True}
 MODEL_CONFIGS["Npvg"] = {**MODEL_CONFIGS["Npv"], "extensions": ("couple", "fcs", "finish", "prior", "g5")}
+# Phase 23: scoreboard channel (margin Kalman filter) as an outcome-layer term; "tier" = P4 offset + per-tier prior width.
+MODEL_CONFIGS["Npvk"] = {**MODEL_CONFIGS["Npv"], "kf": "tier"}
+MODEL_CONFIGS["Npvk0"] = {**MODEL_CONFIGS["Npv"], "kf": "flat"}
 # Task 49: Np with the outcome layer trained without the 2020 COVID season.
 MODEL_CONFIGS["Np21"] = {**MODEL_CONFIGS["Np"], "outcome_first": 2021}
 O_SELECTION = RESULTS / "O_selection.json"
@@ -104,6 +109,15 @@ J_FEATURES = RESULTS / "J_features.json"
 CALIBRATOR_SEASONS = [2021, 2022]
 CALIBRATOR_BOOT = 500
 PROB_COLUMNS = ("p_home", "p_bayes", "p_bayes_lo", "p_bayes_hi")
+
+
+def draw_kwargs(cfg: dict) -> dict:
+    """The snapshot-naming arguments of a config, for load_season_draws."""
+    return dict(units=cfg["units"], conference=cfg.get("conference", False), projection=bool(cfg.get("projection", False)),
+                drop_features=tuple(cfg.get("drop_features", ())), drives=cfg.get("drives", False),
+                independents_separate=cfg.get("independents_separate", False), tau_phases=cfg.get("tau_phases", False),
+                heavy_tails=cfg.get("heavy_tails", False), garbage_weight=cfg.get("garbage_weight", GARBAGE_WEIGHT),
+                extensions=tuple(cfg.get("extensions", ())))
 
 
 def resolve_config(model: str, features_path: Path = J_FEATURES, o_selection: Path = O_SELECTION) -> dict:
@@ -455,6 +469,11 @@ def main() -> None:
         if cfg.get("qb_change"):
             changes = qb_changes(starters, games[games["season"].between(FIRST_OUTCOME_SEASON, max(args.seasons))])
             flags["qb_change"] = expected_changes(changes, games, args.seasons) if args.qb_expected else changes
+    if cfg.get("kf"):
+        kf_seasons = list(range(FIRST_OUTCOME_SEASON, max(args.seasons) + 1))
+        strengths = {s: preseason_strength(load_season_draws(s, **draw_kwargs(cfg))) for s in kf_seasons}
+        srs = ds.load("cfb_coaches").groupby(["season", "team_id"])["srs"].mean()
+        flags["kf"] = kf_table(games, srs, strengths, tiered=cfg["kf"] == "tier")
     frames, metas = [], []
     for s in args.seasons:
         df, meta = run_season(s, games, pregame, lines, units=cfg["units"], form=cfg["form"],

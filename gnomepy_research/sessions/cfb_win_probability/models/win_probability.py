@@ -47,6 +47,9 @@ MOV_SCALE = 10.0
 MOV_SHRINK_GAMES = 2.3
 # Power-4 minus Group-of-5 side indicator, home minus away (+1 P4 home vs G5 away, -1 the reverse, 0 same tier).
 TIER_TERM = "tier_diff"
+# Scoreboard channel (margin_filter): pre-game home-minus-away margin-filter strength, per KF_SCALE points.
+KF_TERM = "kf_edge"
+KF_SCALE = 10.0
 # Fixed map from a past game's pregame net rating edge to the win probability the efficiency ratings implied, so
 # results_diff never depends on the outcome layer it feeds. Calibrated by logistic fit of outcomes on pregame
 # posterior-mean net edge over the 2020-21 training seasons (scale 7.96, hfa 0.28). A smaller scale (5.0, the first
@@ -88,6 +91,7 @@ PRIORS: dict[str, tuple[float, float]] = {
     "mov_diff": (0.0, 0.5),
     "mov_diff_late": (0.0, 0.5),
     "tier_diff": (0.0, 0.5),
+    "kf_edge": (0.0, 1.0),
 }
 # Margin model priors in points: a 0.1 net PPA edge is about 12 points, so edge-type log-odds priors
 # are scaled by 100/8; z-scored diffs (form, qb, option, physical) get N(0, 6); venue N(3, 3).
@@ -201,7 +205,7 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT,
                extensions: tuple[str, ...] = (), results: bool = False,
                qb_change: pd.DataFrame | None = None, mov: bool = False, mov_late: bool = False,
-               mov_shrink: bool = False, tier: bool = False) -> GameDraws:
+               mov_shrink: bool = False, tier: bool = False, kf: pd.DataFrame | None = None) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff). Draws with the "finish" extension add
     finish_edge, the home-minus-away finishing matchup in points per drive. results adds results_diff: each
@@ -320,6 +324,10 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
         td = (home_p4.astype(float) - away_p4.astype(float))[:, None, None]
         x = np.concatenate([x, np.broadcast_to(td, (*x.shape[:2], 1))], axis=-1)
         terms = terms + [TIER_TERM]
+    if kf is not None:
+        k = out[["game_id"]].merge(kf, on="game_id", how="left")["kf_diff"].fillna(0.0).to_numpy() / KF_SCALE
+        x = np.concatenate([x, np.broadcast_to(k[:, None, None], (*x.shape[:2], 1))], axis=-1)
+        terms = terms + [KF_TERM]
     if exclude_terms:
         unknown = [t for t in exclude_terms if t not in terms]
         if unknown:

@@ -2123,6 +2123,40 @@ Added 2026-10-16. Pre-registered before any Phase 22 backtest.
 - **Conclusion:** the G5 gap is preseason information we don't have, not how we use what we have.
 - **Next:** new G5 preseason information (to be discussed). Candidates are market-derived win totals, which cost some independence, or richer roster and coaching data.
 
+## Phase 23: Two evidence channels (models Npvk, Npvk0)
+
+Added 2026-10-16. Pre-registered before any Phase 23 backtest.
+
+**The math** (scratchpad `margin_math.py`, `kalman_margin.py`; 2021–24, 2025 not used):
+- **Margin model:** y = θ_h − θ_a + H·v + ε, with σ_g ≈ 13 points, and E[(y − m̂)²] = σ_g² + e².
+- **Matchup error e (Npv vs the open):** G5–G5 weeks 1–4: 11.6 vs 9.3. P4–G5 weeks 1–4: 9.2 vs 7.6. G5–G5 weeks 5–9: 9.3 vs 8.4.
+- **A closed-form margin Kalman filter** (Np's own preseason prior, four fixed constants) scores 0.5466 log loss, against Npv's 0.5456. Blended on outcomes, the weights are Npv 0.45 (t 4.6) and filter 0.65 (t 5.3), so the channels are complementary.
+- **The fused forecast,** with weights learned leave-one-season-out, scores 0.5416: −0.0040 vs Npv, closing 36% of the gap to the open.
+- **Prior map:** SRS ≈ 26·s + (1.5–2.8)·P4. The residual sd τ is about 6.4 points for P4 and 7.5 for G5.
+- **Tier gap:** in P4-vs-G5 games the P4 side wins by 19.2 points; Npv predicts 16.2 and the open 17.4.
+
+### Task 56: Scoreboard channel (`models/margin_filter.py`) as an outcome-layer term
+
+- **Filter:**
+  - Prior θ₀ ~ N(a·s + b·P4 + c, τ²_tier), where s = the efficiency model's preseason strength (the season's first-period draws, offense + defense summed).
+  - The prior map is fitted on end-of-season SRS from **earlier seasons only** (2020 uses its own, as training data only). Means are centred on the FBS average.
+  - Fixed constants: σ = 13, home edge 2.5, margin cap ±28, weekly drift Q = 1, FCS opponents N(−26, 36).
+- **Term:** `kf_edge` = the pre-game (θ̂_h − θ̂_a)/10, with prior N(0, 1). The outcome layer learns its weight next to the PPA edges.
+- **Configs:**
+  - `Npvk` = Npv + kf (tiered prior: P4 offset b and per-tier τ). This is Change 1 + Change 2.
+  - `Npvk0` = the same without the tier terms (b = 0, pooled τ). It isolates Change 2.
+
+### Task 57: Selection
+
+- **Pass rule:** pooled 2021–24 rolling backtests vs Npv, Δ ≤ −0.001 with P(worse) ≤ 0.10, and no season worse by more than 0.003.
+- **Adoption:** the passing candidate with the lowest pooled log loss.
+- **Reported:** tier × phase, the learned kf weight, and matchup error e by cell.
+- **Caveat:** the channel was found by studying 2021–24, so pooled 2021–24 flatters it.
+- **Confirmation:**
+  - The completed 2026 games again (a reused, weaker check): no worse than Npv by more than 0.003.
+  - The clean test is 2026 weeks 7+, logged before kickoff.
+  - 2025 is not used.
+
 ### Phase 21 (proposed): availability data
 
 - **No free historical college injury data exists.** Sports Info Solutions sells college injury data from 2016.
