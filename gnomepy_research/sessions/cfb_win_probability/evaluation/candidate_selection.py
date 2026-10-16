@@ -57,9 +57,12 @@ def main() -> None:
     ap.add_argument("--ref", default="Np")
     ap.add_argument("--candidates", nargs="+", required=True)
     ap.add_argument("--nested", nargs="*", default=[], help="A:B pairs where A extends B")
+    ap.add_argument("--seasons", type=int, nargs="+", default=[2021, 2022, 2023, 2024],
+                    help="seasons pooled by the rule (a pre-registered subset when a candidate cannot differ in some season)")
     args = ap.parse_args()
     models = [args.ref, *args.candidates]
     d = load(models, market_probs(DatasetStore().load("cfb_lines")).set_index("game_id")["p_open"])
+    d = d[d["season"].isin(args.seasons)]
     y = d["home_win"].to_numpy()
     phase = np.where(d["season_type"] == "postseason", "post", np.where(d["week"] <= 4, "wk1-4", np.where(d["week"] <= 9, "wk5-9", "wk10+")))
     cols = (*models, "p_open")
@@ -78,7 +81,8 @@ def main() -> None:
             passing.remove(a)
     chosen = min(passing, key=lambda c: res[c]["diff"]) if passing else args.ref
     text = "\n\n".join([
-        f"{args.label} selection vs {args.ref}: pooled 2021-24 rolling backtests, {len(d)} FBS games with an opening line; 2025 not read",
+        f"{args.label} selection vs {args.ref}: pooled {min(args.seasons)}-{str(max(args.seasons))[2:]} rolling backtests, "
+        f"{len(d)} FBS games with an opening line; 2025 not read",
         "log loss by phase:\n" + cuts.round(4).to_string(),
         "log loss by season:\n" + seasons.round(4).to_string(),
         "\n".join(f"{k}: diff {v['diff']:+.4f} [{v['lo95']:+.4f}, {v['hi95']:+.4f}] P(worse) {v['p_worse']:.2f}; per season "

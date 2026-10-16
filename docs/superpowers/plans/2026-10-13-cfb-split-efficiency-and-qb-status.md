@@ -2333,6 +2333,38 @@ Added 2026-10-16. Pre-registered before any Phase 26 backtest.
 - **Reported:** tier × phase, the learned kf weights, and the G5–G5 and P4–G5 weeks 1–4 cells.
 - **2026:** a light sanity check only.
 
+**Phase 26 result (2026-10-16, `results/backtest/p26_selection.txt`, scored with `candidate_selection --seasons 2022 2023 2024`): neither passes; Npvk stays live.**
+
+| Comparison vs Npvk (pooled 2022–24) | Δ log loss | 95% CI | P(worse) | 2022 | 2023 | 2024 |
+|---|---|---|---|---|---|---|
+| NpvkW | −0.0003 | [−0.0010, +0.0004] | 0.20 | −0.0005 | −0.0006 | +0.0002 |
+| NpvkWA | +0.0003 | [−0.0016, +0.0021] | 0.62 | +0.0016 | +0.0001 | −0.0008 |
+
+- **Plumbing:** NpvkW's 2021 predictions equal Npvk's exactly (max |Δp| = 0). NpvkWA differs in 2021 because the split is itself a change.
+- **Where the gain appeared:**
+
+  | Cell | Npvk | NpvkW | Open |
+  |---|---|---|---|
+  | Weeks 1–4 | 0.4776 | 0.4765 | |
+  | Weeks 1–4, G5–G5 | 0.6348 | 0.6326 | 0.6055 (8% of that cell's gap) |
+  | Weeks 1–4, P4–G5 | 0.3007 | 0.2990 | |
+  | Bowls | 0.6437 | 0.6411 | |
+
+- **Learned weights:**
+  - NpvkW `kf_edge`: +0.12, +0.29, +0.46 and +0.50 per 10 points.
+  - NpvkWA `kf_prior`: −0.31, −0.28, +0.23 and +0.33.
+  - NpvkWA `kf_evid`: +0.22, +0.28, +0.48 and +0.50.
+- **Why so little reached the forecast: the signal is throttled twice.**
+  - In the prior map, d ≈ 0.30.
+  - In the outcome layer, the channel has one all-season weight, about 0.48 per 10 points. That is about 0.41 of a point-for-point margin, since 1 point ≈ 1.81/15.5 logit.
+  - Net, one point of win-total strength moves the early forecast by about 0.12 points, against the 0.44–0.60 the residual regression says is available in weeks 1–4.
+  - NpvkWA cannot learn a larger prior weight: its prior term is trained on seasons whose prior had no win totals (2020–21), hence the negative weights in 2021–22.
+- **Implication:** the information is real, but the scoreboard prior is the wrong door. It has to enter where the early forecast is made, with its own weight learned on seasons that contain it. That means one of:
+  - an outcome-layer term on (w_h − w_a) that fades with games played;
+  - a win-total feature in the efficiency model's preseason projection.
+
+  Either is a new pre-registration, and its weight is learnable from only 1–3 seasons with win totals (2021+).
+
 ### Phase 21 (proposed): availability data
 
 - **No free historical college injury data exists.** Sports Info Solutions sells college injury data from 2016.
