@@ -59,3 +59,22 @@ def test_phase19_configs():
     assert MODEL_CONFIGS["Npx"]["extensions"] == (*base, "trans")
     assert MODEL_CONFIGS["Npc"]["extensions"] == (*base, "cont")
     assert MODEL_CONFIGS["Npxc"]["extensions"] == (*base, "trans", "cont")
+
+
+def test_mov_diffs_use_only_earlier_fbs_games():
+    from gnomepy_research.sessions.cfb_win_probability.models.win_probability import mov_diffs
+    k = pd.Timestamp("2024-09-01", tz="UTC")
+    games = pd.DataFrame({
+        "game_id": [1, 2, 3], "season": 2024, "kickoff": [k, k + pd.Timedelta(days=7), k + pd.Timedelta(days=14)],
+        "home_id": [1, 1, 2], "away_id": [2, 9, 1], "home_points": [30, 50, np.nan], "away_points": [10, 0, np.nan],
+        "completed": [True, True, False], "home_classification": "fbs", "away_classification": ["fbs", "fcs", "fbs"]})
+    # game 2: team 1 is +20 from game 1, the FCS side has no FBS games; game 3: team 2 lost its only FBS game by 20,
+    # team 1 won its only FBS game by 20 (the FCS rout is ignored)
+    np.testing.assert_allclose(mov_diffs(games, games), [0.0, 2.0, -4.0])
+
+
+def test_phase20_configs():
+    from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import OUTCOME_FLAGS
+    assert {"mov", "mov_late"} <= set(OUTCOME_FLAGS)
+    assert MODEL_CONFIGS["Npv"] == {**MODEL_CONFIGS["Np"], "mov": True}
+    assert MODEL_CONFIGS["Npvl"]["mov_late"] and MODEL_CONFIGS["Npvl"]["mov"]

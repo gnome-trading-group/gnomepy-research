@@ -2001,6 +2001,30 @@ Added 2026-10-16. Pre-registered before any Phase 19 result.
 - **Reported:** phases (weeks 1–4 is where the priors act), transition-team games, and per-season results.
 - **Confirmation:** any adopted change is confirmed once, together with any other adopted Phase 19–20 change, on the completed 2026 games before it goes live. 2025 is not used.
 
+## Phase 20: The scoreboard channel (models Npv, Npvl)
+
+Added 2026-10-16, pre-registered before any Phase 20 backtest.
+
+**Discovery** (scratchpad `residual_mining.py`, 2021–24 regular-season games where both teams had played at least 2 games, n=2574):
+- Of 11 season-to-date stats, the mean scoring margin against FBS opponents is the strongest predictor of outcomes beyond Np: +0.25 per sd, t = 3.4.
+- Fitted on 2021–22 and scored on 2023–24, it improves out-of-sample log loss by −0.0033. Np + open is −0.0112.
+- Leave-one-season-out: 2021 −0.0034, 2022 +0.0021, 2023 −0.0019, 2024 −0.0048.
+- By phase, it adds beyond Np in weeks 5–9 (t 2.5) and weeks 10+ (t 2.9) but not in weeks 3–4. It adds nothing beyond the open (t 0.2 and 1.0), so the market already prices it and Np lacks it.
+- Likely sources: turnovers, special teams, non-offensive scores, and blowout dominance. The drive channel down-weights garbage time to 0.3.
+- **Caveat:** this signal was found on 2021–24, so pooled 2021–24 results flatter it. The 2026 confirmation is the honest test.
+
+### Task 52: Margin term (outcome layer)
+
+- **Term:** `mov_diff` = home − away mean margin (per 10 points) over the team's completed games against FBS opponents that kicked off earlier in the same season; 0 when a team has none. Prior N(0, 0.5).
+- **Late variant:** `mov_diff_late` = mov_diff × (week ≥ 10 or postseason), prior N(0, 0.5).
+- **Configs:** `Npv` = Np + mov; `Npvl` = Np + mov + mov_late. Np's snapshots are used unchanged.
+
+### Task 53: Selection
+
+- **Rule:** the same as Task 51, against Np on the 2021–24 rolling backtests. Npvl is preferred over Npv only if it is a further ≥ 0.0005 better.
+- **Combining:** if both a Phase 19 and a Phase 20 candidate pass, the combination is built and scored under the same rule before confirmation.
+- **Confirmation:** once, on the completed 2026 games.
+
 ### Later phases (not started)
 
 - **Phase 18, honest uncertainty in the efficiency model:** a game-level noise term, and a heavy-tailed play likelihood or a success-rate channel. The target is claimed/actual uncertainty ≈ 1, with posterior sd shrinking through the season.

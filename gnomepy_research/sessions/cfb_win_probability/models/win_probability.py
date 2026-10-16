@@ -38,6 +38,10 @@ PHYSICAL_TERMS = ["talent_diff", "bluechip_diff", "trench_diff", "gap_x_edge"]
 FINISH_TERM = "finish_edge"
 RESULTS_TERM = "results_diff"
 QB_CHANGE_TERM = "qb_change_diff"
+# Season-to-date scoring margin against FBS opponents (home minus away, tens of points), and its weeks-10+ boost.
+MOV_TERM = "mov_diff"
+MOV_LATE_TERM = "mov_diff_late"
+MOV_SCALE = 10.0
 # Fixed map from a past game's pregame net rating edge to the win probability the efficiency ratings implied, so
 # results_diff never depends on the outcome layer it feeds. Calibrated by logistic fit of outcomes on pregame
 # posterior-mean net edge over the 2020-21 training seasons (scale 7.96, hfa 0.28). A smaller scale (5.0, the first
@@ -75,6 +79,9 @@ PRIORS: dict[str, tuple[float, float]] = {
     "results_diff": (0.0, 0.3),
     # Starter differs from the team's previous game, home minus away.
     "qb_change_diff": (0.0, 0.5),
+    # Season-to-date scoring margin vs FBS opponents, home minus away, per 10 points.
+    "mov_diff": (0.0, 0.5),
+    "mov_diff_late": (0.0, 0.5),
 }
 # Margin model priors in points: a 0.1 net PPA edge is about 12 points, so edge-type log-odds priors
 # are scaled by 100/8; z-scored diffs (form, qb, option, physical) get N(0, 6); venue N(3, 3).
@@ -187,7 +194,7 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                tau_phases: bool = False, exclude_terms: list[str] | None = None,
                heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT,
                extensions: tuple[str, ...] = (), results: bool = False,
-               qb_change: pd.DataFrame | None = None) -> GameDraws:
+               qb_change: pd.DataFrame | None = None, mov: bool = False, mov_late: bool = False) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff). Draws with the "finish" extension add
     finish_edge, the home-minus-away finishing matchup in points per drive. results adds results_diff: each
@@ -295,6 +302,12 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
         qc = (q["home_qb_change"] - q["away_qb_change"]).to_numpy()[:, None, None]
         x = np.concatenate([x, np.broadcast_to(qc, (*x.shape[:2], 1))], axis=-1)
         terms = terms + [QB_CHANGE_TERM]
+    if mov or mov_late:
+        md = mov_diffs(out, games)
+        late = ((out["season_type"] == "postseason") | (out["week"] > 9)).to_numpy(float)
+        cols = ([md] if mov else []) + ([md * late] if mov_late else [])
+        x = np.concatenate([x, np.broadcast_to(np.stack(cols, axis=-1)[:, None, :], (*x.shape[:2], len(cols)))], axis=-1)
+        terms = terms + [MOV_TERM] * mov + [MOV_LATE_TERM] * mov_late
     if exclude_terms:
         unknown = [t for t in exclude_terms if t not in terms]
         if unknown:
@@ -308,6 +321,24 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
         x = x[..., [terms.index(t) for t in keep_terms]]
         terms = list(keep_terms)
     return GameDraws(games=out, x=x, terms=terms)
+
+
+def mov_diffs(out: pd.DataFrame, games: pd.DataFrame) -> np.ndarray:
+    """Home minus away mean scoring margin (per MOV_SCALE points) over each team's completed games against FBS
+    opponents that kicked off before this game, same season; 0 for a team with none."""
+    g = games[games["season"].isin(out["season"].unique())]
+    done = g["completed"].fillna(False).astype(bool) & g["home_points"].notna() & g["away_points"].notna()
+    sides = []
+    for team, opp, pf, pa in (("home_id", "away", "home_points", "away_points"), ("away_id", "home", "away_points", "home_points")):
+        counted = done & (g[f"{opp}_classification"] == "fbs")
+        sides.append(pd.DataFrame({"game_id": g["game_id"], "season": g["season"], "kickoff": g["kickoff"], "team": g[team],
+                                   "m": np.where(counted, g[pf] - g[pa], 0.0), "n": counted.astype(float)}))
+    long = pd.concat(sides).sort_values(["season", "team", "kickoff", "game_id"])
+    grp = long.groupby(["season", "team"])
+    long["before"] = (grp["m"].cumsum() - long["m"]) / (grp["n"].cumsum() - long["n"]).replace(0, np.nan)
+    before = long.set_index(["game_id", "team"])["before"].fillna(0.0) / MOV_SCALE
+    pick = lambda col: before.reindex(pd.MultiIndex.from_arrays([out["game_id"], out[col]])).fillna(0.0).to_numpy()
+    return pick("home_id") - pick("away_id")
 
 
 def results_diffs(out: pd.DataFrame, periods: np.ndarray, surprises: pd.DataFrame) -> np.ndarray:

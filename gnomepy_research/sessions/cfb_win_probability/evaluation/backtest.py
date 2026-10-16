@@ -85,12 +85,15 @@ MODEL_CONFIGS["Km"] = {**MODEL_CONFIGS["K"], "learner": "moment"}
 MODEL_CONFIGS["Npx"] = {**MODEL_CONFIGS["Np"], "extensions": ("couple", "fcs", "finish", "prior", "trans")}
 MODEL_CONFIGS["Npc"] = {**MODEL_CONFIGS["Np"], "extensions": ("couple", "fcs", "finish", "prior", "cont")}
 MODEL_CONFIGS["Npxc"] = {**MODEL_CONFIGS["Np"], "extensions": ("couple", "fcs", "finish", "prior", "trans", "cont")}
+# Phase 20: season-to-date scoring margin vs FBS opponents as an outcome-layer term (and a weeks-10+ boost).
+MODEL_CONFIGS["Npv"] = {**MODEL_CONFIGS["Np"], "mov": True}
+MODEL_CONFIGS["Npvl"] = {**MODEL_CONFIGS["Np"], "mov": True, "mov_late": True}
 # Task 49: Np with the outcome layer trained without the 2020 COVID season.
 MODEL_CONFIGS["Np21"] = {**MODEL_CONFIGS["Np"], "outcome_first": 2021}
 O_SELECTION = RESULTS / "O_selection.json"
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
                 "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails", "garbage_weight",
-                "extensions", "results")
+                "extensions", "results", "mov", "mov_late")
 VALIDATION_SEASON = 2022
 F_CONFIG = RESULTS / "F_config.json"
 J_FEATURES = RESULTS / "J_features.json"
