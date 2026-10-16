@@ -56,6 +56,7 @@ def test_phase17_configs():
     assert MODEL_CONFIGS["Npm"] == {**MODEL_CONFIGS["Np"], "learner": "moment"}
     assert MODEL_CONFIGS["Npmt"]["moment_tier"] and MODEL_CONFIGS["Km"]["learner"] == "moment"
     assert "moment_tier" not in MODEL_CONFIGS["Npm"]
+    assert MODEL_CONFIGS["Np21"] == {**MODEL_CONFIGS["Np"], "outcome_first": 2021}
 
 
 def test_fit_moment_recovers_a_positive_edge_slope():

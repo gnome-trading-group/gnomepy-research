@@ -1923,6 +1923,27 @@ Added 2026-10-15. The diagnosis used 2021–24 only; 2025 is not used for any de
 - **Why not 2022 alone:** 2022's big favorites won 85.2% against about 90.5% in every other season (−2.4σ), so a tail fix chosen on 2022 would be rejected for the wrong reason. 2023–24 were already looked at during diagnosis, so the fresh test is the confirmation below.
 - **Confirmation (once):** `backtest 2026` for the adopted model and Np on the completed 2026 FBS games (weeks 0–7), which no model has been scored on. The adopted model goes live only if it is no worse than Np by more than 0.003 and its big-favorite calibration gap is smaller. 2025 is not used.
 
+**Result (2026-10-15, `results/backtest/p17_selection.txt`): rejected, Np kept.**
+
+| Comparison (pooled 2021–24) | Δ log loss | 95% CI | P(worse) | Big-favorite gap |
+|---|---|---|---|---|
+| Npm − Np | −0.0003 | [−0.0022, +0.0015] | 0.37 | worse: +3.7 pts vs +2.9 |
+| Npmt − Np | +0.0001 | | | |
+
+- **Npm learned κ ≈ 31 (an uncertainty penalty that divides η by about 2) and doubled the edge slopes.** Fitted honestly on mean edges, the outcome layer chooses more compression. So the compression is learned from the training outcomes, not only produced by averaging.
+- **The market is also under-confident on big favorites in 5 of 6 seasons:** actual − open = +1.4, −4.5, +3.1, +2.0, +1.8 and +4.7 points (2021–26).
+
+### Task 49: Outcome-layer training window without 2020 (pre-registered before running)
+
+- **Hypothesis:** every outcome-layer training window starts at 2020, the COVID season, with conference-only schedules, few games and weakly linked conferences. Its noisy edges teach the outcome layer to distrust big edges. Np trained on 2020 alone under-rated 2021's big favorites by 4.6 points.
+- **Config:** `Np21` = Np with the outcome layer trained on 2021..S−1 (`outcome_first=2021`). The efficiency snapshots are unchanged.
+- **Runs:** `backtest 2022 2023 2024 --model Np21`. 2021 has no 2020-free training data.
+- **Rule:** adopt Np21's window if, pooled over 2022–24 against Np:
+  - Δ ≤ −0.001, with P(worse) ≤ 0.10;
+  - no season worse than Np by more than 0.003;
+  - the big-favorite gap shrinks.
+- **Confirmation:** the same one-shot rule on the completed 2026 games as in Task 48.
+
 ### Later phases (not started)
 
 - **Phase 18, honest uncertainty in the efficiency model:** a game-level noise term, and a heavy-tailed play likelihood or a success-rate channel. The target is claimed/actual uncertainty ≈ 1, with posterior sd shrinking through the season.

@@ -80,6 +80,8 @@ MODEL_CONFIGS["O4"] = {**MODEL_CONFIGS["O2"], "extensions": ("couple", "fcs", "f
 MODEL_CONFIGS["Npm"] = {**MODEL_CONFIGS["Np"], "learner": "moment"}
 MODEL_CONFIGS["Npmt"] = {**MODEL_CONFIGS["Npm"], "moment_tier": True}
 MODEL_CONFIGS["Km"] = {**MODEL_CONFIGS["K"], "learner": "moment"}
+# Task 49: Np with the outcome layer trained without the 2020 COVID season.
+MODEL_CONFIGS["Np21"] = {**MODEL_CONFIGS["Np"], "outcome_first": 2021}
 O_SELECTION = RESULTS / "O_selection.json"
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
                 "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails", "garbage_weight",
@@ -273,8 +275,9 @@ def _bayes_season(season, games, train_seasons, units, form, qb=None, flags=None
 def run_season(season: int, games: pd.DataFrame, pregame: pd.DataFrame, lines: pd.DataFrame,
                units: tuple[str, ...] = UNITS_ALL, form: bool = False, learner: str = "bayes",
                qb: pd.DataFrame | None = None, config: dict | None = None,
-               flags: dict | None = None, recal: bool = False, moment_tier: bool = False) -> tuple[pd.DataFrame, dict]:
-    train_seasons = list(range(FIRST_OUTCOME_SEASON, season))
+               flags: dict | None = None, recal: bool = False, moment_tier: bool = False,
+               outcome_first: int = FIRST_OUTCOME_SEASON) -> tuple[pd.DataFrame, dict]:
+    train_seasons = list(range(outcome_first, season))
     if learner == "catboost":
         train, test, extra = _catboost_season(season, games, train_seasons)
     elif learner == "residual":
@@ -444,7 +447,8 @@ def main() -> None:
     for s in args.seasons:
         df, meta = run_season(s, games, pregame, lines, units=cfg["units"], form=cfg["form"],
                               learner=cfg["learner"], qb=qb, config=f_config,
-                              flags=flags, recal=cfg.get("recal", False), moment_tier=cfg.get("moment_tier", False))
+                              flags=flags, recal=cfg.get("recal", False), moment_tier=cfg.get("moment_tier", False),
+                              outcome_first=cfg.get("outcome_first", FIRST_OUTCOME_SEASON))
         frames.append(df)
         metas.append(meta)
         print(f"{s}: {len(df)} games", json.dumps(meta, default=str), flush=True)
