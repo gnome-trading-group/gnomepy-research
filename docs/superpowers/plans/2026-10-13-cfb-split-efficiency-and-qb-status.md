@@ -2025,6 +2025,24 @@ Added 2026-10-16, pre-registered before any Phase 20 backtest.
 - **Combining:** if both a Phase 19 and a Phase 20 candidate pass, the combination is built and scored under the same rule before confirmation.
 - **Confirmation:** once, on the completed 2026 games.
 
+**Result (2026-10-16, `results/backtest/p20_selection.txt`): Npv passes.**
+
+| Comparison (pooled 2021–24) | Δ log loss | 95% CI | P(worse) | 2021 | 2022 | 2023 | 2024 |
+|---|---|---|---|---|---|---|---|
+| Npv − Np | −0.0016 | [−0.0032, 0.0000] | 0.03 | −0.0018 | +0.0009 | −0.0015 | −0.0039 |
+| Npvl − Np | −0.0020 | | | | | | |
+| Npvl − Npv | −0.0004 | | | | | | |
+
+- **Npvl** is not a further 0.0005 better than Npv, so Npv is chosen.
+- **The gain is mostly in weeks 5–9** (0.5732 → 0.5704).
+- **In 2023, Npv beats the open** (0.5192 vs 0.5206).
+- **Next:** combine with any passing Phase 19 candidate, then the one-shot 2026 confirmation.
+
+**NFL draft departures (Phase 20 data probe, scratchpad `draft_test.py`, 2019–26 picks from Wikipedia): no information beyond Np.**
+- t ≤ 1.3 in every phase, and the sign is positive: draft value marks strong programs that talent and returning production already capture.
+- Leave-one-season-out, it hurts: +0.0005 to +0.0021.
+- **Decision:** no draft dataset in gnome-pipelines.
+
 ### Later phases (not started)
 
 - **Phase 18, honest uncertainty in the efficiency model:** a game-level noise term, and a heavy-tailed play likelihood or a success-rate channel. The target is claimed/actual uncertainty ≈ 1, with posterior sd shrinking through the season.

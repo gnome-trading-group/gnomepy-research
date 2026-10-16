@@ -1,0 +1,22 @@
+p20 selection vs Np: pooled 2021-24 rolling backtests, 3129 FBS games with an opening line; 2025 not read
+
+log loss by phase:
+           Np     Npv    Npvl    open
+all    0.5484  0.5468  0.5465  0.5355
+wk1-4  0.4843  0.4841  0.4838  0.4732
+wk5-9  0.5732  0.5704  0.5696  0.5532
+wk10+  0.5550  0.5535  0.5534  0.5473
+post   0.6637  0.6629  0.6629  0.6542
+
+log loss by season:
+          Np     Npv    Npvl    open
+2021  0.5622  0.5603  0.5573  0.5326
+2022  0.5635  0.5645  0.5630  0.5527
+2023  0.5207  0.5192  0.5214  0.5206
+2024  0.5481  0.5442  0.5449  0.5366
+
+Npv: diff -0.0016 [-0.0032, +0.0000] P(worse) 0.03; per season 2021 -0.0018, 2022 +0.0009, 2023 -0.0015, 2024 -0.0039; passes: True
+Npvl: diff -0.0020 [-0.0045, +0.0005] P(worse) 0.06; per season 2021 -0.0049, 2022 -0.0005, 2023 +0.0007, 2024 -0.0032; passes: True
+Npvl vs Npv: diff -0.0004 [-0.0024, +0.0015] P(worse) 0.33; per season 2021 -0.0031, 2022 -0.0014, 2023 +0.0021, 2024 +0.0007; passes: False
+
+chosen: Npv
