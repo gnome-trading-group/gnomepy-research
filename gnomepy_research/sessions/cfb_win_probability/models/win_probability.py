@@ -50,6 +50,10 @@ TIER_TERM = "tier_diff"
 # Scoreboard channel (margin_filter): pre-game home-minus-away margin-filter strength, per KF_SCALE points.
 KF_TERM = "kf_edge"
 KF_SCALE = 10.0
+# kf_split: the channel as its season-start prior part, the evidence beyond it, and that evidence again in weeks 1-4.
+KF_SPLIT_TERMS = ["kf_prior", "kf_evid", "kf_evid_early"]
+# Season-to-date turnover margin per game, home minus away (turnovers regress: expected weight < 0).
+TO_TERM = "to_diff"
 # Fixed map from a past game's pregame net rating edge to the win probability the efficiency ratings implied, so
 # results_diff never depends on the outcome layer it feeds. Calibrated by logistic fit of outcomes on pregame
 # posterior-mean net edge over the 2020-21 training seasons (scale 7.96, hfa 0.28). A smaller scale (5.0, the first
@@ -92,6 +96,10 @@ PRIORS: dict[str, tuple[float, float]] = {
     "mov_diff_late": (0.0, 0.5),
     "tier_diff": (0.0, 0.5),
     "kf_edge": (0.0, 1.0),
+    "kf_prior": (0.0, 1.0),
+    "kf_evid": (0.0, 1.0),
+    "kf_evid_early": (0.0, 1.0),
+    "to_diff": (0.0, 0.5),
 }
 # Margin model priors in points: a 0.1 net PPA edge is about 12 points, so edge-type log-odds priors
 # are scaled by 100/8; z-scored diffs (form, qb, option, physical) get N(0, 6); venue N(3, 3).
@@ -205,7 +213,8 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT,
                extensions: tuple[str, ...] = (), results: bool = False,
                qb_change: pd.DataFrame | None = None, mov: bool = False, mov_late: bool = False,
-               mov_shrink: bool = False, tier: bool = False, kf: pd.DataFrame | None = None) -> GameDraws:
+               mov_shrink: bool = False, tier: bool = False, kf: pd.DataFrame | None = None, kf_split: bool = False,
+               to: pd.DataFrame | None = None) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff). Draws with the "finish" extension add
     finish_edge, the home-minus-away finishing matchup in points per drive. results adds results_diff: each
@@ -325,9 +334,22 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
         x = np.concatenate([x, np.broadcast_to(td, (*x.shape[:2], 1))], axis=-1)
         terms = terms + [TIER_TERM]
     if kf is not None:
-        k = out[["game_id"]].merge(kf, on="game_id", how="left")["kf_diff"].fillna(0.0).to_numpy() / KF_SCALE
-        x = np.concatenate([x, np.broadcast_to(k[:, None, None], (*x.shape[:2], 1))], axis=-1)
-        terms = terms + [KF_TERM]
+        kk = out[["game_id"]].merge(kf, on="game_id", how="left").fillna(0.0)
+        total = kk["kf_diff"].to_numpy() / KF_SCALE
+        if kf_split:
+            prior = kk["kf_prior"].to_numpy() / KF_SCALE
+            early = ((out["season_type"] == "regular") & (out["week"] <= EARLY_LAST_WEEK)).to_numpy(float)
+            cols, names = [prior, total - prior, (total - prior) * early], KF_SPLIT_TERMS
+        else:
+            cols, names = [total], [KF_TERM]
+        k = np.stack(cols, axis=-1)[:, None, :]
+        x = np.concatenate([x, np.broadcast_to(k, (*x.shape[:2], len(cols)))], axis=-1)
+        terms = terms + names
+    if to is not None:
+        tt = out[["game_id"]].merge(to, on="game_id", how="left").fillna(0.0)
+        td = (tt["home_to"] - tt["away_to"]).to_numpy()[:, None, None]
+        x = np.concatenate([x, np.broadcast_to(td, (*x.shape[:2], 1))], axis=-1)
+        terms = terms + [TO_TERM]
     if exclude_terms:
         unknown = [t for t in exclude_terms if t not in terms]
         if unknown:

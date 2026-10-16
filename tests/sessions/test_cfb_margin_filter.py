@@ -71,3 +71,52 @@ def test_kf_term_wiring_and_configs(tmp_path):
     assert MODEL_CONFIGS["Npvk"] == {**MODEL_CONFIGS["Npv"], "kf": "tier"}
     assert MODEL_CONFIGS["Npvk0"]["kf"] == "flat"
     assert draw_kwargs(MODEL_CONFIGS["Npvk"])["extensions"] == ("couple", "fcs", "finish", "prior")
+
+
+def test_prior_part_stays_at_season_start():
+    games = schedule([(1, 1, 1, 2, 10, 0, True), (2, 2, 1, 2, np.nan, np.nan, False)])
+    out = mf.run_filter(games, {1: (3.0, 36.0), 2: (-1.0, 36.0)}).set_index("game_id")
+    assert out.loc[1, "kf_prior"] == 4.0 and out.loc[2, "kf_prior"] == 4.0      # prior part frozen
+    assert out.loc[2, "kf_diff"] != 4.0                                          # total moved with the result
+
+
+def test_tier_offset_from_games_recovers_a_shrunk_offset():
+    strength = pd.DataFrame({"season": 2023, "team_id": [1, 2, 3, 4], "s": [0.2, 0.1, -0.1, -0.2], "p4": [True, True, False, False]})
+    m = {"a": 26.0}
+    rows, gid = [], 0
+    for h, a in ((1, 3), (2, 4), (3, 1), (4, 2)):
+        gid += 1
+        sign = 1.0 if h in (1, 2) else -1.0
+        s = dict(zip(strength.team_id, strength.s))
+        margin = 26.0 * (s[h] - s[a]) + mf.HFA + sign * 7.0                      # true P4 offset 7 points
+        rows.append({"game_id": gid, "season": 2023, "season_type": "regular", "completed": True, "home_id": h, "away_id": a,
+                     "home_points": 50 + margin, "away_points": 50.0, "neutral_site": False})
+    b = mf.tier_offset_from_games(strength, pd.DataFrame(rows), m, 2024)
+    assert b == pytest.approx(4 * 7.0 / (4 + mf.K_TIER))
+    assert mf.tier_offset_from_games(strength, pd.DataFrame(rows), m, 2023) == 0.0   # only earlier seasons count
+
+
+def test_turnover_margins_use_only_earlier_games():
+    games = pd.DataFrame({"game_id": [1, 2], "season": 2024, "kickoff": [K, K + pd.Timedelta(days=7)], "home_id": [1, 1], "away_id": [2, 2]})
+    drives = pd.DataFrame({"game_id": [1, 1, 1, 2], "offense_id": [1, 2, 2, 1], "defense_id": [2, 1, 1, 2],
+                           "drive_result": ["INT", "FUMBLE", "TD", "INT TD"]})
+    out = mf.turnover_margins(drives, games).set_index("game_id")
+    assert out.loc[1].tolist() == [0.0, 0.0]                  # nothing earlier
+    assert out.loc[2].tolist() == [0.0, 0.0]                  # game 1: team 1 gave 1, took 1 -> 0; team 2 the same
+    drives.loc[2, "drive_result"] = "INT"                     # team 2 now gave 2 in game 1
+    out = mf.turnover_margins(drives, games).set_index("game_id")
+    assert out.loc[2].tolist() == [1.0, -1.0]
+
+
+def test_split_and_turnover_terms(tmp_path):
+    from gnomepy_research.sessions.cfb_win_probability.models.win_probability import KF_SPLIT_TERMS, TO_TERM
+    model_k.TestPhaseTerms.write(tmp_path)
+    kf = pd.DataFrame({"game_id": [1, 2, 3], "kf_diff": [5.0, -10.0, 0.0], "kf_var": 50.0, "kf_prior": [2.0, -4.0, 1.0]})
+    to = pd.DataFrame({"game_id": [1, 2, 3], "home_to": [0.5, 0.0, -1.0], "away_to": [0.0, 1.0, 0.0]})
+    gd = game_draws(TestResultsTerm.games(), [SEASON], directory=tmp_path, units=UNITS_SPLIT, kf=kf, kf_split=True, to=to)
+    assert gd.terms[-4:] == [*KF_SPLIT_TERMS, TO_TERM]
+    x = {g: gd.x[i, 0, -4:] for i, g in enumerate(gd.games["game_id"])}
+    np.testing.assert_allclose(x[1], [0.2, 0.3, 0.3, 0.5])          # week 1: early evidence = evidence
+    np.testing.assert_allclose(x[2], [-0.4, -0.6, -0.6, -1.0])      # week 4: still early
+    np.testing.assert_allclose(x[3], [0.1, -0.1, 0.0, -1.0])        # week 5: not early
+    assert MODEL_CONFIGS["NpvkA"]["kf_split"] and MODEL_CONFIGS["NpvkB"]["to"] and MODEL_CONFIGS["NpvkC"]["kf"] == "games"

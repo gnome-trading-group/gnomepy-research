@@ -2176,6 +2176,37 @@ Added 2026-10-16. Pre-registered before any Phase 23 backtest.
 
 **Remaining gap:** early-season G5 and P4-vs-G5 games, which are limited by the prior. The next lever is new preseason and late-summer information.
 
+## Phase 24: Why Npvk worked, and three fixes (NpvkA, NpvkB, NpvkC)
+
+Added 2026-10-16. Pre-registered before any Phase 24 backtest.
+
+**Diagnosis** (scratchpad `npvk_why.py`, 2021–24):
+- **The gain is all from week 5 on:** weeks 5–9 −2.12, weeks 10+ −2.78, weeks 1–4 +0.49.
+- **Channel correlation** is 0.97 in weeks 1–4 and 0.94–0.95 after, so fusion has something to work with only once evidence accumulates.
+- **Teams with 1–2 games played lose** (+0.0039/game, n=431); 3+ games gain (−0.002/game). The outcome layer gives the channel one weight all season, although after 1–2 games its own sd is still about 9 points.
+- **Turnovers and non-offensive points explain only 2%** of the channel disagreement. Both Npv and Npvk over-credit past turnover margin: −0.66 points per sd (t ≈ −2.2).
+- **The channel's tier gap rests on the prior:** 82% of P4–G5 games are in weeks 1–4. In 2021 the SRS-fitted P4 offset came from 2020, which had only 16 cross-tier games, and the prior put the average P4 team only 4.9 points better than the average G5 team, against 11.1 in truth. Capping innovations instead of raw margins is a minor effect (+12.9 → +13.8 against +19.0).
+
+### Task 58: Candidates (baseline Npvk)
+
+- **`NpvkA` (`kf_split`):** replaces `kf_edge` with three terms, each prior N(0, 1):
+  - `kf_prior`, the season-start prior part of the channel;
+  - `kf_evid` = kf_diff − kf_prior, the game evidence;
+  - `kf_evid_early`, the same evidence in regular weeks ≤ 4.
+
+  The outcome layer learns how much the evidence is worth by phase.
+- **`NpvkB` (`to`):** `to_diff` = home − away mean turnover margin per game (takeaways − giveaways from drive results) over earlier games this season. Prior N(0, 0.5). The weight is expected to be negative.
+- **`NpvkC` (`kf="games"`):**
+  - The prior map is fitted untiered on SRS, keeping per-tier τ.
+  - The P4 offset b is the P4 side's margin beyond a·Δs + home edge over all **earlier** seasons' regular-season cross-tier games, shrunk by K_TIER = 32 games: b = Σ residual / (n + 32), where 32 ≈ (17-point cross-tier margin sd)² / (3-point prior sd)².
+
+### Task 59: Selection
+
+- **Pass rule:** pooled 2021–24 rolling backtests vs Npvk, Δ ≤ −0.001 with P(worse) ≤ 0.10, and no season worse by more than 0.003.
+- **More than one passes:** their union is built and scored under the same rule, and adopted only if a further ≥ 0.0005 better than the best single.
+- **Reported:** tier × phase, the games-played buckets, and the learned weights.
+- **2026:** a light sanity check only, per the user.
+
 ### Phase 21 (proposed): availability data
 
 - **No free historical college injury data exists.** Sports Info Solutions sells college injury data from 2016.

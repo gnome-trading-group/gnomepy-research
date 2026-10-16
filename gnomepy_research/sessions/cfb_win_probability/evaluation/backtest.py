@@ -34,7 +34,7 @@ from gnomepy_research.sessions.cfb_win_probability.models.residual_wp import (
     FEATURE_SETS, GRID_DEPTHS, GRID_PARAMS, attach_baseline, c_baseline, fit_residual, sigmoid)
 from gnomepy_research.sessions.cfb_win_probability.models.tail_calibrator import (
     TailCalibrator, bootstrap_ci, fit_tail_calibrator)
-from gnomepy_research.sessions.cfb_win_probability.models.margin_filter import kf_table, preseason_strength
+from gnomepy_research.sessions.cfb_win_probability.models.margin_filter import kf_table, preseason_strength, turnover_margins
 from gnomepy_research.sessions.cfb_win_probability.models.win_probability import (
     N_FIT_DRAWS, apply_recal, cross_fitted_recal, fit, fit_margin, fit_moment, game_draws, load_season_draws,
     physical_match_rate, subset_draws)
@@ -97,12 +97,17 @@ MODEL_CONFIGS["Npvg"] = {**MODEL_CONFIGS["Npv"], "extensions": ("couple", "fcs",
 # Phase 23: scoreboard channel (margin Kalman filter) as an outcome-layer term; "tier" = P4 offset + per-tier prior width.
 MODEL_CONFIGS["Npvk"] = {**MODEL_CONFIGS["Npv"], "kf": "tier"}
 MODEL_CONFIGS["Npvk0"] = {**MODEL_CONFIGS["Npv"], "kf": "flat"}
+# Phase 24 on Npvk: A evidence-weighted channel (prior / evidence / early evidence), B turnover regression,
+# C P4 offset from earlier seasons' cross-tier games.
+MODEL_CONFIGS["NpvkA"] = {**MODEL_CONFIGS["Npvk"], "kf_split": True}
+MODEL_CONFIGS["NpvkB"] = {**MODEL_CONFIGS["Npvk"], "to": True}
+MODEL_CONFIGS["NpvkC"] = {**MODEL_CONFIGS["Npvk"], "kf": "games"}
 # Task 49: Np with the outcome layer trained without the 2020 COVID season.
 MODEL_CONFIGS["Np21"] = {**MODEL_CONFIGS["Np"], "outcome_first": 2021}
 O_SELECTION = RESULTS / "O_selection.json"
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
                 "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails", "garbage_weight",
-                "extensions", "results", "mov", "mov_late", "mov_shrink", "tier")
+                "extensions", "results", "mov", "mov_late", "mov_shrink", "tier", "kf_split")
 VALIDATION_SEASON = 2022
 F_CONFIG = RESULTS / "F_config.json"
 J_FEATURES = RESULTS / "J_features.json"
@@ -473,7 +478,9 @@ def main() -> None:
         kf_seasons = list(range(FIRST_OUTCOME_SEASON, max(args.seasons) + 1))
         strengths = {s: preseason_strength(load_season_draws(s, **draw_kwargs(cfg))) for s in kf_seasons}
         srs = ds.load("cfb_coaches").groupby(["season", "team_id"])["srs"].mean()
-        flags["kf"] = kf_table(games, srs, strengths, tiered=cfg["kf"] == "tier")
+        flags["kf"] = kf_table(games, srs, strengths, tiered={"tier": "srs"}.get(cfg["kf"], cfg["kf"]))
+    if cfg.get("to"):
+        flags["to"] = turnover_margins(ds.load("cfb_drives"), games)
     frames, metas = [], []
     for s in args.seasons:
         df, meta = run_season(s, games, pregame, lines, units=cfg["units"], form=cfg["form"],
