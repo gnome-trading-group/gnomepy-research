@@ -2043,6 +2043,23 @@ Added 2026-10-16, pre-registered before any Phase 20 backtest.
 - Leave-one-season-out, it hurts: +0.0005 to +0.0021.
 - **Decision:** no draft dataset in gnome-pipelines.
 
+**Phase 19 result (2026-10-16, `results/backtest/p19_selection.txt`): none pass; Np kept.**
+
+| Comparison (pooled 2021–24) | Δ log loss | 95% CI | P(worse) | 2021 | 2022 | 2023 | 2024 |
+|---|---|---|---|---|---|---|---|
+| Npx − Np | +0.0006 | [−0.0004, +0.0016] | 0.86 | | | | |
+| Npc − Np | −0.0009 | [−0.0020, +0.0001] | 0.04 | −0.0011 | −0.0001 | −0.0020 | −0.0005 |
+| Npxc − Np | −0.0006 | | | | | | |
+
+- **Npx:** weeks 1–4 worse (0.4869 vs 0.4843).
+- **Npc:** better in every season, but short of the −0.001 bar, so it is not adopted. It goes on a watch list to retest on live 2026 data; its gain is in weeks 5–9.
+- **Hyper fits:** max r̂ 1.008–1.024 and min ESS 236–481, comparable to Np's own fits.
+
+**Confirmation criterion for Npv (written before the sealed 2026 runs are read):**
+- **Data:** `backtest 2026 --model Np` / `--model Npv` on completed 2026 FBS games.
+- **Go-live rule:** Npv goes live if its log loss is no worse than Np's by more than 0.003, the Task 48 threshold.
+- **Report:** the paired difference with its CI, and the weeks 5+ subset.
+
 ### Phase 21 (proposed): availability data
 
 - **No free historical college injury data exists.** Sports Info Solutions sells college injury data from 2016.
