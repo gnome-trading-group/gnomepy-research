@@ -88,12 +88,16 @@ MODEL_CONFIGS["Npxc"] = {**MODEL_CONFIGS["Np"], "extensions": ("couple", "fcs", 
 # Phase 20: season-to-date scoring margin vs FBS opponents as an outcome-layer term (and a weeks-10+ boost).
 MODEL_CONFIGS["Npv"] = {**MODEL_CONFIGS["Np"], "mov": True}
 MODEL_CONFIGS["Npvl"] = {**MODEL_CONFIGS["Np"], "mov": True, "mov_late": True}
+# Phase 22 on Npv: margin shrunk by games played (Npv2), a P4-vs-G5 tier offset (Npvs), a wider G5 prior (Npvg).
+MODEL_CONFIGS["Npv2"] = {**MODEL_CONFIGS["Npv"], "mov_shrink": True}
+MODEL_CONFIGS["Npvs"] = {**MODEL_CONFIGS["Npv"], "tier": True}
+MODEL_CONFIGS["Npvg"] = {**MODEL_CONFIGS["Npv"], "extensions": ("couple", "fcs", "finish", "prior", "g5")}
 # Task 49: Np with the outcome layer trained without the 2020 COVID season.
 MODEL_CONFIGS["Np21"] = {**MODEL_CONFIGS["Np"], "outcome_first": 2021}
 O_SELECTION = RESULTS / "O_selection.json"
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
                 "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails", "garbage_weight",
-                "extensions", "results", "mov", "mov_late")
+                "extensions", "results", "mov", "mov_late", "mov_shrink", "tier")
 VALIDATION_SEASON = 2022
 F_CONFIG = RESULTS / "F_config.json"
 J_FEATURES = RESULTS / "J_features.json"

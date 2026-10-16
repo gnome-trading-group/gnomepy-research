@@ -2070,6 +2070,41 @@ Added 2026-10-16, pre-registered before any Phase 20 backtest.
 - The open is at 0.4290 on these mostly early-season games.
 - Npc stays on the watch list.
 
+## Phase 22: Why the Group of 5 is hard, and three fixes on Npv
+
+Added 2026-10-16. Pre-registered before any Phase 22 backtest.
+
+**Diagnosis** (scratchpad `npv_anatomy.py`, `why_g5.py`; 2020–24, with 2025 not used):
+- **Where the gap lives:** G5-vs-G5 games hold about 97% of Npv's 2022–24 gap to the open (13.8 of 14.2). The gap is +0.028/game in weeks 1–4, +0.018 in weeks 5–9 and +0.005 in weeks 10+.
+- **P4 games are not the problem:** in P4–P4 and P4–G5 games, Npv and the open carry equal information (blend weights about 0.5/0.5). In G5–G5 games the weights are 0.16 vs 0.87.
+- **Cause, the preseason prior:**
+  - Our prior orders G5 teams much worse than P4 teams: correlation with end-of-season SRS 0.55 vs 0.67. ESPN FPI preseason gets 0.58 vs 0.66.
+  - Talent and recruiting separate P4 teams (0.55, 0.54) but are nearly flat for G5 (0.11, 0.18).
+  - G5-specific prior weights don't help out of sample (0.571 vs 0.574).
+- **Cause, how long that prior lasts:**
+  - G5 teams get the same prior width as P4, so their ratings start 30% too bunched and are still 19% bunched at season's end, against an equal true spread (8.6 SRS points in both tiers).
+  - It takes about 9 games to reach reliability 0.8.
+- **Ruled out:** data quality, game signal-to-noise, home field, altitude, Hawai'i, calibration (tier slopes about 1), and team-attribute bias.
+- **P4 vs G5:** the P4 side won 82.3%; Npv said 78.5% and the open 80.4%. Npv is low in 3 of 4 seasons.
+
+### Task 54: Candidates (baseline Npv)
+
+- **`Npv2`:** the margin term weighted by n/(n + 2.3) for a team's n FBS games played (`mov_shrink`). k = 2.3 is (one-game noise 13 pts / team spread 8.6 pts)², i.e. the number of games at which a mean margin is half signal. It targets the early-season losses where one or two lopsided results dominated.
+- **`Npvs`:** a tier offset term `tier_diff` = P4(home) − P4(away), with prior N(0, 0.5). P4 means the SEC, Big Ten, Big 12, ACC, the Pac-12 through 2023, and Notre Dame. It targets the under-rated P4 side.
+- **`Npvg`:** Npv + the existing `g5` efficiency extension, a learned uncertainty flag that widens G5 teams' preseason prior, so their games take over sooner.
+  - Phase 16 rejected it on 2022 alone, the upset year.
+  - Snapshots: 2020–22 already exist; 2023–24 are being built (hypers 2019–2022 and 2019–2023).
+
+### Task 55: Selection
+
+- **Pass rule:** pooled 2021–24 rolling backtests vs Npv, Δ ≤ −0.001 with P(worse) ≤ 0.10, and no season worse by more than 0.003.
+- **More than one passes:** the union of the passing changes is built and adopted only if it beats the best single by a further ≥ 0.0005 under the same rule. Otherwise the best single is adopted.
+- **Reported:** G5–G5, P4–G5 and P4–P4 cuts by phase.
+- **Confirmation:**
+  - The adopted change must be no worse than Npv by more than 0.003 on the completed 2026 games. That is a second use of those games (they confirmed Npv), so it is a weaker check.
+  - The clean test is 2026 weeks 7+, logged before kickoff.
+  - 2025 is not used.
+
 ### Phase 21 (proposed): availability data
 
 - **No free historical college injury data exists.** Sports Info Solutions sells college injury data from 2016.

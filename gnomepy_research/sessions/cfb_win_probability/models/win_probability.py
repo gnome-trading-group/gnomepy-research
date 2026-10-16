@@ -42,6 +42,11 @@ QB_CHANGE_TERM = "qb_change_diff"
 MOV_TERM = "mov_diff"
 MOV_LATE_TERM = "mov_diff_late"
 MOV_SCALE = 10.0
+# mov_shrink weights a team's mean margin by n / (n + MOV_SHRINK_GAMES): one game's margin noise (about 13 points)
+# against the spread of team quality (about 8.6 points SRS) makes an n-game mean half signal at n = 2.3.
+MOV_SHRINK_GAMES = 2.3
+# Power-4 minus Group-of-5 side indicator, home minus away (+1 P4 home vs G5 away, -1 the reverse, 0 same tier).
+TIER_TERM = "tier_diff"
 # Fixed map from a past game's pregame net rating edge to the win probability the efficiency ratings implied, so
 # results_diff never depends on the outcome layer it feeds. Calibrated by logistic fit of outcomes on pregame
 # posterior-mean net edge over the 2020-21 training seasons (scale 7.96, hfa 0.28). A smaller scale (5.0, the first
@@ -82,6 +87,7 @@ PRIORS: dict[str, tuple[float, float]] = {
     # Season-to-date scoring margin vs FBS opponents, home minus away, per 10 points.
     "mov_diff": (0.0, 0.5),
     "mov_diff_late": (0.0, 0.5),
+    "tier_diff": (0.0, 0.5),
 }
 # Margin model priors in points: a 0.1 net PPA edge is about 12 points, so edge-type log-odds priors
 # are scaled by 100/8; z-scored diffs (form, qb, option, physical) get N(0, 6); venue N(3, 3).
@@ -194,7 +200,8 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                tau_phases: bool = False, exclude_terms: list[str] | None = None,
                heavy_tails: bool = False, garbage_weight: float = GARBAGE_WEIGHT,
                extensions: tuple[str, ...] = (), results: bool = False,
-               qb_change: pd.DataFrame | None = None, mov: bool = False, mov_late: bool = False) -> GameDraws:
+               qb_change: pd.DataFrame | None = None, mov: bool = False, mov_late: bool = False,
+               mov_shrink: bool = False, tier: bool = False) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff). Draws with the "finish" extension add
     finish_edge, the home-minus-away finishing matchup in points per drive. results adds results_diff: each
@@ -303,11 +310,16 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
         x = np.concatenate([x, np.broadcast_to(qc, (*x.shape[:2], 1))], axis=-1)
         terms = terms + [QB_CHANGE_TERM]
     if mov or mov_late:
-        md = mov_diffs(out, games)
+        md = mov_diffs(out, games, shrink=MOV_SHRINK_GAMES if mov_shrink else 0.0)
         late = ((out["season_type"] == "postseason") | (out["week"] > 9)).to_numpy(float)
         cols = ([md] if mov else []) + ([md * late] if mov_late else [])
         x = np.concatenate([x, np.broadcast_to(np.stack(cols, axis=-1)[:, None, :], (*x.shape[:2], len(cols)))], axis=-1)
         terms = terms + [MOV_TERM] * mov + [MOV_LATE_TERM] * mov_late
+    if tier:
+        home_p4, away_p4 = p4_sides(out)
+        td = (home_p4.astype(float) - away_p4.astype(float))[:, None, None]
+        x = np.concatenate([x, np.broadcast_to(td, (*x.shape[:2], 1))], axis=-1)
+        terms = terms + [TIER_TERM]
     if exclude_terms:
         unknown = [t for t in exclude_terms if t not in terms]
         if unknown:
@@ -323,9 +335,10 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
     return GameDraws(games=out, x=x, terms=terms)
 
 
-def mov_diffs(out: pd.DataFrame, games: pd.DataFrame) -> np.ndarray:
+def mov_diffs(out: pd.DataFrame, games: pd.DataFrame, shrink: float = 0.0) -> np.ndarray:
     """Home minus away mean scoring margin (per MOV_SCALE points) over each team's completed games against FBS
-    opponents that kicked off before this game, same season; 0 for a team with none."""
+    opponents that kicked off before this game, same season; 0 for a team with none. shrink > 0 weights an n-game
+    mean by n / (n + shrink)."""
     g = games[games["season"].isin(out["season"].unique())]
     done = g["completed"].fillna(False).astype(bool) & g["home_points"].notna() & g["away_points"].notna()
     sides = []
@@ -335,7 +348,8 @@ def mov_diffs(out: pd.DataFrame, games: pd.DataFrame) -> np.ndarray:
                                    "m": np.where(counted, g[pf] - g[pa], 0.0), "n": counted.astype(float)}))
     long = pd.concat(sides).sort_values(["season", "team", "kickoff", "game_id"])
     grp = long.groupby(["season", "team"])
-    long["before"] = (grp["m"].cumsum() - long["m"]) / (grp["n"].cumsum() - long["n"]).replace(0, np.nan)
+    n_before = grp["n"].cumsum() - long["n"]
+    long["before"] = (grp["m"].cumsum() - long["m"]) / n_before.replace(0, np.nan) * n_before / (n_before + shrink)
     before = long.set_index(["game_id", "team"])["before"].fillna(0.0) / MOV_SCALE
     pick = lambda col: before.reindex(pd.MultiIndex.from_arrays([out["game_id"], out[col]])).fillna(0.0).to_numpy()
     return pick("home_id") - pick("away_id")
@@ -409,14 +423,20 @@ def moment_design(gd: GameDraws) -> tuple[np.ndarray, np.ndarray]:
     return x, net.var(1)
 
 
-def matchup_tier(games: pd.DataFrame) -> np.ndarray:
-    """0 Power 4 vs Power 4, 1 Power 4 vs Group of 5, 2 Group of 5 vs Group of 5 (Pac-12 is Power 4 through 2023)."""
+def p4_sides(games: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Whether the home and the away team are Power 4 (the Pac-12 through 2023, and Notre Dame)."""
     def p4(side: str) -> np.ndarray:
         conf = games.get(f"{side}_conference", pd.Series("", index=games.index))
         team = games.get(f"{side}_team", pd.Series("", index=games.index))
         pac = (conf == "Pac-12") & (games["season"] <= PAC12_LAST_P4_SEASON)
         return (conf.isin(P4_STABLE) | pac | team.isin(P4_TEAMS)).to_numpy()
-    return 2 - p4("home").astype(int) - p4("away").astype(int)
+    return p4("home"), p4("away")
+
+
+def matchup_tier(games: pd.DataFrame) -> np.ndarray:
+    """0 Power 4 vs Power 4, 1 Power 4 vs Group of 5, 2 Group of 5 vs Group of 5."""
+    home, away = p4_sides(games)
+    return 2 - home.astype(int) - away.astype(int)
 
 
 def moment_phase(games: pd.DataFrame) -> np.ndarray:

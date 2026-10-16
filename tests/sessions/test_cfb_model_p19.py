@@ -85,3 +85,29 @@ def test_every_extension_has_hyperparameter_fields_and_a_suffix():
     from gnomepy_research.models.cfb.efficiency.dynamic_efficiency import EXTENSION_FIELDS
     from gnomepy_research.models.cfb.efficiency.posterior_snapshots import EXTENSION_SUFFIX
     assert set(EXTENSION_FIELDS) == set(EXTENSIONS) == set(EXTENSION_SUFFIX)
+
+
+def test_mov_shrink_weights_by_games_played():
+    from gnomepy_research.sessions.cfb_win_probability.models.win_probability import MOV_SHRINK_GAMES, mov_diffs
+    k = pd.Timestamp("2024-09-01", tz="UTC")
+    games = pd.DataFrame({
+        "game_id": [1, 2, 3], "season": 2024, "kickoff": [k, k + pd.Timedelta(days=7), k + pd.Timedelta(days=14)],
+        "home_id": [1, 1, 2], "away_id": [2, 9, 1], "home_points": [30, 50, np.nan], "away_points": [10, 0, np.nan],
+        "completed": [True, True, False], "home_classification": "fbs", "away_classification": ["fbs", "fcs", "fbs"]})
+    w = 1 / (1 + MOV_SHRINK_GAMES)                   # one FBS game each
+    np.testing.assert_allclose(mov_diffs(games, games, shrink=MOV_SHRINK_GAMES), [0.0, 2.0 * w, -4.0 * w])
+
+
+def test_p4_sides_and_tier_configs():
+    from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import OUTCOME_FLAGS
+    from gnomepy_research.sessions.cfb_win_probability.models.win_probability import p4_sides
+    g = pd.DataFrame({"season": [2024, 2024, 2026, 2024, 2023],
+                      "home_conference": ["SEC", "Sun Belt", "Pac-12", "FBS Independents", "Pac-12"],
+                      "away_conference": ["Sun Belt", "SEC", "SEC", "Mid-American", "Mountain West"],
+                      "home_team": ["A", "B", "Colorado State", "Notre Dame", "Utah"], "away_team": ["C", "D", "E", "F", "G"]})
+    home, away = p4_sides(g)
+    assert (home.astype(int) - away.astype(int)).tolist() == [1, -1, -1, 1, 1]
+    assert {"mov_shrink", "tier"} <= set(OUTCOME_FLAGS)
+    assert MODEL_CONFIGS["Npv2"] == {**MODEL_CONFIGS["Npv"], "mov_shrink": True}
+    assert MODEL_CONFIGS["Npvs"] == {**MODEL_CONFIGS["Npv"], "tier": True}
+    assert MODEL_CONFIGS["Npvg"]["extensions"] == ("couple", "fcs", "finish", "prior", "g5") and MODEL_CONFIGS["Npvg"]["mov"]
