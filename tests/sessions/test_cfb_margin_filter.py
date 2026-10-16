@@ -120,3 +120,31 @@ def test_split_and_turnover_terms(tmp_path):
     np.testing.assert_allclose(x[2], [-0.4, -0.6, -0.6, -1.0])      # week 4: still early
     np.testing.assert_allclose(x[3], [0.1, -0.1, 0.0, -1.0])        # week 5: not early
     assert MODEL_CONFIGS["NpvkA"]["kf_split"] and MODEL_CONFIGS["NpvkB"]["to"] and MODEL_CONFIGS["NpvkC"]["kf"] == "games"
+
+
+def test_option_edge_term(tmp_path):
+    from tests.sessions.test_cfb_win_probability_models import TestSplitGameDraws
+    from gnomepy_research.models.cfb.features.ratings import FCS_TEAM
+    TestSplitGameDraws.write(tmp_path, [1, 2, FCS_TEAM], option=[1.0, 0.0, 0.0])
+    gd = game_draws(TestSplitGameDraws.games(), [TestSplitGameDraws.SEASON], directory=tmp_path, units=UNITS_SPLIT, option_edge=True)
+    assert gd.terms[-1] == "option_edge" and PRIORS["option_edge"] == (0.0, 5.0)
+    np.testing.assert_allclose(gd.x[0, :, -1], gd.x[0, :, 0] + gd.x[0, :, 1])   # team 1 runs the option: full net edge
+    np.testing.assert_allclose(gd.x[1, :, -1], 0.0)                              # neither side does
+
+
+def test_new_coach_terms_and_table(tmp_path):
+    from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import coach_table
+    from gnomepy_research.sessions.cfb_win_probability.models.win_probability import NC_TERMS
+    model_k.TestPhaseTerms.write(tmp_path)
+    coach = pd.DataFrame({"season": SEASON, "team_id": [1, 2], "coach_new": [1.0, 0.0], "prior_z": [-1.5, 0.5]})
+    gd = game_draws(TestResultsTerm.games(), [SEASON], directory=tmp_path, units=UNITS_SPLIT, coach=coach)
+    assert gd.terms[-2:] == NC_TERMS
+    got = {g: gd.x[i, 0, -2:] for i, g in enumerate(gd.games["game_id"])}
+    np.testing.assert_allclose(got[1], [1.5, 1 / 15])        # new coach (bad last season) at home, week 1
+    np.testing.assert_allclose(got[2], [-1.5, -4 / 15])      # same team away, week 4
+    np.testing.assert_allclose(got[3], [1.5, 5 / 15])
+    pre = pd.DataFrame({"season": 2024, "team_id": [1, 2, 3], "prior_off_rating": [0.1, 0.0, np.nan], "prior_def_rating": [0.1, 0.0, 0.1],
+                        "coach_new": [True, False, None]})
+    t = coach_table(pre).set_index("team_id")
+    assert t.loc[1, "prior_z"] > 0 > t.loc[2, "prior_z"] and t.loc[3, "prior_z"] == 0.0 and t.loc[3, "coach_new"] == 0.0
+    assert MODEL_CONFIGS["NpvkN"]["newcoach"] and MODEL_CONFIGS["NpvkO"]["option_edge"]

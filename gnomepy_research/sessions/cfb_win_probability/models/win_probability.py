@@ -32,6 +32,11 @@ TERMS_SPLIT = ["pass_edge", "rush_edge", "venue", "bowl_edge"]
 TERMS = TERMS_ALL
 STRETCH_TERM = "edge_abs_edge"
 OPTION_TERM = "option_diff"
+# Net edge in games with an option offense on either side (option teams make per-play edges less predictive).
+OPTION_EDGE_TERM = "option_edge"
+# First-year head coach: reset toward average (minus last season's strength z) and an in-season learning curve.
+NC_TERMS = ["nc_reg", "nc_trend"]
+SEASON_WEEKS = 15
 PHASE_TERMS = ["pass_edge_early", "rush_edge_early"]
 EARLY_LAST_WEEK = 4
 PHYSICAL_TERMS = ["talent_diff", "bluechip_diff", "trench_diff", "gap_x_edge"]
@@ -79,6 +84,9 @@ PRIORS: dict[str, tuple[float, float]] = {
     "qb_delta_diff": (4.0, 4.0),
     "edge_abs_edge": (0.0, 30.0),
     "option_diff": (0.0, 0.5),
+    "option_edge": (0.0, 5.0),
+    "nc_reg": (0.0, 0.5),
+    "nc_trend": (0.0, 0.5),
     "talent_diff": (0.0, 0.5),
     "bluechip_diff": (0.0, 0.5),
     "trench_diff": (0.0, 0.5),
@@ -214,7 +222,7 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                extensions: tuple[str, ...] = (), results: bool = False,
                qb_change: pd.DataFrame | None = None, mov: bool = False, mov_late: bool = False,
                mov_shrink: bool = False, tier: bool = False, kf: pd.DataFrame | None = None, kf_split: bool = False,
-               to: pd.DataFrame | None = None) -> GameDraws:
+               to: pd.DataFrame | None = None, option_edge: bool = False, coach: pd.DataFrame | None = None) -> GameDraws:
     """Design arrays for completed or upcoming FBS-vs-FBS games, using each game's own weekly
     cutoff posterior (built only from data before that cutoff). Draws with the "finish" extension add
     finish_edge, the home-minus-away finishing matchup in points per drive. results adds results_diff: each
@@ -257,6 +265,11 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
                     raise ValueError(f"{key}: draws have no option flag; snapshot with --conference")
                 o = draws[f"{key}__option"][p_cols]
                 tail.append(np.broadcast_to((o[hi] - o[ai])[:, None, None], (len(gg), len(pick), 1)))
+            if option_edge:
+                if f"{key}__option" not in draws:
+                    raise ValueError(f"{key}: draws have no option flag; snapshot with --conference")
+                o = draws[f"{key}__option"][p_cols].astype(float)
+                tail.append(((main[0] + main[1]) * np.maximum(o[hi], o[ai])[:, None])[..., None])
             if form:
                 if f"{key}__form" not in draws:
                     raise ValueError(f"{key}: draws have no form; snapshot with --form")
@@ -301,7 +314,7 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
         x = np.concatenate([x, np.broadcast_to(qd, (*x.shape[:2], 1))], axis=-1)
         terms = [*terms, "qb_delta_diff"]
     x = np.concatenate([x, np.concatenate(tails, axis=0)], axis=-1)
-    terms = terms + [STRETCH_TERM] * stretch + [OPTION_TERM] * option
+    terms = terms + [STRETCH_TERM] * stretch + [OPTION_TERM] * option + [OPTION_EDGE_TERM] * option_edge
     if physical is not None:
         d = physical_diffs(out, physical, min_match=PHYSICAL_MIN_MATCH)[:, None, :]
         net = x[..., 0] + x[..., 1]
@@ -345,6 +358,16 @@ def game_draws(games: pd.DataFrame, seasons: list[int], n_draws: int | None = No
         k = np.stack(cols, axis=-1)[:, None, :]
         x = np.concatenate([x, np.broadcast_to(k, (*x.shape[:2], len(cols)))], axis=-1)
         terms = terms + names
+    if coach is not None:
+        c = coach.set_index(["season", "team_id"])
+        side = lambda col: c.reindex(pd.MultiIndex.from_arrays([out["season"], out[col]])).fillna(0.0)[["coach_new", "prior_z"]].to_numpy(float)
+        h, a = side("home_id"), side("away_id")                 # positional arrays: (G, [coach_new, prior_z])
+        reg = -(h[:, 0] * h[:, 1] - a[:, 0] * a[:, 1])
+        frac = np.where(out["season_type"] == "postseason", 1.0, np.minimum(out["week"].to_numpy(float), SEASON_WEEKS) / SEASON_WEEKS)
+        trend = (h[:, 0] - a[:, 0]) * frac
+        cc = np.stack([reg, trend], axis=-1)[:, None, :]
+        x = np.concatenate([x, np.broadcast_to(cc, (*x.shape[:2], 2))], axis=-1)
+        terms = terms + NC_TERMS
     if to is not None:
         tt = out[["game_id"]].merge(to, on="game_id", how="left").fillna(0.0)
         td = (tt["home_to"] - tt["away_to"]).to_numpy()[:, None, None]

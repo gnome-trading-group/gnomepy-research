@@ -102,18 +102,31 @@ MODEL_CONFIGS["Npvk0"] = {**MODEL_CONFIGS["Npv"], "kf": "flat"}
 MODEL_CONFIGS["NpvkA"] = {**MODEL_CONFIGS["Npvk"], "kf_split": True}
 MODEL_CONFIGS["NpvkB"] = {**MODEL_CONFIGS["Npvk"], "to": True}
 MODEL_CONFIGS["NpvkC"] = {**MODEL_CONFIGS["Npvk"], "kf": "games"}
+# Phase 25 on Npvk: first-year head coaches (reset toward average + learning curve), option-game edge discount.
+MODEL_CONFIGS["NpvkN"] = {**MODEL_CONFIGS["Npvk"], "newcoach": True}
+MODEL_CONFIGS["NpvkO"] = {**MODEL_CONFIGS["Npvk"], "option_edge": True}
 # Task 49: Np with the outcome layer trained without the 2020 COVID season.
 MODEL_CONFIGS["Np21"] = {**MODEL_CONFIGS["Np"], "outcome_first": 2021}
 O_SELECTION = RESULTS / "O_selection.json"
 OUTCOME_FLAGS = ("conference", "stretch", "option", "keep_terms", "drop_features", "drives",
                 "independents_separate", "phase", "tau_phases", "exclude_terms", "heavy_tails", "garbage_weight",
-                "extensions", "results", "mov", "mov_late", "mov_shrink", "tier", "kf_split")
+                "extensions", "results", "mov", "mov_late", "mov_shrink", "tier", "kf_split", "option_edge")
 VALIDATION_SEASON = 2022
 F_CONFIG = RESULTS / "F_config.json"
 J_FEATURES = RESULTS / "J_features.json"
 CALIBRATOR_SEASONS = [2021, 2022]
 CALIBRATOR_BOOT = 500
 PROB_COLUMNS = ("p_home", "p_bayes", "p_bayes_lo", "p_bayes_hi")
+
+
+def coach_table(preseason: pd.DataFrame) -> pd.DataFrame:
+    """(season, team_id, coach_new, prior_z): prior_z is last season's offense + defense rating, z-scored within season
+    (0 when missing)."""
+    p = preseason.drop_duplicates(["season", "team_id"], keep="last").copy()
+    s = p["prior_off_rating"].astype(float) + p["prior_def_rating"].astype(float)
+    z = (s - s.groupby(p["season"]).transform("mean")) / s.groupby(p["season"]).transform("std")
+    return pd.DataFrame({"season": p["season"], "team_id": p["team_id"], "coach_new": p["coach_new"].astype(float).fillna(0.0),
+                         "prior_z": z.fillna(0.0)})
 
 
 def draw_kwargs(cfg: dict) -> dict:
@@ -479,6 +492,8 @@ def main() -> None:
         strengths = {s: preseason_strength(load_season_draws(s, **draw_kwargs(cfg))) for s in kf_seasons}
         srs = ds.load("cfb_coaches").groupby(["season", "team_id"])["srs"].mean()
         flags["kf"] = kf_table(games, srs, strengths, tiered={"tier": "srs"}.get(cfg["kf"], cfg["kf"]))
+    if cfg.get("newcoach"):
+        flags["coach"] = coach_table(ds.load("cfb_team_preseason_features"))
     if cfg.get("to"):
         flags["to"] = turnover_margins(ds.load("cfb_drives"), games)
     frames, metas = [], []

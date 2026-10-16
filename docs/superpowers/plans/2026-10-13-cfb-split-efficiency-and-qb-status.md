@@ -2227,6 +2227,47 @@ Every mechanism shows up in the fitted weights, but each is too small to pass:
 - When Npvk is above the open on the ranked team, there is no edge.
 - This was picked after looking, so it needs a live paper-trade test.
 
+## Phase 25: Big-miss analysis, first-year coaches and option games (NpvkN, NpvkO)
+
+Added 2026-10-16. Pre-registered before any Phase 25 backtest.
+
+**Big-miss analysis** (scratchpad `big_misses*.py`, 2021–24, Npvk vs the open):
+- **The net gap is a tail.** It is +30.8; the open beats us by +216 gross and we beat it by −185. The worst 1% of games (31) hold 86% of the net gap, and every one is an upset where we were much surer of the favorite than the market (e.g. Army 91% vs open 65%, lost to Ball State).
+- **It isn't heavy tails or extreme probabilities.** Residual kurtosis is 3.05 and our 95%+ calls are fine. The damage is in our 80–90% calls.
+- **Persistent misrating:** we carry a team-season component with sd ≈ 2.0 points; the market's is about 0.
+- **Net-gap attribution:**
+
+  | Bucket | Share of net gap | Note |
+  |---|---|---|
+  | 2021 (COVID-year priors) | 63% | |
+  | G5–G5 weeks 1–4 | 14% | |
+  | First-year head coach | 10% | |
+  | Option academies | 6% | but 8 of the 31 worst games |
+  | Everything else | 11% | about market level |
+
+- **Traits:**
+  - Weeks 1–4 exposure to preseason-prior error is 0.83 for us vs 0.59 for the market (G5), and 0.83 vs 0.77 (P4).
+  - First-year-coach teams: our view is 0.64 below the market (t −2.3).
+  - The market under-rates returning production (+0.54, t 2.7) and over-reacts to portal departures (+0.45, t 2.2); we are right on both.
+- **Diagnostics:**
+  - The possessions hypothesis is rejected: expected possessions barely vary (sd 0.74 drives), and the interaction t is 0.3.
+  - Option games: the calibration slope is 0.59 ± 0.29 for Npvk and 0.70 for the open; other games 0.97.
+  - First-year coaches: teams coming off bad seasons beat us by +2.19 (market +1.40), middling +0.89 (+0.07), good −2.11 (−1.93); same-coach teams about 0. Their residual grows over the season: +0.22 in weeks 1–4, +0.95 in weeks 10+, +1.29 in bowls.
+
+### Task 60: Candidates (outcome layer, baseline Npvk)
+
+- **`NpvkN` (`newcoach`):**
+  - `nc_reg` = −(cn_h·z_h − cn_a·z_a), where cn is a first-year head coach and z is last season's offense + defense rating z-scored. It resets new-staff teams toward the average.
+  - `nc_trend` = (cn_h − cn_a)·min(week, 15)/15, set to 1 in the postseason. This is the learning curve.
+  - Both priors N(0, 0.5).
+- **`NpvkO` (`option_edge`):** `option_edge` = the net edge × [either team is flagged option], prior N(0, 5). The weight is expected to be negative, i.e. a discount.
+
+### Task 61: Selection
+
+- **Pass rule:** pooled 2021–24 rolling backtests vs Npvk, Δ ≤ −0.001 with P(worse) ≤ 0.10, and no season worse by more than 0.003.
+- **Both pass:** the union is built and adopted only if a further ≥ 0.0005 better.
+- **Reported:** first-year-coach and option-game cuts, plus the learned weights.
+
 ### Phase 21 (proposed): availability data
 
 - **No free historical college injury data exists.** Sports Info Solutions sells college injury data from 2016.
