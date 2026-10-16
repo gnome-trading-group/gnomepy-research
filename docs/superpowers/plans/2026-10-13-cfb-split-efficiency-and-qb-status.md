@@ -2105,6 +2105,24 @@ Added 2026-10-16. Pre-registered before any Phase 22 backtest.
   - The clean test is 2026 weeks 7+, logged before kickoff.
   - 2025 is not used.
 
+**Phase 22 result (2026-10-16, `results/backtest/p22_selection.txt`): none pass; Npv stays live.**
+
+| Comparison vs Npv (pooled 2021–24) | Δ log loss | P(worse) | Note |
+|---|---|---|---|
+| Npv2 | +0.0000 | 0.54 | |
+| Npvs | −0.0003 | 0.21 | |
+| Npvg | −0.0004 | 0.07 | only 2021 helped |
+
+**None of them touches the G5 gap.** 2022–24 G5–G5 log loss per game:
+
+| Window | Npv | Npvg | Npvs | Open |
+|---|---|---|---|---|
+| Weeks 1–4 | 0.6162 | 0.6159 | 0.6152 | 0.5881 |
+| Weeks 5–9 | 0.5759 | 0.5765 | 0.5754 | 0.5584 |
+
+- **Conclusion:** the G5 gap is preseason information we don't have, not how we use what we have.
+- **Next:** new G5 preseason information (to be discussed). Candidates are market-derived win totals, which cost some independence, or richer roster and coaching data.
+
 ### Phase 21 (proposed): availability data
 
 - **No free historical college injury data exists.** Sports Info Solutions sells college injury data from 2016.
