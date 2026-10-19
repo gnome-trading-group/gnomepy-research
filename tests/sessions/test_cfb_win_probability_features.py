@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 import pytest
 
+from gnomepy_research.models.cfb.features.coach_effects import coach_features
 from gnomepy_research.models.cfb.features.cutoffs import game_cutoffs, week_cutoffs
 from gnomepy_research.models.cfb.features.ratings import FCS_TEAM, ridge_ratings
 from gnomepy_research.models.cfb.features.source import SourceData, with_coach_availability
@@ -31,11 +34,14 @@ def make_games() -> pd.DataFrame:
 
 def make_coaches() -> pd.DataFrame:
     # Team 10: coach 1 continues from 2023 and is fired mid-2024; coach 2 is the interim.
-    rows = [
+    return coach_rows([
         (1, 10, 2023, "2019-12-01", 12, 5.0),
         (1, 10, 2024, "2019-12-01", 6, 2.0),
         (2, 10, 2024, "2024-10-20", 6, 2.0),
-    ]
+    ])
+
+
+def coach_rows(rows: list[tuple]) -> pd.DataFrame:
     df = pd.DataFrame([{
         "coach_id": cid, "team_id": tid, "season": s, "hire_date": ts(h), "games": g, "wins": 0, "losses": 0,
         "srs": srs, "sp_overall": 0.0, "sp_offense": 0.0, "sp_defense": 0.0, "postseason_rank": None,
@@ -121,6 +127,22 @@ class TestAsOf:
         v = make_source().as_of(ts("2024-09-01"))
         with pytest.raises(ValueError):
             v.as_of(ts("2024-10-01"))
+
+
+class TestCoachNew:
+    def coach_new(self, rows: list[tuple], season: int) -> bool:
+        src = replace(make_source(), coaches=with_coach_availability(coach_rows(rows), make_games()))
+        return bool(coach_features(src, season).set_index("team_id").loc[10, "coach_new"])
+
+    def test_bowl_coach_kept_on_is_new_against_the_coach_of_most_of_last_season(self):
+        # CFBD's hire_date is a coach's first head-coaching hire anywhere, so coach 3 (hired elsewhere in 2013, bowl
+        # game only) outranks coach 4 (12 games) as 2024's season-start pick. His 2025 is still a coaching change.
+        rows = [(4, 10, 2024, "2023-12-01", 12, 2.0), (3, 10, 2024, "2013-12-19", 1, 2.0), (3, 10, 2025, "2013-12-19", 12, 0.0)]
+        assert self.coach_new(rows, 2025)
+
+    def test_coach_of_most_of_last_season_is_not_new(self):
+        rows = [(1, 10, 2024, "2019-12-01", 12, 2.0), (2, 10, 2024, "2024-11-20", 1, 2.0), (1, 10, 2025, "2019-12-01", 12, 0.0)]
+        assert not self.coach_new(rows, 2025)
 
 
 def test_season_start_coach_prefers_continuing_coach_over_later_hire():
