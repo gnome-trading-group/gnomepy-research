@@ -10,8 +10,10 @@ Inside the entry window - from window_hours before HLTV's latest kickoff until k
 HLTV still lists the match as upcoming - it buys whichever team's listing is underpriced by at
 least min_edge after the venue's taker fee. Orders are IOC limits capped at the highest price
 that still clears the threshold, so it only ever takes liquidity it has already priced.
-Positions are held to settlement: once the match starts (HLTV no longer lists it as upcoming, or
-its kickoff has passed) the session ends itself, keeping what it holds.
+Positions are held to settlement. Trading stops at kickoff (or once HLTV lists the match live), but
+the session runs on through the match so its positions keep being marked, and ends itself, keeping
+what it holds, once HLTV drops the match from its listing, which it does when the match ends. If
+the pipeline stalls and never says, it ends exit_hours_after_kickoff after kickoff.
 
 It does not trade until both lineups are announced: the model leans on player form, which is
 blank until then. Nor does it trade on stale match state: if the newest cs2_upcoming row is
@@ -46,6 +48,7 @@ SIZE_SCALE = Scales.SIZE
 HOUR_NS = 3_600_000_000_000
 TERMINAL = {OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED}
 UPCOMING = "upcoming"
+MISSING = "missing"
 ARTIFACT = "artifact://"
 DEFAULT_MODEL = "artifact://xgboost_model/cs2_prematch_preveto"
 
@@ -90,6 +93,7 @@ class CS2Series(Strategy):
         reload_minutes: how often to re-read the match's rows (0 = once, for replays).
         near_kickoff_reload_minutes, near_kickoff_hours: re-read this often inside this long before kickoff,
             so HLTV marking the match live stops trading within a minute of the pipeline writing it.
+        exit_hours_after_kickoff: when the session ends if the match state never says the match is over.
         features_source, matches_source: DatasetStore tables, or parquet extracts of them.
     """
 
@@ -111,6 +115,7 @@ class CS2Series(Strategy):
         reload_minutes: float = 5.0,
         near_kickoff_reload_minutes: float = 1.0,
         near_kickoff_hours: float = 1.0,
+        exit_hours_after_kickoff: float = 8.0,
         features_source: str = FEATURES,
         matches_source: str = MATCHES,
     ):
@@ -125,6 +130,7 @@ class CS2Series(Strategy):
         self.book_depth = book_depth
         self._processing_time_ns = processing_time_ns
         self.max_state_age_ns = int(max_state_age_minutes * 60 * 1e9)
+        self.exit_after_kickoff_ns = int(exit_hours_after_kickoff * HOUR_NS)
         self._metrics_buf = None
         self._entry_lineups = None
 
@@ -193,12 +199,12 @@ class CS2Series(Strategy):
 
     def _evaluate(self, now_ns: int) -> list[Intent]:
         state, quote = self._feed.state(now_ns), self._feed.quote(now_ns)
-        if state is not None and (state.status != UPCOMING or now_ns >= state.kickoff_ns):
-            # Judged on the last state even when it's stale: a stalled pipeline can't make a passed kickoff upcoming.
-            self.request_exit(f"match {self.match_id} is {state.status}" if state.status != UPCOMING
-                              else f"match {self.match_id} kicked off")
+        if state is not None and (state.status == MISSING or now_ns >= state.kickoff_ns + self.exit_after_kickoff_ns):
+            # Judged on the last state even when it's stale: a stalled pipeline mustn't keep the session up forever.
+            self.request_exit(f"match {self.match_id} is {state.status}" if state.status == MISSING
+                              else f"match {self.match_id} not over {self.exit_after_kickoff_ns / HOUR_NS:g}h after kickoff")
             return []
-        if state is None or quote is None:
+        if state is None or quote is None or state.status != UPCOMING:
             return []
         if now_ns - state.at_ns > self.max_state_age_ns:
             return []

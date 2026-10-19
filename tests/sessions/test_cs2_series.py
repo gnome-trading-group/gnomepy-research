@@ -332,23 +332,36 @@ def test_no_trading_once_hltv_says_live_or_drops_the_match(make, status):
     assert _tick(s, 102, [(0.45, 1000)], hours_before=1) == []
 
 
-@pytest.mark.parametrize("status", ["live", "missing"])
-def test_the_session_ends_keeping_its_positions_once_the_match_is_no_longer_upcoming(make, status):
-    s = make(states=_states((KICKOFF - pd.Timedelta(hours=2), {"status": status})))
+def test_the_session_runs_through_the_match_without_trading_and_ends_once_it_is_over(make):
+    s = make(states=_states((KICKOFF, {"status": "live"}), (KICKOFF + pd.Timedelta(hours=2.5), {"status": "missing"})))
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=3) != []
+    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
+
+    for hours_before in (0, -1, -2.4):
+        assert _tick(s, 102, [(0.45, 1000)], hours_before=hours_before) == []
+    assert not s.is_exiting, "kickoff and live keep the session up, marking its positions"
+
+    _tick(s, 102, [(0.45, 1000)], hours_before=-2.5)
+    assert s._control.exits == [("match 7 is missing", False)]
+
+
+def test_the_session_ends_keeping_its_positions_once_hltv_drops_the_match(make):
+    s = make(states=_states((KICKOFF - pd.Timedelta(hours=2), {"status": "missing"})))
     _tick(s, 102, [(0.45, 1000)], hours_before=3)
     assert not s.is_exiting
 
     _tick(s, 102, [(0.45, 1000)], hours_before=1)
-    assert s._control.exits == [(f"match 7 is {status}", False)]
+    assert s._control.exits == [("match 7 is missing", False)]
 
 
-def test_the_session_ends_at_kickoff_even_on_stale_state(make):
+def test_the_session_ends_hours_after_kickoff_even_on_stale_state(make):
     s = make(states=_states(until=KICKOFF - pd.Timedelta(hours=4)))
-    _tick(s, 102, [(0.45, 1000)], hours_before=1)
-    assert not s.is_exiting, "stale state stops trading but isn't a start"
-
     _tick(s, 102, [(0.45, 1000)], hours_before=0)
-    assert s._control.exits == [("match 7 kicked off", False)]
+    _tick(s, 102, [(0.45, 1000)], hours_before=-7.9)
+    assert not s.is_exiting, "stale state stops trading but doesn't end the match"
+
+    _tick(s, 102, [(0.45, 1000)], hours_before=-8)
+    assert s._control.exits == [("match 7 not over 8h after kickoff", False)]
 
 
 def test_no_trading_on_stale_match_state(make):
