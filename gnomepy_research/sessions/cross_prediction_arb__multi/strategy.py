@@ -27,7 +27,7 @@ from gnomepy.java.enums import Action, ExecType
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
-from gnomepy_research.arb import FeeRates, registry_fee_rates
+from gnomepy_research.fees import FeeRates, registry_fee_rates
 
 PRICE_SCALE = Scales.PRICE   # 1_000_000_000
 SIZE_SCALE = Scales.SIZE      # 1_000_000

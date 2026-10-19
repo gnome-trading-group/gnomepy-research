@@ -78,7 +78,7 @@ class _FakeRegistry:
 def make_strategy():
     """Build a CrossPredictionArb with the registry patched out."""
     def _make(outcomes=None, registry: _FakeRegistry | None = None, **kwargs):
-        from gnomepy_research.sessions.cross_prediction_arb import cross_prediction_arb as mod
+        from gnomepy_research.sessions.cross_prediction_arb import strategy as mod
 
         if outcomes is None:
             outcomes = [{"pm": 222852, "k": 97203}, {"pm": 222853, "k": 97202}]

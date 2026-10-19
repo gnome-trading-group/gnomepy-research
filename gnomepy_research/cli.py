@@ -8,10 +8,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import click
+import numpy as np
+import pandas as pd
 import yaml
 from gnomepy.data import ArtifactStore, DatasetStore
+from gnomepy.reporting.metrics import build_curves, compute_sharpe
 
 from gnomepy_research import api
+from gnomepy_research.analysis.statistics import bootstrap_sharpe_ci, deflated_sharpe_ratio, minimum_backtest_length
+from gnomepy_research.analysis.walk_forward import WalkForwardConfig, run_walk_forward_local
+from gnomepy_research.environment import capture_environment
 from gnomepy_research.notes_sync import pull_notes, push_notes
 
 
@@ -342,7 +348,6 @@ def iterations_record_from_results(
     Reads summary.json for metrics and metadata.json for environment capture.
     Only requires human-authored fields: title, description, and optional extras.
     """
-    from gnomepy_research.environment import capture_environment
 
     results_path = Path(results_dir)
     summary_path = results_path / "summary.json"
@@ -469,10 +474,6 @@ def validate() -> None:
 @click.option("--json", "as_json", is_flag=True, help="Emit results as JSON")
 def validate_significance(session_name: str, fills: str, market: str, n_trials: int, as_json: bool) -> None:
     """Compute bootstrap Sharpe CI and Deflated Sharpe Ratio."""
-    import numpy as np
-    import pandas as pd
-    from gnomepy.reporting.metrics import build_curves, compute_sharpe
-    from gnomepy_research.validation.statistics import bootstrap_sharpe_ci, deflated_sharpe_ratio, minimum_backtest_length
 
     fills_df = pd.read_parquet(fills)
     market_df = pd.read_parquet(market)
@@ -530,7 +531,6 @@ def validate_walk_forward(
     output_dir: str | None,
 ) -> None:
     """Run walk-forward validation across OOS date folds."""
-    from gnomepy_research.validation.walk_forward import WalkForwardConfig, run_walk_forward_local
 
     try:
         start_dt = datetime.fromisoformat(total_start)

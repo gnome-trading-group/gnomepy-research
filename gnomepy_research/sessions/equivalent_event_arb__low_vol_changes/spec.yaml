@@ -1,0 +1,40 @@
+name: equivalent_event_arb__low_vol_changes
+description: >
+  [BRANCH: low_vol_changes] Maker-only equivalent_event_arb with a volatility-regime filter
+  on entries, sized to capture the batch fill at match resolution (CS:GO IEM Beijing 2026).
+
+  Reconstructed 2026-10-19 from the session's configs and research_learnings.md; the
+  session ran without a spec.yaml.
+
+  Original: Arbitrage equivalent prediction market contracts across exchanges (Polymarket,
+  Kalshi). A complete set of mutually exclusive outcomes always pays $1 at resolution, so
+  buying each outcome from its cheapest venue is a guaranteed profit when total cost + fees
+  < $1.
+
+data:
+  listings:
+    - listing_id: 253844  # Polymarket
+    - listing_id: 253845  # Polymarket
+    - listing_id: 246127  # Kalshi
+    - listing_id: 246126  # Kalshi
+  date_ranges:
+    - start: "2026-08-24T16:54:00"
+      end: "2026-08-24T17:06:40"
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">0"
+
+constraints:
+  strategy_type: arb
+  max_iterations: 20
+
+meta:
+  execution_mode: local
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous

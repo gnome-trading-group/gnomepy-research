@@ -35,7 +35,7 @@ from gnomepy.data import ArtifactQuery, ArtifactStore, resolve_artifact_path
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
-from gnomepy_research.arb import registry_fee_rates
+from gnomepy_research.fees import registry_fee_rates
 from gnomepy_research.models.cs2.win_probability.pre_map_model import CS2PreMapModel
 from gnomepy_research.models.cs2.win_probability.series_pricing import price
 from gnomepy_research.sessions.cs2_series.decision import Level, choose_entry, cost_per_share, shares_to_buy

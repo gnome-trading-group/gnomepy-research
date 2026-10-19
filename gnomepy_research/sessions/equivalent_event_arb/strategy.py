@@ -9,6 +9,7 @@ from gnomepy.java.backtest.orders import ExecutionReport
 from gnomepy.java.enums import OrderType
 from gnomepy.registry import RegistryClient
 
+from gnomepy_research.fees import registry_fee_rates
 from gnomepy_research.arb import (
     AggressivePriceModel,
     ArbBudgetConstraint,
@@ -28,10 +29,9 @@ from gnomepy_research.arb import (
     PriceModel,
     VenuePairing,
     discover_group,
-    registry_fee_rates,
     walk_books,
 )
-from gnomepy_research.strategies.target_portfolio import (
+from gnomepy_research.sessions.equivalent_event_arb.target_portfolio import (
     Listing,
     Target,
     TargetEntry,

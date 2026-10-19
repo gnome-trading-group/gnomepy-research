@@ -1,52 +1,31 @@
 # Analysis Toolkit
 
-Everything in `gnomepy_research` that analyses a result rather than producing one. Most of this
-existed for months without being referenced anywhere, so the research loop was re-deriving from
-parquet what was already implemented and tested.
+Everything in `gnomepy_research.analysis` — the code that analyses a result rather than producing
+one — plus the arb library and environment capture.
 
-**Imports are submodule-qualified.** `gnomepy_research/__init__.py` and several package `__init__.py`
-files are empty, so `from gnomepy_research.validation import deflated_sharpe_ratio` fails — use
-`from gnomepy_research.validation.statistics import deflated_sharpe_ratio`.
-
----
-
-## Before you write a strategy — `explore`
-
-`gnomepy_research/explore.py` loads market data and evaluates signals without running a backtest.
-Use it to check a signal actually separates before building a strategy around it.
-
-```python
-from gnomepy_research.explore import (
-    compare_results, compute_signals, load_datastore, load_market_data, load_results, plot_signals,
-)
-from gnomepy_research.signals import DepthImbalance, MicropriceFairValue, TradeImbalance
-
-market = load_market_data(listing_id=222852, start="2026-08-24T00:25:00", end="2026-08-24T03:11:00")
-
-source = load_datastore(listing_id=222852, start="2026-08-24T00:25:00", end="2026-08-24T03:11:00")
-signals = compute_signals(source, {
-    "fair_value": MicropriceFairValue(),
-    "depth_imb":  DepthImbalance(num_levels=5),
-    "flow":       TradeImbalance(horizon_ns=1_000_000_000),
-})
-
-plot_signals(market, signals, signals_to_plot=["depth_imb", "flow"]).show()
-```
-
-After a run, `load_results(path)` gives a `BacktestReport` from a results directory (local or S3),
-and `compare_results(*paths, metric="sharpe")` tabulates several runs side by side.
+**Imports are submodule-qualified.** `gnomepy_research/analysis/__init__.py` is empty, so
+`from gnomepy_research.analysis import deflated_sharpe_ratio` fails — use
+`from gnomepy_research.analysis.statistics import deflated_sharpe_ratio`.
 
 ---
 
-## Diagnosing a result — `reporting.backtest`
+## Loading results — `analysis.results`
+
+After a run, `analysis.results.load_results(path)` gives a `BacktestReport` from a results directory
+(local or S3), and `analysis.results.compare_results(*paths, metric="sharpe")` tabulates several runs
+— or several sessions' best runs — side by side.
+
+---
+
+## Diagnosing a result — `analysis.market_making`, `adverse_selection`, `rolling_performance`
 
 These are what `/research` Step 5 calls. Each takes the `BacktestReport` from `load_results`.
 
 ```python
-from gnomepy_research.explore import load_results
-from gnomepy_research.reporting.backtest.adverse_selection import compute_adverse_selection
-from gnomepy_research.reporting.backtest.market_making import compute_mm_stats, plot_mm_dashboard
-from gnomepy_research.reporting.backtest.rolling_performance import (
+from gnomepy_research.analysis.results import load_results
+from gnomepy_research.analysis.adverse_selection import compute_adverse_selection
+from gnomepy_research.analysis.market_making import compute_mm_stats, plot_mm_dashboard
+from gnomepy_research.analysis.rolling_performance import (
     compute_alpha_decay, compute_rolling_sharpe, detect_regimes, pnl_by_regime,
 )
 
@@ -64,12 +43,12 @@ report = load_results("gnomepy_research/sessions/<name>/results/iter_007")
 
 ---
 
-## Is the result real? — `validation`
+## Is the result real? — `analysis.statistics`, `walk_forward`, `monte_carlo`
 
 ### `validation.statistics`
 
 ```python
-from gnomepy_research.validation.statistics import (
+from gnomepy_research.analysis.statistics import (
     bootstrap_sharpe_ci, deflated_sharpe_ratio, expected_max_sharpe,
     minimum_backtest_length, sharpe_standard_error,
 )
@@ -106,7 +85,7 @@ Robustness against simulation assumptions. The two generators emit configs with 
 section, which is the only part `gnomepy.sweep.expand_sweep` expands.
 
 ```python
-from gnomepy_research.validation.monte_carlo import (
+from gnomepy_research.analysis.monte_carlo import (
     bootstrap_pnl_paths, generate_latency_sweep_config, generate_queue_sweep_config, summarize_mc_paths,
 )
 
@@ -151,30 +130,16 @@ Ablation answers "does this signal earn its place?" far more directly than a par
 
 ---
 
-## Comparing strategies — `analysis.portfolio`
-
-```python
-from gnomepy_research.analysis.portfolio import (
-    combined_sharpe, compute_cross_strategy_correlation, plot_correlation_matrix,
-)
-
-corr = compute_cross_strategy_correlation(
-    ["sessions/a/results/iter_010", "sessions/b/results/iter_007"],
-    session_names=["a", "b"], resample_bar="1min",
-)
-plot_correlation_matrix(corr).show()
-combined_sharpe([curve_a, curve_b], weights=[0.5, 0.5])
-```
-
-Low correlation between two profitable strategies is worth more than a marginal improvement in
-either one.
-
----
-
 ## Prediction-market arbitrage — `arb`
 
 Shared machinery behind the arb sessions, rather than each session reimplementing pricing and
-book-walking.
+book-walking. Fee rates come from the registry through `gnomepy_research.fees`:
+
+```python
+from gnomepy_research.fees import registry_fee_rates
+
+self._fee_rates = registry_fee_rates(self)   # in __init__; looked up per listing at the strategy's time
+```
 
 ```python
 from gnomepy_research.arb import (

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from gnomepy_research.arb import ArbPhase
-from gnomepy_research.strategies.equivalent_event_arb import EquivalentEventArb
-from gnomepy_research.strategies.target_portfolio import Listing
+from gnomepy_research.listing import Listing
+from gnomepy_research.sessions.equivalent_event_arb.strategy import EquivalentEventArb
 
 
 class LowVolEquivalentEventArb(EquivalentEventArb):

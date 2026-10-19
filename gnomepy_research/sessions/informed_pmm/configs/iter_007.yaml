@@ -1,5 +1,5 @@
 strategy:
-  class_name: "gnomepy_research.strategies.informed_prediction_market_maker:InformedPredictionMarketMaker"
+  class_name: "gnomepy_research.sessions.informed_pmm.strategy:InformedPredictionMarketMaker"
   args:
     ref_listing_id: 129651
     quote_listing_id: 130435
@@ -10,7 +10,6 @@ strategy:
     max_ref_staleness_ns: 5000000000
     kalman_Q: 0.001
     kalman_R: 0.01
-    maker_fee_rate: 0.0
     processing_time_ns: 5000000
 
 record_depth: 1

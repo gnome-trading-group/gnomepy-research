@@ -1,5 +1,5 @@
 strategy:
-  class_name: "gnomepy_research.strategies.prediction_market_maker:PredictionMarketMaker"
+  class_name: "gnomepy_research.sessions.prediction_market_mm.strategy:PredictionMarketMaker"
   args:
     listing_id: 19757
     value_function_path: "artifact://value_function/Q10_k150"

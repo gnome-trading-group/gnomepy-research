@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from gnomepy import Scales
 
 from gnomepy_research.arb.book_walking import OrderMode
-from gnomepy_research.arb.types import Listing
+from gnomepy_research.listing import Listing
 
 if TYPE_CHECKING:
     from gnomepy_research.arb.pricing import LegConstraint

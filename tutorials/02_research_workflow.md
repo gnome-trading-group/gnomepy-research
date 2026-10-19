@@ -44,7 +44,7 @@ targets are **0.001 to 0.003**; anything above
 **Minimum backtest length:** don't guess it — the library computes it.
 
 ```python
-from gnomepy_research.validation.statistics import minimum_backtest_length
+from gnomepy_research.analysis.statistics import minimum_backtest_length
 
 minimum_backtest_length(0.002)   # per-bar Sharpe 0.002 -> ~676,000 bars
 minimum_backtest_length(0.05)    # per-bar Sharpe 0.05  -> ~1,085 bars
@@ -67,7 +67,7 @@ Treat significance as informational on short ranges and lean on walk-forward con
 
 ## Deep-Dive Analysis
 
-When a result looks interesting — or suspicious — open `notebooks/02_backtest_deep_dive.ipynb`. It loads the parquet files and walks through:
+When a result looks interesting — or suspicious — load it with `analysis.results.load_results` and work through these, using the diagnostics in `05_analysis_toolkit.md`:
 
 1. **PnL curve** — is it smooth and consistent, or driven by 1-2 big trades?
 2. **Worst drawdown period** — zoom in and see what happened in the market
@@ -77,7 +77,7 @@ When a result looks interesting — or suspicious — open `notebooks/02_backtes
 6. **Alpha decay** — do early windows have higher Sharpe than late ones? Signals the strategy's edge degrades as the session progresses
 7. **Regime analysis** — does PnL concentrate in one market condition (low vol, tight spread)?
 
-The notebook ends with a **red flags checklist** that runs programmatically. Pay attention to:
+Red flags:
 - Top 10% of bars driving > 80% of positive returns (lucky outlier, not signal)
 - Adverse selection rate > 55% (being picked off consistently)
 - PnL from only one regime (not robust)
@@ -266,7 +266,7 @@ windows overlap.
 working it out by hand:
 
 ```python
-from gnomepy_research.validation.statistics import minimum_backtest_length
+from gnomepy_research.analysis.statistics import minimum_backtest_length
 
 minimum_backtest_length(0.5)    # 14 bars
 minimum_backtest_length(0.1)    # 273 bars
@@ -280,7 +280,7 @@ strategies — which is all of the realistic ones — need very long windows to 
 Sharpe under the null grows with the trial count, and the library computes it:
 
 ```python
-from gnomepy_research.validation.statistics import expected_max_sharpe
+from gnomepy_research.analysis.statistics import expected_max_sharpe
 
 expected_max_sharpe(20)     # 20 iterations
 expected_max_sharpe(2_000)  # 20 iterations x 100 sweep jobs
@@ -294,17 +294,13 @@ thresholds are met.
 
 ## Cross-Session Comparison
 
-Once you have multiple sessions with good results, use `gnomepy_research.analysis.portfolio`
-(or open `notebooks/03_cross_session_comparison.ipynb`, which wraps it):
+Once you have multiple sessions with good results:
 
-1. **Summary table** — side-by-side Sharpe, PnL, fill count across sessions
-2. **PnL overlay** — normalized curves on the same axes to spot correlation
-3. **Correlation matrix** — low correlation between strategies is valuable (diversification)
-4. **Combined Sharpe** — `analysis.portfolio.combined_sharpe(pnl_curves, weights)` computes it from the
-   actual curves. For intuition: two strategies at 0.3 correlation with individual Sharpe `s` combine at
-   equal weight to `s × √(2 / 1.3) ≈ 1.24 × s`, so 1.5 becomes about 1.86. Correlation is
-   `analysis.portfolio.compute_cross_strategy_correlation(results_dirs)`
-5. **Per-regime PnL** — does strategy A perform where strategy B doesn't?
+1. **Summary table** — `analysis.results.compare_results(*best_result_dirs)` puts Sharpe, PnL and fill count side by side
+2. **Correlation** — low correlation between strategies is valuable (diversification). Two strategies at 0.3
+   correlation with individual Sharpe `s` combine at equal weight to `s × √(2 / 1.3) ≈ 1.24 × s`, so 1.5
+   becomes about 1.86
+3. **Per-regime PnL** — `analysis.rolling_performance.pnl_by_regime` shows whether strategy A performs where strategy B doesn't
 
 ---
 
@@ -327,5 +323,4 @@ Once you have multiple sessions with good results, use `gnomepy_research.analysi
 ## Next Steps
 
 - Read **`03_strategy_building.md`** for signal DSL, strategy patterns, and code conventions
-- Open `notebooks/02_backtest_deep_dive.ipynb` for structured result analysis
-- Open `notebooks/03_cross_session_comparison.ipynb` to compare sessions
+- Read **`05_analysis_toolkit.md`** for the result diagnostics and validation functions

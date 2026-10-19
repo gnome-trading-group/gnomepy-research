@@ -1,5 +1,5 @@
 strategy:
-  class_name: "gnomepy_research.sessions.cross_prediction_arb.cross_prediction_arb:CrossPredictionArb"
+  class_name: "gnomepy_research.sessions.cross_prediction_arb.strategy:CrossPredictionArb"
   args:
     pm_a_listing_id: 0
     pm_b_listing_id: 0

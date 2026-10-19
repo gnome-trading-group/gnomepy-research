@@ -7,8 +7,8 @@ from typing import Callable, Protocol
 from gnomepy import Scales, Side
 from gnomepy.java.backtest.orders import ExecutionReport
 
-from gnomepy_research.arb.fees import FeeRates
-from gnomepy_research.arb.types import Listing
+from gnomepy_research.fees import FeeRates
+from gnomepy_research.listing import Listing
 
 
 class OrderMode(IntEnum):

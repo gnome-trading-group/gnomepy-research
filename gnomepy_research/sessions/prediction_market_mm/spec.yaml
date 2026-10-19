@@ -12,7 +12,7 @@ description: >
   and lower VaR vs the A-S baseline with comparable expected PnL.
 
   Prerequisite: run the HJB solver first to produce the value function table.
-    poetry run python -m gnomepy_research.solvers.prediction_market_hjb
+    poetry run python -m gnomepy_research.sessions.prediction_market_mm.prediction_market_hjb
 
 data:
   listings:
@@ -50,4 +50,4 @@ meta:
     queue_model: true
     latency: true
   interaction_mode: autonomous
-  baseline_comparison: gnomepy_research.strategies.market_maker:MarketMaker
+  baseline_comparison: gnomepy_research.sessions.prediction_market_mm.market_maker:MarketMaker

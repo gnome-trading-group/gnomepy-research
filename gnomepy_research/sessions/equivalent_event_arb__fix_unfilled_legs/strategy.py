@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from gnomepy import Scales
 
-from gnomepy_research.strategies.equivalent_event_arb import EquivalentEventArb
-from gnomepy_research.strategies.target_portfolio import Target
+from gnomepy_research.sessions.equivalent_event_arb.strategy import EquivalentEventArb
+from gnomepy_research.sessions.equivalent_event_arb.target_portfolio import Target
 
 
 class EquivalentEventArbFillFix(EquivalentEventArb):

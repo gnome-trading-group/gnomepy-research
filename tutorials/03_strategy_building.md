@@ -304,7 +304,7 @@ return []
 **Side is named for the side you are creating, not the side you are hitting.** `Side.BID` buys and
 `Side.ASK` sells, for both quotes and takes. To close a long position you take `Side.ASK`. Getting
 this backwards is the single easiest way to build a strategy that loses money on a real signal — see
-`gnomepy_research/strategies/momentum.py:97-121` for the canonical usage.
+the Momentum / Mean-Reversion pattern below for the canonical usage.
 
 Setting a size to `0` cancels that side; `Intent(exchange_id, security_id)` with no price or size
 fields cancels everything on the listing.
@@ -459,7 +459,7 @@ def _log(self, ts: int, z: float, state: int) -> None:
 
 Columns are long, double or int; a row holds up to 46 eight-byte values.
 
-Custom metric streams appear in `report.custom_metrics()` and can be analyzed in `notebooks/02_backtest_deep_dive.ipynb` under "Signal Attribution". A live or paper session records the same streams into its journal; read them back with `gnomepy.load_session_metrics(session_id)`.
+Custom metric streams appear in `report.custom_metrics()` and can be analyzed with `analysis.signal_attribution` (see `05_analysis_toolkit.md`). A live or paper session records the same streams into its journal; read them back with `gnomepy.load_session_metrics(session_id)`.
 
 ---
 
@@ -495,5 +495,4 @@ These apply to every `strategy.py`:
 
 - Read **`01_getting_started.md`** for session creation and first iteration
 - Read **`02_research_workflow.md`** for evaluation, notes, and validation
-- Open `notebooks/01_signal_exploration.ipynb` to explore signal behavior on real data before building a strategy
 - Browse `gnomepy_research/signals/` for the full signal catalog — each file has a docstring explaining the formula and parameters

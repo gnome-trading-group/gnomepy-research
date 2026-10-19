@@ -24,9 +24,6 @@ strategy:
     fill_risk_horizon_ns: 60000000000
     fill_risk_lambda: 0.0
     imbalance_timeout_ns: 60000000000
-    maker_fee_rates:
-      k: 0.0175
-      pm: 0.0
     max_position: 20000
     max_price_divergence_cents: 5.0
     max_staleness_ns: 60000000000
@@ -40,9 +37,6 @@ strategy:
     price_model: join_best_bid
     price_window_cents: 2
     processing_time_ns: 5000000
-    taker_fee_rates:
-      k: 0.07
-      pm: 0.07
     taker_labels: []
     lead_with_illiquid: true
     taker_complete_edge_cents: 1.0

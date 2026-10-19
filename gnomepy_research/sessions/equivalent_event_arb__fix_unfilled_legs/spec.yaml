@@ -1,0 +1,41 @@
+name: equivalent_event_arb__fix_unfilled_legs
+description: >
+  [BRANCH: fix_unfilled_legs] Fix the leg imbalance in equivalent_event_arb: taker legs
+  arrived after brief ask dips had closed, leaving one side of the arb unfilled. Explores
+  maker legs, imbalance timeouts and entry filters on a Polymarket/Kalshi pair.
+
+  Reconstructed 2026-10-19 from the session's configs and research_learnings.md; the
+  session ran without a spec.yaml.
+
+  Original: Arbitrage equivalent prediction market contracts across exchanges (Polymarket,
+  Kalshi). A complete set of mutually exclusive outcomes always pays $1 at resolution, so
+  buying each outcome from its cheapest venue is a guaranteed profit when total cost + fees
+  < $1.
+
+data:
+  listings:
+    - listing_id: 117905  # Polymarket
+    - listing_id: 117906  # Polymarket
+    - listing_id: 115763  # Kalshi
+    - listing_id: 115764  # Kalshi
+  date_ranges:
+    - start: "2026-08-19T21:24:00"
+      end: "2026-08-19T22:10:00"
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">0"
+
+constraints:
+  strategy_type: arb
+  max_iterations: 20
+
+meta:
+  execution_mode: local
+  sensitivity_tests:
+    latency: true
+    queue_model: true
+  interaction_mode: autonomous

@@ -6,9 +6,9 @@ from typing import Protocol
 
 from gnomepy import Scales
 
-from gnomepy_research.arb.fees import FeeRates
+from gnomepy_research.fees import FeeRates
 from gnomepy_research.arb.portfolio import ArbLeg
-from gnomepy_research.arb.types import Listing
+from gnomepy_research.listing import Listing
 
 _PRICE_SCALE = Scales.PRICE
 _SIZE_SCALE = Scales.SIZE

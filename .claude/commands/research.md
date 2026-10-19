@@ -76,7 +76,7 @@ If the user has given a directive in this conversation — a signal to try, a pa
 
 - **`autonomous`**: Skip the question — proceed with the user's latest directive (if any) or the session history's `next_action`.
 
-**Iteration 1:** Design an initial strategy from scratch based on `spec.description` and `spec.constraints`. Look at the existing strategies in `gnomepy_research/strategies/` for patterns. Choose signals from `gnomepy_research/signals/` that match the description. State your strategy design as your hypothesis.
+**Iteration 1:** Design an initial strategy from scratch based on `spec.description` and `spec.constraints`. Look at the patterns in `tutorials/03_strategy_building.md` (Common Patterns) and at other sessions' `strategy.py` for structure. Choose signals from `gnomepy_research/signals/` that match the description. State your strategy design as your hypothesis.
 
 **Later iterations:** Read the last entry's `analysis` and `next_action`. If the user has given a directive, use it instead of `next_action`. Otherwise follow `next_action` unless a better approach is evident from the full history. If the last 3+ iterations show no meaningful improvement in `spec.goals.primary_metric` (see the plateau rule in Step 5), try something fundamentally different — different signals, different strategy class, or a new structural approach.
 
@@ -119,9 +119,10 @@ Rules:
 - Subclass `gnomepy.Strategy`
 - No comments unless the WHY is non-obvious
 - Use signals from `gnomepy_research.signals`
-- Follow the pattern in `gnomepy_research/strategies/market_maker.py` (quoting) or `momentum.py` (taking)
+- Follow the Market Maker (quoting) or Momentum (taking) pattern in `tutorials/03_strategy_building.md`
+- Put the class itself in `strategy.py` — no module-level instance; the config's `strategy.args` are the parameters
 - Return `[]` from `on_execution_report` unless reactive logic is needed
-- **All code changes stay under the session directory.** Never modify files outside `gnomepy_research/sessions/$ARGUMENTS/` during research. If you need a signal or component that doesn't exist yet or needs modification, copy it into the session directory and import from there (e.g., `from gnomepy_research.sessions.$ARGUMENTS.signals import MySignal`). Shared code in `gnomepy_research/signals/`, `gnomepy_research/strategies/`, etc. is stable — promote session-local code to shared locations only after the session completes and the approach is proven.
+- **All code changes stay under the session directory.** Never modify files outside `gnomepy_research/sessions/$ARGUMENTS/` during research. If you need a signal or component that doesn't exist yet or needs modification, copy it into the session directory and import from there (e.g., `from gnomepy_research.sessions.$ARGUMENTS.signals import MySignal`). Shared code in `gnomepy_research/signals/`, `gnomepy_research/arb/`, etc. is stable — promote session-local code to shared locations only after the session completes and the approach is proven.
 
 ### 4A.2 — Write the backtest config
 
@@ -320,10 +321,10 @@ implemented and tested:
 ```bash
 poetry run python3 - <<'EOF'
 import json
-from gnomepy_research.explore import load_results
-from gnomepy_research.reporting.backtest.adverse_selection import compute_adverse_selection
-from gnomepy_research.reporting.backtest.market_making import compute_mm_stats
-from gnomepy_research.reporting.backtest.rolling_performance import (
+from gnomepy_research.analysis.results import load_results
+from gnomepy_research.analysis.adverse_selection import compute_adverse_selection
+from gnomepy_research.analysis.market_making import compute_mm_stats
+from gnomepy_research.analysis.rolling_performance import (
     compute_alpha_decay, compute_rolling_sharpe, detect_regimes, pnl_by_regime,
 )
 
@@ -441,7 +442,7 @@ iteration).
 
 ```bash
 poetry run python3 - <<'EOF'
-from gnomepy_research.validation.monte_carlo import (
+from gnomepy_research.analysis.monte_carlo import (
     generate_latency_sweep_config, generate_queue_sweep_config,
 )
 
@@ -466,7 +467,7 @@ Run each generated config the same way as any other local run, with its own `--o
 
 Optionally, bootstrap the PnL path to see how much of the result is path luck:
 ```python
-from gnomepy_research.validation.monte_carlo import bootstrap_pnl_paths, summarize_mc_paths
+from gnomepy_research.analysis.monte_carlo import bootstrap_pnl_paths, summarize_mc_paths
 summarize_mc_paths(bootstrap_pnl_paths(report.fills, report.market_df))
 ```
 

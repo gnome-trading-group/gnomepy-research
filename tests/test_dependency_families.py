@@ -145,7 +145,7 @@ def test_extras_come_from_the_nearest_package():
     assert strategy_extras("gnomepy_research.sessions.cs2_series.strategy:CS2Series") == ("xgboost",)
     assert module_extras("gnomepy_research.models.cfb.efficiency.inference") == ("pymc",)
     assert module_extras("gnomepy_research.models.cfb.features.source") == ()
-    assert strategy_extras("gnomepy_research.strategies.random_trader:RandomTrader") == ()
+    assert strategy_extras("gnomepy_research.sessions.dutch_book_arb.strategy:DutchBookArb") == ()
     with pytest.raises(ValueError):
         strategy_extras("somewhere_else.module:Strategy")
 

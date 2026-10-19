@@ -1,8 +1,6 @@
 exchanges:
   POLYMARKET_INTL:
     fee_model:
-      maker_fee_rate: 0.0
-      taker_fee_rate: 0.05
       type: parametric
     order_processing_latency:
       base_nanos: 5000000
@@ -11,8 +9,6 @@ exchanges:
       type: maker_taker
   KALSHI:
     fee_model:
-      maker_fee_rate: 0.0175
-      taker_fee_rate: 0.07
       type: parametric
 record_depth: 10
 scenarios:
@@ -129,9 +125,6 @@ strategy:
       - pm
     fill_risk_lambda: 0.0
     imbalance_timeout_ns: 60000000000
-    maker_fee_rates:
-      k: 0.0175
-      pm: 0.0
     max_position: 20000
     max_price_divergence_cents: 5.0
     max_staleness_ns: 60000000000
@@ -141,9 +134,6 @@ strategy:
     price_model: join_best_bid
     price_window_cents: 2
     processing_time_ns: 5000000
-    taker_fee_rates:
-      k: 0.07
-      pm: 0.05
     taker_labels:
       - pm
     unwind_spread_mult: 2.0

@@ -2,7 +2,6 @@ strategy:
   class_name: "gnomepy_research.sessions.dutch_book_arb.strategy:DutchBookArb"
   args:
     size: 1000000
-    fee_rate: 0.07
     min_edge_bps: 10.0
     stale_threshold_ns: 2000000000
     imbalance_timeout_ns: 30000000000

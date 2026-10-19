@@ -109,3 +109,15 @@ cython_debug/
 *.parquet
 *.html
 *.npz
+
+# Session results: only the small files that record what a run was and how it scored
+gnomepy_research/sessions/*/results/**
+!gnomepy_research/sessions/*/results/**/
+!gnomepy_research/sessions/*/results/**/summary.json
+!gnomepy_research/sessions/*/results/**/sweep_summary.json
+!gnomepy_research/sessions/*/results/**/metadata.json
+!gnomepy_research/sessions/*/results/**/config.yaml
+!gnomepy_research/sessions/*/results/**/*.txt
+!gnomepy_research/sessions/*/results/**/*.csv
+# The cfb in-game monitor (live/ingame_monitor.py) loads its model from here
+!gnomepy_research/sessions/cfb_win_probability/results/ingame/wp_xgb_*.json

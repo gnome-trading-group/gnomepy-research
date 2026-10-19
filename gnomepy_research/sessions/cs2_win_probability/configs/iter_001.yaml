@@ -3,7 +3,7 @@
 # Replace fair_value_series_path with a pre-computed parquet from GRID/demo data.
 
 strategy:
-  class_name: "gnomepy_research.sessions.cs2_win_probability.cs2_win_probability:CS2WinProbability"
+  class_name: "gnomepy_research.sessions.cs2_win_probability.strategy:CS2WinProbability"
   args:
     listing_id_yes: 253844       # Polymarket YES for this match (example)
     listing_id_no: 253845        # Polymarket NO for this match

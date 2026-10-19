@@ -191,7 +191,7 @@ wrong is what made every session before 2026-09-30 stall against unreachable tar
 - Per-bar Sharpe > 0.01 (≈ 18 annualized) with < 50 fills on a 30-minute window: a lucky fluke, not signal
 - PnL entirely in one 10-minute window: alpha may be concentrated on a single event
 
-Use `notebooks/02_backtest_deep_dive.ipynb` for a structured post-result analysis.
+See the Deep-Dive Analysis section of `02_research_workflow.md` for a structured post-result analysis.
 
 ---
 
@@ -252,4 +252,3 @@ poetry run research validate walk-forward <name> \
 
 - Read **`02_research_workflow.md`** for the full evaluation → iterate → validate lifecycle
 - Read **`03_strategy_building.md`** for signal DSL, strategy patterns, and code conventions
-- Open `notebooks/01_signal_exploration.ipynb` to explore market data and signals before building a strategy

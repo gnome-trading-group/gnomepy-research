@@ -7,7 +7,7 @@ from gnomepy import ExecutionReport, Intent, OrderType, Side, Strategy
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient, RelationshipGraph
 
-from gnomepy_research.arb import registry_fee_rates
+from gnomepy_research.fees import registry_fee_rates
 
 PRICE_SCALE = 1_000_000_000
 

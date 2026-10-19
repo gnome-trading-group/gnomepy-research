@@ -232,5 +232,16 @@ duplicate verdicts for three sessions because Step 7 blind-appended.
 ## Sessions with no entry
 
 These ran or were scaffolded but never produced a learnings entry. Listed so the gap is visible
-rather than silent: `n_exchange_arb`, `stablecoin_stat_arb`, `cs2_win_probability`,
-`equivalent_event_arb`, `dutch_book_arb`, `implication_boundary_arb`, `prediction_market_mm`.
+rather than silent. The arb and market-making ones were abandoned (as of the 2026-10-19 cleanup);
+nobody recorded why, so treat them as untested ideas rather than dead ends.
+
+| Session | Configs | Status |
+|---|---|---|
+| `equivalent_event_arb` | 37 | Abandoned; its branches `__fix_unfilled_legs` and `__low_vol_changes` have entries above |
+| `cross_prediction_arb__multi` | 56 | Abandoned; the parent `cross_prediction_arb` has an entry above |
+| `n_exchange_arb` | 40 | Abandoned |
+| `stablecoin_stat_arb` | 1 | Abandoned after one bug-fix run; never iterated by `/research` |
+| `dutch_book_arb` | 1 | Scaffolded, never iterated |
+| `implication_boundary_arb` | 1 | Scaffolded, never iterated |
+| `prediction_market_mm` | 3 | Abandoned; `informed_pmm` (entry above) runs the same HJB quoting with a reference-venue fair value |
+| `cs2_win_probability` | 1 | Model research, not a `/research` loop. 2026-10-18: the pre-match model's backtest edge over Polymarket came from VRS ranks leaking the result; without them it loses to the market at every horizon |

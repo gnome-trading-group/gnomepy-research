@@ -5,7 +5,7 @@ from itertools import product
 
 from gnomepy.registry import RegistryClient, RelationshipGraph
 
-from gnomepy_research.arb.types import Listing
+from gnomepy_research.listing import Listing
 
 
 @dataclass

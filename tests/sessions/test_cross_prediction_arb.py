@@ -12,7 +12,7 @@ import pytest
 
 from gnomepy import Scales
 from gnomepy.java.enums import Action
-from gnomepy_research.sessions.cross_prediction_arb.cross_prediction_arb import (
+from gnomepy_research.sessions.cross_prediction_arb.strategy import (
     BookLevel,
     LegState,
     Phase,

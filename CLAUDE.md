@@ -49,7 +49,8 @@ the first iteration. Sessions not driven by it commit wherever you are working.
 gnomepy_research/sessions/<name>/
   __init__.py       # makes the session importable; declares EXTRAS if its code needs a dependency family
   spec.yaml         # user-authored goals and constraints — DO NOT MODIFY
-  strategy.py       # current working strategy (modified each iteration)
+  strategy.py       # the strategy class itself (modified each iteration); configs name it
+                    #   gnomepy_research.sessions.<name>.strategy:<Class>
   *.py              # session-local signals or utilities, if needed
   best/             # snapshot of all .py files from the last accepted iteration
   configs/          # per-iteration backtest YAML configs and sweep configs
@@ -57,7 +58,16 @@ gnomepy_research/sessions/<name>/
   notes/            # local note files synced from API (poetry run research notes pull <name>)
 ```
 
-**Code scope (autonomous iterations only):** during a `/research` iteration, all code changes stay under `sessions/<name>/` — never modify `gnomepy_research/signals/`, `gnomepy_research/strategies/`, or the rest of the shared package. This is a guardrail on the unattended loop, not a rule about sessions generally; working on a session directly, reach for whatever the work needs. If a session needs a modified signal or utility, copy it into the session directory and import from there. Promote session-local code to shared locations only after the session completes.
+`strategy.py` holds the class, never a module-level instance: a config's `strategy.args` are the
+parameters. A branch session `<parent>__<suffix>` may subclass its parent's `strategy.py`; no other
+session imports from another. Configs record the run they were written for — an old iteration's
+args need not match today's constructor.
+
+Only the small files in `results/` are committed (`summary.json`, `sweep_summary.json`,
+`metadata.json`, `config.yaml`, and `.txt`/`.csv` reports); parquet, HTML and everything else
+stays local. `.gitignore` holds the list.
+
+**Code scope (autonomous iterations only):** during a `/research` iteration, all code changes stay under `sessions/<name>/` — never modify `gnomepy_research/signals/`, `gnomepy_research/arb/`, or the rest of the shared package. This is a guardrail on the unattended loop, not a rule about sessions generally; working on a session directly, reach for whatever the work needs. If a session needs a modified signal or utility, copy it into the session directory and import from there. Promote session-local code to shared locations only after the session completes.
 
 For loop-driven sessions, state (iterations, notes, status) is stored in the API — viewable at the Research page in the web UI. **API responses are snake_case** (`session_name`, `iteration_count`, `best_iteration`, `best_pnl`, `best_sharpe`). `research sessions list --json` and `research validate significance --json` emit raw JSON for scripting.
 
@@ -65,7 +75,7 @@ For loop-driven sessions, state (iterations, notes, status) is stored in the API
 
 **Cross-session memory:** `gnomepy_research/research_learnings.md` holds **one entry per session**, updated in place when a session completes or stalls. `/research` Step 2 reads this file before forming each hypothesis — avoids re-running dead ends and bootstraps from known-good approaches. Learnings are also pushed as session notes (`poetry run research notes add`) for web UI visibility.
 
-**Diagnostics:** `/research` Step 5 runs mandatory per-strategy-type diagnostic checks every iteration via `gnomepy_research.reporting.backtest` (`compute_mm_stats`, `compute_adverse_selection`, `compute_rolling_sharpe`) rather than hand-rolling them from parquet. Results are included in the iteration analysis and directly inform the next hypothesis.
+**Diagnostics:** `/research` Step 5 runs mandatory per-strategy-type diagnostic checks every iteration via `gnomepy_research.analysis` (`compute_mm_stats`, `compute_adverse_selection`, `compute_rolling_sharpe`) rather than hand-rolling them from parquet. Results are included in the iteration analysis and directly inform the next hypothesis.
 
 ### Simulation parameters
 Each exchange's simulation parameters (network and order latency, market data latency, queue model, self-trade prevention) live in the registry, under the controller's Security Master → Simulation tab. Every backtest and paper session simulates each listing with its exchange's parameters, so a config states nothing about simulation unless an experiment changes it. Fees always come from the registry's fee schedules.
@@ -114,10 +124,30 @@ sweep:
         latency_nanos: [5000000, 10000000]   # simulation sweep; needs exchanges.KALSHI.network_latency.type
 ```
 
+## Where code goes
+
+| Location | What belongs there |
+|---|---|
+| `models/` | Production models and features, imported by gnome-pipelines and live strategies. Tested, released by tag. |
+| `sessions/<name>/` | Everything a session needs that no other session does: its strategy, signals, analysis scripts. Live strategies run from their session too (`sessions/cs2_series`). |
+| `signals/` | The composable `Signal` library (catalog in tutorial 03). |
+| `arb/` | Pricing, book-walking and leg tracking shared by the prediction-market arb sessions. |
+| `fees.py`, `listing.py` | Registry fee rates and the `Listing` key, for any strategy (live ones included). |
+| `analysis/` | Reading backtest results: loading and comparing runs, market-making and adverse-selection diagnostics, rolling performance, significance and walk-forward validation, signal attribution. |
+| `cli.py`, `api.py`, `notes_sync.py`, `environment.py`, `dependencies.py` | The `research` CLI, the research API client, and packaging. |
+
+Shared code is code more than one session uses. A strategy class used by one session family lives
+in that session, not in a shared `strategies/` package; promote code out of a session only once a
+second session needs it.
+
+Tests mirror the package: `tests/models/...` for production code, `tests/sessions/` for session
+code, and `tests/<module>/` for the shared modules.
+
 ## Production code vs sessions
 
-gnome-pipelines and live strategies depend on this package (pinned by git tag) and import only from
-`gnomepy_research/models/`:
+gnome-pipelines and live strategies depend on this package (pinned by git tag). Pipelines import only
+from `gnomepy_research/models/`; a live strategy is its session's `strategy.py`, importing only
+`models/`, its own session, and the base-only `fees`/`listing` modules:
 
 ```
 models/cs2/hltv/             HLTV point-in-time features and priors
@@ -129,7 +159,7 @@ models/cfb/hyperparameters/  its fitted hyperparameters
 ```
 
 Sessions build on `models/`, never the other way round: nothing in `models/` imports from
-`sessions/`. When session code goes to production, promote it into `models/` first, and treat
+`sessions/`. When a session's model code goes to production, promote it into `models/` first, and treat
 changes there as production changes: tested, and released by tagging this repo.
 
 ## Dependency families
@@ -143,7 +173,7 @@ installs only what its code uses:
 | `xgboost` | xgboost (`xgboost-cpu` on Linux), scikit-learn, joblib |
 | `pymc` | pymc, `nutpie[pymc]` (our models sample with nutpie; it brings numba) |
 | `websocket` | websocket-client |
-| `research` | gnomepy[backtest] (plotly, dash, ...) for analysis, reporting, explore, CLI, validation |
+| `research` | gnomepy[backtest] (plotly, dash, ...) for `analysis` and the CLI |
 
 - A package declares the extras its code needs in its `__init__.py`: `EXTRAS = ("xgboost",)`.
   The nearest enclosing package that declares EXTRAS decides for every module in it; code with
@@ -205,7 +235,7 @@ model_path: "artifact://xgboost_model/cs2_pre_map_win_prob@production"          
 - `tutorials/02_research_workflow.md` — evaluate → iterate → validate, and what the metrics mean
 - `tutorials/03_strategy_building.md` — signal catalog (generated) and strategy patterns
 - `tutorials/04_artifacts_and_datasets.md` — reading models and datasets
-- `tutorials/05_analysis_toolkit.md` — `explore`, `analysis`, `validation`, `reporting.backtest`, `arb`
+- `tutorials/05_analysis_toolkit.md` — `analysis`, `arb`, `environment`
 
 The signal tables in `03` are generated: `poetry run python scripts/gen_signal_catalog.py`.
 `tests/test_docs_sync.py` fails if they drift from `gnomepy_research.signals.__all__`.
