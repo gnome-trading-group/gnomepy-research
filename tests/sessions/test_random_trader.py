@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 
 import pytest
-from gnomepy import OrderType, Side
+from gnomepy import ExecType, OrderType, RejectReason, Side
 
-from gnomepy_research.strategies import random_trader
-from gnomepy_research.strategies.random_trader import RandomTrader
+from gnomepy_research.sessions.random_trader import strategy as random_trader
+from gnomepy_research.sessions.random_trader.strategy import RandomTrader
 
 SECOND = 1_000_000_000
 DOLLAR = 1_000_000_000
@@ -187,3 +188,115 @@ def test_never_exits_by_default():
     for t in range(0, 10_000, 100):
         strategy.on_market_data(Book(t * SECOND))
     assert strategy._control.exits == []
+
+
+class FakeStream:
+    """Keeps committed rows, holding the strategy to the declare, freeze, begin, set, commit order sessions enforce."""
+
+    def __init__(self):
+        self.columns = []
+        self.rows = []
+        self._frozen = False
+        self._row = None
+
+    def _add(self, name):
+        assert not self._frozen
+        self.columns.append(name)
+        return len(self.columns) - 1
+
+    add_long_column = add_double_column = add_int_column = _add
+
+    def freeze(self):
+        self._frozen = True
+
+    def begin(self):
+        assert self._frozen and self._row is None
+        self._row = {}
+
+    def _set(self, column, value):
+        assert self._row is not None
+        self._row[self.columns[column]] = value
+
+    set_long = set_double = set_int = _set
+
+    def commit(self):
+        self.rows.append(self._row)
+        self._row = None
+
+
+class FakeMetrics:
+    def __init__(self):
+        self.streams = {}
+
+    def create_stream(self, name):
+        self.streams[name] = FakeStream()
+        return self.streams[name]
+
+
+def with_metrics(strategy: RandomTrader) -> FakeMetrics:
+    metrics = FakeMetrics()
+    strategy._metric_recorder = metrics
+    strategy.register_metrics()
+    return metrics
+
+
+def test_each_intent_records_the_touch_the_position_and_what_was_sent():
+    positions = FakePositions()
+    positions.quantity[(1, 2)] = 2
+    strategy = make(positions, quote=True, quote_offset=0.01)
+    metrics = with_metrics(strategy)
+
+    intents = strategy.on_market_data(Book(0, bid=40 * CENT, ask=42 * CENT))
+
+    [row] = metrics.streams["decisions"].rows
+    assert row["timestamp"] == 0
+    assert (row["exchange_id"], row["security_id"]) == (1, 2)
+    assert (row["best_bid"], row["best_ask"]) == (0.40, 0.42)
+    assert row["position"] == 2
+    assert row["take_side"] == {Side.BID: 1, Side.ASK: -1}[intents[0].take_side]
+    assert row["take_size"] == intents[0].take_size
+    assert (row["quote_bid"], row["quote_ask"]) == (0.39, 0.43)
+
+
+def test_a_take_without_a_quote_records_no_quote_prices():
+    strategy = make(FakePositions())
+    metrics = with_metrics(strategy)
+
+    strategy.on_market_data(Book(0))
+
+    [row] = metrics.streams["decisions"].rows
+    assert math.isnan(row["quote_bid"]) and math.isnan(row["quote_ask"])
+
+
+def test_no_intent_records_no_decision():
+    strategy = make(FakePositions())
+    metrics = with_metrics(strategy)
+
+    strategy.on_market_data(Book(0, bid=0))
+
+    assert metrics.streams["decisions"].rows == []
+
+
+def test_each_execution_report_is_recorded_with_its_type_and_reject_reason():
+    strategy = make(FakePositions())
+    metrics = with_metrics(strategy)
+    fill = SimpleNamespace(
+        timestamp_recv=5, exchange_id=1, security_id=2, client_oid="17", exec_type=ExecType.FILL,
+        filled_qty=1, fill_price=41 * CENT, leaves_qty=0, reject_reason=RejectReason.UNKNOWN,
+    )
+    reject = SimpleNamespace(
+        timestamp_recv=6, exchange_id=1, security_id=2, client_oid="18", exec_type=ExecType.REJECT,
+        filled_qty=0, fill_price=0, leaves_qty=0, reject_reason=RejectReason.RISK_LIMIT_EXCEEDED,
+    )
+
+    strategy.on_execution_report(fill)
+    strategy.on_execution_report(reject)
+
+    filled, rejected = metrics.streams["reports"].rows
+    assert filled == {
+        "timestamp": 5, "exchange_id": 1, "security_id": 2, "client_oid": 17,
+        "exec_type": list(ExecType).index(ExecType.FILL), "filled_qty": 1, "fill_price": 0.41,
+        "leaves_qty": 0, "reject_reason": -1,
+    }
+    assert rejected["exec_type"] == list(ExecType).index(ExecType.REJECT)
+    assert rejected["reject_reason"] == list(RejectReason).index(RejectReason.RISK_LIMIT_EXCEEDED)

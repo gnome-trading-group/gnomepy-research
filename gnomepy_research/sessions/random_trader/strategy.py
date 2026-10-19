@@ -23,14 +23,28 @@ Options for exercising a strategy ending its own session:
 
 Every execution report is printed, rejects with their reason, so the session log shows
 what the OMS refused and why.
+
+Two metric streams record the same, so a session's journal exercises metrics too:
+
+* ``decisions``: one row per intent, with the touch, the position and what was sent. ``take_side``
+  is 1 to buy, -1 to sell and 0 for none; a missing quote side is NaN.
+* ``reports``: one row per execution report. ``exec_type`` and ``reject_reason`` are positions
+  in gnomepy's ``ExecType`` and ``RejectReason`` enums; ``reject_reason`` is -1 on anything but a reject.
+
+Sizes and positions are in the scaled units orders use.
 """
 from __future__ import annotations
 
 import random
 from datetime import timedelta
+from math import nan
 
-from gnomepy import ExecutionReport, Intent, OrderType, Scales, Side, Strategy
+from gnomepy import ExecType, ExecutionReport, Intent, OrderType, RejectReason, Scales, Side, Strategy
 from gnomepy.java.schemas import Schema
+
+_TAKE_SIDES = {Side.BID: 1, Side.ASK: -1}
+_EXEC_TYPES = {exec_type: code for code, exec_type in enumerate(ExecType)}
+_REJECT_REASONS = {reason: code for code, reason in enumerate(RejectReason)}
 
 
 class RandomTrader(Strategy):
@@ -65,6 +79,36 @@ class RandomTrader(Strategy):
         self._rng = random.Random(seed)
         self._last_trade_ns: dict[tuple[int, int], int] = {}
         self._first_ns: int | None = None
+        self._decisions = None
+        self._reports = None
+
+    def register_metrics(self) -> None:
+        decisions = self.metrics.create_stream("decisions")
+        self._d_ts = decisions.add_long_column("timestamp")
+        self._d_exchange = decisions.add_int_column("exchange_id")
+        self._d_security = decisions.add_int_column("security_id")
+        self._d_bid = decisions.add_double_column("best_bid")
+        self._d_ask = decisions.add_double_column("best_ask")
+        self._d_position = decisions.add_long_column("position")
+        self._d_take_side = decisions.add_int_column("take_side")
+        self._d_take_size = decisions.add_long_column("take_size")
+        self._d_quote_bid = decisions.add_double_column("quote_bid")
+        self._d_quote_ask = decisions.add_double_column("quote_ask")
+        decisions.freeze()
+        self._decisions = decisions
+
+        reports = self.metrics.create_stream("reports")
+        self._r_ts = reports.add_long_column("timestamp")
+        self._r_exchange = reports.add_int_column("exchange_id")
+        self._r_security = reports.add_int_column("security_id")
+        self._r_client_oid = reports.add_long_column("client_oid")
+        self._r_exec_type = reports.add_int_column("exec_type")
+        self._r_filled = reports.add_long_column("filled_qty")
+        self._r_price = reports.add_double_column("fill_price")
+        self._r_leaves = reports.add_long_column("leaves_qty")
+        self._r_reject = reports.add_int_column("reject_reason")
+        reports.freeze()
+        self._reports = reports
 
     def on_market_data(self, data: Schema) -> list[Intent]:
         exchange_id, security_id = data.exchange_id, data.security_id
@@ -96,7 +140,25 @@ class RandomTrader(Strategy):
             fields.update(self._take(exchange_id, security_id, bid, ask))
         if not fields:
             return []
+        self._record_decision(now, exchange_id, security_id, bid, ask, fields)
         return [Intent(exchange_id=exchange_id, security_id=security_id, **fields)]
+
+    def _record_decision(self, now: int, exchange_id: int, security_id: int, bid: int, ask: int, fields: dict) -> None:
+        if self._decisions is None:
+            return
+        stream = self._decisions
+        stream.begin()
+        stream.set_long(self._d_ts, now)
+        stream.set_int(self._d_exchange, exchange_id)
+        stream.set_int(self._d_security, security_id)
+        stream.set_double(self._d_bid, bid / Scales.PRICE)
+        stream.set_double(self._d_ask, ask / Scales.PRICE)
+        stream.set_long(self._d_position, self.positions.get_effective_quantity(exchange_id, security_id))
+        stream.set_int(self._d_take_side, _TAKE_SIDES.get(fields.get("take_side"), 0))
+        stream.set_long(self._d_take_size, fields.get("take_size", 0))
+        stream.set_double(self._d_quote_bid, fields["bid_price"] / Scales.PRICE if "bid_price" in fields else nan)
+        stream.set_double(self._d_quote_ask, fields["ask_price"] / Scales.PRICE if "ask_price" in fields else nan)
+        stream.commit()
 
     def _quote(self, exchange_id: int, security_id: int, bid: int, ask: int) -> dict:
         offset = _to_price(self.quote_offset)
@@ -150,6 +212,21 @@ class RandomTrader(Strategy):
             f"leaves={report.leaves_qty}{reason}",
             flush=True,
         )
+        if self._reports is not None:
+            stream = self._reports
+            stream.begin()
+            stream.set_long(self._r_ts, report.timestamp_recv)
+            stream.set_int(self._r_exchange, report.exchange_id)
+            stream.set_int(self._r_security, report.security_id)
+            stream.set_long(self._r_client_oid, int(report.client_oid))
+            stream.set_int(self._r_exec_type, _EXEC_TYPES[report.exec_type])
+            stream.set_long(self._r_filled, report.filled_qty)
+            stream.set_double(self._r_price, report.fill_price / Scales.PRICE)
+            stream.set_long(self._r_leaves, report.leaves_qty)
+            # Reports that aren't rejects carry RejectReason.UNKNOWN rather than nothing.
+            rejected = report.exec_type in (ExecType.REJECT, ExecType.CANCEL_REJECT)
+            stream.set_int(self._r_reject, _REJECT_REASONS[report.reject_reason] if rejected else -1)
+            stream.commit()
         return []
 
 
