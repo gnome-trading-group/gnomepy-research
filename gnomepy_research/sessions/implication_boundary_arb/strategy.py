@@ -127,28 +127,29 @@ class ImplicationBoundaryArb(Strategy):
         self._col_ask_a_no = None
 
     def register_metrics(self) -> None:
-        buf = self.metrics.create_buffer("diagnostics")
-        self._col_ts = buf.addLongColumn("timestamp")
-        self._col_pair = buf.addLongColumn("pair_index")
-        self._col_edge_bps = buf.addDoubleColumn("edge_bps")
-        self._col_cost = buf.addDoubleColumn("cost")
-        self._col_state = buf.addLongColumn("state")
-        self._col_ask_b_yes = buf.addLongColumn("best_ask_b_yes")
-        self._col_ask_a_no = buf.addLongColumn("best_ask_a_no")
+        buf = self.metrics.create_stream("diagnostics")
+        self._col_ts = buf.add_long_column("timestamp")
+        self._col_pair = buf.add_long_column("pair_index")
+        self._col_edge_bps = buf.add_double_column("edge_bps")
+        self._col_cost = buf.add_double_column("cost")
+        self._col_state = buf.add_long_column("state")
+        self._col_ask_b_yes = buf.add_long_column("best_ask_b_yes")
+        self._col_ask_a_no = buf.add_long_column("best_ask_a_no")
         buf.freeze()
         self._buf = buf
 
     def _log(self, ts: int, pair_idx: int, edge_bps: float, cost: float, state: State, ask_b: int, ask_a: int) -> None:
         if self._buf is None:
             return
-        row = self._buf.appendRow()
-        self._buf.setLong(row, self._col_ts, ts)
-        self._buf.setLong(row, self._col_pair, pair_idx)
-        self._buf.setDouble(row, self._col_edge_bps, edge_bps)
-        self._buf.setDouble(row, self._col_cost, cost)
-        self._buf.setLong(row, self._col_state, int(state))
-        self._buf.setLong(row, self._col_ask_b_yes, ask_b)
-        self._buf.setLong(row, self._col_ask_a_no, ask_a)
+        self._buf.begin()
+        self._buf.set_long(self._col_ts, ts)
+        self._buf.set_long(self._col_pair, pair_idx)
+        self._buf.set_double(self._col_edge_bps, edge_bps)
+        self._buf.set_double(self._col_cost, cost)
+        self._buf.set_long(self._col_state, int(state))
+        self._buf.set_long(self._col_ask_b_yes, ask_b)
+        self._buf.set_long(self._col_ask_a_no, ask_a)
+        self._buf.commit()
 
     def simulate_processing_time(self) -> int:
         return self._processing_time_ns

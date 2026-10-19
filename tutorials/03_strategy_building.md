@@ -440,23 +440,26 @@ Log per-tick diagnostics for the parquet analyzer in Step 5:
 
 ```python
 def register_metrics(self) -> None:
-    buf = self.metrics.create_buffer("diagnostics")
-    self._col_ts    = buf.addLongColumn("timestamp")
-    self._col_z     = buf.addDoubleColumn("z_score")
-    self._col_state = buf.addLongColumn("state")
-    buf.freeze()
-    self._buf = buf
+    stream = self.metrics.create_stream("diagnostics")
+    self._col_ts    = stream.add_long_column("timestamp")
+    self._col_z     = stream.add_double_column("z_score")
+    self._col_state = stream.add_long_column("state")
+    stream.freeze()
+    self._diagnostics = stream
 
 def _log(self, ts: int, z: float, state: int) -> None:
-    if self._buf is None:
+    if self._diagnostics is None:
         return
-    row = self._buf.appendRow()
-    self._buf.setLong(row, self._col_ts, ts)
-    self._buf.setDouble(row, self._col_z, z)
-    self._buf.setLong(row, self._col_state, state)
+    self._diagnostics.begin()
+    self._diagnostics.set_long(self._col_ts, ts)
+    self._diagnostics.set_double(self._col_z, z)
+    self._diagnostics.set_long(self._col_state, state)
+    self._diagnostics.commit()
 ```
 
-Custom metric buffers appear in `report.custom_metrics()` and can be analyzed in `notebooks/02_backtest_deep_dive.ipynb` under "Signal Attribution".
+Columns are long, double or int; a row holds up to 46 eight-byte values.
+
+Custom metric streams appear in `report.custom_metrics()` and can be analyzed in `notebooks/02_backtest_deep_dive.ipynb` under "Signal Attribution". A live or paper session records the same streams into its journal; read them back with `gnomepy.load_session_metrics(session_id)`.
 
 ---
 

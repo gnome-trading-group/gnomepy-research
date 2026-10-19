@@ -384,7 +384,7 @@ class CS2WinProbability(Strategy):
         return self._processing_time_ns
 
     def register_metrics(self) -> None:
-        buf = self.metrics.create_buffer("cs2_signals")
+        buf = self.metrics.create_stream("cs2_signals")
         self._m_ts = buf.add_long_column("timestamp")
         self._m_fv = buf.add_double_column("fair_value")
         self._m_bid = buf.add_double_column("book_bid")
@@ -434,12 +434,13 @@ class CS2WinProbability(Strategy):
             ask_size = 0
 
         if self._metrics_buf is not None:
-            row = self._metrics_buf.append_row()
-            self._metrics_buf.set_long(row, self._m_ts, data.event_timestamp)
-            self._metrics_buf.set_double(row, self._m_fv, fv)
-            self._metrics_buf.set_double(row, self._m_bid, self._book_yes.best_bid() / PRICE_SCALE)
-            self._metrics_buf.set_double(row, self._m_ask, self._book_yes.best_ask() / PRICE_SCALE)
-            self._metrics_buf.set_long(row, self._m_pos, net_position)
+            self._metrics_buf.begin()
+            self._metrics_buf.set_long(self._m_ts, data.event_timestamp)
+            self._metrics_buf.set_double(self._m_fv, fv)
+            self._metrics_buf.set_double(self._m_bid, self._book_yes.best_bid() / PRICE_SCALE)
+            self._metrics_buf.set_double(self._m_ask, self._book_yes.best_ask() / PRICE_SCALE)
+            self._metrics_buf.set_long(self._m_pos, net_position)
+            self._metrics_buf.commit()
 
         if bid_size == 0 and ask_size == 0:
             return []

@@ -58,27 +58,28 @@ class DutchBookArb(Strategy):
         self._col_min_ask_size = None
 
     def register_metrics(self) -> None:
-        buf = self.metrics.create_buffer("diagnostics")
-        self._col_ts = buf.addLongColumn("timestamp")
-        self._col_sum_asks = buf.addDoubleColumn("sum_asks")
-        self._col_edge_bps = buf.addDoubleColumn("edge_bps")
-        self._col_state = buf.addLongColumn("state")
-        self._col_n_outcomes = buf.addLongColumn("n_outcomes")
-        self._col_min_ask_size = buf.addLongColumn("min_ask_size")
+        buf = self.metrics.create_stream("diagnostics")
+        self._col_ts = buf.add_long_column("timestamp")
+        self._col_sum_asks = buf.add_double_column("sum_asks")
+        self._col_edge_bps = buf.add_double_column("edge_bps")
+        self._col_state = buf.add_long_column("state")
+        self._col_n_outcomes = buf.add_long_column("n_outcomes")
+        self._col_min_ask_size = buf.add_long_column("min_ask_size")
         buf.freeze()
         self._buf = buf
 
     def _log(self, ts: int, sum_asks: float, edge_bps: float) -> None:
         if self._buf is None:
             return
-        row = self._buf.appendRow()
-        self._buf.setLong(row, self._col_ts, ts)
-        self._buf.setDouble(row, self._col_sum_asks, sum_asks)
-        self._buf.setDouble(row, self._col_edge_bps, edge_bps)
-        self._buf.setLong(row, self._col_state, int(self._state))
-        self._buf.setLong(row, self._col_n_outcomes, len(self._listings))
+        self._buf.begin()
+        self._buf.set_long(self._col_ts, ts)
+        self._buf.set_double(self._col_sum_asks, sum_asks)
+        self._buf.set_double(self._col_edge_bps, edge_bps)
+        self._buf.set_long(self._col_state, int(self._state))
+        self._buf.set_long(self._col_n_outcomes, len(self._listings))
         min_size = min(self._best_ask_size.values()) if self._best_ask_size else 0
-        self._buf.setLong(row, self._col_min_ask_size, min_size)
+        self._buf.set_long(self._col_min_ask_size, min_size)
+        self._buf.commit()
 
     def simulate_processing_time(self) -> int:
         return self._processing_time_ns

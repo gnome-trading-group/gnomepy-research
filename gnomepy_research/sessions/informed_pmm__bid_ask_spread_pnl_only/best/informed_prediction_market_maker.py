@@ -134,16 +134,16 @@ class SpreadCapturePMM(Strategy):
         self._metrics_buf = None
 
     def register_metrics(self) -> None:
-        buf = self.metrics.create_buffer("sc_pmm")
-        self._m_ts = buf.addLongColumn("timestamp")
-        self._m_ref_fv = buf.addDoubleColumn("ref_fair_value")
-        self._m_tau = buf.addDoubleColumn("tau_norm")
-        self._m_yes_q = buf.addDoubleColumn("yes_position")
-        self._m_no_q = buf.addDoubleColumn("no_position")
-        self._m_yes_bid = buf.addDoubleColumn("yes_bid")
-        self._m_yes_ask = buf.addDoubleColumn("yes_ask")
-        self._m_no_bid = buf.addDoubleColumn("no_bid")
-        self._m_no_ask = buf.addDoubleColumn("no_ask")
+        buf = self.metrics.create_stream("sc_pmm")
+        self._m_ts = buf.add_long_column("timestamp")
+        self._m_ref_fv = buf.add_double_column("ref_fair_value")
+        self._m_tau = buf.add_double_column("tau_norm")
+        self._m_yes_q = buf.add_double_column("yes_position")
+        self._m_no_q = buf.add_double_column("no_position")
+        self._m_yes_bid = buf.add_double_column("yes_bid")
+        self._m_yes_ask = buf.add_double_column("yes_ask")
+        self._m_no_bid = buf.add_double_column("no_bid")
+        self._m_no_ask = buf.add_double_column("no_ask")
         buf.freeze()
         self._metrics_buf = buf
 
@@ -335,16 +335,17 @@ class SpreadCapturePMM(Strategy):
             no_bid_sz = 0
 
         if self._metrics_buf is not None:
-            row = self._metrics_buf.appendRow()
-            self._metrics_buf.setLong(row, self._m_ts, ts)
-            self._metrics_buf.setDouble(row, self._m_ref_fv, p)
-            self._metrics_buf.setDouble(row, self._m_tau, tau_norm)
-            self._metrics_buf.setDouble(row, self._m_yes_q, float(yes_qty_actual))
-            self._metrics_buf.setDouble(row, self._m_no_q, float(no_qty_actual))
-            self._metrics_buf.setDouble(row, self._m_yes_bid, yes_bid / PRICE_SCALE if yes_bid else 0.0)
-            self._metrics_buf.setDouble(row, self._m_yes_ask, yes_ask / PRICE_SCALE if yes_ask else 0.0)
-            self._metrics_buf.setDouble(row, self._m_no_bid, no_bid / PRICE_SCALE if no_bid else 0.0)
-            self._metrics_buf.setDouble(row, self._m_no_ask, no_ask / PRICE_SCALE if no_ask else 0.0)
+            self._metrics_buf.begin()
+            self._metrics_buf.set_long(self._m_ts, ts)
+            self._metrics_buf.set_double(self._m_ref_fv, p)
+            self._metrics_buf.set_double(self._m_tau, tau_norm)
+            self._metrics_buf.set_double(self._m_yes_q, float(yes_qty_actual))
+            self._metrics_buf.set_double(self._m_no_q, float(no_qty_actual))
+            self._metrics_buf.set_double(self._m_yes_bid, yes_bid / PRICE_SCALE if yes_bid else 0.0)
+            self._metrics_buf.set_double(self._m_yes_ask, yes_ask / PRICE_SCALE if yes_ask else 0.0)
+            self._metrics_buf.set_double(self._m_no_bid, no_bid / PRICE_SCALE if no_bid else 0.0)
+            self._metrics_buf.set_double(self._m_no_ask, no_ask / PRICE_SCALE if no_ask else 0.0)
+            self._metrics_buf.commit()
 
         self._last_posted_bid[self._yes_sid] = yes_bid
         self._last_posted_ask[self._yes_sid] = yes_ask

@@ -284,6 +284,48 @@ class _Control:
         return bool(self.exits)
 
 
+class _MetricStream:
+    """Keeps committed rows, holding the strategy to the declare, freeze, begin, set, commit order sessions enforce."""
+
+    def __init__(self):
+        self.columns = []
+        self.rows = []
+        self._frozen = False
+        self._row = None
+
+    def add_long_column(self, name):
+        assert not self._frozen
+        self.columns.append(name)
+        return len(self.columns) - 1
+
+    add_double_column = add_long_column
+
+    def freeze(self):
+        self._frozen = True
+
+    def begin(self):
+        assert self._frozen and self._row is None
+        self._row = {}
+
+    def set_long(self, column, value):
+        self._row[self.columns[column]] = value
+
+    set_double = set_long
+
+    def commit(self):
+        self.rows.append(self._row)
+        self._row = None
+
+
+class _Metrics:
+    def __init__(self):
+        self.streams = {}
+
+    def create_stream(self, name):
+        self.streams[name] = _MetricStream()
+        return self.streams[name]
+
+
 @pytest.fixture
 def make(tmp_path):
     def _make(features=None, states=None, spec=None, **kw):
@@ -492,3 +534,20 @@ def test_series_pricing_goes_through_the_map_model():
     assert series_of(0.5) == pytest.approx(0.5)
     assert series_of(LOW) < LOW < 0.5, "a BO3 is more lopsided than one map"
     assert np.isclose(series_of(LOW), 0.40, atol=0.01)
+
+
+def test_each_order_records_the_decision_behind_it(make):
+    strat = make()
+    strat._metric_recorder = _Metrics()
+    strat.register_metrics()
+
+    out = _tick(strat, 102, [(0.45, 1000)], hours_before=6)
+
+    rows = strat.metrics.streams["cs2_series_orders"].rows
+    assert len(out) == len(rows) == 1
+    row = rows[0]
+    assert row["timestamp"] == K_NS - 6 * HOUR
+    assert row["best_ask"] == pytest.approx(0.45)
+    assert round(row["limit_price"] * P) == out[0].take_limit_price
+    assert 0 < row["edge_at_best"] < row["fair"] - row["best_ask"], "the edge is what's left after the taker fee"
+    assert row["shares"] > 0

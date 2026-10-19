@@ -89,26 +89,27 @@ class NExchangeArb(Strategy):
         self._col_state = None
 
     def register_metrics(self) -> None:
-        buf = self.metrics.create_buffer("diagnostics")
-        self._col_ts = buf.addLongColumn("timestamp")
-        self._col_z = buf.addDoubleColumn("z_score")
-        self._col_spread = buf.addDoubleColumn("spread_bps")
-        self._col_pos_long = buf.addLongColumn("pos_long")
-        self._col_pos_short = buf.addLongColumn("pos_short")
-        self._col_state = buf.addLongColumn("state")
+        buf = self.metrics.create_stream("diagnostics")
+        self._col_ts = buf.add_long_column("timestamp")
+        self._col_z = buf.add_double_column("z_score")
+        self._col_spread = buf.add_double_column("spread_bps")
+        self._col_pos_long = buf.add_long_column("pos_long")
+        self._col_pos_short = buf.add_long_column("pos_short")
+        self._col_state = buf.add_long_column("state")
         buf.freeze()
         self._buf = buf
 
     def _log(self, ts: int, z: float, spread: float, pos_long: int, pos_short: int, state: int) -> None:
         if self._buf is None:
             return
-        row = self._buf.appendRow()
-        self._buf.setLong(row, self._col_ts, ts)
-        self._buf.setDouble(row, self._col_z, z)
-        self._buf.setDouble(row, self._col_spread, spread)
-        self._buf.setLong(row, self._col_pos_long, pos_long)
-        self._buf.setLong(row, self._col_pos_short, pos_short)
-        self._buf.setLong(row, self._col_state, state)
+        self._buf.begin()
+        self._buf.set_long(self._col_ts, ts)
+        self._buf.set_double(self._col_z, z)
+        self._buf.set_double(self._col_spread, spread)
+        self._buf.set_long(self._col_pos_long, pos_long)
+        self._buf.set_long(self._col_pos_short, pos_short)
+        self._buf.set_long(self._col_state, state)
+        self._buf.commit()
 
     def simulate_processing_time(self) -> int:
         return self._processing_time_ns

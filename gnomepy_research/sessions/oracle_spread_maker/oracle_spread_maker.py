@@ -118,15 +118,15 @@ class OracleSpreadMaker(Strategy):
         self._bid_refresh_seq: int = 0
 
     def register_metrics(self) -> None:
-        buf = self.metrics.create_buffer("osm_signals")
-        self._m_ts = buf.addLongColumn("timestamp")
-        self._m_poly_mid = buf.addDoubleColumn("poly_mid")
-        self._m_vol = buf.addDoubleColumn("poly_vol")
-        self._m_yq = buf.addDoubleColumn("yes_qty")
-        self._m_nq = buf.addDoubleColumn("no_qty")
-        self._m_yb = buf.addDoubleColumn("yes_bid")
-        self._m_nb = buf.addDoubleColumn("no_bid")
-        self._m_matched = buf.addDoubleColumn("matched_pairs")
+        buf = self.metrics.create_stream("osm_signals")
+        self._m_ts = buf.add_long_column("timestamp")
+        self._m_poly_mid = buf.add_double_column("poly_mid")
+        self._m_vol = buf.add_double_column("poly_vol")
+        self._m_yq = buf.add_double_column("yes_qty")
+        self._m_nq = buf.add_double_column("no_qty")
+        self._m_yb = buf.add_double_column("yes_bid")
+        self._m_nb = buf.add_double_column("no_bid")
+        self._m_matched = buf.add_double_column("matched_pairs")
         buf.freeze()
         self._metrics_buf = buf
 
@@ -285,14 +285,15 @@ class OracleSpreadMaker(Strategy):
 
         if self._metrics_buf is not None:
             matched_pairs = float(min(yes_qty, no_qty))
-            row = self._metrics_buf.appendRow()
-            self._metrics_buf.setLong(row, self._m_ts, ts)
-            self._metrics_buf.setDouble(row, self._m_poly_mid, self._poly_mid)
-            self._metrics_buf.setDouble(row, self._m_vol, current_vol)
-            self._metrics_buf.setDouble(row, self._m_yq, float(yes_qty))
-            self._metrics_buf.setDouble(row, self._m_nq, float(no_qty))
-            self._metrics_buf.setDouble(row, self._m_yb, yes_bid_price / PRICE_SCALE)
-            self._metrics_buf.setDouble(row, self._m_nb, no_bid_price / PRICE_SCALE)
-            self._metrics_buf.setDouble(row, self._m_matched, matched_pairs)
+            self._metrics_buf.begin()
+            self._metrics_buf.set_long(self._m_ts, ts)
+            self._metrics_buf.set_double(self._m_poly_mid, self._poly_mid)
+            self._metrics_buf.set_double(self._m_vol, current_vol)
+            self._metrics_buf.set_double(self._m_yq, float(yes_qty))
+            self._metrics_buf.set_double(self._m_nq, float(no_qty))
+            self._metrics_buf.set_double(self._m_yb, yes_bid_price / PRICE_SCALE)
+            self._metrics_buf.set_double(self._m_nb, no_bid_price / PRICE_SCALE)
+            self._metrics_buf.set_double(self._m_matched, matched_pairs)
+            self._metrics_buf.commit()
 
         return intents

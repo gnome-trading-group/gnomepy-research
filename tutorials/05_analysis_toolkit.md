@@ -131,9 +131,9 @@ from gnomepy_research.analysis.signal_attribution import (
 # Attribute realized PnL to signal values at fill time. Requires the strategy to log those
 # signals via register_metrics (see tutorials/03_strategy_building.md).
 #
-# The buffer name is whatever the strategy passed to self.metrics.create_buffer(...) —
+# The stream name is whatever the strategy passed to self.metrics.create_stream(...) —
 # cross_prediction_arb registers "cpa_signals". Call custom_metrics() with no argument
-# to see which buffers a run actually has.
+# to see which streams a run actually has.
 report.custom_metrics()                      # -> {"cpa_signals": DataFrame, ...}
 signals = report.custom_metrics("cpa_signals")
 

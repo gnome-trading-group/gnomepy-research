@@ -452,12 +452,12 @@ class CrossPredictionArbMulti(Strategy):
         self._metrics_buf = None
 
     def register_metrics(self) -> None:
-        buf = self.metrics.create_buffer("cpa_signals")
-        self._m_ts = buf.addLongColumn("timestamp")
-        self._m_phase = buf.addIntColumn("phase")
-        self._m_pairing = buf.addIntColumn("pairing")
-        self._m_edge = buf.addDoubleColumn("edge")
-        self._m_qty = buf.addLongColumn("qty")
+        buf = self.metrics.create_stream("cpa_signals")
+        self._m_ts = buf.add_long_column("timestamp")
+        self._m_phase = buf.add_int_column("phase")
+        self._m_pairing = buf.add_int_column("pairing")
+        self._m_edge = buf.add_double_column("edge")
+        self._m_qty = buf.add_long_column("qty")
         buf.freeze()
         self._metrics_buf = buf
 
@@ -1009,12 +1009,13 @@ class CrossPredictionArbMulti(Strategy):
             )
 
         if self._metrics_buf is not None:
-            row = self._metrics_buf.appendRow()
-            self._metrics_buf.setLong(row, self._m_ts, ts)
-            self._metrics_buf.setInt(row, self._m_phase, int(Phase.ENTERING))
-            self._metrics_buf.setInt(row, self._m_pairing, ps.pairing.index)
-            self._metrics_buf.setDouble(row, self._m_edge, edge)
-            self._metrics_buf.setLong(row, self._m_qty, target_qty)
+            self._metrics_buf.begin()
+            self._metrics_buf.set_long(self._m_ts, ts)
+            self._metrics_buf.set_int(self._m_phase, int(Phase.ENTERING))
+            self._metrics_buf.set_int(self._m_pairing, ps.pairing.index)
+            self._metrics_buf.set_double(self._m_edge, edge)
+            self._metrics_buf.set_long(self._m_qty, target_qty)
+            self._metrics_buf.commit()
 
         taker_intents = []
         maker_intents = []
@@ -1670,12 +1671,13 @@ class CrossPredictionArbMulti(Strategy):
         """
         if self._metrics_buf is None:
             return
-        row = self._metrics_buf.appendRow()
-        self._metrics_buf.setLong(row, self._m_ts, ts)
-        self._metrics_buf.setInt(row, self._m_phase, int(ps.phase))
-        self._metrics_buf.setInt(row, self._m_pairing, ps.pairing.index)
-        self._metrics_buf.setDouble(row, self._m_edge, edge)
-        self._metrics_buf.setLong(row, self._m_qty, qty)
+        self._metrics_buf.begin()
+        self._metrics_buf.set_long(self._m_ts, ts)
+        self._metrics_buf.set_int(self._m_phase, int(ps.phase))
+        self._metrics_buf.set_int(self._m_pairing, ps.pairing.index)
+        self._metrics_buf.set_double(self._m_edge, edge)
+        self._metrics_buf.set_long(self._m_qty, qty)
+        self._metrics_buf.commit()
 
     def _reset(self, ps: PairingState) -> None:
         ps.legs = []

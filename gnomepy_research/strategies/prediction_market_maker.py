@@ -97,15 +97,15 @@ class PredictionMarketMaker(Strategy):
         self._metrics_buf = None
 
     def register_metrics(self) -> None:
-        buf = self.metrics.create_buffer("pmm_signals")
-        self._m_ts = buf.addLongColumn("timestamp")
-        self._m_p = buf.addDoubleColumn("price")
-        self._m_tau = buf.addDoubleColumn("tau_norm")
-        self._m_q = buf.addDoubleColumn("position")
-        self._m_zb = buf.addDoubleColumn("z_b")
-        self._m_za = buf.addDoubleColumn("z_a")
-        self._m_bid = buf.addDoubleColumn("optimal_bid")
-        self._m_ask = buf.addDoubleColumn("optimal_ask")
+        buf = self.metrics.create_stream("pmm_signals")
+        self._m_ts = buf.add_long_column("timestamp")
+        self._m_p = buf.add_double_column("price")
+        self._m_tau = buf.add_double_column("tau_norm")
+        self._m_q = buf.add_double_column("position")
+        self._m_zb = buf.add_double_column("z_b")
+        self._m_za = buf.add_double_column("z_a")
+        self._m_bid = buf.add_double_column("optimal_bid")
+        self._m_ask = buf.add_double_column("optimal_ask")
         buf.freeze()
         self._metrics_buf = buf
 
@@ -186,15 +186,16 @@ class PredictionMarketMaker(Strategy):
             ask_price_int = int(np.clip(-(-raw // tick) * tick, tick, PRICE_SCALE - tick))
 
         if self._metrics_buf is not None:
-            row = self._metrics_buf.appendRow()
-            self._metrics_buf.setLong(row, self._m_ts, ts)
-            self._metrics_buf.setDouble(row, self._m_p, p)
-            self._metrics_buf.setDouble(row, self._m_tau, tau_norm)
-            self._metrics_buf.setDouble(row, self._m_q, float(raw_position))
-            self._metrics_buf.setDouble(row, self._m_zb, z_b_val)
-            self._metrics_buf.setDouble(row, self._m_za, z_a_val)
-            self._metrics_buf.setDouble(row, self._m_bid, pi_b)
-            self._metrics_buf.setDouble(row, self._m_ask, pi_a)
+            self._metrics_buf.begin()
+            self._metrics_buf.set_long(self._m_ts, ts)
+            self._metrics_buf.set_double(self._m_p, p)
+            self._metrics_buf.set_double(self._m_tau, tau_norm)
+            self._metrics_buf.set_double(self._m_q, float(raw_position))
+            self._metrics_buf.set_double(self._m_zb, z_b_val)
+            self._metrics_buf.set_double(self._m_za, z_a_val)
+            self._metrics_buf.set_double(self._m_bid, pi_b)
+            self._metrics_buf.set_double(self._m_ask, pi_a)
+            self._metrics_buf.commit()
 
         abs_pos = abs(raw_position)
         fade_start = self.max_position * self.inventory_fade

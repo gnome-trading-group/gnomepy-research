@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from math import exp
+from enum import IntEnum
+from math import exp, nan
 
 from gnomepy import Scales, Side
 from gnomepy.java.backtest.orders import ExecutionReport
@@ -36,6 +37,15 @@ from gnomepy_research.strategies.target_portfolio import (
     TargetEntry,
     TargetPortfolioStrategy,
 )
+
+
+class Decision(IntEnum):
+    ENTRY = 0
+    SCALE_UP = 1
+    EXIT = 2
+    ENTRY_CANCEL = 3
+    FLAT = 4
+    LEG_RISK_UNWIND = 5
 
 
 class EquivalentEventArb(TargetPortfolioStrategy):
@@ -139,6 +149,88 @@ class EquivalentEventArb(TargetPortfolioStrategy):
         self._logged_at_target: dict[Listing, bool] = {}
         self._last_maker_price: dict[Listing, int] = {}
         self._last_reprice_ts: dict[Listing, int] = {}
+        self._decisions = None
+        self._best_edges = None
+        self._maker_prices = None
+        self._last_best_edge: tuple[int, float] | None = None
+
+    def register_metrics(self) -> None:
+        decisions = self.metrics.create_stream("decisions")
+        self._d_ts = decisions.add_long_column("timestamp")
+        self._d_event = decisions.add_int_column("event")
+        self._d_pairing = decisions.add_int_column("pairing")
+        self._d_edge = decisions.add_double_column("edge_bps")
+        self._d_qty = decisions.add_double_column("qty")
+        self._d_mode = decisions.add_int_column("order_mode")
+        decisions.freeze()
+        self._decisions = decisions
+
+        best_edges = self.metrics.create_stream("best_edge")
+        self._e_ts = best_edges.add_long_column("timestamp")
+        self._e_pairing = best_edges.add_int_column("pairing")
+        self._e_edge = best_edges.add_double_column("maker_edge_bps")
+        self._e_min = best_edges.add_double_column("maker_min_bps")
+        best_edges.freeze()
+        self._best_edges = best_edges
+
+        maker_prices = self.metrics.create_stream("maker_prices")
+        self._p_ts = maker_prices.add_long_column("timestamp")
+        self._p_exchange = maker_prices.add_int_column("exchange_id")
+        self._p_security = maker_prices.add_int_column("security_id")
+        self._p_bid = maker_prices.add_double_column("best_bid")
+        self._p_ask = maker_prices.add_double_column("best_ask")
+        self._p_price = maker_prices.add_double_column("price")
+        self._p_max_price = maker_prices.add_double_column("max_price")
+        self._p_fill_prob = maker_prices.add_double_column("fill_prob")
+        self._p_stuck_cost = maker_prices.add_double_column("stuck_cost")
+        maker_prices.freeze()
+        self._maker_prices = maker_prices
+
+    def _record_decision(self, timestamp: int, event: Decision, edge_bps: float, qty: int) -> None:
+        if self._decisions is None:
+            return
+        pairing = self._portfolio.pairing_index if self._portfolio is not None else -1
+        mode = int(self._portfolio.order_mode) if self._portfolio is not None else -1
+        self._decisions.begin()
+        self._decisions.set_long(self._d_ts, timestamp)
+        self._decisions.set_int(self._d_event, int(event))
+        self._decisions.set_int(self._d_pairing, pairing)
+        self._decisions.set_double(self._d_edge, edge_bps)
+        self._decisions.set_double(self._d_qty, qty / Scales.SIZE)
+        self._decisions.set_int(self._d_mode, mode)
+        self._decisions.commit()
+
+    def _record_best_edge(self, timestamp: int, pairing: VenuePairing | None, edge_bps: float) -> None:
+        if self._best_edges is None:
+            return
+        best = (pairing.index if pairing is not None else -1, edge_bps)
+        if best == self._last_best_edge:
+            return
+        self._last_best_edge = best
+        self._best_edges.begin()
+        self._best_edges.set_long(self._e_ts, timestamp)
+        self._best_edges.set_int(self._e_pairing, best[0])
+        self._best_edges.set_double(self._e_edge, edge_bps)
+        self._best_edges.set_double(self._e_min, self.min_pure_arb_bps)
+        self._best_edges.commit()
+
+    def _record_maker_price(
+        self, timestamp: int, listing: Listing, best_bid: int, best_ask: int, price: int,
+        max_price: int | None, fill_prob: float, stuck_cost: float,
+    ) -> None:
+        if self._maker_prices is None:
+            return
+        self._maker_prices.begin()
+        self._maker_prices.set_long(self._p_ts, timestamp)
+        self._maker_prices.set_int(self._p_exchange, listing[0])
+        self._maker_prices.set_int(self._p_security, listing[1])
+        self._maker_prices.set_double(self._p_bid, best_bid / Scales.PRICE)
+        self._maker_prices.set_double(self._p_ask, best_ask / Scales.PRICE)
+        self._maker_prices.set_double(self._p_price, price / Scales.PRICE)
+        self._maker_prices.set_double(self._p_max_price, max_price / Scales.PRICE if max_price is not None else nan)
+        self._maker_prices.set_double(self._p_fill_prob, fill_prob)
+        self._maker_prices.set_double(self._p_stuck_cost, stuck_cost)
+        self._maker_prices.commit()
 
     def _on_book_updated(
         self, listing: Listing,
@@ -202,6 +294,7 @@ class EquivalentEventArb(TargetPortfolioStrategy):
         all_at_zero = all(qty == 0 for qty in group_target.values())
         all_flat = all(self._net_qty(lst) == 0 for lst in group_target)
         if all_at_zero and all_flat and group_target:
+            self._record_decision(timestamp, Decision.FLAT, nan, 0)
             self._clear_state()
             print(f"[{timestamp}] FLAT '{self._group.label}'")
             return target
@@ -242,6 +335,10 @@ class EquivalentEventArb(TargetPortfolioStrategy):
                     if price != self._last_maker_price.get(lst, 0):
                         self._last_maker_price[lst] = price
                         self._last_reprice_ts[lst] = timestamp
+                        self._record_maker_price(
+                            timestamp, lst, best_bid, best_ask, price, max_price, result.fill_prob,
+                            context.stuck_cost if context is not None else nan,
+                        )
                     self._debug(
                         timestamp, "PRICE_MODEL",
                         eid=lst[0], sid=lst[1],
@@ -269,6 +366,7 @@ class EquivalentEventArb(TargetPortfolioStrategy):
         return target
 
     def on_imbalance_timeout(self, timestamp: int) -> Target | None:
+        self._record_decision(timestamp, Decision.LEG_RISK_UNWIND, nan, 0)
         self._clear_state()
         return None
 
@@ -281,6 +379,7 @@ class EquivalentEventArb(TargetPortfolioStrategy):
             if result is None:
                 return {}
             new_target, arb_edge = result
+            self._record_decision(timestamp, Decision.ENTRY, arb_edge, next(iter(new_target.values())))
             print(
                 f"[{timestamp}] ENTRY '{self._group.label}' "
                 f"pairing={self._portfolio.pairing_index} edge={arb_edge:.1f}bps "
@@ -299,8 +398,12 @@ class EquivalentEventArb(TargetPortfolioStrategy):
         if self._portfolio.phase == ArbPhase.ENTERING and self._constraint is not None and self._portfolio.should_cancel_entry(self._constraint, timestamp):
             edge = self._constraint.edge_bps()
             edge_str = f"{edge:.1f}" if edge is not None else "?"
-            has_position = entry_pairing is not None and any(
-                self._net_qty(lst) > 0 for _, lst in entry_pairing.legs
+            held_qty = max(
+                (self._net_qty(lst) for _, lst in entry_pairing.legs), default=0
+            ) if entry_pairing is not None else 0
+            has_position = held_qty > 0
+            self._record_decision(
+                timestamp, Decision.ENTRY_CANCEL, edge if edge is not None else nan, max(held_qty, 0),
             )
             if has_position:
                 self._portfolio.begin_exit()
@@ -320,6 +423,7 @@ class EquivalentEventArb(TargetPortfolioStrategy):
                 order_mode=OrderMode.TAKER,
             )
             if exit_edge > self._exit_edge_threshold_bps and exit_qty >= current_qty:
+                self._record_decision(timestamp, Decision.EXIT, exit_edge, current_qty)
                 self._portfolio.begin_exit()
                 self._logged_at_target.clear()
                 print(
@@ -343,6 +447,7 @@ class EquivalentEventArb(TargetPortfolioStrategy):
                 self._portfolio.phase = ArbPhase.ENTERING
                 for _, lst in arb_legs:
                     self._logged_at_target.pop(lst, None)
+                self._record_decision(timestamp, Decision.SCALE_UP, arb_edge, arb_qty)
                 print(
                     f"[{timestamp}] SCALE_UP '{self._group.label}' "
                     f"edge={arb_edge:.1f}bps qty={arb_qty // Scales.SIZE} "
@@ -413,14 +518,15 @@ class EquivalentEventArb(TargetPortfolioStrategy):
         return None
 
     def _try_enter(self, timestamp: int) -> tuple[dict[Listing, int], float] | None:
-        best_edge = self.min_pure_arb_bps
+        best_edge = float("-inf")
         best_pairing: VenuePairing | None = None
         for pairing in self._group.pairings:
             _, edge, _ = self._walk_pairing(pairing, timestamp, buy=True, max_qty=0, order_mode=OrderMode.MAKER)
             if edge > best_edge:
                 best_edge = edge
                 best_pairing = pairing
-        if best_pairing is None:
+        self._record_best_edge(timestamp, best_pairing, best_edge)
+        if best_pairing is None or best_edge <= self.min_pure_arb_bps:
             return None
 
         entry_max = self.max_position if self.max_position > 0 else 0

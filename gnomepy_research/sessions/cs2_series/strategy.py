@@ -161,7 +161,7 @@ class CS2Series(Strategy):
         return self._processing_time_ns
 
     def register_metrics(self) -> None:
-        buf = self.metrics.create_buffer("cs2_series_orders")
+        buf = self.metrics.create_stream("cs2_series_orders")
         self._m_ts = buf.add_long_column("timestamp")
         self._m_side = buf.add_long_column("side")
         self._m_fair = buf.add_double_column("fair")
@@ -264,11 +264,12 @@ class CS2Series(Strategy):
         if self._metrics_buf is None:
             return
         buf = self._metrics_buf
-        row = buf.append_row()
-        buf.set_long(row, self._m_ts, now_ns)
-        buf.set_long(row, self._m_side, entry.side)
-        buf.set_double(row, self._m_fair, entry.fair)
-        buf.set_double(row, self._m_ask, entry.best_ask)
-        buf.set_double(row, self._m_edge, entry.edge_at_best)
-        buf.set_double(row, self._m_limit, entry.limit_price)
-        buf.set_double(row, self._m_shares, shares)
+        buf.begin()
+        buf.set_long(self._m_ts, now_ns)
+        buf.set_long(self._m_side, entry.side)
+        buf.set_double(self._m_fair, entry.fair)
+        buf.set_double(self._m_ask, entry.best_ask)
+        buf.set_double(self._m_edge, entry.edge_at_best)
+        buf.set_double(self._m_limit, entry.limit_price)
+        buf.set_double(self._m_shares, shares)
+        buf.commit()

@@ -18,6 +18,11 @@ against the ratings that stood at the start of that date.
 Updates use round share, not the binary result. A map is 24+ Bernoulli trials
 and 13-2 says more than 13-11; this also puts the round margin to use, which is
 otherwise only a scrape sanity check.
+
+A rebuilt roster usually gets a new team_id. Starting it from its ranking seed
+throws away what its players' old teams already proved, and thin-history teams
+carry most of the model's loss; so a new team_id fielding enough players from
+rated teams starts from their Elo instead.
 """
 from __future__ import annotations
 
@@ -38,14 +43,21 @@ logger = logging.getLogger(__name__)
 class EloConfig:
     base: float = 1500.0
     scale: float = 400.0
-    k_global: float = 24.0
+    k_global: float = 48.0
     k_map: float = 16.0
     k_side: float = 12.0
-    decay_tau_days: float = 365.0
+    # No decay: pulling idle teams toward the base lifted inactive weak teams to the
+    # median ranked team's level.
+    decay_tau_days: float = math.inf
     provisional_games: int = 30
     provisional_k_mult: float = 1.75
-    seed_alpha: float = 120.0
+    # Wider seeds than round-share Elo settles at made ratings compress all year,
+    # so the same elo_diff meant ~5x more in September than in January.
+    seed_alpha: float = 45.0
     score_clip: float = 0.05
+    # Announced players from one or more rated teams a new team_id needs before it
+    # inherits their Elo; 0 disables inheritance.
+    inherit_min_players: int = 3
 
 
 @dataclass
@@ -53,6 +65,13 @@ class _Rating:
     value: float
     last_seen: pd.Timestamp
     games: int = 0
+
+
+def _lineup(row: pd.Series, side: str) -> list[int]:
+    ids = row.get(f"team_{side}_lineup_ids")
+    if ids is None or isinstance(ids, float):
+        return []
+    return [int(p) for p in ids]
 
 
 def _expected(rating_a: float, rating_b: float, scale: float) -> float:
@@ -70,6 +89,7 @@ class EloEngine:
         self._global: dict[int, _Rating] = {}
         self._map: dict[tuple[int, str], _Rating] = {}
         self._side: dict[tuple[int, int], _Rating] = {}
+        self._player_team: dict[int, int] = {}
         self._seed_points = self._build_seed_table(rankings)
 
     def _build_seed_table(self, rankings: pd.DataFrame | None):
@@ -91,14 +111,27 @@ class EloEngine:
         r, median_by_date = self._seed_points
         sub = r[(r["team_id"].values == team_id) & (r["date"].values < as_of)]
         if len(sub) == 0:
-            return self.cfg.base
-        latest = sub.iloc[-1]
-        med = float(median_by_date.loc[latest["date"]])
+            # Unranked means below the ranked pool, not at its median: ranked teams
+            # beat never-ranked ones 79% of the time.
+            published = median_by_date[median_by_date.index < as_of]
+            if len(published) == 0:
+                return self.cfg.base
+            points, med = 0.0, float(published.iloc[-1])
+        else:
+            latest = sub.iloc[-1]
+            points, med = float(latest["points"]), float(median_by_date.loc[latest["date"]])
         if med <= 0:
             return self.cfg.base
-        return self.cfg.base + self.cfg.seed_alpha * (
-            math.log1p(float(latest["points"])) - math.log1p(med)
-        )
+        return self.cfg.base + self.cfg.seed_alpha * (math.log1p(points) - math.log1p(med))
+
+    def _inherited_seed(self, team_id: int, lineup: list[int], as_of: pd.Timestamp) -> float | None:
+        prev = [self._player_team[p] for p in lineup if p in self._player_team]
+        prev = [t for t in prev if t != team_id and t in self._global]
+        if self.cfg.inherit_min_players <= 0 or len(prev) < self.cfg.inherit_min_players:
+            return None
+        inherited = float(np.mean([self._decayed(self._global[t], as_of) for t in prev]))
+        w = min(len(prev), 5) / 5
+        return w * inherited + (1 - w) * self._seed(team_id, as_of)
 
     def _decayed(self, rating: _Rating, as_of: pd.Timestamp) -> float:
         """Pull an unseen team back toward the base so stale elite ratings do not persist."""
@@ -106,14 +139,19 @@ class EloEngine:
         w = math.exp(-days / self.cfg.decay_tau_days)
         return self.cfg.base + w * (rating.value - self.cfg.base)
 
-    def _get(self, store: dict, key, as_of: pd.Timestamp, seed_id: int | None = None) -> _Rating:
+    def _get(self, store: dict, key, as_of: pd.Timestamp, seed_id: int | None = None,
+             seed: float | None = None) -> _Rating:
         if key not in store:
-            seed = self._seed(seed_id, as_of) if seed_id is not None else self.cfg.base
+            if seed is None:
+                seed = self._seed(seed_id, as_of) if seed_id is not None else self.cfg.base
             store[key] = _Rating(value=seed, last_seen=as_of, games=0)
         return store[key]
 
-    def rating_global(self, team_id: int, as_of: pd.Timestamp) -> tuple[float, int]:
-        r = self._get(self._global, team_id, as_of, seed_id=team_id)
+    def rating_global(self, team_id: int, as_of: pd.Timestamp, lineup: list[int] | None = None) -> tuple[float, int]:
+        seed = None
+        if team_id not in self._global and lineup:
+            seed = self._inherited_seed(team_id, lineup, as_of)
+        r = self._get(self._global, team_id, as_of, seed_id=team_id, seed=seed)
         return self._decayed(r, as_of), r.games
 
     def rating_map(self, team_id: int, map_name: str, as_of: pd.Timestamp) -> float:
@@ -180,14 +218,18 @@ class EloEngine:
             self._update_pair(self._side, (id_a, 1), (id_b, -1), ct_share, cfg.k_side, as_of, id_a, id_b)
             self._update_pair(self._side, (id_a, -1), (id_b, 1), t_share, cfg.k_side, as_of, id_a, id_b)
 
+        for side, team_id in (("a", id_a), ("b", id_b)):
+            for player in _lineup(first, side):
+                self._player_team[player] = team_id
+
     def snapshot_series(self, series_rows: pd.DataFrame) -> dict:
         """Pre-series ratings, identical for every map of the series."""
         first = series_rows.iloc[0]
         id_a, id_b = int(first["team_a_id"]), int(first["team_b_id"])
         as_of = pd.Timestamp(first["match_date"])
 
-        g_a, n_a = self.rating_global(id_a, as_of)
-        g_b, n_b = self.rating_global(id_b, as_of)
+        g_a, n_a = self.rating_global(id_a, as_of, _lineup(first, "a"))
+        g_b, n_b = self.rating_global(id_b, as_of, _lineup(first, "b"))
         ct_a, t_a = self.rating_side(id_a, 1, as_of), self.rating_side(id_a, -1, as_of)
         ct_b, t_b = self.rating_side(id_b, 1, as_of), self.rating_side(id_b, -1, as_of)
 
