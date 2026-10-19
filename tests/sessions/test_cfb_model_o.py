@@ -82,6 +82,12 @@ class TestPriorExtensions:
         pre = pd.DataFrame({"season": 2024, "team_id": [1, 2, 3, 5]})
         np.testing.assert_array_equal(group_of_five(pre, games, [2024]), [0.0, 0.0, 1.0, 1.0])
 
+    def test_pac12_is_power_four_only_through_2023(self):
+        games = pd.DataFrame({"season": [2023, 2024], "home_id": 1, "away_id": 2, "home_team": "Washington State",
+                              "away_team": "B", "home_conference": "Pac-12", "away_conference": "Mountain West"})
+        pre = pd.DataFrame({"season": [2023, 2024], "team_id": 1})
+        np.testing.assert_array_equal(group_of_five(pre, games, [2023, 2024]), [0.0, 1.0])
+
     def test_coach_features(self):
         pre = pd.DataFrame({"coach_tenure": [0, 1, 2, np.nan], "coach_new": [True, False, False, True],
                             "portal_in_stars": [10.0, 5.0, 3.0, np.nan]})

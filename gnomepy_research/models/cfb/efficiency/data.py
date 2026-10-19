@@ -60,7 +60,8 @@ EXT_G5, EXT_COACH = "g5", "coach"
 # FBS seasons. cont: last season's rating carries over in proportion to what returns (offense: returning PPA share;
 # defense: the class-weighted share of last season's defensive roster still on it), plus defensive continuity itself.
 EXT_TRANS, EXT_CONT = "trans", "cont"
-P4_CONFERENCES = {"SEC", "Big Ten", "Big 12", "ACC", "Pac-12"}
+P4_CONFERENCES = {"SEC", "Big Ten", "Big 12", "ACC"}
+PAC12, PAC12_LAST_P4_SEASON = "Pac-12", 2023
 P4_INDEPENDENTS = {"Notre Dame"}
 EXTENSIONS = (EXT_COUPLE, EXT_FCS, EXT_FINISH, EXT_PRIOR, EXT_G5, EXT_COACH, EXT_TRANS, EXT_CONT, EXT_TIGHT)
 DEFENSIVE_POSITIONS = {"DL", "DE", "DT", "NT", "EDGE", "LB", "OLB", "ILB", "DB", "CB", "S"}
@@ -68,6 +69,9 @@ FIT_TIME_ONLY = (EXT_TIGHT,)
 DRIVE_EXTENSIONS = (EXT_COUPLE, EXT_FINISH)
 TRANSITION_SEASONS = 3
 RETURNING_FEATURES = ["returning_pct_ppa", "returning_pct_passing_ppa"]
+# CFBD's returning production comes from its own roster snapshot. When last season's primary passer has left (our roster
+# check) yet at least this share of passing production "returns", that snapshot is stale.
+STALE_RETURNING_PASSING = 0.8
 TRANSITION_MASKED = ["talent_offense", "talent_defense", "talent_qb", "recruiting_points", *RETURNING_FEATURES]
 
 
@@ -208,6 +212,8 @@ def prior_fixes(pre: pd.DataFrame, games: pd.DataFrame, keep_transition: bool = 
     else:
         pre.loc[transition.to_numpy(), TRANSITION_MASKED] = np.nan
     pre.loc[pre["prior_off_rating"].isna().to_numpy(), RETURNING_FEATURES] = np.nan
+    stale = (pre["qb_returning_starter"] == 0) & (pre["returning_pct_passing_ppa"] >= STALE_RETURNING_PASSING)
+    pre.loc[stale.to_numpy(), RETURNING_FEATURES] = np.nan
     return pre
 
 
@@ -242,12 +248,14 @@ def continuity_features(pre: pd.DataFrame) -> pd.DataFrame:
 
 
 def group_of_five(pre: pd.DataFrame, games: pd.DataFrame, seasons: list[int]) -> np.ndarray:
-    """1.0 for team-seasons outside the Power 4 conferences (Pac-12 counted while it existed) and Notre Dame."""
+    """1.0 for team-seasons outside the Power 4 conferences and Notre Dame. The Pac-12 counts through 2023, before it lost
+    all but two members."""
     conf = pre[["season", "team_id"]].merge(team_conferences(games, seasons), on=["season", "team_id"], how="left")["conference"]
     names = pd.concat([games[["home_id", "home_team"]].set_axis(["team_id", "team"], axis=1),
                        games[["away_id", "away_team"]].set_axis(["team_id", "team"], axis=1)]).drop_duplicates("team_id")
     p4_ind = set(names.loc[names["team"].isin(P4_INDEPENDENTS), "team_id"])
-    return (~conf.isin(P4_CONFERENCES).to_numpy() & ~pre["team_id"].isin(p4_ind).to_numpy()).astype(float)
+    p4 = conf.isin(P4_CONFERENCES).to_numpy() | ((conf == PAC12).to_numpy() & (pre["season"].to_numpy() <= PAC12_LAST_P4_SEASON))
+    return (~p4 & ~pre["team_id"].isin(p4_ind).to_numpy()).astype(float)
 
 
 def coach_features(pre: pd.DataFrame) -> pd.DataFrame:

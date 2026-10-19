@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.models.cfb.efficiency.data import (
-    TRANSITION_MASKED, UNITS_SPLIT, build_model_data, first_fbs_seasons, prior_fixes)
+    RETURNING_FEATURES, TRANSITION_MASKED, UNITS_SPLIT, build_model_data, first_fbs_seasons, prior_fixes)
 from gnomepy_research.models.cfb.efficiency.posterior_snapshots import draws_name, hyper_name
 from gnomepy_research.sessions.cfb_win_probability.evaluation import n_selection
 from gnomepy_research.sessions.cfb_win_probability.evaluation.backtest import MODEL_CONFIGS
@@ -24,7 +24,8 @@ def schedule(first_fbs: dict[int, int], seasons=range(2018, 2026)) -> pd.DataFra
 
 def preseason(teams, seasons=range(2019, 2026)) -> pd.DataFrame:
     rows = [{"season": s, "team_id": t, "prior_off_rating": 0.01, "talent_offense": 500.0, "talent_defense": 500.0,
-             "talent_qb": 80.0, "recruiting_points": 200.0, "returning_pct_ppa": 0.6, "returning_pct_passing_ppa": 0.5}
+             "talent_qb": 80.0, "recruiting_points": 200.0, "returning_pct_ppa": 0.6, "returning_pct_passing_ppa": 0.5,
+             "qb_returning_starter": True}
             for t in teams for s in seasons]
     return pd.DataFrame(rows)
 
@@ -48,6 +49,14 @@ class TestPriorFixes:
         assert out.loc[2021, ["returning_pct_ppa", "returning_pct_passing_ppa"]].isna().all()
         assert out.loc[2021, ["talent_offense", "recruiting_points"]].notna().all()
         assert out.loc[2022, "returning_pct_ppa"] == 0.6
+
+    def test_returning_production_from_a_stale_roster_is_unknown(self):
+        # CFBD says 90% of passing PPA returns, yet last season's primary passer is not on this season's roster.
+        pre = preseason([1, 2, 3], seasons=[2024]).assign(qb_returning_starter=[False, True, False],
+                                                           returning_pct_passing_ppa=[0.9, 0.9, 0.5])
+        out = prior_fixes(pre, schedule({1: 2018, 2: 2018, 3: 2018})).set_index("team_id")
+        assert out.loc[1, RETURNING_FEATURES].isna().all()
+        assert out.loc[2, "returning_pct_passing_ppa"] == 0.9 and out.loc[3, "returning_pct_passing_ppa"] == 0.5
 
     def test_talent_missing_indicator_ignores_transition_masking(self):
         pre = preseason([1, 2])
