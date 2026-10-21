@@ -12,6 +12,7 @@ edge that is real should show up in most months on its own.
 """
 import logging
 import os
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -66,9 +67,11 @@ def series_dp(predict, ids):
     return np.array(out)
 
 
-PREDS = DATA_DIR / "backtest_6mo_preds.parquet"
-# Refitting seven monthly models is the slow part; set CS2_BACKTEST_REUSE_PREDS=1 to re-score saved predictions.
-REUSE = os.environ.get("CS2_BACKTEST_REUSE_PREDS") == "1" and PREDS.exists()
+# Refitting seven monthly models is the slow part; set CS2_BACKTEST_REUSE_PREDS=1 to re-score saved predictions,
+# or CS2_BACKTEST_PREDS to score another model's predictions (same columns), with its own eval and summary files.
+PREDS = Path(os.environ.get("CS2_BACKTEST_PREDS", DATA_DIR / "backtest_6mo_preds.parquet"))
+REUSE = (os.environ.get("CS2_BACKTEST_REUSE_PREDS") == "1" or "CS2_BACKTEST_PREDS" in os.environ) and PREDS.exists()
+RUN = PREDS.stem.replace("_preds", "") + (f"_fee{os.environ['CS2_BACKTEST_FEE_RATE']}" if "CS2_BACKTEST_FEE_RATE" in os.environ else "")
 preds = []
 for start in ([] if REUSE else MONTHS):
     end = start + pd.offsets.MonthBegin(1)
@@ -142,7 +145,7 @@ for r in P.itertuples():
         base["t_m1end"] = m1
     rows.append(base)
 E = pd.DataFrame(rows)
-E.to_parquet(DATA_DIR / "backtest_6mo_eval.parquet", index=False)
+E.to_parquet(DATA_DIR / f"{RUN}_eval.parquet", index=False)
 
 
 def simulate(p, q, y, fee_a, fee_b, hs, th=0.05):
@@ -167,13 +170,19 @@ CASES = [("series", "k12", "series, 12h before", 0.01), ("series", "k6", "series
          ("series", "k0", "series, kickoff", 0.01), ("game1", "k0", "map 1, kickoff", 0.0125),
          ("game1", "k0", "map 1, kickoff (5.5c spread)", 0.055), ("game2", "m1end", "map 2, at map-1 end", 0.0125)]
 
-fees = TakerFees(pd.concat([E.token_a, E.token_b]).dropna())
+# The registry only lists markets the classifier saw, a fraction of Mar-Sep; CS2_BACKTEST_FEE_RATE charges every
+# token rate * p * (1 - p) instead (the registry's CS2 schedules were 0 throughout).
+FEE_RATE = os.environ.get("CS2_BACKTEST_FEE_RATE")
+fees = TakerFees(pd.concat([E.token_a, E.token_b]).dropna()) if FEE_RATE is None else None
 summary = []
 for market, col, label, hs in CASES:
     print(f"\n=== {label}  (half-spread {hs*100:.2f}c, 5c edge threshold) ===")
     print(f"{'month':>8} {'n':>5} {'mkt LL':>7} {'mdl LL':>7} {'gap':>8} {'blend-mkt':>10} {'trades':>7} {'P&L':>8} {'95% CI':>17} {'per $':>7}")
     sub = E[(E.market == market) & E[col].notna()] if col in E else E.iloc[0:0]
-    fee_a, fee_b = fees.for_column(sub, col)
+    if fees is None:
+        fee_a, fee_b = float(FEE_RATE) * sub[col] * (1 - sub[col]), float(FEE_RATE) * sub[col] * (1 - sub[col])
+    else:
+        fee_a, fee_b = fees.for_column(sub, col)
     sub = sub.assign(fee_a=fee_a, fee_b=fee_b)
     for month, g in list(sub.groupby("month")) + [("POOLED", sub)]:
         if len(g) < 40:
@@ -191,7 +200,7 @@ for market, col, label, hs in CASES:
                         "blend_gain": db, "trades": len(pnl), "pnl": pnl.sum(), "lo": lo, "hi": hi, "roi": roi})
 
 S = pd.DataFrame(summary)
-S.to_parquet(DATA_DIR / "backtest_6mo_summary.parquet", index=False)
+S.to_parquet(DATA_DIR / f"{RUN}_summary.parquet", index=False)
 print("\n=== stability: months with positive P&L / months tested ===")
 for label, g in S[S.month != "POOLED"].groupby("case", sort=False):
     print(f"  {label:32s} {int((g.pnl > 0).sum())}/{len(g)} positive, {int((g.lo > 0).sum())} with CI above zero")

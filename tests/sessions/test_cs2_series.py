@@ -28,7 +28,7 @@ from gnomepy_research.sessions.cs2_series.decision import (
     cost_per_share,
     evaluate_side,
     max_entry_price,
-    shares_to_buy,
+    plan_take,
     taker_fee,
 )
 from gnomepy_research.sessions.cs2_series.match_feed import MatchFeed
@@ -59,43 +59,69 @@ def test_max_entry_price_without_fee_is_fair_minus_edge():
     assert max_entry_price(0.6, 0.05, 0.0) == pytest.approx(0.55)
 
 
+def _side(fair, asks, fee_rate=0.07):
+    return evaluate_side(0, fair, asks, min_edge=0.05, fee_rate=fee_rate, tick=0.01)
+
+
 def test_no_entry_when_best_ask_does_not_clear_the_threshold():
-    assert evaluate_side(0, 0.6, [Level(0.58, 100)], min_edge=0.05, fee_rate=0.07, max_slippage=0.02, tick=0.01) is None
+    assert _side(0.6, [Level(0.58, 100)]) is None
 
 
-def test_limit_is_capped_by_slippage_and_floored_to_tick():
-    asks = [Level(0.40, 50), Level(0.41, 50), Level(0.43, 50)]
-    e = evaluate_side(0, 0.70, asks, min_edge=0.05, fee_rate=0.07, max_slippage=0.02, tick=0.01)
-    assert e.limit_price == pytest.approx(0.42)
-    assert e.shares_available == pytest.approx(100)
+def test_the_entry_reaches_every_level_that_still_clears_the_threshold():
+    # fair 0.70, 5c edge, 7% fee: the cap is the price p with 0.70 - p - 0.07 p (1 - p) = 0.05, about 0.6339.
+    asks = [Level(0.40, 50), Level(0.50, 50), Level(0.63, 50), Level(0.64, 50)]
+    e = _side(0.70, asks)
+    assert e.limit_price == pytest.approx(0.63), "floored to the tick below the cap, however far above the best ask"
+    assert [lv.price for lv in e.levels] == [0.40, 0.50, 0.63] and e.shares_available == pytest.approx(150)
+    for lv in e.levels:
+        assert 0.70 - lv.price - taker_fee(lv.price, 0.07) >= 0.05 - 1e-12
 
 
-def test_limit_is_capped_by_the_threshold_price_when_that_is_lower():
-    e = evaluate_side(0, 0.58, [Level(0.50, 50), Level(0.53, 50)], min_edge=0.05, fee_rate=0.07,
-                      max_slippage=0.05, tick=0.01)
+def test_the_threshold_price_cuts_the_book():
+    e = _side(0.58, [Level(0.50, 50), Level(0.53, 50)])
     assert e.limit_price <= max_entry_price(0.58, 0.05, 0.07)
     assert e.shares_available == pytest.approx(50), "the 0.53 level is above the cap"
 
 
 def test_choose_entry_buys_the_underpriced_side_and_respects_allowed_sides():
     asks_a, asks_b = [Level(0.62, 100)], [Level(0.30, 100)]
-    e = choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.07, 0.07), max_slippage=0.02, tick=0.01)
+    e = choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.07, 0.07), tick=0.01)
     assert e.side == 1 and e.fair == pytest.approx(0.40)
-    assert choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.07, 0.07), max_slippage=0.02,
-                        tick=0.01, allowed_sides=(0,)) is None
+    assert choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.07, 0.07), tick=0.01,
+                        allowed_sides=(0,)) is None
 
 
 def test_choose_entry_charges_each_side_its_own_listings_fee():
     asks_a, asks_b = [Level(0.62, 100)], [Level(0.30, 100)]
-    e = choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.0, 0.07), max_slippage=0.0, tick=0.01)
+    e = choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.0, 0.07), tick=0.01)
     assert e.edge_at_best == pytest.approx(0.40 - 0.30 - taker_fee(0.30, 0.07))
-    assert choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.07, 0.5), max_slippage=0.0,
-                        tick=0.01) is None, "side B's 10c gross edge does not survive a 0.5 rate"
+    assert choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.07, 0.5), tick=0.01) is None, \
+        "side B's 10c gross edge does not survive a 0.5 rate"
 
 
-def test_shares_to_buy_includes_the_fee_in_the_budget():
-    e = evaluate_side(0, 0.80, [Level(0.50, 10_000)], min_edge=0.05, fee_rate=0.07, max_slippage=0.0, tick=0.01)
-    assert shares_to_buy(e, 50.0, 0.07) * cost_per_share(e.limit_price, 0.07) == pytest.approx(50.0)
+def test_a_take_costs_each_level_at_its_own_price_and_fee():
+    e = _side(0.80, [Level(0.40, 20), Level(0.45, 30), Level(0.50, 1000)])
+    take = plan_take(e, 30.0, 0.07, lot=1.0)
+    by_hand = 20 * (0.40 + 0.07 * 0.40 * 0.60) + 30 * (0.45 + 0.07 * 0.45 * 0.55)
+    rest = int((30.0 - by_hand) / (0.50 + 0.07 * 0.25))
+    assert take.shares == pytest.approx(50 + rest)
+    assert take.cost == pytest.approx(by_hand + rest * (0.50 + 0.07 * 0.25))
+    assert take.cost <= 30.0 and take.limit_price == pytest.approx(0.50)
+
+
+def test_a_take_within_the_best_level_limits_at_the_best_ask():
+    e = _side(0.80, [Level(0.40, 10_000), Level(0.45, 10_000)])
+    take = plan_take(e, 50.0, 0.07, lot=1.0)
+    assert take.limit_price == pytest.approx(0.40), "the order can't fill deeper than the level it was costed at"
+    assert take.cost == pytest.approx(take.shares * cost_per_share(0.40, 0.07))
+    assert 50.0 - cost_per_share(0.40, 0.07) < take.cost <= 50.0
+
+
+def test_a_take_is_whole_lots_and_stops_with_the_book():
+    e = _side(0.80, [Level(0.40, 7.5)])
+    take = plan_take(e, 50.0, 0.07, lot=2.0)
+    assert take.shares == pytest.approx(6.0) and take.cost == pytest.approx(6 * cost_per_share(0.40, 0.07))
+    assert plan_take(e, 0.5, 0.07, lot=2.0).shares == 0.0, "a budget short of one lot buys nothing"
 
 
 # ---- the match's rows ----------------------------------------------------------------
@@ -481,6 +507,15 @@ def test_no_second_order_while_one_is_in_flight(make):
 def test_stake_is_respected_including_fees(make):
     o = _tick(make(stake_usd=50.0), 102, [(0.45, 10_000)], hours_before=6)[0]
     assert o.take_size / S * cost_per_share(o.take_limit_price / P, 0.07) <= 50.0 + 1e-6
+
+
+def test_a_thin_book_is_walked_to_the_level_the_stake_needs_and_no_further(make):
+    asks = [(0.45, 20), (0.46, 20), (0.47, 10_000), (0.48, 10_000)]
+    o = _tick(make(stake_usd=50.0), 102, asks, hours_before=6)[0]
+    assert o.take_limit_price == round(0.47 * P), "40 shares at 0.45-0.46 leave most of the stake for 0.47"
+    shares = o.take_size / S
+    cost = 20 * cost_per_share(0.45, 0.07) + 20 * cost_per_share(0.46, 0.07) + (shares - 40) * cost_per_share(0.47, 0.07)
+    assert 50.0 - cost_per_share(0.47, 0.07) < cost <= 50.0 + 1e-9
 
 
 def test_stake_already_spent_blocks_further_orders(make):

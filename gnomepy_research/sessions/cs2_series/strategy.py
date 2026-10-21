@@ -9,8 +9,9 @@ two announced lineups, and the two are blended (series_pricing.price_blended).
 
 Inside the entry window - from window_hours before HLTV's latest kickoff until kickoff, while
 HLTV still lists the match as upcoming - it buys whichever team's listing is underpriced by at
-least min_edge after the venue's taker fee. Orders are IOC limits capped at the highest price
-that still clears the threshold, so it only ever takes liquidity it has already priced.
+least min_edge after the venue's taker fee. An order walks the ask book as deep as every share still
+clears the threshold at its own price and fee, within the stake; it is an IOC limit at the deepest level
+it costed, so it only ever takes liquidity it has already priced.
 Positions are held to settlement. Trading stops at kickoff (or once HLTV lists the match live), but
 the session runs on through the match so its positions keep being marked, and ends itself, keeping
 what it holds, once HLTV drops the match from its listing, which it does when the match ends. If
@@ -47,7 +48,7 @@ from gnomepy_research.fees import registry_fee_rates
 from gnomepy_research.models.cs2.win_probability.pre_map_model import CS2PreMapModel
 from gnomepy_research.models.cs2.hltv.bayes_series import RankStrength, SeriesBlend, SeriesPosterior
 from gnomepy_research.models.cs2.win_probability.series_pricing import price_blended
-from gnomepy_research.sessions.cs2_series.decision import Level, choose_entry, cost_per_share, shares_to_buy
+from gnomepy_research.sessions.cs2_series.decision import Level, choose_entry, cost_per_share, plan_take
 from gnomepy_research.sessions.cs2_series.match_feed import FEATURES, MATCHES, MatchFeed, Quote
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,6 @@ class CS2Series(Strategy):
         min_edge: the least edge after the fee worth buying.
         window_hours: how long before kickoff the entry window opens.
         stake_usd: most this session may commit, fees included.
-        max_slippage: how far above the best ask a single order may reach.
         adverse_move: stop adding once the price has fallen this far below our average entry -
             a big pre-kickoff move is usually news the model cannot see.
         min_order_usd: smallest order worth sending.
@@ -145,7 +145,6 @@ class CS2Series(Strategy):
         min_edge: float = 0.05,
         window_hours: float = 12.0,
         stake_usd: float = 50.0,
-        max_slippage: float = 0.02,
         adverse_move: float = 0.08,
         min_order_usd: float = 1.0,
         book_depth: int = 10,
@@ -164,7 +163,6 @@ class CS2Series(Strategy):
         self.min_edge = min_edge
         self.window_ns = int(window_hours * HOUR_NS)
         self.stake_usd = stake_usd
-        self.max_slippage = max_slippage
         self.adverse_move = adverse_move
         self.min_order_usd = min_order_usd
         self.book_depth = book_depth
@@ -222,6 +220,7 @@ class CS2Series(Strategy):
         self._m_edge = buf.add_double_column("edge_at_best")
         self._m_limit = buf.add_double_column("limit_price")
         self._m_shares = buf.add_double_column("shares")
+        self._m_cost = buf.add_double_column("cost")
         buf.freeze()
         self._metrics_buf = buf
 
@@ -281,7 +280,7 @@ class CS2Series(Strategy):
 
         fee_rates = (self._taker_rate(self._legs[0]), self._taker_rate(self._legs[1]))
         entry = choose_entry(quote.p_team_a, self._legs[0].asks, self._legs[1].asks,
-                             min_edge=self.min_edge, fee_rates=fee_rates, max_slippage=self.max_slippage,
+                             min_edge=self.min_edge, fee_rates=fee_rates,
                              tick=self._legs[0].tick, allowed_sides=tuple(held) if held else (0, 1))
         if entry is None:
             return []
@@ -290,19 +289,18 @@ class CS2Series(Strategy):
             return []
 
         leg = self._legs[entry.side]
-        fee_rate = fee_rates[entry.side]
-        shares = shares_to_buy(entry, budget, fee_rate)
-        size = int(shares * SIZE_SCALE) // leg.lot * leg.lot
-        if size <= 0 or size < leg.min_size or shares * cost_per_share(entry.limit_price, fee_rate) < self.min_order_usd:
+        take = plan_take(entry, budget, fee_rates[entry.side], leg.lot / SIZE_SCALE)
+        size = round(take.shares * SIZE_SCALE)
+        if size <= 0 or size < leg.min_size or take.cost < self.min_order_usd:
             return []
 
         if not held:
             self._entry_lineups = quote.lineups
         leg.in_flight = True
-        leg.last_limit = entry.limit_price
-        self._record(now_ns, entry, size / SIZE_SCALE, self._components.get(quote.at_ns, (float("nan"), float("nan"))))
+        leg.last_limit = take.limit_price
+        self._record(now_ns, entry, take, self._components.get(quote.at_ns, (float("nan"), float("nan"))))
         return [Intent(leg.exchange_id, leg.security_id, take_side=Side.BID, take_size=size,
-                       take_order_type=OrderType.LIMIT, take_limit_price=round(entry.limit_price * PRICE_SCALE))]
+                       take_order_type=OrderType.LIMIT, take_limit_price=round(take.limit_price * PRICE_SCALE))]
 
     def _lineups_unchanged(self, quote: Quote) -> bool:
         """Whether the lineups still match the ones the position was entered on."""
@@ -318,7 +316,7 @@ class CS2Series(Strategy):
             self._legs[side].in_flight = False
         return []
 
-    def _record(self, now_ns: int, entry, shares: float, components: tuple[float, float]) -> None:
+    def _record(self, now_ns: int, entry, take, components: tuple[float, float]) -> None:
         if self._metrics_buf is None:
             return
         buf = self._metrics_buf
@@ -330,6 +328,7 @@ class CS2Series(Strategy):
         buf.set_double(self._m_fair_bayes, components[1])
         buf.set_double(self._m_ask, entry.best_ask)
         buf.set_double(self._m_edge, entry.edge_at_best)
-        buf.set_double(self._m_limit, entry.limit_price)
-        buf.set_double(self._m_shares, shares)
+        buf.set_double(self._m_limit, take.limit_price)
+        buf.set_double(self._m_shares, take.shares)
+        buf.set_double(self._m_cost, take.cost)
         buf.commit()

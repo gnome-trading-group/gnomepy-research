@@ -24,7 +24,6 @@ constraints:
     - trading outside the window - 12h before HLTV's latest kickoff, until kickoff - or once HLTV lists the match live or drops it
     - in-play trading - the pre-match model knows nothing about the score
     - buying both teams in one match (no hedging into the spread)
-    - walking the book more than max_slippage above the best ask
     - adding after the price falls adverse_move below our entry (likely news the model lacks)
   notes:
     - The backtest notes below were measured on the XGB-only pre-veto model; the blend (Oct 2026) scored 0.5774 series log loss against 0.5854 for XGB alone on Mar-Sep 2026, so thresholds tuned on the old model need re-checking
