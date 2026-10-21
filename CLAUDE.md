@@ -244,8 +244,9 @@ AWS_PROFILE=dev poetry run research jobs download <run_id> <dir> [--flat]
 `--commit` resolves to the SHA origin has (push first; `research/*` branches are for this). A task reads
 `--input` sets at `/work/in/<NAME>/` (uploaded once, content-addressed), datasets and artifacts through
 `gnomepy.data`, and writes what it keeps to `$OUTPUT_DIR`; outputs and the log land in
-`s3://gnome-research-<stage>/research-jobs/runs/<run_id>/jobs/<i>/`. Defaults: 4 vCPU / 14 GiB per task,
-64 vCPUs across all research jobs. The runner image is gnomepy's `docker/research-job/`.
+`s3://gnome-research-<stage>/research-jobs/runs/<run_id>/jobs/<i>/`. Defaults: 4 vCPU / 14 GiB per task.
+Research runs in prod (`STAGE=prod`, after `STAGE=prod poetry run gnomepy login`), with up to 128 vCPUs across all
+research jobs; dev is capped at 16 for testing the runner. The runner image is gnomepy's `docker/research-job/`.
 
 ## Tutorials
 
