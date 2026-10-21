@@ -103,13 +103,16 @@ def main() -> None:
     f.add_argument("--seed", type=int, default=0)
     f.add_argument("--no-debut-prior", dest="debut_prior", action="store_false",
                    help="give debutants the regular prior (the model before Oct 2026)")
+    f.add_argument("--window-months", type=int, default=BayesSeriesConfig.window_months,
+                   help="months of history each fit sees")
     s = sub.add_parser("score")
     s.add_argument("out_dir", type=Path)
     s.add_argument("premap_prices", type=Path)
     s.add_argument("confirm_from")
     args = parser.parse_args()
     if args.command == "fit":
-        fit(args.data_dir, args.out_dir, args.first, args.last, BayesSeriesConfig(seed=args.seed, debut_prior=args.debut_prior))
+        cfg = BayesSeriesConfig(seed=args.seed, debut_prior=args.debut_prior, window_months=args.window_months)
+        fit(args.data_dir, args.out_dir, args.first, args.last, cfg)
     else:
         score(args.out_dir, args.premap_prices, args.confirm_from)
 
