@@ -16,7 +16,7 @@ S = 400
 A_FIVE, B_FIVE = [1, 2, 3, 4, 5], [6, 7, 8, 9, 10]
 
 
-def _posterior(skill_a=0.0, skill_b=0.0, sigma_s=0.15, rho_na=0.0, beta=(0.0, 0.0), a_new=0.0):
+def _posterior(skill_a=0.0, skill_b=0.0, sigma_s=0.15, rho_na=0.0, beta=(0.0, 0.0), a_new=0.0, rho_lan_na=None):
     rng = np.random.default_rng(0)
     theta = np.concatenate([np.full((S, 5), skill_a), np.full((S, 5), skill_b)], axis=1) + 0.01 * rng.standard_normal((S, 10))
     rho = np.zeros((S, 7))
@@ -29,6 +29,7 @@ def _posterior(skill_a=0.0, skill_b=0.0, sigma_s=0.15, rho_na=0.0, beta=(0.0, 0.
         plays_team_ids=np.array([100, 200]), plays_maps=np.array(["de_nuke", "de_nuke"]), plays_counts=np.array([4, 4]),
         a_new=np.full(S, a_new), sigma_new=np.full(S, 0.4), career_ids=np.array([*range(1, 11), 555]),
         as_of="2026-10-01",
+        rho_lan=None if rho_lan_na is None else np.zeros((S, 7)) + np.eye(7)[2] * rho_lan_na,
     )
 
 
@@ -62,6 +63,18 @@ def test_region_and_map_terms_move_the_gap():
     nuke_a, _ = _posterior(beta=(0.2, 0.0)).gap(100, A_FIVE, -4.0, 200, B_FIVE, -4.0)
     assert na_weaker.mean() - base.mean() == pytest.approx(0.3, abs=1e-6)
     assert nuke_a.mean() - base.mean() == pytest.approx(0.2, abs=1e-6)
+
+
+def test_lan_region_offsets_apply_on_lan_only_and_survive_saving(tmp_path):
+    post = _posterior(rho_lan_na=-0.4)
+    online, _ = post.gap(100, A_FIVE, -4.0, 200, B_FIVE, -4.0)
+    lan, _ = post.gap(100, A_FIVE, -4.0, 200, B_FIVE, -4.0, is_lan=True)
+    assert lan.mean() - online.mean() == pytest.approx(0.4, abs=1e-6), "team B is North American"
+    post.save(tmp_path / "p.npz")
+    again = SeriesPosterior.load(tmp_path / "p.npz")
+    assert again.price(100, A_FIVE, -4.0, 200, B_FIVE, -4.0, is_lan=True) == pytest.approx(
+        post.price(100, A_FIVE, -4.0, 200, B_FIVE, -4.0, is_lan=True))
+    assert _posterior().gap(100, A_FIVE, -4.0, 200, B_FIVE, -4.0, is_lan=True)[0].mean() == pytest.approx(online.mean())
 
 
 def test_unseen_player_takes_the_newcomer_prior_and_widens_the_gap():

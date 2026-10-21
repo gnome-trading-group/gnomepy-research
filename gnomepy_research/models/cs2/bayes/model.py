@@ -5,6 +5,7 @@ The Bayesian series model, fitted with NUTS (nutpie) on one window.
     D = mean(skill_A[t]) - mean(skill_B[t]) + beta[A, map] - beta[B, map] + rho[home A] - rho[home B] + eta + eps
     skill[p, 0] ~ N(b * strength_p, sigma0);  skill[p, t] = skill[p, t-1] + tau * N(0, 1)   (monthly random walk)
     beta ~ N(0, sigma_map);  rho[Europe] = rho[unknown] = 0, others ~ N(0, 0.3)
+    lan_region: D += is_lan * (rho_lan[home A] - rho_lan[home B]), rho_lan pinned and drawn like rho
     eta ~ N(0, sigma_m) per map;  eps ~ N(0, sigma_s) per series
     rating_dev[p, map] ~ N(gamma * (skill[p, t] - mean(skill[own lineup, t])) + style_p, sigma_r),  gamma > 0
 
@@ -45,6 +46,9 @@ class BayesSeriesConfig:
     # Debutants start from their own prior (offset a_new, about -0.35 round-logit, spread sigma_new) instead of the
     # regular one, which rates an unknown newcomer on a good team too highly. Confirm Mar-Sep 2026: -0.0010* vs off.
     debut_prior: bool = True
+    # Region offsets that apply on LAN only: online cross-region play (ping, regional servers) needn't carry the
+    # same gaps, and on dev the blend under-rated European teams at cross-region LANs by ~0.10 series probability.
+    lan_region: bool = False
 
 
 def build_model(data: FitData, cfg: BayesSeriesConfig) -> pm.Model:
@@ -67,13 +71,18 @@ def build_model(data: FitData, cfg: BayesSeriesConfig) -> pm.Model:
         beta = pm.Deterministic("beta", sigma_map * pm.Normal("beta_z", 0, 1, shape=len(data.tm_maps)))
         rho_free = pm.Normal("rho_free", 0, 0.3, shape=len(REGIONS) - 1)
         rho = pm.Deterministic("rho", pt.concatenate([pt.zeros(2), rho_free]))
+        region = rho[data.region_a] - rho[data.region_b]
+        if cfg.lan_region:
+            rho_lan_free = pm.Normal("rho_lan_free", 0, 0.3, shape=len(REGIONS) - 1)
+            rho_lan = pm.Deterministic("rho_lan", pt.concatenate([pt.zeros(2), rho_lan_free]))
+            region = region + data.is_lan * (rho_lan[data.region_a] - rho_lan[data.region_b])
         sigma_m = pm.HalfNormal("sigma_m", 0.5)
         eta = sigma_m * pm.Normal("eta_z", 0, 1, shape=len(data.rounds))
         sigma_s = pm.HalfNormal("sigma_s", 0.5)
         eps = sigma_s * pm.Normal("eps_z", 0, 1, shape=data.n_series)
 
         d = (skill[data.lineup_a, data.month[:, None]].mean(axis=1) - skill[data.lineup_b, data.month[:, None]].mean(axis=1)
-             + beta[data.tm_a] - beta[data.tm_b] + rho[data.region_a] - rho[data.region_b] + eta + eps[data.series])
+             + beta[data.tm_a] - beta[data.tm_b] + region + eta + eps[data.series])
         pm.Binomial("rounds", n=data.rounds, p=pm.math.sigmoid(d), observed=data.rounds_a)
 
         # Positive: a better player rates above his teammates. Unconstrained, the sign is only weakly fixed (rounds
@@ -90,7 +99,7 @@ def build_model(data: FitData, cfg: BayesSeriesConfig) -> pm.Model:
 
 def sample(model: pm.Model, cfg: BayesSeriesConfig) -> az.InferenceData:
     with model:
-        extra = ["a_new", "sigma_new"] if cfg.debut_prior else []
+        extra = (["a_new", "sigma_new"] if cfg.debut_prior else []) + (["rho_lan"] if cfg.lan_region else [])
         return pm.sample(draws=cfg.draws, tune=cfg.tune, chains=cfg.chains, random_seed=cfg.seed, nuts_sampler="nutpie",
                          target_accept=cfg.target_accept, progressbar=False,
                          var_names=POSTERIOR_VARS + ["sigma_u"] + extra)
@@ -123,6 +132,7 @@ def posterior_from(idata: az.InferenceData, data: FitData, cfg: BayesSeriesConfi
         sigma_new=draws("sigma_new") if cfg.debut_prior else draws("sigma0"),
         career_ids=data.career_ids,
         as_of=f"{pd.Timestamp(as_of):%Y-%m-%d}",
+        rho_lan=draws("rho_lan") if cfg.lan_region else None,
     )
 
 
@@ -135,4 +145,6 @@ def fit_month(maps: pd.DataFrame, player_stats: pd.DataFrame, rank_strength: Ran
     diag.update({"maps": len(data.rounds), "players": data.n_players, "rating_obs": len(data.rating_dev),
                  **{k: float(idata.posterior[k].mean()) for k in ("gamma", "sigma0", "sigma_m", "sigma_s")
                     + (("a_new", "sigma_new") if cfg.debut_prior else ())}})
+    if cfg.lan_region:
+        diag["rho_lan"] = [round(float(v), 3) for v in idata.posterior["rho_lan"].mean(("chain", "draw"))]
     return posterior_from(idata, data, cfg, month), diag

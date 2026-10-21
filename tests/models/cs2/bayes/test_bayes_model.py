@@ -32,7 +32,7 @@ def _world(n_teams=6, n_days=60, seed=0):
             sa, sb = (13, min(sb, 11)) if won_a > 12 else (min(sa, 11), 13)
             hist.append({"match_id": mid, "match_date": DAY0 + pd.Timedelta(days=day), "map_name": "de_nuke",
                          "team_a_id": a + 1, "team_b_id": b + 1, "team_a_score": sa, "team_b_score": sb,
-                         "team_a_won": int(sa > sb), "bo_type": 1, "event_name": "Test Europe Cup"})
+                         "team_a_won": int(sa > sb), "bo_type": 1, "event_name": "Test Europe Cup", "is_lan": day % 2})
             for team, five in ((a + 1, fa), (b + 1, fb)):
                 mean = np.mean([skill[p] for p in five])
                 for slot, p in enumerate(five):
@@ -76,12 +76,12 @@ def test_debutants_are_players_first_seen_inside_the_window():
     assert 777 in set(data.career_ids) and 0 in set(data.career_ids)
 
 
-@pytest.mark.parametrize("debut_prior", [False, True])
-def test_fit_recovers_player_skill_order(debut_prior):
+@pytest.mark.parametrize("debut_prior,lan_region", [(False, False), (True, False), (True, True)])
+def test_fit_recovers_player_skill_order(debut_prior, lan_region):
     hist, lineups, stats, skill = _world()
     maps = prepare_maps(hist, lineups)
     data = build_fit_data(maps, stats, RANKS, DAY0, DAY0 + pd.Timedelta(days=60))
-    cfg = BayesSeriesConfig(draws=200, tune=300, chains=2, debut_prior=debut_prior)
+    cfg = BayesSeriesConfig(draws=200, tune=300, chains=2, debut_prior=debut_prior, lan_region=lan_region)
     post = posterior_from(sample(build_model(data, cfg), cfg), data, cfg, DAY0 + pd.Timedelta(days=60))
     est = pd.Series(post.theta.mean(axis=0), index=post.player_ids)
     truth = pd.Series(skill).reindex(est.index)
@@ -90,3 +90,4 @@ def test_fit_recovers_player_skill_order(debut_prior):
     within = np.corrcoef(est - est.groupby(team).transform("mean"), truth - truth.groupby(team).transform("mean"))[0, 1]
     assert within > 0.6, "ratings against teammates should order players inside a fixed five"
     assert post.price(6, list(range(25, 30)), RANKS(6, DAY0), 1, list(range(0, 5)), RANKS(1, DAY0)) > 0.6
+    assert (post.rho_lan is not None) == lan_region

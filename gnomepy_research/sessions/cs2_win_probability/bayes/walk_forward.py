@@ -50,7 +50,7 @@ def fit(data_dir: Path, out_dir: Path, first: str, last: str, cfg: BayesSeriesCo
         posterior.save(out_dir / f"posterior_{month:%Y-%m}.npz")
         series = maps[(maps.month == month) & (maps.bo_type == 3)].drop_duplicates("match_id")
         q = [posterior.price(r.team_a_id, r.lineup_a, ranks(r.team_a_id, month),
-                             r.team_b_id, r.lineup_b, ranks(r.team_b_id, month)) for r in series.itertuples()]
+                             r.team_b_id, r.lineup_b, ranks(r.team_b_id, month), r.is_lan == 1) for r in series.itertuples()]
         prices = pd.DataFrame({"match_id": series.match_id.to_numpy(), "q": np.clip(q, 0.01, 0.99),
                                "y": series.match_id.map(won).to_numpy()})
         prices.to_parquet(out_dir / f"prices_{month:%Y-%m}.parquet", index=False)
@@ -103,13 +103,15 @@ def main() -> None:
     f.add_argument("--seed", type=int, default=0)
     f.add_argument("--no-debut-prior", dest="debut_prior", action="store_false",
                    help="give debutants the regular prior (the model before Oct 2026)")
+    f.add_argument("--lan-region", action="store_true", help="add region offsets that apply on LAN maps only")
     s = sub.add_parser("score")
     s.add_argument("out_dir", type=Path)
     s.add_argument("premap_prices", type=Path)
     s.add_argument("confirm_from")
     args = parser.parse_args()
     if args.command == "fit":
-        fit(args.data_dir, args.out_dir, args.first, args.last, BayesSeriesConfig(seed=args.seed, debut_prior=args.debut_prior))
+        fit(args.data_dir, args.out_dir, args.first, args.last,
+            BayesSeriesConfig(seed=args.seed, debut_prior=args.debut_prior, lan_region=args.lan_region))
     else:
         score(args.out_dir, args.premap_prices, args.confirm_from)
 

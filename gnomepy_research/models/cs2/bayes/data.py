@@ -42,6 +42,7 @@ class FitData:
     tm_b: np.ndarray
     region_a: np.ndarray         # (N,)
     region_b: np.ndarray
+    is_lan: np.ndarray           # (N,) 1.0 for a map played on LAN
     series: np.ndarray           # (N,)
     rounds: np.ndarray           # (N,) regulation rounds played
     rounds_a: np.ndarray         # (N,) won by A
@@ -124,6 +125,7 @@ def build_fit_data(maps: pd.DataFrame, player_stats: pd.DataFrame, rank_strength
         tm_b=np.array([tmidx[(int(t), m)] for t, m in zip(tr.team_b_id, tr.map_name)]),
         region_a=np.array([home.get(int(t), 0) for t in tr.team_a_id]),
         region_b=np.array([home.get(int(t), 0) for t in tr.team_b_id]),
+        is_lan=(pd.to_numeric(tr.is_lan, errors="coerce").fillna(0).to_numpy() == 1).astype(float),
         series=tr.match_id.map(sidx).to_numpy(),
         rounds=tr.rounds.to_numpy(),
         rounds_a=tr.rounds_a.to_numpy(),

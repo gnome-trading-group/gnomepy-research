@@ -117,6 +117,7 @@ class SeriesPosterior:
     sigma_new: np.ndarray       # (S,)
     career_ids: np.ndarray      # players with any map before the fit's end
     as_of: str                  # the fit window's end (ISO date): the posterior knows nothing after it
+    rho_lan: np.ndarray | None = None  # (S, regions) offsets on LAN only, when the fit had them
 
     def __post_init__(self):
         object.__setattr__(self, "_pidx", {int(p): i for i, p in enumerate(self.player_ids)})
@@ -179,25 +180,29 @@ class SeriesPosterior:
         return effect
 
     def gap(self, team_a: int, lineup_a: list[int], strength_a: float,
-            team_b: int, lineup_b: list[int], strength_b: float) -> tuple[np.ndarray, np.ndarray]:
+            team_b: int, lineup_b: list[int], strength_b: float, is_lan: bool = False) -> tuple[np.ndarray, np.ndarray]:
         """Per draw: the expected round-logit gap of a pre-veto map, and the variance shared by every map."""
         mean_a, var_a = self._lineup(lineup_a, strength_a)
         mean_b, var_b = self._lineup(lineup_b, strength_b)
         rho_a = self.rho[:, self._home.get(int(team_a), UNKNOWN_REGION)]
         rho_b = self.rho[:, self._home.get(int(team_b), UNKNOWN_REGION)]
         mean = mean_a - mean_b + self._map_term(team_a, team_b) + rho_a - rho_b
+        if is_lan and self.rho_lan is not None:
+            mean = mean + self.rho_lan[:, self._home.get(int(team_a), UNKNOWN_REGION)] \
+                - self.rho_lan[:, self._home.get(int(team_b), UNKNOWN_REGION)]
         return mean, var_a + var_b + self.sigma_s ** 2
 
     def price(self, team_a: int, lineup_a: list[int], strength_a: float,
-              team_b: int, lineup_b: list[int], strength_b: float) -> float:
+              team_b: int, lineup_b: list[int], strength_b: float, is_lan: bool = False) -> float:
         """P(team A wins the bo3), averaged over the posterior draws."""
-        mean, shared_var = self.gap(team_a, lineup_a, strength_a, team_b, lineup_b, strength_b)
+        mean, shared_var = self.gap(team_a, lineup_a, strength_a, team_b, lineup_b, strength_b, is_lan)
         d = mean[:, None] + np.sqrt(shared_var)[:, None] * _OUTER_X[None, :]
         p = np.interp(d, _GRID, self._map_table)
         return float((_bo3(p) @ _OUTER_W).mean())
 
     def save(self, path: str | Path) -> None:
-        np.savez_compressed(path, **{k: np.asarray(getattr(self, k)) for k in SeriesPosterior.__dataclass_fields__})
+        np.savez_compressed(path, **{k: np.asarray(getattr(self, k)) for k in SeriesPosterior.__dataclass_fields__
+                                     if getattr(self, k) is not None})
 
     @classmethod
     def load(cls, path: str | Path) -> SeriesPosterior:
