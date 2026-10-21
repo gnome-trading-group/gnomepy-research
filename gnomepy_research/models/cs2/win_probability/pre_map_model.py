@@ -190,14 +190,16 @@ def _fit(
     X_es: np.ndarray, y_es: np.ndarray,
     n_estimators: int, max_depth: int,
 ) -> XGBClassifier:
+    # Tuned by walk-forward Mar-Sep 2026: with ~20k map rows, shallow slow trees on half the columns beat
+    # depth 5 / lr 0.05 / 0.8 columns, and a higher round cap with longer patience lets them finish.
     model = XGBClassifier(
         n_estimators=n_estimators,
         max_depth=max_depth,
-        learning_rate=0.05,
+        learning_rate=0.03,
         subsample=0.8,
-        colsample_bytree=0.8,
+        colsample_bytree=0.5,
         eval_metric="logloss",
-        early_stopping_rounds=50,
+        early_stopping_rounds=80,
         tree_method="hist",
         n_jobs=-1,
         random_state=42,
@@ -209,8 +211,8 @@ def _fit(
 def train(
     df: pd.DataFrame | None = None,
     out_path: str | None = None,
-    n_estimators: int = 1000,
-    max_depth: int = 5,
+    n_estimators: int = 2000,
+    max_depth: int = 2,
     feature_names: list[str] | None = None,
     symmetric: bool = True,
     report: bool = True,
@@ -282,7 +284,7 @@ def train(
     return metrics
 
 
-def fit_production(df: pd.DataFrame, names: list[str], n_estimators: int = 1000, max_depth: int = 5) -> dict:
+def fit_production(df: pd.DataFrame, names: list[str], n_estimators: int = 2000, max_depth: int = 2) -> dict:
     """
     A bundle fit on all of df, for live use: no test hold-out, only the latest
     slice reserved for early stopping and calibration - exactly how each month of
@@ -385,8 +387,8 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
-    ap.add_argument("--n-estimators", type=int, default=1000)
-    ap.add_argument("--max-depth", type=int, default=5)
+    ap.add_argument("--n-estimators", type=int, default=2000)
+    ap.add_argument("--max-depth", type=int, default=2)
     ap.add_argument("--ablate", action="store_true", help="also report Elo and symmetry ablations")
     args = ap.parse_args()
 

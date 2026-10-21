@@ -26,11 +26,10 @@ from sklearn.metrics import log_loss, roc_auc_score
 from gnomepy_research.models.cs2.hltv.context_features import (
     EVENT_FEATURES,
     PAGE_H2H_FEATURES,
-    RANK_FEATURES,
     SCHEDULE_FEATURES,
     VETO_FEATURES,
 )
-from gnomepy_research.models.cs2.hltv.player_form import PLAYER_FORM_FEATURES
+from gnomepy_research.models.cs2.hltv.player_skill import PLAYER_SKILL_FEATURES
 from gnomepy_research.models.cs2.win_probability.pre_map_features import (
     HARVEST_FEATURE_NAMES,
     PRE_MAP_FEATURE_NAMES,
@@ -41,9 +40,8 @@ from gnomepy_research.models.cs2.win_probability.splits import clustered_bootstr
 logger = logging.getLogger(__name__)
 
 BLOCKS = {
-    "player_form": PLAYER_FORM_FEATURES,
+    "player_skill": PLAYER_SKILL_FEATURES,
     "schedule": SCHEDULE_FEATURES,
-    "rank": RANK_FEATURES,
     "event": EVENT_FEATURES,
     "veto": VETO_FEATURES,
     "page_h2h": PAGE_H2H_FEATURES,

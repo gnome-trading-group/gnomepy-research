@@ -129,45 +129,6 @@ def _rank(value) -> float:
     return float(f) if f == f else np.nan
 
 
-def compute_rank_features(history: pd.DataFrame) -> pd.DataFrame:
-    """
-    Combine HLTV and VRS ranks.
-
-    rank_diff alone is NaN for 19.4% of rows, concentrated on lower-tier teams
-    where the model is weakest. VRS covers a different population, so the union
-    is denser than either, and the two disagreeing is itself informative.
-    """
-    out = pd.DataFrame({
-        "match_id": history["match_id"],
-        "map_name": history["map_name"],
-    })
-    has_vrs = "team_a_vrs_rank" in history.columns
-
-    for side in ("a", "b"):
-        hltv = pd.to_numeric(history.get(f"team_{side}_rank"), errors="coerce")
-        vrs = pd.to_numeric(history.get(f"team_{side}_vrs_rank"), errors="coerce") if has_vrs else pd.Series(np.nan, index=history.index)
-        out[f"team_{side}_rank_best"] = pd.concat([hltv, vrs], axis=1).min(axis=1)
-        out[f"team_{side}_log_rank"] = np.log1p(out[f"team_{side}_rank_best"])
-
-    out["rank_best_diff"] = out["team_a_rank_best"] - out["team_b_rank_best"]
-    out["log_rank_diff"] = out["team_a_log_rank"] - out["team_b_log_rank"]
-    out["rank_known_both"] = (out["team_a_rank_best"].notna() & out["team_b_rank_best"].notna()).astype(float)
-
-    if has_vrs:
-        a_gap = pd.to_numeric(history["team_a_rank"], errors="coerce") - pd.to_numeric(history["team_a_vrs_rank"], errors="coerce")
-        b_gap = pd.to_numeric(history["team_b_rank"], errors="coerce") - pd.to_numeric(history["team_b_vrs_rank"], errors="coerce")
-        out["rank_source_disagreement"] = a_gap - b_gap
-    else:
-        out["rank_source_disagreement"] = np.nan
-    return out
-
-
-RANK_FEATURES = [
-    "team_a_rank_best", "team_b_rank_best", "team_a_log_rank", "team_b_log_rank",
-    "rank_best_diff", "log_rank_diff", "rank_known_both", "rank_source_disagreement",
-]
-
-
 EVENT_FEATURES = ["is_elimination", "is_qualifier", "is_playoff", "is_group"]
 
 

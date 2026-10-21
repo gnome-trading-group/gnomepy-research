@@ -8,12 +8,16 @@ unknown map: the pre-veto model is asked for P(team A wins the next map) at each
 series score, and the series DP composes those into the series price. Map 1 is
 the lattice's (0, 0) node. This is the construction the walk-forward backtest
 scored (holding/preveto_checks.py).
+
+price_blended is the production series price: this pre-map price blended with the Bayesian
+series model's (models/cs2/bayes), which prices only once both lineups are known.
 """
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
+from gnomepy_research.models.cs2.hltv.bayes_series import LINEUP_SIZE, RankStrength, SeriesBlend, SeriesPosterior
 from gnomepy_research.models.cs2.win_probability.pre_map_model import CS2PreMapModel, _matrix
 from gnomepy_research.models.cs2.win_probability.series_dp import series_nodes, series_win_prob
 
@@ -54,3 +58,29 @@ def price(model: CS2PreMapModel, priors: pd.DataFrame) -> pd.DataFrame:
     df = pd.DataFrame(out)
     df[["series", "game1"]] = np.clip(df[["series", "game1"]], *PROB_CLIP)
     return df
+
+
+def _five(value) -> list[int] | None:
+    if value is None or (isinstance(value, float) and np.isnan(value)) or len(value) != LINEUP_SIZE:
+        return None
+    return [int(p) for p in value]
+
+
+def price_blended(model: CS2PreMapModel, posterior: SeriesPosterior, blend: SeriesBlend, ranks: RankStrength,
+                  priors: pd.DataFrame) -> pd.DataFrame:
+    """
+    priors: upcoming series rows with team ids, match_date and both lineups (team_a/b_lineup_ids).
+    Returns match_id, series (the blend), xgb and bayes - each P(HLTV team A wins the series). A row
+    without both full lineups has no Bayesian price, so its series price is NaN.
+    """
+    xgb = price(model, priors)["series"].to_numpy()
+    bayes, blended = np.full(len(priors), np.nan), np.full(len(priors), np.nan)
+    for i, r in enumerate(priors.itertuples()):
+        five_a, five_b = _five(r.team_a_lineup_ids), _five(r.team_b_lineup_ids)
+        if five_a is None or five_b is None:
+            continue
+        day = pd.Timestamp(r.match_date)
+        bayes[i] = posterior.price(r.team_a_id, five_a, ranks(r.team_a_id, day), r.team_b_id, five_b, ranks(r.team_b_id, day))
+        blended[i] = blend.predict(np.array([bayes[i]]), np.array([xgb[i]]))[0]
+    return pd.DataFrame({"match_id": priors["match_id"].astype(int).to_numpy(), "series": np.clip(blended, *PROB_CLIP),
+                         "xgb": xgb, "bayes": bayes})

@@ -150,7 +150,8 @@ from `gnomepy_research/models/`; a live strategy is its session's `strategy.py`,
 `models/`, its own session, and the base-only `fees`/`listing` modules:
 
 ```
-models/cs2/hltv/             HLTV point-in-time features and priors
+models/cs2/hltv/             HLTV point-in-time features and priors; Bayesian series pricing (base-only)
+models/cs2/bayes/            Bayesian series model: data preparation and NUTS fitting
 models/cs2/win_probability/  pre-map, round and series models
 models/cs2/prematch/         Polymarket market lookup, HLTV team identity
 models/cfb/features/         CFB point-in-time features
@@ -177,8 +178,8 @@ installs only what its code uses:
 
 - A package declares the extras its code needs in its `__init__.py`: `EXTRAS = ("xgboost",)`.
   The nearest enclosing package that declares EXTRAS decides for every module in it; code with
-  none runs on the base. Today: `models/cs2/win_probability` → xgboost, `models/cfb/efficiency`
-  → pymc, and the sessions that run them. `models/cs2/hltv`, `models/cs2/prematch` and
+  none runs on the base. Today: `models/cs2/win_probability` → xgboost, `models/cs2/bayes` and
+  `models/cfb/efficiency` → pymc, and the sessions that run them. `models/cs2/hltv`, `models/cs2/prematch` and
   `models/cfb/features` are base-only.
 - gnome-orchestrator's `start-session.sh` runs
   `python3 gnomepy_research/dependencies.py extras <strategy class>` and installs
@@ -228,6 +229,23 @@ model_path: "artifact://xgboost_model/cs2_pre_map_win_prob"                     
 model_path: "artifact://xgboost_model/cs2_pre_map_win_prob:20261013T165937051464Z"   # pinned
 model_path: "artifact://xgboost_model/cs2_pre_map_win_prob@production"               # alias
 ```
+
+## Research jobs (AWS Batch)
+
+Any module runnable with `python -m` can run on spot AWS Batch at a pushed commit, one task per argument
+list, visible to everyone on the controller's Research → Jobs page:
+
+```bash
+poetry run research jobs submit <module> --commit research/<topic> [--input NAME=PATH ...] [--array-file tasks.json | -- ARGS...] [--cpu 4 --memory-gib 14]
+poetry run research jobs list | get <run_id> | cancel <run_id>
+AWS_PROFILE=dev poetry run research jobs download <run_id> <dir> [--flat]
+```
+
+`--commit` resolves to the SHA origin has (push first; `research/*` branches are for this). A task reads
+`--input` sets at `/work/in/<NAME>/` (uploaded once, content-addressed), datasets and artifacts through
+`gnomepy.data`, and writes what it keeps to `$OUTPUT_DIR`; outputs and the log land in
+`s3://gnome-research-<stage>/research-jobs/runs/<run_id>/jobs/<i>/`. Defaults: 4 vCPU / 14 GiB per task,
+64 vCPUs across all research jobs. The runner image is gnomepy's `docker/research-job/`.
 
 ## Tutorials
 

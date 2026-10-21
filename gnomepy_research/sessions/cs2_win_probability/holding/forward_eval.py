@@ -83,7 +83,7 @@ history = ds.load("cs2_match_history")
 history["match_date"] = pd.to_datetime(history.match_date)
 new = history[(history.match_date >= CUTOFF) & (history.match_date <= END)]
 print(f"HLTV maps in {CUTOFF.date()} -> {END.date()}: {len(new)} across {new.match_id.nunique()} series", flush=True)
-priors = build_priors(history, ds.load("cs2_team_rankings"), player_stats=ds.load("cs2_player_map_stats"),
+priors = build_priors(history, ds.load("cs2_team_rankings"), lineups=ds.load("cs2_match_lineups"),
                       veto=ds.load("cs2_match_veto"), h2h=ds.load("cs2_h2h_history"))
 cols = ["match_id", "map_name", "team_a_won", "team_a_score", "team_b_score"]
 mf = priors.merge(history[cols], on=["match_id", "map_name"])

@@ -27,7 +27,7 @@ kick = pd.read_parquet(DATA_DIR / "pm_all_matched.parquet").drop_duplicates("mat
 E["kickoff"] = pd.to_datetime(E.match_id.map(kick))
 priors = pd.read_parquet(DATA_DIR / "priors_full.parquet")
 ctx = priors[priors.map_position_in_series == 1].drop_duplicates("match_id").set_index("match_id")[
-    ["rank_known_both", "event_tier", "is_lan", "elo_games_min"]]
+    ["rank_diff", "event_tier", "is_lan", "elo_games_min"]]
 E = E.join(ctx, on="match_id")
 traded = E[E.market.isin(["series", "game1"])]
 fees = TakerFees(pd.concat([traded.token_a, traded.token_b]).dropna())
@@ -175,7 +175,7 @@ for name in ("series @ 6h", "map 1 @ kickoff"):
     p = d[col]
     d["bought"] = np.where((d.side == 1) == (p > 0.5), "favourite", "underdog")
     d["edge_bucket"] = pd.cut(d.edge, [0.05, 0.10, 0.15, 0.25, 1], labels=["5-10c", "10-15c", "15-25c", "25c+"])
-    d["ranked"] = np.where(d.rank_known_both == 1, "both ranked", "a team unranked")
+    d["ranked"] = np.where(d.rank_diff.notna(), "both ranked", "a team unranked")
     d["tier"] = np.where(d.event_tier > 0, "rated event", "unrated event")
     d["lan"] = np.where(d.is_lan == 1, "LAN", "online")
     d["history"] = np.where(d.elo_games_min >= 20, "both 20+ games", "thin history")

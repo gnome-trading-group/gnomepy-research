@@ -17,9 +17,9 @@ import xgboost as xgb
 from sklearn.metrics import log_loss
 
 from gnomepy_research.models.cs2.hltv.context_features import (
-    EVENT_FEATURES, PAGE_H2H_FEATURES, RANK_FEATURES, SCHEDULE_FEATURES, VETO_FEATURES,
+    EVENT_FEATURES, PAGE_H2H_FEATURES, SCHEDULE_FEATURES, VETO_FEATURES,
 )
-from gnomepy_research.models.cs2.hltv.player_form import PLAYER_FORM_FEATURES
+from gnomepy_research.models.cs2.hltv.player_skill import PLAYER_SKILL_FEATURES
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 from gnomepy_research.models.cs2.win_probability.pre_map_features import _MAP_OHE_NAMES, PRE_MAP_FEATURE_NAMES
 from gnomepy_research.models.cs2.win_probability.pre_map_model import _fit, _matrix, fit_calibrator
@@ -30,8 +30,8 @@ N_ORDERS = 3
 N_PERMS = 5
 BLOCKS = {
     "Elo": ["elo_diff", "elo_map_diff", "elo_map_resid_diff", "elo_side_asym", "elo_games_min"],
-    "rank (HLTV + VRS)": RANK_FEATURES + ["rank_diff", "team_a_rating_diff", "ranking_age_days"],
-    "player form": PLAYER_FORM_FEATURES,
+    "rank (HLTV)": ["rank_diff", "team_a_rating_diff", "ranking_age_days"],
+    "player skill": PLAYER_SKILL_FEATURES,
     "team results history": ["team_a_map_winrate_long", "team_b_map_winrate_long", "team_a_map_winrate_short",
                              "team_b_map_winrate_short", "team_a_overall_winrate", "team_b_overall_winrate",
                              "recent_form_diff"],

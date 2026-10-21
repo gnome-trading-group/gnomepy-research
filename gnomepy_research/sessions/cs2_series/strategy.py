@@ -2,9 +2,10 @@
 CS2 series winner, pre-match, on one venue for one HLTV match.
 
 gnome-launcher starts one session per match per venue, so each session sits near its venue
-and a venue's trouble stays in its own sessions. The session prices the match itself: the
-pre-veto model reads each cs2_upcoming_features row as the pipeline writes it (match_feed.py),
-and the series DP turns map prices into a series price.
+and a venue's trouble stays in its own sessions. The session prices the match itself from each
+cs2_upcoming_features row as the pipeline writes it (match_feed.py): the pre-veto model and the
+series DP give one series price, the Bayesian series model (its weekly posterior) another from the
+two announced lineups, and the two are blended (series_pricing.price_blended).
 
 Inside the entry window - from window_hours before HLTV's latest kickoff until kickoff, while
 HLTV still lists the match as upcoming - it buys whichever team's listing is underpriced by at
@@ -15,10 +16,12 @@ the session runs on through the match so its positions keep being marked, and en
 what it holds, once HLTV drops the match from its listing, which it does when the match ends. If
 the pipeline stalls and never says, it ends exit_hours_after_kickoff after kickoff.
 
-It does not trade until both lineups are announced: the model leans on player form, which is
-blank until then. Nor does it trade on stale match state: if the newest cs2_upcoming row is
+It does not trade until both lineups are announced: both models price players, and the Bayesian
+one has no price without them. Nor does it trade on stale match state: if the newest cs2_upcoming row is
 older than max_state_age_minutes, the pipeline has stalled, and a match that has since started
-or moved would look upcoming. Once it holds a position it stops adding if a lineup changes, because a
+or moved would look upcoming. Nor on a stale posterior: one fitted more than max_posterior_age_days
+ago has missed recent results and debuts, and one fitted after the moment being priced (a replay)
+would know the future. Once it holds a position it stops adding if a lineup changes, because a
 stand-in the model has barely seen is news it cannot price.
 
 Settings come from the six-month walk-forward backtest (spec.yaml). State that must survive a
@@ -27,17 +30,23 @@ positions rather than kept here, so a restarted session resumes instead of buyin
 """
 from __future__ import annotations
 
+import json
 import logging
+import math
 from dataclasses import dataclass, field
+from pathlib import Path
+
+import pandas as pd
 
 from gnomepy import ExecutionReport, Intent, OrderStatus, OrderType, Scales, Side, Strategy
-from gnomepy.data import ArtifactQuery, ArtifactStore, resolve_artifact_path
+from gnomepy.data import ArtifactQuery, ArtifactStore, DatasetStore, resolve_artifact_path
 from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
 from gnomepy_research.fees import registry_fee_rates
 from gnomepy_research.models.cs2.win_probability.pre_map_model import CS2PreMapModel
-from gnomepy_research.models.cs2.win_probability.series_pricing import price
+from gnomepy_research.models.cs2.hltv.bayes_series import RankStrength, SeriesBlend, SeriesPosterior
+from gnomepy_research.models.cs2.win_probability.series_pricing import price_blended
 from gnomepy_research.sessions.cs2_series.decision import Level, choose_entry, cost_per_share, shares_to_buy
 from gnomepy_research.sessions.cs2_series.match_feed import FEATURES, MATCHES, MatchFeed, Quote
 
@@ -51,6 +60,10 @@ UPCOMING = "upcoming"
 MISSING = "missing"
 ARTIFACT = "artifact://"
 DEFAULT_MODEL = "artifact://xgboost_model/cs2_prematch_preveto"
+DEFAULT_POSTERIOR = "artifact://bayes_posterior/cs2_series"
+DEFAULT_BLEND = "artifact://blend/cs2_series"
+RANKINGS = "cs2_team_rankings"
+DAY_NS = 24 * HOUR_NS
 
 
 @dataclass
@@ -66,13 +79,33 @@ class _Leg:
     last_limit: float = 0.0
 
 
-def load_model(model_path: str) -> tuple[CS2PreMapModel, str]:
-    """The pre-veto model and the exact version it resolved to (an unpinned URI or an alias is resolved first)."""
-    if model_path.startswith(ARTIFACT):
+def _fetch(uri: str) -> tuple[Path, str]:
+    """A local copy of an artifact URI or path, and the exact version it resolved to (an unpinned URI or an alias
+    is resolved first)."""
+    if uri.startswith(ARTIFACT):
         store = ArtifactStore()
-        ref = store.find(ArtifactQuery.parse(model_path))
-        return CS2PreMapModel(store.resolve(ref)), str(ref)
-    return CS2PreMapModel(resolve_artifact_path(model_path)), model_path
+        ref = store.find(ArtifactQuery.parse(uri))
+        return Path(store.resolve(ref)), str(ref)
+    return Path(resolve_artifact_path(uri)), uri
+
+
+@dataclass(frozen=True)
+class Models:
+    premap: CS2PreMapModel
+    posterior: SeriesPosterior
+    blend: SeriesBlend
+    versions: dict[str, str]
+
+
+def load_models(model_path: str, posterior_path: str, blend_path: str) -> Models:
+    (m, mv), (p, pv), (b, bv) = _fetch(model_path), _fetch(posterior_path), _fetch(blend_path)
+    return Models(CS2PreMapModel(m), SeriesPosterior.load(p), SeriesBlend.from_dict(json.loads(b.read_text())),
+                  {"premap": mv, "posterior": pv, "blend": bv})
+
+
+def read_table(source: str) -> pd.DataFrame:
+    """A whole DatasetStore table, or a parquet extract of one (for replays)."""
+    return pd.read_parquet(source) if source.endswith(".parquet") else DatasetStore().load(source)
 
 
 class CS2Series(Strategy):
@@ -82,6 +115,9 @@ class CS2Series(Strategy):
         listing_team_a, listing_team_b: the venue's registry listings for each HLTV team
             winning the series.
         model_path: the pre-veto model, an artifact URI or path; unpinned means the latest.
+        posterior_path: the Bayesian series model's posterior (cs2_bayes_fit, weekly), likewise.
+        blend_path: the blend weights of the two (JSON), likewise.
+        max_posterior_age_days: the oldest posterior it trades on, counted from the end of its fit window.
         min_edge: the least edge after the fee worth buying.
         window_hours: how long before kickoff the entry window opens.
         stake_usd: most this session may commit, fees included.
@@ -94,7 +130,7 @@ class CS2Series(Strategy):
         near_kickoff_reload_minutes, near_kickoff_hours: re-read this often inside this long before kickoff,
             so HLTV marking the match live stops trading within a minute of the pipeline writing it.
         exit_hours_after_kickoff: when the session ends if the match state never says the match is over.
-        features_source, matches_source: DatasetStore tables, or parquet extracts of them.
+        features_source, matches_source, rankings_source: DatasetStore tables, or parquet extracts of them.
     """
 
     def __init__(
@@ -103,6 +139,9 @@ class CS2Series(Strategy):
         listing_team_a: int,
         listing_team_b: int,
         model_path: str = DEFAULT_MODEL,
+        posterior_path: str = DEFAULT_POSTERIOR,
+        blend_path: str = DEFAULT_BLEND,
+        max_posterior_age_days: float = 14.0,
         min_edge: float = 0.05,
         window_hours: float = 12.0,
         stake_usd: float = 50.0,
@@ -118,6 +157,7 @@ class CS2Series(Strategy):
         exit_hours_after_kickoff: float = 8.0,
         features_source: str = FEATURES,
         matches_source: str = MATCHES,
+        rankings_source: str = RANKINGS,
     ):
         self.match_id = int(match_id)
         self._fee_rates = registry_fee_rates(self)
@@ -138,10 +178,21 @@ class CS2Series(Strategy):
         self._legs = (self._resolve(registry, listing_team_a), self._resolve(registry, listing_team_b))
         self._side_of = {(leg.exchange_id, leg.security_id): side for side, leg in enumerate(self._legs)}
 
-        model, resolved = load_model(model_path)
-        logger.info("match %d: pricing with %s", self.match_id, resolved)
-        self._feed = MatchFeed(self.match_id, lambda rows: price(model, rows)["series"].tolist(),
-                               features_source, matches_source, reload_minutes * 60,
+        models = load_models(model_path, posterior_path, blend_path)
+        logger.info("match %d: pricing with %s", self.match_id, models.versions)
+        ranks = RankStrength(read_table(rankings_source))
+        self._posterior_as_of_ns = pd.Timestamp(models.posterior.as_of).value
+        self.max_posterior_age_ns = int(max_posterior_age_days * DAY_NS)
+        # Each priced row's components, by the row's generated_at, so an order records what its price was made of.
+        self._components: dict[int, tuple[float, float]] = {}
+
+        def pricer(rows: pd.DataFrame) -> list[float]:
+            priced = price_blended(models.premap, models.posterior, models.blend, ranks, rows)
+            for at, xgb, bayes in zip(rows.generated_at, priced.xgb, priced.bayes):
+                self._components[pd.Timestamp(at).value] = (float(xgb), float(bayes))
+            return priced.series.tolist()
+
+        self._feed = MatchFeed(self.match_id, pricer, features_source, matches_source, reload_minutes * 60,
                                near_kickoff_reload_minutes * 60, near_kickoff_hours * 3600)
 
     @staticmethod
@@ -165,6 +216,8 @@ class CS2Series(Strategy):
         self._m_ts = buf.add_long_column("timestamp")
         self._m_side = buf.add_long_column("side")
         self._m_fair = buf.add_double_column("fair")
+        self._m_fair_xgb = buf.add_double_column("fair_xgb")
+        self._m_fair_bayes = buf.add_double_column("fair_bayes")
         self._m_ask = buf.add_double_column("best_ask")
         self._m_edge = buf.add_double_column("edge_at_best")
         self._m_limit = buf.add_double_column("limit_price")
@@ -212,6 +265,11 @@ class CS2Series(Strategy):
             return []
         if not quote.lineup_known or any(leg.in_flight for leg in self._legs):
             return []
+        if not 0 <= now_ns - self._posterior_as_of_ns <= self.max_posterior_age_ns:
+            return []
+        if math.isnan(quote.p_team_a):
+            # Unpriced: a lineup that isn't a full five gives the Bayesian model nothing to price.
+            return []
 
         states = [self._leg_state(leg) for leg in self._legs]
         held = [side for side, (filled, committed, _) in enumerate(states) if filled > 0 or committed > 0]
@@ -242,7 +300,7 @@ class CS2Series(Strategy):
             self._entry_lineups = quote.lineups
         leg.in_flight = True
         leg.last_limit = entry.limit_price
-        self._record(now_ns, entry, size / SIZE_SCALE)
+        self._record(now_ns, entry, size / SIZE_SCALE, self._components.get(quote.at_ns, (float("nan"), float("nan"))))
         return [Intent(leg.exchange_id, leg.security_id, take_side=Side.BID, take_size=size,
                        take_order_type=OrderType.LIMIT, take_limit_price=round(entry.limit_price * PRICE_SCALE))]
 
@@ -260,7 +318,7 @@ class CS2Series(Strategy):
             self._legs[side].in_flight = False
         return []
 
-    def _record(self, now_ns: int, entry, shares: float) -> None:
+    def _record(self, now_ns: int, entry, shares: float, components: tuple[float, float]) -> None:
         if self._metrics_buf is None:
             return
         buf = self._metrics_buf
@@ -268,6 +326,8 @@ class CS2Series(Strategy):
         buf.set_long(self._m_ts, now_ns)
         buf.set_long(self._m_side, entry.side)
         buf.set_double(self._m_fair, entry.fair)
+        buf.set_double(self._m_fair_xgb, components[0])
+        buf.set_double(self._m_fair_bayes, components[1])
         buf.set_double(self._m_ask, entry.best_ask)
         buf.set_double(self._m_edge, entry.edge_at_best)
         buf.set_double(self._m_limit, entry.limit_price)

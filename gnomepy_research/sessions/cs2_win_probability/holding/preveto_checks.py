@@ -8,11 +8,11 @@ lookahead. Two questions, one walk-forward:
 
 1. Map 1, veto-blind: does a model with no map identity, picker or veto
    features still beat the map-1 market at kickoff?
-2. Series, Phase 0 gate: does STRICT + player form (the chosen pre-veto model)
+2. Series, Phase 0 gate: does STRICT + player skill (the chosen pre-veto model)
    do at least as well as STRICT, the variant the leak check validated?
 
 Feature sets: STRICT drops map one-hots, veto features, map-specific records
-and player form; STRICT_FORM adds player form back (announced lineups are
+and player skill; STRICT_SKILL adds player skill back (announced lineups are
 public before kickoff).
 """
 import logging
@@ -22,7 +22,7 @@ import pandas as pd
 from sklearn.metrics import log_loss
 
 from gnomepy_research.models.cs2.hltv.context_features import VETO_FEATURES
-from gnomepy_research.models.cs2.hltv.player_form import PLAYER_FORM_FEATURES
+from gnomepy_research.models.cs2.hltv.player_skill import PLAYER_SKILL_FEATURES
 from gnomepy_research.sessions.cs2_win_probability.holding._fees import TakerFees
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 from gnomepy_research.models.cs2.win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
@@ -39,9 +39,9 @@ MAP_SPECIFIC = ["team_a_map_winrate_long", "team_b_map_winrate_long", "team_a_ma
                 "team_b_map_winrate_short", "elo_map_diff", "elo_map_resid_diff"]
 UNKNOWN_MAP = ["team_a_picked_map", "is_decider"] + VETO_FEATURES + MAP_SPECIFIC
 FULL = list(PRE_MAP_FEATURE_NAMES)
-STRICT = [n for n in FULL if not n.startswith("map_de_") and n not in set(UNKNOWN_MAP + PLAYER_FORM_FEATURES)]
-STRICT_FORM = STRICT + list(PLAYER_FORM_FEATURES)
-SETS = {"strict": STRICT, "strict_form": STRICT_FORM}
+STRICT = [n for n in FULL if not n.startswith("map_de_") and n not in set(UNKNOWN_MAP + PLAYER_SKILL_FEATURES)]
+STRICT_SKILL = STRICT + list(PLAYER_SKILL_FEATURES)
+SETS = {"strict": STRICT, "strict_skill": STRICT_SKILL}
 
 history = pd.read_parquet(DATA_DIR / "cs2_match_history.parquet")
 history["match_date"] = pd.to_datetime(history.match_date)
@@ -52,7 +52,7 @@ mf = mf[mf.team_a_score != mf.team_b_score].sort_values(["match_date", "match_id
 by_mid = {k: v for k, v in priors.groupby("match_id")}
 series_won = history.groupby("match_id").team_a_won.agg(lambda w: int(w.sum() > len(w) - w.sum()))
 map1_won = history[history.map_position_in_series == 1].set_index("match_id").team_a_won
-print(f"STRICT {len(STRICT)} features, STRICT_FORM {len(STRICT_FORM)}", flush=True)
+print(f"STRICT {len(STRICT)} features, STRICT_SKILL {len(STRICT_SKILL)}", flush=True)
 
 
 def train_before(cutoff, names):
@@ -139,7 +139,7 @@ for market, col, prefix, ycol, hs, th, label in CASES:
     j = Q.merge(e, on="match_id").dropna(subset=[ycol])
     y, mk, g = j[ycol].to_numpy().astype(int), np.clip(j[col].to_numpy(), 1e-4, 1 - 1e-4), j.match_id.to_numpy()
     fee_a, fee_b = fees.for_column(j, col)
-    for variant in ("full", "strict", "strict_form"):
+    for variant in ("full", "strict", "strict_skill"):
         q = j[f"{prefix}_{variant}"].to_numpy()
         ok = ~np.isnan(q)
         blend = 1 / (1 + np.exp(-(lg(mk[ok]) + lg(q[ok])) / 2))

@@ -1,8 +1,9 @@
 """
 CS2Series: entry maths, the match feed's view of time, windows, lineups, budgets, restart safety.
 
-The strategy resolves listings through RegistryClient and loads its model in __init__, so the
-registry and the model loader are replaced with in-memory stand-ins; the match feed reads real
+The strategy resolves listings through RegistryClient and loads its models in __init__, so the
+registry and the model loader are replaced with in-memory stand-ins (a blend that keeps only the
+pre-map price, unless a test says otherwise); the match feed reads real
 parquet extracts; positions and market data are plain objects with the engine's interface.
 Nothing here needs a JVM.
 """
@@ -18,6 +19,7 @@ import pytest
 
 from gnomepy import OrderStatus, OrderType, Scales, Side
 from gnomepy.data import ArtifactRef
+from gnomepy_research.models.cs2.hltv.bayes_series import SeriesBlend
 from gnomepy_research.models.cs2.win_probability.series_pricing import price
 from gnomepy_research.sessions.cs2_series import strategy as mod
 from gnomepy_research.sessions.cs2_series.decision import (
@@ -115,9 +117,23 @@ def series_of(p_map: float) -> float:
 LOW = 0.43
 
 
-def _feature(at, p_map=LOW, known=1.0, lineup_a=LINEUP_A, match_id=7):
-    return {"match_id": match_id, "map_name": "", "generated_at": at, "p_map": p_map, "form_known_min": known,
-            "team_a_lineup_ids": lineup_a, "team_b_lineup_ids": LINEUP_B}
+def _feature(at, p_map=LOW, lineup_a=LINEUP_A, match_id=7):
+    return {"match_id": match_id, "map_name": "", "generated_at": at, "p_map": p_map, "match_date": KICKOFF.normalize(),
+            "team_a_id": 1, "team_b_id": 2, "team_a_lineup_ids": lineup_a, "team_b_lineup_ids": LINEUP_B}
+
+
+class _Posterior:
+    """Prices every series at a fixed P(team A); fitted as_of a date before KICKOFF unless a test says otherwise."""
+
+    def __init__(self, p=0.5, as_of=f"{KICKOFF - pd.Timedelta(days=3):%Y-%m-%d}"):
+        self.p, self.as_of = p, as_of
+
+    def price(self, *_):
+        return self.p
+
+
+def _models(posterior=None, blend=SeriesBlend(0.0, 1.0)):
+    return mod.Models(_MapModel(), posterior or _Posterior(), blend, {"premap": "m", "posterior": "p", "blend": "b"})
 
 
 def _state(at, kickoff=KICKOFF, status="upcoming"):
@@ -169,10 +185,10 @@ def test_the_feed_is_point_in_time(tmp_path):
 
 
 def test_the_feed_reads_only_its_match_and_carries_lineups(tmp_path):
-    f, m = _write(tmp_path, [_feature(EARLY, known=0.0), _feature(EARLY, p_map=0.9, match_id=8)], [_state(EARLY)])
+    f, m = _write(tmp_path, [_feature(EARLY, lineup_a=[]), _feature(EARLY, p_map=0.9, match_id=8)], [_state(EARLY)])
     q = MatchFeed(7, _pricer([]), f, m, reload_seconds=0).quote(K_NS)
     assert q.p_team_a == pytest.approx(series_of(LOW)) and not q.lineup_known
-    assert q.lineups == (tuple(LINEUP_A), tuple(LINEUP_B))
+    assert q.lineups == ((), tuple(LINEUP_B))
 
 
 def test_reload_prices_only_new_rows_and_survives_a_bad_read(tmp_path):
@@ -328,12 +344,14 @@ class _Metrics:
 
 @pytest.fixture
 def make(tmp_path):
-    def _make(features=None, states=None, spec=None, **kw):
+    def _make(features=None, states=None, spec=None, models=None, **kw):
         f, m = _write(tmp_path, features or [_feature(EARLY)], states or _states())
+        r = tmp_path / "rankings.parquet"
+        pd.DataFrame({"date": [KICKOFF - pd.Timedelta(days=7)] * 2, "team_id": [1, 2], "rank": [5, 9]}).to_parquet(r)
         with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry(spec or _Spec())), \
-                patch.object(mod, "load_model", lambda path: (_MapModel(), path)):
+                patch.object(mod, "load_models", lambda *paths: models or _models()):
             strat = mod.CS2Series(match_id=7, listing_team_a=101, listing_team_b=102, reload_minutes=0,
-                                  features_source=f, matches_source=m, **kw)
+                                  features_source=f, matches_source=m, rankings_source=str(r), **kw)
         strat._position_view = _Positions()
         strat._control = _Control()
         return strat
@@ -429,7 +447,7 @@ def test_no_trade_before_the_first_features_row(make):
 
 
 def test_no_trade_until_both_lineups_are_announced(make):
-    s = make(features=[_feature(EARLY, known=0.0), _feature(KICKOFF - pd.Timedelta(hours=3))])
+    s = make(features=[_feature(EARLY, lineup_a=[]), _feature(KICKOFF - pd.Timedelta(hours=3))])
     assert _tick(s, 102, [(0.45, 1000)], hours_before=6) == []
     assert _tick(s, 102, [(0.45, 1000)], hours_before=2.9) != []
 
@@ -511,7 +529,7 @@ def test_unknown_listing_data_is_ignored(make):
     assert make().on_market_data(_Book((5, 99999), [(0.01, 10)], K_NS - HOUR)) == []
 
 
-def test_the_model_is_logged_at_the_version_it_resolved_to(monkeypatch):
+def test_artifacts_are_fetched_at_the_version_they_resolved_to(monkeypatch):
     found = []
 
     class _Store:
@@ -522,12 +540,28 @@ def test_the_model_is_logged_at_the_version_it_resolved_to(monkeypatch):
         def resolve(self, ref):
             return "/tmp/model.json"
     monkeypatch.setattr(mod, "ArtifactStore", _Store)
-    monkeypatch.setattr(mod, "CS2PreMapModel", lambda path: path)
-    model, resolved = mod.load_model(mod.DEFAULT_MODEL + "@production")
-    assert model == "/tmp/model.json" and found[0].alias == "production"
+    path, resolved = mod._fetch(mod.DEFAULT_MODEL + "@production")
+    assert str(path) == "/tmp/model.json" and found[0].alias == "production"
     assert resolved == "artifact://xgboost_model/cs2_prematch_preveto:20261015T163515680176Z"
     monkeypatch.setattr(mod, "resolve_artifact_path", lambda path: "/local/model.json")
-    assert mod.load_model("/local/model.json") == ("/local/model.json", "/local/model.json")
+    assert mod._fetch("/local/model.json") == (mod.Path("/local/model.json"), "/local/model.json")
+
+
+@pytest.mark.parametrize("as_of, trades", [
+    (KICKOFF - pd.Timedelta(days=3), True),
+    (KICKOFF - pd.Timedelta(days=20), False),
+    (KICKOFF + pd.Timedelta(days=1), False),
+])
+def test_no_trading_on_a_stale_or_future_posterior(make, as_of, trades):
+    s = make(models=_models(_Posterior(as_of=f"{as_of:%Y-%m-%d}")))
+    assert (_tick(s, 102, [(0.45, 1000)], hours_before=6) != []) is trades
+
+
+def test_the_bayesian_price_moves_the_blend(make):
+    """All weight on the Bayesian model, which says team A at 0.8: team A's 0.6 ask is now the cheap side."""
+    s = make(models=_models(_Posterior(p=0.8), blend=SeriesBlend(1.0, 0.0)))
+    out = _tick(s, 101, [(0.60, 1000)], hours_before=6)
+    assert len(out) == 1 and (out[0].exchange_id, out[0].security_id) == LISTINGS[101]
 
 
 def test_series_pricing_goes_through_the_map_model():
@@ -551,3 +585,4 @@ def test_each_order_records_the_decision_behind_it(make):
     assert round(row["limit_price"] * P) == out[0].take_limit_price
     assert 0 < row["edge_at_best"] < row["fair"] - row["best_ask"], "the edge is what's left after the taker fee"
     assert row["shares"] > 0
+    assert row["fair_xgb"] == pytest.approx(series_of(LOW)) and row["fair_bayes"] == pytest.approx(0.5)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -12,11 +13,20 @@ import numpy as np
 import pandas as pd
 import yaml
 from gnomepy.data import ArtifactStore, DatasetStore
+from gnomepy.remote import (
+    cancel_research_job,
+    download_research_job,
+    get_research_job,
+    list_research_jobs,
+    submit_research_job,
+    upload_research_input,
+)
 from gnomepy.reporting.metrics import build_curves, compute_sharpe
 
 from gnomepy_research import api
 from gnomepy_research.analysis.statistics import bootstrap_sharpe_ci, deflated_sharpe_ratio, minimum_backtest_length
 from gnomepy_research.analysis.walk_forward import WalkForwardConfig, run_walk_forward_local
+from gnomepy_research.dependencies import ROOT
 from gnomepy_research.environment import capture_environment
 from gnomepy_research.notes_sync import pull_notes, push_notes
 
@@ -643,6 +653,173 @@ def datasets_get(name: str, as_of: str | None, output: str | None) -> None:
     dest = output or f"{name}.parquet"
     df.to_parquet(dest, index=False)
     click.echo(f"saved {len(df)} rows to {dest}")
+
+
+# ---------------------------------------------------------------------------
+# Jobs
+# ---------------------------------------------------------------------------
+
+_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def resolve_commit(ref: str, cwd: Path = ROOT) -> str:
+    """The full SHA a job will check out: ref as given if it is one, else what origin's branch or tag points at.
+
+    Resolved once at submit, so every task (and a rerun) runs the same code even if the branch moves.
+    """
+    if _SHA.match(ref):
+        return ref
+    try:
+        out = subprocess.run(["git", "ls-remote", "origin", f"refs/heads/{ref}", f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}"],
+                             capture_output=True, text=True, check=True, cwd=cwd).stdout
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise click.ClickException(f"could not ask origin for {ref}: {e}")
+    refs = {name: sha for sha, name in (line.split("\t") for line in out.splitlines() if line)}
+    for name in (f"refs/heads/{ref}", f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}"):
+        if name in refs:
+            return refs[name]
+    raise click.ClickException(f"origin has no branch or tag {ref!r}: push it first (jobs check out what origin has)")
+
+
+def parse_inputs(specs: tuple[str, ...]) -> dict[str, list[Path]]:
+    """--input name=path, repeatable; a name given several times collects every path into one input set."""
+    inputs: dict[str, list[Path]] = {}
+    for spec in specs:
+        name, sep, path = spec.partition("=")
+        if not sep or not name or not path:
+            raise click.BadParameter(f"{spec!r} is not name=path", param_hint="--input")
+        if not Path(path).exists():
+            raise click.BadParameter(f"{path} does not exist", param_hint="--input")
+        inputs.setdefault(name, []).append(Path(path))
+    return inputs
+
+
+def read_array_file(path: str) -> list[list[str]]:
+    array = json.loads(Path(path).read_text())
+    if not isinstance(array, list) or not all(isinstance(a, list) and all(isinstance(x, str) for x in a) for a in array):
+        raise click.BadParameter("must be a JSON list of argument lists (strings)", param_hint="--array-file")
+    return array
+
+
+@main.group()
+def jobs() -> None:
+    """Run gnomepy-research modules on AWS Batch, one task per argument list.
+
+    A task runs `python -m MODULE ARGS...` at a pushed commit; it reads inputs from /work/in/<name>/ and writes
+    whatever it keeps to $OUTPUT_DIR. Runs show on the controller's Research → Jobs page.
+    """
+
+
+@jobs.command(name="submit", context_settings={"ignore_unknown_options": True})
+@click.argument("module")
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+@click.option("--commit", "ref", required=True, help="Branch, tag or SHA of gnomepy-research (must be on origin)")
+@click.option("--array-file", default=None, type=click.Path(exists=True, dir_okay=False),
+              help="JSON list of argument lists: one task each (instead of ARGS)")
+@click.option("--input", "input_specs", multiple=True, metavar="NAME=PATH",
+              help="Upload a file or directory as input NAME, seen at /work/in/NAME/ (repeatable)")
+@click.option("--cpu", type=int, default=None, help="vCPUs per task (default 4)")
+@click.option("--memory-gib", type=int, default=None, help="Memory per task in GiB (default 14)")
+@click.option("--description", default=None, help="Shown with the run")
+def jobs_submit(module: str, args: tuple[str, ...], ref: str, array_file: str | None, input_specs: tuple[str, ...],
+                cpu: int | None, memory_gib: int | None, description: str | None) -> None:
+    """Submit MODULE with ARGS (put -- before ARGS that start with a dash), or once per entry of --array-file."""
+    if array_file and args:
+        raise click.UsageError("give ARGS or --array-file, not both")
+    commit = resolve_commit(ref)
+    inputs = {}
+    try:
+        for name, paths in parse_inputs(input_specs).items():
+            inputs[name] = upload_research_input(paths)
+            click.echo(f"input {name}: {inputs[name][:16]}…")
+        result = submit_research_job(
+            module, commit,
+            args=None if array_file else list(args),
+            array=read_array_file(array_file) if array_file else None,
+            inputs=inputs or None, cpu=cpu, memory_gib=memory_gib,
+            research_ref=None if ref == commit else ref, description=description,
+        )
+    except RuntimeError as e:
+        raise click.ClickException(str(e))
+    click.echo(f"submitted {result['run_id']}: {result['task_count']} task(s) at {commit[:12]}")
+    click.echo(f"outputs: {result['output_prefix']}")
+
+
+@jobs.command(name="list")
+@click.option("--status", default=None, help="Filter by status (e.g. RUNNING, COMPLETED)")
+@click.option("--limit", default=20, show_default=True, help="Max results")
+@click.option("--json", "as_json", is_flag=True, help="Emit the raw API response as JSON")
+def jobs_list(status: str | None, limit: int, as_json: bool) -> None:
+    """List recent research jobs."""
+    try:
+        result = list_research_jobs(status=status, limit=limit)
+    except RuntimeError as e:
+        raise click.ClickException(str(e))
+    if as_json:
+        click.echo(json.dumps(result, indent=2))
+        return
+    runs = result.get("runs", [])
+    if not runs:
+        click.echo("no research jobs found")
+        return
+    header = f"{'RUN_ID':<18} {'STATUS':<18} {'TASKS':>7} {'COMMIT':<9} {'MODULE':<50} {'SUBMITTED'}"
+    click.echo(header)
+    click.echo("-" * len(header))
+    for r in runs:
+        tasks = f"{r.get('succeeded_count', 0)}/{r.get('task_count', '?')}"
+        module = r.get("module", "").removeprefix("gnomepy_research.")[-50:]
+        submitted = r.get("submitted_at", "")[:19].replace("T", " ")
+        click.echo(f"{r['run_id']:<18} {r.get('status', ''):<18} {tasks:>7} {r.get('research_commit', '')[:8]:<9} "
+                   f"{module:<50} {submitted}")
+
+
+@jobs.command(name="get")
+@click.argument("run_id")
+@click.option("--json", "as_json", is_flag=True, help="Emit the raw API response as JSON")
+def jobs_get(run_id: str, as_json: bool) -> None:
+    """Show a research job and its tasks."""
+    try:
+        run = get_research_job(run_id)
+    except RuntimeError as e:
+        raise click.ClickException(str(e))
+    if as_json:
+        click.echo(json.dumps(run, indent=2))
+        return
+    click.echo(f"{run['run_id']}  {run['status']}  {run['module']}")
+    click.echo(f"commit {' '.join(filter(None, (run.get('research_ref'), run['research_commit'])))}")
+    click.echo(f"tasks {run.get('succeeded_count', 0)}/{run['task_count']} succeeded, {run.get('failed_count', 0)} failed")
+    click.echo(f"outputs {run['output_prefix']}")
+    if run.get("error"):
+        click.echo(f"error {run['error']}")
+    for t in run.get("tasks", []):
+        line = f"  [{t['array_index']:>3}] {t['status']:<10} {' '.join(t.get('args', []))}"
+        if t.get("status_reason") and t["status"] == "FAILED":
+            line += f"  ({t['status_reason']})"
+        click.echo(line)
+
+
+@jobs.command(name="cancel")
+@click.argument("run_id")
+def jobs_cancel(run_id: str) -> None:
+    """Terminate every unfinished task of a research job."""
+    try:
+        result = cancel_research_job(run_id)
+    except RuntimeError as e:
+        raise click.ClickException(str(e))
+    click.echo(f"{result['run_id']}: {result['status']}")
+
+
+@jobs.command(name="download")
+@click.argument("run_id")
+@click.argument("dest", type=click.Path(file_okay=False))
+@click.option("--flat", is_flag=True, help="Merge every task's outputs into DEST (no logs) instead of DEST/<task>/")
+def jobs_download(run_id: str, dest: str, flat: bool) -> None:
+    """Download a research job's outputs (uses your AWS credentials, e.g. AWS_PROFILE=dev)."""
+    try:
+        count = download_research_job(run_id, Path(dest), flat=flat)
+    except (RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e))
+    click.echo(f"downloaded {count} files to {dest}")
 
 
 if __name__ == "__main__":

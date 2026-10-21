@@ -39,7 +39,7 @@ Lineups = tuple[tuple[int, ...], tuple[int, ...]]
 class Quote:
     at_ns: int
     p_team_a: float
-    # Both lineups announced: player form, which the model leans on, is blank until they are.
+    # Both lineups announced: player skill, which the model leans on, is blank until they are.
     lineup_known: bool
     lineups: Lineups
 
@@ -141,5 +141,8 @@ class MatchFeed:
         if fresh:
             prices = self._pricer(features.iloc[fresh].reset_index(drop=True))
             self._prices.update(zip((at[i] for i in fresh), (float(p) for p in prices)))
-        return [Quote(t, self._prices[t], bool(r.form_known_min > 0), (_ids(r.team_a_lineup_ids), _ids(r.team_b_lineup_ids)))
-                for t, r in zip(at, features.itertuples())]
+        quotes = []
+        for t, r in zip(at, features.itertuples()):
+            lineups = (_ids(r.team_a_lineup_ids), _ids(r.team_b_lineup_ids))
+            quotes.append(Quote(t, self._prices[t], all(lineups), lineups))
+        return quotes

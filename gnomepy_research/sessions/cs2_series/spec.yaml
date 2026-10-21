@@ -3,7 +3,8 @@ name: cs2_series
 description: >
   Pre-match CS2 series winner (BO3), one session per HLTV match per venue: Polymarket
   International, Kalshi or Polymarket US. The session prices the match itself from the rows
-  the cs2_upcoming pipeline writes (pre-veto model + series DP), and buys whichever team's
+  the cs2_upcoming pipeline writes (pre-veto model + series DP, blended with the Bayesian series
+  model's weekly posterior), and buys whichever team's
   listing is underpriced by at least the threshold after the venue's taker fee, with IOC
   limit orders, holding to settlement.
 
@@ -17,7 +18,8 @@ goals:
 constraints:
   strategy_type: directional
   avoid:
-    - trading before both lineups are announced (player form is blank until then)
+    - trading before both lineups are announced (both models price the players; the Bayesian one has no price without them)
+    - trading on a Bayesian posterior older than max_posterior_age_days, or fitted after the moment being priced
     - adding to a position after a lineup changes (a stand-in is news the model cannot price)
     - trading outside the window - 12h before HLTV's latest kickoff, until kickoff - or once HLTV lists the match live or drops it
     - in-play trading - the pre-match model knows nothing about the score
@@ -25,6 +27,7 @@ constraints:
     - walking the book more than max_slippage above the best ask
     - adding after the price falls adverse_move below our entry (likely news the model lacks)
   notes:
+    - The backtest notes below were measured on the XGB-only pre-veto model; the blend (Oct 2026) scored 0.5774 series log loss against 0.5854 for XGB alone on Mar-Sep 2026, so thresholds tuned on the old model need re-checking
     - Six-month walk-forward backtest against Polymarket (Mar-Sep 2026, price history, fee + 1c half-spread) - series from 12h before kickoff positive in 7/7 months, about +18% per $ risked
     - The edge holds on markets that clear the classifier's $1k volume gate - +20.4% per $ on those against +18.3% on all; the gate costs about 8% of the series P&L
     - Not a stale-price artefact - split by how long the price had gone unchanged at entry, fresh prices (<30 min) carry the edge at the same rate
