@@ -7,9 +7,13 @@ buying team B's listing, never selling team A's. Each side is therefore priced o
 own ask book, and an entry is only ever a taker buy.
 
 An entry may reach as deep into the ask book as the edge allows: every share it buys, at its own
-level's price and fee, still clears min_edge. Fees are the venues' rate * p * (1 - p) curve, charged
-on each fill at its own price; the venues' rounding (Polymarket to $0.00001 per fill, Kalshi up to
-$0.0001 per order) is left out.
+level's price and fee, still clears min_edge. How many it buys is the Kelly size: a share costing u
+(its price plus fee) pays 1 if the side wins, so log-wealth growth is maximised by holding the n
+shares at which p * (1 - u) * (W - C) = (1 - p) * u * (W - C + n), for win probability p, Kelly
+bankroll W and C already paid. Sizing against what is already held makes each top-up bring the
+holding to the size the current price and book justify, never past it. Fees are the venues'
+rate * p * (1 - p) curve, charged on each fill at its own price; the venues' rounding (Polymarket to
+$0.00001 per fill, Kalshi up to $0.0001 per order) is left out.
 
 Prices here are plain probabilities in [0, 1] and sizes are shares; the strategy
 converts to the engine's scaled integers at the edge.
@@ -124,19 +128,37 @@ def cost_per_share(price: float, fee_rate: float) -> float:
     return price + taker_fee(price, fee_rate)
 
 
-def plan_take(entry: Entry, budget_usd: float, fee_rate: float, lot: float) -> Take:
+def kelly_shares(p: float, unit: float, kelly_bankroll: float, held_shares: float, held_cost: float) -> float:
     """
-    Walk the entry's asks cheapest first, each level's shares costed at that level's price and fee, until the
-    budget or the levels run out. Shares are whole lots; the limit is the deepest level they reach.
+    Shares to add at a cost of `unit` each (price plus fee, paying 1 on a win) to reach the Kelly holding, given
+    held_shares already bought for held_cost; zero or less when the holding is already there.
+
+    Maximising p * log(W - C + n) + (1 - p) * log(W - C) over x more shares, with C and n growing by x * unit and
+    x, gives x = (p * (1 - u) * (W - C) - (1 - p) * u * (W - C + n)) / (u * (1 - u)). From nothing that spends
+    (p - u) / (1 - u) of W: the Kelly fraction for a contract that costs u and pays 1.
     """
-    shares, remaining = 0.0, budget_usd
+    wealth = kelly_bankroll - held_cost
+    if wealth <= 0 or not 0 < unit < 1:
+        return 0.0
+    return (p * (1 - unit) * wealth - (1 - p) * unit * (wealth + held_shares)) / (unit * (1 - unit))
+
+
+def kelly_take(entry: Entry, kelly_bankroll: float, held_shares: float, held_cost: float, max_cost: float,
+               fee_rate: float, lot: float) -> Take:
+    """
+    Walk the entry's asks cheapest first, each level's shares costed at its own price and fee, adding shares while
+    the Kelly holding at that level is still above what is held, until the holding's cost would pass max_cost or the
+    levels run out. Shares are whole lots; the limit is the deepest level they reach.
+    """
+    shares, n, cost = 0.0, held_shares, held_cost
     for level in entry.levels:
         unit = cost_per_share(level.price, fee_rate)
-        if remaining < unit * lot:
+        take = min(level.size, kelly_shares(entry.fair, unit, kelly_bankroll, n, cost), (max_cost - cost) / unit)
+        if take <= 0:
             break
-        take = min(level.size, remaining / unit)
-        shares += take
-        remaining -= take * unit
+        shares, n, cost = shares + take, n + take, cost + take * unit
+        if take < level.size:
+            break
     shares = math.floor(shares / lot + 1e-9) * lot
     return _cost(entry.levels, shares, fee_rate)
 

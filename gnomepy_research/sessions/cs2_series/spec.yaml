@@ -6,7 +6,10 @@ description: >
   the cs2_upcoming pipeline writes (pre-veto model + series DP, blended with the Bayesian series
   model's weekly posterior), and buys whichever team's
   listing is underpriced by at least the threshold after the venue's taker fee, with IOC
-  limit orders, holding to settlement.
+  limit orders, holding to settlement. Each holding is sized by fractional Kelly on the
+  strategy's bankroll (split evenly across the venues with a series market for the match),
+  topped up on every book update to the Kelly size the current book justifies, and capped
+  at max_stake_usd per session.
 
 goals:
   primary_metric: final_pnl
@@ -25,6 +28,7 @@ constraints:
     - in-play trading - the pre-match model knows nothing about the score
     - buying both teams in one match (no hedging into the spread)
     - adding after the price falls adverse_move below our entry (likely news the model lacks)
+    - holding more than the Kelly size at the current price, or more than max_stake_usd
   notes:
     - The backtest notes below were measured on the XGB-only pre-veto model; the blend (Oct 2026) scored 0.5774 series log loss against 0.5854 for XGB alone on Mar-Sep 2026, so thresholds tuned on the old model need re-checking
     - Six-month walk-forward backtest against Polymarket (Mar-Sep 2026, price history, fee + 1c half-spread) - series from 12h before kickoff positive in 7/7 months, about +18% per $ risked
@@ -32,7 +36,8 @@ constraints:
     - Not a stale-price artefact - split by how long the price had gone unchanged at entry, fresh prices (<30 min) carry the edge at the same rate
     - Live books on 2026-10-15 - series markets 1-4c wide on all three venues hours before kickoff, in line with the backtest's spread
     - Fills in the backtest are simulated against price history, not books - forward paper trading is the real test
-    - Capacity is the binding constraint - a few hundred dollars per match near the best price
+    - Capacity (prod cs2_upcoming_books, Oct 21) - when a side clears 5c at the best ask, the median $ still clearing it is ~$1,750 on PM Intl, ~$615 Kalshi, ~$500 PM US; $250 fillable 68-87% of the time, so the stake cap binds before depth does
+    - Sizing (Oct 2026) - flat $50 at a 5c threshold replaced by half-Kelly with a 2c floor. Replays without book depth had Kelly at about flat's P&L with lower variance once the cap stops binding; small edges (1-5c) realized ~+1-2c/share on Mar-Sep but lost on Sep-Feb, so the 2c floor is on trial in paper
     - Map 1 and map 2 are a separate session (cs2_maps), not traded here
 
 meta:

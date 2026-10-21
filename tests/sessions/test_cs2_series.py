@@ -9,6 +9,8 @@ Nothing here needs a JVM.
 """
 from __future__ import annotations
 
+import json
+import math
 import time
 from dataclasses import dataclass
 from unittest.mock import patch
@@ -27,8 +29,9 @@ from gnomepy_research.sessions.cs2_series.decision import (
     choose_entry,
     cost_per_share,
     evaluate_side,
+    kelly_shares,
+    kelly_take,
     max_entry_price,
-    plan_take,
     taker_fee,
 )
 from gnomepy_research.sessions.cs2_series.match_feed import MatchFeed
@@ -99,29 +102,61 @@ def test_choose_entry_charges_each_side_its_own_listings_fee():
         "side B's 10c gross edge does not survive a 0.5 rate"
 
 
-def test_a_take_costs_each_level_at_its_own_price_and_fee():
-    e = _side(0.80, [Level(0.40, 20), Level(0.45, 30), Level(0.50, 1000)])
-    take = plan_take(e, 30.0, 0.07, lot=1.0)
-    by_hand = 20 * (0.40 + 0.07 * 0.40 * 0.60) + 30 * (0.45 + 0.07 * 0.45 * 0.55)
-    rest = int((30.0 - by_hand) / (0.50 + 0.07 * 0.25))
-    assert take.shares == pytest.approx(50 + rest)
-    assert take.cost == pytest.approx(by_hand + rest * (0.50 + 0.07 * 0.25))
-    assert take.cost <= 30.0 and take.limit_price == pytest.approx(0.50)
+def test_from_nothing_kelly_spends_the_fraction_for_a_contract_paying_one():
+    u = cost_per_share(0.40, 0.07)
+    spent = kelly_shares(0.60, u, 1000.0, 0.0, 0.0) * u
+    assert spent == pytest.approx(1000.0 * (0.60 - u) / (1 - u))
 
 
-def test_a_take_within_the_best_level_limits_at_the_best_ask():
+def test_kelly_tops_up_to_the_same_holding_whatever_was_bought_on_the_way():
+    u = cost_per_share(0.40, 0.07)
+    full = kelly_shares(0.60, u, 1000.0, 0.0, 0.0)
+    part = full / 3
+    assert kelly_shares(0.60, u, 1000.0, part, part * u) == pytest.approx(full - part)
+    assert kelly_shares(0.60, u, 1000.0, full, full * u) == pytest.approx(0.0, abs=1e-9)
+    assert kelly_shares(0.60, u, 1000.0, 2 * full, 2 * full * u) < 0, "past the Kelly size: nothing more to buy"
+
+
+def test_no_kelly_size_without_an_edge():
+    assert kelly_shares(0.40, cost_per_share(0.40, 0.07), 1000.0, 0.0, 0.0) < 0
+
+
+def test_a_take_stops_at_the_kelly_size_in_a_deep_book():
     e = _side(0.80, [Level(0.40, 10_000), Level(0.45, 10_000)])
-    take = plan_take(e, 50.0, 0.07, lot=1.0)
-    assert take.limit_price == pytest.approx(0.40), "the order can't fill deeper than the level it was costed at"
-    assert take.cost == pytest.approx(take.shares * cost_per_share(0.40, 0.07))
+    take = kelly_take(e, 100.0, 0.0, 0.0, max_cost=1e9, fee_rate=0.07, lot=1.0)
+    u = cost_per_share(0.40, 0.07)
+    assert take.limit_price == pytest.approx(0.40), "the best level alone holds the Kelly size"
+    assert take.shares == pytest.approx(math.floor(kelly_shares(0.80, u, 100.0, 0.0, 0.0)))
+
+
+def test_a_take_walks_levels_each_at_its_own_price_and_fee_until_the_kelly_size():
+    e = _side(0.80, [Level(0.40, 20), Level(0.45, 30), Level(0.50, 10_000)])
+    take = kelly_take(e, 100.0, 0.0, 0.0, max_cost=1e9, fee_rate=0.07, lot=1.0)
+    by_hand = 20 * cost_per_share(0.40, 0.07) + 30 * cost_per_share(0.45, 0.07)
+    u = cost_per_share(0.50, 0.07)
+    rest = math.floor(kelly_shares(0.80, u, 100.0, 50.0, by_hand))
+    assert take.shares == pytest.approx(50 + rest)
+    assert take.cost == pytest.approx(by_hand + rest * u) and take.limit_price == pytest.approx(0.50)
+
+
+def test_a_take_stops_at_the_cap_before_the_kelly_size():
+    e = _side(0.80, [Level(0.40, 10_000)])
+    take = kelly_take(e, 10_000.0, 0.0, 0.0, max_cost=50.0, fee_rate=0.07, lot=1.0)
     assert 50.0 - cost_per_share(0.40, 0.07) < take.cost <= 50.0
+
+
+def test_a_take_counts_what_is_already_held_against_the_cap_and_the_kelly_size():
+    e = _side(0.80, [Level(0.40, 10_000)])
+    u = cost_per_share(0.40, 0.07)
+    assert kelly_take(e, 10_000.0, 100.0, 45.0, max_cost=50.0, fee_rate=0.07, lot=1.0).cost <= 5.0
+    full = kelly_shares(0.80, u, 100.0, 0.0, 0.0)
+    assert kelly_take(e, 100.0, full, full * u, max_cost=1e9, fee_rate=0.07, lot=1.0).shares == 0.0
 
 
 def test_a_take_is_whole_lots_and_stops_with_the_book():
     e = _side(0.80, [Level(0.40, 7.5)])
-    take = plan_take(e, 50.0, 0.07, lot=2.0)
+    take = kelly_take(e, 10_000.0, 0.0, 0.0, max_cost=50.0, fee_rate=0.07, lot=2.0)
     assert take.shares == pytest.approx(6.0) and take.cost == pytest.approx(6 * cost_per_share(0.40, 0.07))
-    assert plan_take(e, 0.5, 0.07, lot=2.0).shares == 0.0, "a budget short of one lot buys nothing"
 
 
 # ---- the match's rows ----------------------------------------------------------------
@@ -162,8 +197,9 @@ def _models(posterior=None, blend=SeriesBlend(0.0, 1.0)):
     return mod.Models(_MapModel(), posterior or _Posterior(), blend, {"premap": "m", "posterior": "p", "blend": "b"})
 
 
-def _state(at, kickoff=KICKOFF, status="upcoming"):
-    return {"match_id": 7, "generated_at": at, "kickoff": kickoff, "status": status}
+def _state(at, kickoff=KICKOFF, status="upcoming", venues=("polymarket",)):
+    markets = [{"venue": v, "market": "series", "listing_team_a": 101, "listing_team_b": 102} for v in venues]
+    return {"match_id": 7, "generated_at": at, "kickoff": kickoff, "status": status, "markets": json.dumps(markets)}
 
 
 EARLY = KICKOFF - pd.Timedelta(hours=24)
@@ -173,7 +209,7 @@ RUN_EVERY = pd.Timedelta(minutes=15)
 def _states(*changes, until=KICKOFF + pd.Timedelta(hours=6)):
     """A matches row every pipeline run from EARLY, as cs2_upcoming writes them; changes are
     (from_time, {"kickoff": ..., "status": ...}) applied from that run on."""
-    rows, current = [], {"kickoff": KICKOFF, "status": "upcoming"}
+    rows, current = [], {"kickoff": KICKOFF, "status": "upcoming", "venues": ("polymarket",)}
     pending = sorted(changes, key=lambda c: c[0])
     at = EARLY
     while at <= until:
@@ -376,6 +412,7 @@ def make(tmp_path):
         pd.DataFrame({"date": [KICKOFF - pd.Timedelta(days=7)] * 2, "team_id": [1, 2], "rank": [5, 9]}).to_parquet(r)
         with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry(spec or _Spec())), \
                 patch.object(mod, "load_models", lambda *paths: models or _models()):
+            kw.setdefault("bankroll_usd", 10_000.0)
             strat = mod.CS2Series(match_id=7, listing_team_a=101, listing_team_b=102, reload_minutes=0,
                                   features_source=f, matches_source=m, rankings_source=str(r), **kw)
         strat._position_view = _Positions()
@@ -504,14 +541,14 @@ def test_no_second_order_while_one_is_in_flight(make):
     assert _tick(s, 102, [(0.45, 1000)], hours_before=5.8), "a terminal report frees the market to top up"
 
 
-def test_stake_is_respected_including_fees(make):
-    o = _tick(make(stake_usd=50.0), 102, [(0.45, 10_000)], hours_before=6)[0]
+def test_the_stake_cap_is_respected_including_fees(make):
+    o = _tick(make(max_stake_usd=50.0), 102, [(0.45, 10_000)], hours_before=6)[0]
     assert o.take_size / S * cost_per_share(o.take_limit_price / P, 0.07) <= 50.0 + 1e-6
 
 
 def test_a_thin_book_is_walked_to_the_level_the_stake_needs_and_no_further(make):
     asks = [(0.45, 20), (0.46, 20), (0.47, 10_000), (0.48, 10_000)]
-    o = _tick(make(stake_usd=50.0), 102, asks, hours_before=6)[0]
+    o = _tick(make(max_stake_usd=50.0), 102, asks, hours_before=6)[0]
     assert o.take_limit_price == round(0.47 * P), "40 shares at 0.45-0.46 leave most of the stake for 0.47"
     shares = o.take_size / S
     cost = 20 * cost_per_share(0.45, 0.07) + 20 * cost_per_share(0.46, 0.07) + (shares - 40) * cost_per_share(0.47, 0.07)
@@ -519,9 +556,62 @@ def test_a_thin_book_is_walked_to_the_level_the_stake_needs_and_no_further(make)
 
 
 def test_stake_already_spent_blocks_further_orders(make):
-    s = make(stake_usd=50.0)
+    s = make(max_stake_usd=50.0)
     s.positions.fill(LISTINGS[102], shares=105, price=0.45, fee=1.8)
     assert _tick(s, 102, [(0.45, 10_000)], hours_before=6) == []
+
+
+FAIR_B = 1 - series_of(LOW)
+
+
+def _kelly_spend(bankroll, ask=0.45, fraction=0.5, venues=1):
+    u = cost_per_share(ask, 0.07)
+    return fraction * bankroll / venues * (FAIR_B - u) / (1 - u)
+
+
+def test_a_bankroll_too_small_for_the_cap_buys_the_kelly_size(make):
+    o = _tick(make(bankroll_usd=100.0, max_stake_usd=50.0), 102, [(0.45, 10_000)], hours_before=6)[0]
+    spend = o.take_size / S * cost_per_share(0.45, 0.07)
+    assert spend == pytest.approx(_kelly_spend(100.0), abs=cost_per_share(0.45, 0.07))
+    assert spend < 50.0, "the Kelly size, not the cap, set this order"
+
+
+def test_the_kelly_fraction_scales_the_size(make):
+    half = _tick(make(bankroll_usd=100.0, kelly_fraction=0.5), 102, [(0.45, 10_000)], hours_before=6)[0]
+    full = _tick(make(bankroll_usd=100.0, kelly_fraction=1.0), 102, [(0.45, 10_000)], hours_before=6)[0]
+    assert full.take_size == pytest.approx(2 * half.take_size, abs=S // 100)
+
+
+def test_the_bankroll_is_split_across_the_venues_with_a_series_market(make):
+    one = _tick(make(bankroll_usd=100.0), 102, [(0.45, 10_000)], hours_before=6)[0]
+    three = make(bankroll_usd=100.0, states=_states((EARLY, {"venues": ("polymarket", "kalshi", "polymarket_us")})))
+    o = _tick(three, 102, [(0.45, 10_000)], hours_before=6)[0]
+    assert o.take_size == pytest.approx(one.take_size / 3, abs=S // 100), "three sessions take the same view"
+
+
+def test_a_held_kelly_size_is_topped_up_only_when_the_price_improves(make):
+    s = make(bankroll_usd=100.0)
+    o = _tick(s, 102, [(0.45, 10_000)], hours_before=6)[0]
+    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
+    shares = o.take_size / S
+    s.positions.fill(LISTINGS[102], shares=shares, price=0.45, fee=shares * taker_fee(0.45, 0.07))
+    assert _tick(s, 102, [(0.45, 10_000)], hours_before=5) == [], "already at the Kelly size for this price"
+    top_up = _tick(s, 102, [(0.40, 10_000)], hours_before=4)
+    assert top_up, "a cheaper ask means a bigger edge and a bigger Kelly size"
+    spent = shares * cost_per_share(0.45, 0.07) + top_up[0].take_size / S * cost_per_share(0.40, 0.07)
+    assert spent < _kelly_spend(100.0, ask=0.40) + 1.0, "never past the Kelly size at the better price"
+
+
+def test_edges_under_the_floor_are_not_bought(make):
+    s = make(min_edge=0.02)
+    ask = FAIR_B - 0.015 - taker_fee(FAIR_B - 0.015, 0.07)
+    assert _tick(s, 102, [(math.floor(ask * 100) / 100 + 0.01, 10_000)], hours_before=6) == []
+    assert _tick(s, 102, [(0.45, 10_000)], hours_before=6) != [], "the same session buys a bigger edge"
+
+
+def test_a_session_needs_a_positive_bankroll(make):
+    with pytest.raises(ValueError, match="bankroll_usd"):
+        make(bankroll_usd=0.0)
 
 
 def test_never_buys_the_other_side_once_holding_one(make):
@@ -539,9 +629,9 @@ def test_adverse_move_stops_top_ups(make):
 
 def test_restart_reads_committed_money_from_positions(make):
     """A fresh instance must see an earlier session's fills and not buy them again."""
-    first = make(stake_usd=50.0)
+    first = make(max_stake_usd=50.0)
     first.positions.fill(LISTINGS[102], shares=110, price=0.45, fee=1.9)
-    restarted = make(stake_usd=50.0)
+    restarted = make(max_stake_usd=50.0)
     restarted._position_view = first.positions
     assert _tick(restarted, 102, [(0.45, 10_000)], hours_before=6) == []
 
@@ -620,4 +710,5 @@ def test_each_order_records_the_decision_behind_it(make):
     assert round(row["limit_price"] * P) == out[0].take_limit_price
     assert 0 < row["edge_at_best"] < row["fair"] - row["best_ask"], "the edge is what's left after the taker fee"
     assert row["shares"] > 0
+    assert row["kelly_bankroll"] == pytest.approx(0.5 * 10_000.0) and row["held_shares"] == 0.0
     assert row["fair_xgb"] == pytest.approx(series_of(LOW)) and row["fair_bayes"] == pytest.approx(0.5)

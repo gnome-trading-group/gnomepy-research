@@ -9,9 +9,13 @@ two announced lineups, and the two are blended (series_pricing.price_blended).
 
 Inside the entry window - from window_hours before HLTV's latest kickoff until kickoff, while
 HLTV still lists the match as upcoming - it buys whichever team's listing is underpriced by at
-least min_edge after the venue's taker fee. An order walks the ask book as deep as every share still
-clears the threshold at its own price and fee, within the stake; it is an IOC limit at the deepest level
-it costed, so it only ever takes liquidity it has already priced.
+least min_edge after the venue's taker fee, sized by the Kelly criterion: the holding that maximises
+log-wealth growth on kelly_fraction of its share of bankroll_usd, where the bankroll is split evenly
+across the venues with a series market for the match, since a session on each takes the same view.
+Every book update re-checks the edge and tops the holding up to the Kelly size the current book
+justifies, never past max_stake_usd. An order walks the ask book only as deep as every share still
+clears the threshold and the Kelly size; it is an IOC limit at the deepest level it costed, so it only
+ever takes liquidity it has already priced.
 Positions are held to settlement. Trading stops at kickoff (or once HLTV lists the match live), but
 the session runs on through the match so its positions keep being marked, and ends itself, keeping
 what it holds, once HLTV drops the match from its listing, which it does when the match ends. If
@@ -48,7 +52,7 @@ from gnomepy_research.fees import registry_fee_rates
 from gnomepy_research.models.cs2.win_probability.pre_map_model import CS2PreMapModel
 from gnomepy_research.models.cs2.hltv.bayes_series import RankStrength, SeriesBlend, SeriesPosterior
 from gnomepy_research.models.cs2.win_probability.series_pricing import price_blended
-from gnomepy_research.sessions.cs2_series.decision import Level, choose_entry, cost_per_share, plan_take
+from gnomepy_research.sessions.cs2_series.decision import Level, choose_entry, cost_per_share, kelly_take
 from gnomepy_research.sessions.cs2_series.match_feed import FEATURES, MATCHES, MatchFeed, Quote
 
 logger = logging.getLogger(__name__)
@@ -118,10 +122,13 @@ class CS2Series(Strategy):
         model_path: the pre-veto model, an artifact URI or path; unpinned means the latest.
         posterior_path: the Bayesian series model's posterior (cs2_bayes_fit, weekly), likewise.
         blend_path: the blend weights of the two (JSON), likewise.
+        bankroll_usd: the money the strategy sizes its bets against, across every venue it trades the match on.
         max_posterior_age_days: the oldest posterior it trades on, counted from the end of its fit window.
         min_edge: the least edge after the fee worth buying.
+        kelly_fraction: the share of the Kelly size to hold; under 1 because the model's win probability is an
+            estimate, and betting full Kelly on an estimate over-bets.
         window_hours: how long before kickoff the entry window opens.
-        stake_usd: most this session may commit, fees included.
+        max_stake_usd: most this session may commit, fees included, however large the Kelly size.
         adverse_move: stop adding once the price has fallen this far below our average entry -
             a big pre-kickoff move is usually news the model cannot see.
         min_order_usd: smallest order worth sending.
@@ -138,13 +145,15 @@ class CS2Series(Strategy):
         match_id: int,
         listing_team_a: int,
         listing_team_b: int,
+        bankroll_usd: float,
         model_path: str = DEFAULT_MODEL,
         posterior_path: str = DEFAULT_POSTERIOR,
         blend_path: str = DEFAULT_BLEND,
         max_posterior_age_days: float = 14.0,
-        min_edge: float = 0.05,
+        min_edge: float = 0.02,
+        kelly_fraction: float = 0.5,
         window_hours: float = 12.0,
-        stake_usd: float = 50.0,
+        max_stake_usd: float = 50.0,
         adverse_move: float = 0.08,
         min_order_usd: float = 1.0,
         book_depth: int = 10,
@@ -160,9 +169,13 @@ class CS2Series(Strategy):
     ):
         self.match_id = int(match_id)
         self._fee_rates = registry_fee_rates(self)
+        if bankroll_usd <= 0:
+            raise ValueError(f"bankroll_usd must be positive, got {bankroll_usd}")
+        self.bankroll_usd = bankroll_usd
         self.min_edge = min_edge
+        self.kelly_fraction = kelly_fraction
         self.window_ns = int(window_hours * HOUR_NS)
-        self.stake_usd = stake_usd
+        self.max_stake_usd = max_stake_usd
         self.adverse_move = adverse_move
         self.min_order_usd = min_order_usd
         self.book_depth = book_depth
@@ -221,6 +234,8 @@ class CS2Series(Strategy):
         self._m_limit = buf.add_double_column("limit_price")
         self._m_shares = buf.add_double_column("shares")
         self._m_cost = buf.add_double_column("cost")
+        self._m_kelly_bankroll = buf.add_double_column("kelly_bankroll")
+        self._m_held_shares = buf.add_double_column("held_shares")
         buf.freeze()
         self._metrics_buf = buf
 
@@ -274,8 +289,8 @@ class CS2Series(Strategy):
         held = [side for side, (filled, committed, _) in enumerate(states) if filled > 0 or committed > 0]
         if held and not self._lineups_unchanged(quote):
             return []
-        budget = self.stake_usd - sum(s[1] for s in states)
-        if budget < self.min_order_usd:
+        committed = sum(s[1] for s in states)
+        if self.max_stake_usd - committed < self.min_order_usd:
             return []
 
         fee_rates = (self._taker_rate(self._legs[0]), self._taker_rate(self._legs[1]))
@@ -284,12 +299,14 @@ class CS2Series(Strategy):
                              tick=self._legs[0].tick, allowed_sides=tuple(held) if held else (0, 1))
         if entry is None:
             return []
-        avg_entry = states[entry.side][2]
+        held_shares, held_cost, avg_entry = states[entry.side]
         if avg_entry > 0 and entry.best_ask <= avg_entry - self.adverse_move:
             return []
 
         leg = self._legs[entry.side]
-        take = plan_take(entry, budget, fee_rates[entry.side], leg.lot / SIZE_SCALE)
+        kelly_bankroll = self.kelly_fraction * self.bankroll_usd / state.series_venues
+        take = kelly_take(entry, kelly_bankroll, held_shares, held_cost, self.max_stake_usd - (committed - held_cost),
+                          fee_rates[entry.side], leg.lot / SIZE_SCALE)
         size = round(take.shares * SIZE_SCALE)
         if size <= 0 or size < leg.min_size or take.cost < self.min_order_usd:
             return []
@@ -298,7 +315,8 @@ class CS2Series(Strategy):
             self._entry_lineups = quote.lineups
         leg.in_flight = True
         leg.last_limit = take.limit_price
-        self._record(now_ns, entry, take, self._components.get(quote.at_ns, (float("nan"), float("nan"))))
+        self._record(now_ns, entry, take, self._components.get(quote.at_ns, (float("nan"), float("nan"))),
+                     kelly_bankroll, held_shares)
         return [Intent(leg.exchange_id, leg.security_id, take_side=Side.BID, take_size=size,
                        take_order_type=OrderType.LIMIT, take_limit_price=round(take.limit_price * PRICE_SCALE))]
 
@@ -316,7 +334,8 @@ class CS2Series(Strategy):
             self._legs[side].in_flight = False
         return []
 
-    def _record(self, now_ns: int, entry, take, components: tuple[float, float]) -> None:
+    def _record(self, now_ns: int, entry, take, components: tuple[float, float], kelly_bankroll: float,
+                held_shares: float) -> None:
         if self._metrics_buf is None:
             return
         buf = self._metrics_buf
@@ -331,4 +350,6 @@ class CS2Series(Strategy):
         buf.set_double(self._m_limit, take.limit_price)
         buf.set_double(self._m_shares, take.shares)
         buf.set_double(self._m_cost, take.cost)
+        buf.set_double(self._m_kelly_bankroll, kelly_bankroll)
+        buf.set_double(self._m_held_shares, held_shares)
         buf.commit()
