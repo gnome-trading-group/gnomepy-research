@@ -373,7 +373,11 @@ def _priors_for_day(
     veto: pd.DataFrame | None,
     h2h: pd.DataFrame | None,
 ) -> pd.DataFrame:
-    combined = pd.concat([match_history, targets], ignore_index=True)
+    # HLTV keeps a delayed match on its scheduled day, so a target can predate history already played; the scans
+    # would then carry its unknown result into those later days.
+    day = targets["match_date"].iloc[0]
+    played = match_history[pd.to_datetime(match_history["match_date"]) <= day]
+    combined = pd.concat([played, targets], ignore_index=True)
     combined["match_date"] = pd.to_datetime(combined["match_date"])
     combined = combined.sort_values("match_date").reset_index(drop=True)
     keys = set(zip(targets.match_id, targets.map_name))

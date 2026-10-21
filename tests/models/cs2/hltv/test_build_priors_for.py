@@ -103,3 +103,15 @@ def test_same_day_targets_share_a_pass_without_reading_each_other():
 def test_no_targets_gives_no_rows(targets):
     frame = pd.DataFrame(targets or [], columns=["match_id", "match_date", "map_name"])
     assert build_priors_for(_history(), _rankings(), frame).empty
+
+
+def test_a_target_dated_before_the_last_played_day_prices_as_if_appended_on_its_day():
+    """HLTV keeps a delayed match on its scheduled day, so a target can predate history already played."""
+    history, rankings = _history(), _rankings()
+    day = history.match_date.max() - pd.Timedelta(days=3)
+    late = _target(2001, day, 1, 2)
+
+    out = build_priors_for(history, rankings, pd.DataFrame([late]))
+    before = build_priors_for(history[history.match_date <= day], rankings, pd.DataFrame([late]))
+
+    pd.testing.assert_series_equal(_features(out, 2001), _features(before, 2001), check_names=False)
