@@ -115,8 +115,8 @@ def series_of(p_map: float) -> float:
 LOW = 0.43
 
 
-def _feature(at, p_map=LOW, known=1.0, lineup_a=LINEUP_A, match_id=7):
-    return {"match_id": match_id, "map_name": "", "generated_at": at, "p_map": p_map, "form_known_min": known,
+def _feature(at, p_map=LOW, lineup_a=LINEUP_A, match_id=7):
+    return {"match_id": match_id, "map_name": "", "generated_at": at, "p_map": p_map,
             "team_a_lineup_ids": lineup_a, "team_b_lineup_ids": LINEUP_B}
 
 
@@ -169,10 +169,10 @@ def test_the_feed_is_point_in_time(tmp_path):
 
 
 def test_the_feed_reads_only_its_match_and_carries_lineups(tmp_path):
-    f, m = _write(tmp_path, [_feature(EARLY, known=0.0), _feature(EARLY, p_map=0.9, match_id=8)], [_state(EARLY)])
+    f, m = _write(tmp_path, [_feature(EARLY, lineup_a=[]), _feature(EARLY, p_map=0.9, match_id=8)], [_state(EARLY)])
     q = MatchFeed(7, _pricer([]), f, m, reload_seconds=0).quote(K_NS)
     assert q.p_team_a == pytest.approx(series_of(LOW)) and not q.lineup_known
-    assert q.lineups == (tuple(LINEUP_A), tuple(LINEUP_B))
+    assert q.lineups == ((), tuple(LINEUP_B))
 
 
 def test_reload_prices_only_new_rows_and_survives_a_bad_read(tmp_path):
@@ -429,7 +429,7 @@ def test_no_trade_before_the_first_features_row(make):
 
 
 def test_no_trade_until_both_lineups_are_announced(make):
-    s = make(features=[_feature(EARLY, known=0.0), _feature(KICKOFF - pd.Timedelta(hours=3))])
+    s = make(features=[_feature(EARLY, lineup_a=[]), _feature(KICKOFF - pd.Timedelta(hours=3))])
     assert _tick(s, 102, [(0.45, 1000)], hours_before=6) == []
     assert _tick(s, 102, [(0.45, 1000)], hours_before=2.9) != []
 

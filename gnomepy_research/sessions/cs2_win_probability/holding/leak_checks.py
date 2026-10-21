@@ -9,8 +9,8 @@ Leakage checks on the six-month backtest.
    are announced late, so at T-12h/T-6h the market cannot know the maps or a
    last-minute lineup. A strict model drops every map, veto and lineup feature
    and prices all three maps as unknown.
-3. Legacy priors. compute_priors_for_row predates pit.py and was never put
-   through a truncation test.
+3. Legacy priors: retired. They now run through pit_scan (build_priors._TeamHistoryAccumulator) and its
+   point-in-time test.
 
 If the edge survives (1) at kickoff and (2) at 12h/6h, it is not these leaks.
 """
@@ -20,9 +20,8 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import log_loss
 
-from gnomepy_research.models.cs2.hltv.build_priors import compute_priors_for_row
 from gnomepy_research.models.cs2.hltv.context_features import VETO_FEATURES
-from gnomepy_research.models.cs2.hltv.player_form import PLAYER_FORM_FEATURES
+from gnomepy_research.models.cs2.hltv.player_skill import PLAYER_SKILL_FEATURES
 from gnomepy_research.sessions.cs2_win_probability.holding._fees import TakerFees
 from gnomepy_research.sessions.cs2_win_probability.holding._paths import DATA_DIR
 from gnomepy_research.models.cs2.win_probability.pre_map_features import PRE_MAP_FEATURE_NAMES
@@ -38,7 +37,7 @@ MONTHS = pd.date_range("2026-03-01", "2026-09-01", freq="MS")
 MAP_SPECIFIC = ["team_a_map_winrate_long", "team_b_map_winrate_long", "team_a_map_winrate_short",
                 "team_b_map_winrate_short", "elo_map_diff", "elo_map_resid_diff"]
 VETO_DEPENDENT = ["team_a_picked_map", "is_decider"] + VETO_FEATURES + MAP_SPECIFIC
-LINEUP_DEPENDENT = list(PLAYER_FORM_FEATURES)
+LINEUP_DEPENDENT = list(PLAYER_SKILL_FEATURES)
 FULL = list(PRE_MAP_FEATURE_NAMES)
 STRICT = [n for n in FULL if not n.startswith("map_de_") and n not in set(VETO_DEPENDENT + LINEUP_DEPENDENT)]
 
@@ -52,28 +51,6 @@ by_mid = {k: v for k, v in priors.groupby("match_id")}
 series_won = history.groupby("match_id").team_a_won.agg(lambda w: int(w.sum() > len(w) - w.sum()))
 
 print(f"strict feature set: {len(STRICT)} of {len(FULL)} (drops map one-hots, veto, map-specific and lineup features)")
-
-# ---- check 3: legacy priors under truncation ---------------------------------------
-rank = pd.read_parquet(DATA_DIR / "cs2_team_rankings.parquet").sort_values("date").reset_index(drop=True)
-hs = history.sort_values("match_date").reset_index(drop=True)
-legacy = ["team_a_map_winrate_long", "team_b_map_winrate_long", "team_a_map_winrate_short", "team_b_map_winrate_short",
-          "team_a_overall_winrate", "team_b_overall_winrate", "h2h_win_rate", "recent_form_diff", "rank_diff"]
-sample = hs[hs.match_date > "2026-03-01"].sample(150, random_state=0)
-mism = 0
-for r in sample.itertuples():
-    row = hs.loc[r.Index]
-    full = compute_priors_for_row(row, hs, rank)
-    trunc_hist = hs[(hs.match_date < row.match_date) | (hs.match_id == row.match_id)].reset_index(drop=True)
-    trunc = compute_priors_for_row(row, trunc_hist, rank[rank.date < row.match_date + pd.Timedelta(days=1)])
-    if full is None or trunc is None:
-        continue
-    for c in legacy:
-        a, b = full.get(c), trunc.get(c)
-        if not ((a is None and b is None) or (a != a and b != b) or a == b):
-            mism += 1
-            break
-print(f"\nCHECK 3 legacy priors: {mism} of {len(sample)} sampled rows change when later matches are withheld")
-
 
 # ---- monthly refits for checks 1 and 2 ---------------------------------------------
 def train_before(cutoff, names):

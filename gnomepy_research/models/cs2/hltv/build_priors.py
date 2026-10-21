@@ -19,6 +19,8 @@ Output dataset: cs2_match_priors
 from __future__ import annotations
 
 import argparse
+import bisect
+import collections
 import datetime
 import logging
 
@@ -28,20 +30,20 @@ import pandas as pd
 from gnomepy_research.models.cs2.hltv.context_features import (
     EVENT_FEATURES,
     PAGE_H2H_FEATURES,
-    RANK_FEATURES,
     SCHEDULE_FEATURES,
     VETO_FEATURES,
     compute_event_features,
     compute_page_h2h_features,
-    compute_rank_features,
     compute_schedule_features,
     compute_veto_features,
 )
 from gnomepy_research.models.cs2.hltv.elo import compute_elo_features
-from gnomepy_research.models.cs2.hltv.player_form import (
-    PLAYER_FORM_FEATURES,
-    compute_player_form_features,
+from gnomepy_research.models.cs2.hltv.pit import SeriesBatch, pit_scan
+from gnomepy_research.models.cs2.hltv.player_skill import (
+    PLAYER_SKILL_FEATURES,
+    compute_player_skill_features,
 )
+from gnomepy_research.models.cs2.hltv.roster_features import ROSTER_FEATURES, compute_roster_features
 
 logger = logging.getLogger(__name__)
 
@@ -161,55 +163,116 @@ def _resolve_team_id(history: pd.DataFrame, team_name: str) -> int | None:
     return None
 
 
-def compute_priors_for_row(
-    row: pd.Series,
-    history_sorted: pd.DataFrame,
-    rankings: pd.DataFrame,
-) -> dict | None:
-    """Compute all prior features for a single map row, using only data strictly before its date."""
-    if pd.isna(row["match_date"]):
-        return None
-    match_date = pd.Timestamp(row["match_date"])
-    map_name = row["map_name"]
-    id_a, id_b = int(row["team_a_id"]), int(row["team_b_id"])
+class _TeamHistoryAccumulator:
+    """
+    Rankings, map and overall win rates, head-to-head and recent form for every map row, in one pass.
 
-    pts_a, rank_a, age_a = _ranking_lookup(rankings, id_a, match_date)
-    pts_b, rank_b, age_b = _ranking_lookup(rankings, id_b, match_date)
-    form_a = _team_recent_form(history_sorted, id_a, match_date)
-    form_b = _team_recent_form(history_sorted, id_b, match_date)
+    These were once recomputed per row by masking the whole history, which cost the square of its length
+    (minutes for 33k rows, worse with every backfilled year). The windows only ever look at a team's last 20
+    maps, a (team, map)'s last 20 or a pair's last 10, so bounded queues per key give the same answers. Each
+    window is "the last N maps strictly before the day, within max age": the queues hold maps from earlier days
+    only, so dropping the over-age ones from the last N is the same as taking the last N of the in-age ones.
+    """
 
-    return {
-        "match_id": row["match_id"],
-        "map_name": map_name,
-        "match_date": match_date,
-        "team_a_name": row["team_a_name"],
-        "team_b_name": row["team_b_name"],
-        "team_a_id": id_a,
-        "team_b_id": id_b,
-        "team_a_rating_diff": pts_a - pts_b,
-        "team_a_rank": rank_a,
-        "team_b_rank": rank_b,
-        "rank_diff": rank_a - rank_b,
-        "ranking_age_days": np.nanmax([age_a, age_b]) if not (np.isnan(age_a) and np.isnan(age_b)) else float("nan"),
-        "team_a_map_winrate_long": _team_map_winrate(history_sorted, id_a, map_name, match_date, _MAP_WIN_RATE_WINDOW_LONG, _MAP_WIN_RATE_MAX_AGE_LONG),
-        "team_b_map_winrate_long": _team_map_winrate(history_sorted, id_b, map_name, match_date, _MAP_WIN_RATE_WINDOW_LONG, _MAP_WIN_RATE_MAX_AGE_LONG),
-        "team_a_map_winrate_short": _team_map_winrate(history_sorted, id_a, map_name, match_date, _MAP_WIN_RATE_WINDOW_SHORT, _MAP_WIN_RATE_MAX_AGE_SHORT),
-        "team_b_map_winrate_short": _team_map_winrate(history_sorted, id_b, map_name, match_date, _MAP_WIN_RATE_WINDOW_SHORT, _MAP_WIN_RATE_MAX_AGE_SHORT),
-        "team_a_overall_winrate": _team_overall_winrate(history_sorted, id_a, match_date),
-        "team_b_overall_winrate": _team_overall_winrate(history_sorted, id_b, match_date),
-        "h2h_win_rate": _h2h_winrate(history_sorted, id_a, id_b, match_date),
-        "team_a_recent_form": form_a,
-        "team_b_recent_form": form_b,
-        "recent_form_diff": form_a - form_b,
-        "team_a_picked_map": float(row.get("team_a_picked_map", float("nan"))),
-        "is_lan": float(row.get("is_lan", float("nan"))),
-        "is_decider": float(row.get("is_decider", float("nan"))),
-        "bo_type": float(row.get("bo_type", float("nan"))),
-        "map_position_in_series": float(row.get("map_position_in_series", float("nan"))),
-        "event_tier": float(row.get("event_tier", float("nan"))),
-        "team_a_series_score": float(row.get("team_a_series_score", 0)),
-        "team_b_series_score": float(row.get("team_b_series_score", 0)),
-    }
+    def __init__(self, rankings: pd.DataFrame):
+        self._team: dict[int, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=_OVERALL_WINRATE_WINDOW))
+        self._team_map: dict[tuple, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=_MAP_WIN_RATE_WINDOW_LONG))
+        self._pair: dict[tuple, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=_H2H_WINDOW))
+        self._rank_dates: dict[int, list] = collections.defaultdict(list)
+        self._rank_rows: dict[int, list] = collections.defaultdict(list)
+        for r in rankings.itertuples():
+            self._rank_dates[int(r.team_id)].append(pd.Timestamp(r.date))
+            self._rank_rows[int(r.team_id)].append((float(r.points), float(r.rank), pd.Timestamp(r.date)))
+
+    def _ranking(self, team_id: int, before: pd.Timestamp) -> tuple[float, float, float]:
+        i = bisect.bisect_left(self._rank_dates.get(team_id, []), before) - 1
+        if i < 0:
+            return float("nan"), float("nan"), float("nan")
+        points, rank, date = self._rank_rows[team_id][i]
+        age_days = float((before - date).days)
+        if age_days > _RANKING_MAX_AGE.days:
+            return float("nan"), float("nan"), age_days
+        return points, rank, age_days
+
+    @staticmethod
+    def _rate(results, before: pd.Timestamp, window: int, max_age: datetime.timedelta) -> float:
+        cutoff = before - max_age
+        recent = [won for date, won in list(results)[-window:] if date >= cutoff]
+        if not recent:
+            return float("nan")
+        return float(int(sum(recent)) / len(recent))
+
+    def _h2h(self, team_a: int, team_b: int, before: pd.Timestamp) -> float:
+        meetings = self._pair.get(tuple(sorted((team_a, team_b))), ())
+        as_a = [(date, won if a == team_a else 1 - won) for date, a, won in meetings]
+        return self._rate(as_a, before, _H2H_WINDOW, _H2H_MAX_AGE)
+
+    def snapshot(self, batch: SeriesBatch) -> list[dict]:
+        day = pd.Timestamp(batch.match_date)
+        out = []
+        for row in batch.records:
+            id_a, id_b = int(row.team_a_id), int(row.team_b_id)
+            map_name = row.map_name
+            pts_a, rank_a, age_a = self._ranking(id_a, day)
+            pts_b, rank_b, age_b = self._ranking(id_b, day)
+            form_a = self._rate(self._team.get(id_a, ()), day, _RECENT_FORM_WINDOW, _RECENT_FORM_MAX_AGE)
+            form_b = self._rate(self._team.get(id_b, ()), day, _RECENT_FORM_WINDOW, _RECENT_FORM_MAX_AGE)
+
+            def map_rate(team_id, window, max_age):
+                if not isinstance(map_name, str):
+                    return float("nan")
+                return self._rate(self._team_map.get((team_id, map_name), ()), day, window, max_age)
+
+            out.append({
+                "match_id": row.match_id,
+                "map_name": map_name,
+                "match_date": day,
+                "team_a_name": row.team_a_name,
+                "team_b_name": row.team_b_name,
+                "team_a_id": id_a,
+                "team_b_id": id_b,
+                "team_a_rating_diff": pts_a - pts_b,
+                "team_a_rank": rank_a,
+                "team_b_rank": rank_b,
+                "rank_diff": rank_a - rank_b,
+                "ranking_age_days": np.nanmax([age_a, age_b]) if not (np.isnan(age_a) and np.isnan(age_b)) else float("nan"),
+                "team_a_map_winrate_long": map_rate(id_a, _MAP_WIN_RATE_WINDOW_LONG, _MAP_WIN_RATE_MAX_AGE_LONG),
+                "team_b_map_winrate_long": map_rate(id_b, _MAP_WIN_RATE_WINDOW_LONG, _MAP_WIN_RATE_MAX_AGE_LONG),
+                "team_a_map_winrate_short": map_rate(id_a, _MAP_WIN_RATE_WINDOW_SHORT, _MAP_WIN_RATE_MAX_AGE_SHORT),
+                "team_b_map_winrate_short": map_rate(id_b, _MAP_WIN_RATE_WINDOW_SHORT, _MAP_WIN_RATE_MAX_AGE_SHORT),
+                "team_a_overall_winrate": self._rate(self._team.get(id_a, ()), day, _OVERALL_WINRATE_WINDOW, _OVERALL_WINRATE_MAX_AGE),
+                "team_b_overall_winrate": self._rate(self._team.get(id_b, ()), day, _OVERALL_WINRATE_WINDOW, _OVERALL_WINRATE_MAX_AGE),
+                "h2h_win_rate": self._h2h(id_a, id_b, day),
+                "team_a_recent_form": form_a,
+                "team_b_recent_form": form_b,
+                "recent_form_diff": form_a - form_b,
+                "team_a_picked_map": float(getattr(row, "team_a_picked_map", float("nan"))),
+                "is_lan": float(getattr(row, "is_lan", float("nan"))),
+                "is_decider": float(getattr(row, "is_decider", float("nan"))),
+                "bo_type": float(getattr(row, "bo_type", float("nan"))),
+                "map_position_in_series": float(getattr(row, "map_position_in_series", float("nan"))),
+                "event_tier": float(getattr(row, "event_tier", float("nan"))),
+                "team_a_series_score": float(getattr(row, "team_a_series_score", 0)),
+                "team_b_series_score": float(getattr(row, "team_b_series_score", 0)),
+            })
+        return out
+
+    def update(self, batch: SeriesBatch) -> None:
+        day = pd.Timestamp(batch.match_date)
+        for row in batch.records:
+            id_a, id_b, won = int(row.team_a_id), int(row.team_b_id), float(row.team_a_won)
+            self._team[id_a].append((day, won))
+            self._team[id_b].append((day, 1 - won))
+            if isinstance(row.map_name, str):
+                self._team_map[(id_a, row.map_name)].append((day, won))
+                self._team_map[(id_b, row.map_name)].append((day, 1 - won))
+            self._pair[tuple(sorted((id_a, id_b)))].append((day, id_a, won))
+
+
+def compute_team_history_priors(history: pd.DataFrame, rankings: pd.DataFrame) -> pd.DataFrame:
+    """Rankings and team-history priors for every map row with a date, keyed (match_id, map_name)."""
+    dated = history[history["match_date"].notna()]
+    return pit_scan(dated, _TeamHistoryAccumulator(rankings.sort_values("date").reset_index(drop=True)))
 
 
 def _frame(value: pd.DataFrame | None) -> pd.DataFrame:
@@ -236,7 +299,8 @@ def build_priors(
     match_history: pd.DataFrame,
     team_rankings: pd.DataFrame,
     *,
-    player_stats: pd.DataFrame | None = None,
+    lineups: pd.DataFrame | None = None,
+    roster_moves: pd.DataFrame | None = None,
     veto: pd.DataFrame | None = None,
     h2h: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
@@ -248,22 +312,14 @@ def build_priors(
     rankings = team_rankings.sort_values("date").reset_index(drop=True)
 
     logger.info("Computing priors for %d map rows...", len(history_sorted))
-    rows = []
-    for i, row in history_sorted.iterrows():
-        result = compute_priors_for_row(row, history_sorted, rankings)
-        if result is not None:
-            rows.append(result)
-        if (i + 1) % 500 == 0:
-            logger.info("Processed %d / %d rows", i + 1, len(history_sorted))
-
-    priors = pd.DataFrame(rows)
+    priors = compute_team_history_priors(history_sorted, rankings)
     elo = compute_elo_features(history_sorted, rankings)
     out = priors.merge(elo, on=["match_id", "map_name"], how="left")
 
     blocks = [
-        (compute_player_form_features(history_sorted, _frame(player_stats)), PLAYER_FORM_FEATURES),
+        (compute_player_skill_features(history_sorted, rankings, _frame(lineups)), PLAYER_SKILL_FEATURES),
+        (compute_roster_features(history_sorted, _frame(lineups), _frame(roster_moves)), ROSTER_FEATURES),
         (compute_schedule_features(history_sorted), SCHEDULE_FEATURES),
-        (compute_rank_features(history_sorted), RANK_FEATURES),
         (compute_event_features(history_sorted), EVENT_FEATURES),
         (compute_veto_features(history_sorted, _frame(veto)), VETO_FEATURES),
         (compute_page_h2h_features(history_sorted, _frame(h2h)), PAGE_H2H_FEATURES),
@@ -278,7 +334,8 @@ def build_priors_for(
     team_rankings: pd.DataFrame,
     targets: pd.DataFrame,
     *,
-    player_stats: pd.DataFrame | None = None,
+    lineups: pd.DataFrame | None = None,
+    roster_moves: pd.DataFrame | None = None,
     veto: pd.DataFrame | None = None,
     h2h: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
@@ -300,7 +357,7 @@ def build_priors_for(
     rankings = team_rankings.sort_values("date").reset_index(drop=True)
     targets = targets.assign(match_date=pd.to_datetime(targets["match_date"]))
     days = [
-        _priors_for_day(match_history, rankings, day_targets, player_stats, veto, h2h)
+        _priors_for_day(match_history, rankings, day_targets, lineups, roster_moves, veto, h2h)
         for _, day_targets in targets.groupby("match_date", sort=True)
     ]
     days = [d for d in days if not d.empty]
@@ -311,7 +368,8 @@ def _priors_for_day(
     match_history: pd.DataFrame,
     rankings: pd.DataFrame,
     targets: pd.DataFrame,
-    player_stats: pd.DataFrame | None,
+    lineups: pd.DataFrame | None,
+    roster_moves: pd.DataFrame | None,
     veto: pd.DataFrame | None,
     h2h: pd.DataFrame | None,
 ) -> pd.DataFrame:
@@ -319,17 +377,16 @@ def _priors_for_day(
     combined["match_date"] = pd.to_datetime(combined["match_date"])
     combined = combined.sort_values("match_date").reset_index(drop=True)
     keys = set(zip(targets.match_id, targets.map_name))
-    is_target = [k in keys for k in zip(combined.match_id, combined.map_name)]
 
-    rows = [compute_priors_for_row(row, combined, rankings) for _, row in combined[is_target].iterrows()]
-    out = pd.DataFrame([r for r in rows if r is not None])
+    team_history = compute_team_history_priors(combined, rankings)
+    out = team_history[[k in keys for k in zip(team_history.match_id, team_history.map_name)]].reset_index(drop=True)
     if out.empty:
         return out
     out = out.merge(compute_elo_features(combined, rankings), on=["match_id", "map_name"], how="left")
     blocks = [
-        (compute_player_form_features(combined, _frame(player_stats)), PLAYER_FORM_FEATURES),
+        (compute_player_skill_features(combined, rankings, _frame(lineups)), PLAYER_SKILL_FEATURES),
+        (compute_roster_features(combined, _frame(lineups), _frame(roster_moves)), ROSTER_FEATURES),
         (compute_schedule_features(combined), SCHEDULE_FEATURES),
-        (compute_rank_features(combined), RANK_FEATURES),
         (compute_event_features(combined), EVENT_FEATURES),
         (compute_veto_features(combined, _frame(veto)), VETO_FEATURES),
         (compute_page_h2h_features(combined, _frame(h2h)), PAGE_H2H_FEATURES),

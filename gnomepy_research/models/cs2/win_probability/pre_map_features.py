@@ -20,14 +20,14 @@ from gnomepy_research.models.cs2.hltv.config import MAP_POOL
 from gnomepy_research.models.cs2.hltv.context_features import (
     EVENT_FEATURES,
     PAGE_H2H_FEATURES,
-    RANK_FEATURES,
     SCHEDULE_FEATURES,
     VETO_FEATURES,
 )
-from gnomepy_research.models.cs2.hltv.player_form import PLAYER_FORM_FEATURES
+from gnomepy_research.models.cs2.hltv.player_skill import PLAYER_SKILL_FEATURES
+from gnomepy_research.models.cs2.hltv.roster_features import ROSTER_FEATURES
 
 HARVEST_FEATURE_NAMES = (
-    PLAYER_FORM_FEATURES + SCHEDULE_FEATURES + RANK_FEATURES
+    PLAYER_SKILL_FEATURES + ROSTER_FEATURES + SCHEDULE_FEATURES
     + EVENT_FEATURES + VETO_FEATURES + PAGE_H2H_FEATURES
 )
 
@@ -62,9 +62,8 @@ _MAP_OHE_NAMES = frozenset(f"map_{m}" for m in MAP_POOL)
 
 # HLTV posts the veto only when a match goes live, so before kickoff neither the
 # map nor who picked it is known. The pre-veto model drops every feature that
-# depends on them and keeps the rest - including player form, since lineups are
-# announced in advance. Walk-forward Mar-Sep 2026 (holding/preveto_checks.py):
-# beats the series and map-1 markets in 7/7 months.
+# depends on them and keeps the rest - including player skill, since lineups are
+# announced in advance.
 _MAP_DEPENDENT = frozenset(
     ["team_a_picked_map", "is_decider", "team_a_map_winrate_long", "team_b_map_winrate_long",
      "team_a_map_winrate_short", "team_b_map_winrate_short", "elo_map_diff", "elo_map_resid_diff"]

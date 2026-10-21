@@ -20,7 +20,7 @@ print(f"history: {len(history)} rows, {history.match_id.nunique()} series, "
 priors = build_priors(
     history,
     pd.read_parquet(f"{D}/cs2_team_rankings.parquet"),
-    player_stats=pd.read_parquet(f"{D}/cs2_player_map_stats.parquet"),
+    lineups=pd.read_parquet(f"{D}/cs2_match_lineups.parquet"),
     veto=pd.read_parquet(f"{D}/cs2_match_veto.parquet"),
     h2h=pd.read_parquet(f"{D}/cs2_h2h_history.parquet"),
 )
