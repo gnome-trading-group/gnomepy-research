@@ -80,6 +80,7 @@ class _Leg:
     lot: int
     min_size: int
     asks: list[Level] = field(default_factory=list)
+    best_bid: float = math.nan
     in_flight: bool = False
     last_limit: float = 0.0
 
@@ -230,6 +231,7 @@ class CS2Series(Strategy):
         self._m_fair_xgb = buf.add_double_column("fair_xgb")
         self._m_fair_bayes = buf.add_double_column("fair_bayes")
         self._m_ask = buf.add_double_column("best_ask")
+        self._m_spread = buf.add_double_column("spread")
         self._m_edge = buf.add_double_column("edge_at_best")
         self._m_limit = buf.add_double_column("limit_price")
         self._m_shares = buf.add_double_column("shares")
@@ -250,7 +252,7 @@ class CS2Series(Strategy):
         pos = self.positions.get_position(leg.exchange_id, leg.security_id)
         filled = pos.net_quantity / SIZE_SCALE if pos else 0.0
         avg = pos.avg_entry_price / PRICE_SCALE if pos and pos.net_quantity else 0.0
-        fees = float(pos.total_fees) if pos else 0.0
+        fees = pos.total_fees / PRICE_SCALE if pos else 0.0
         pending = max(0.0, self.positions.get_effective_quantity(leg.exchange_id, leg.security_id) / SIZE_SCALE - filled)
         return filled, filled * avg + fees + pending * cost_per_share(leg.last_limit, self._taker_rate(leg)), avg
 
@@ -262,6 +264,7 @@ class CS2Series(Strategy):
             return []
         self._legs[side].asks = [Level(data.ask_price(i) / PRICE_SCALE, data.ask_size(i) / SIZE_SCALE)
                                  for i in range(self.book_depth) if data.ask_size(i) > 0]
+        self._legs[side].best_bid = data.bid_price(0) / PRICE_SCALE if data.bid_size(0) > 0 else math.nan
         return self._evaluate(data.event_timestamp)
 
     def _evaluate(self, now_ns: int) -> list[Intent]:
@@ -316,7 +319,7 @@ class CS2Series(Strategy):
         leg.in_flight = True
         leg.last_limit = take.limit_price
         self._record(now_ns, entry, take, self._components.get(quote.at_ns, (float("nan"), float("nan"))),
-                     kelly_bankroll, held_shares)
+                     kelly_bankroll, held_shares, leg.best_bid)
         return [Intent(leg.exchange_id, leg.security_id, take_side=Side.BID, take_size=size,
                        take_order_type=OrderType.LIMIT, take_limit_price=round(take.limit_price * PRICE_SCALE))]
 
@@ -335,7 +338,7 @@ class CS2Series(Strategy):
         return []
 
     def _record(self, now_ns: int, entry, take, components: tuple[float, float], kelly_bankroll: float,
-                held_shares: float) -> None:
+                held_shares: float, best_bid: float) -> None:
         if self._metrics_buf is None:
             return
         buf = self._metrics_buf
@@ -346,6 +349,8 @@ class CS2Series(Strategy):
         buf.set_double(self._m_fair_xgb, components[0])
         buf.set_double(self._m_fair_bayes, components[1])
         buf.set_double(self._m_ask, entry.best_ask)
+        # NaN with no bid: a one-sided book is the case the column exists to tell apart.
+        buf.set_double(self._m_spread, entry.best_ask - best_bid)
         buf.set_double(self._m_edge, entry.edge_at_best)
         buf.set_double(self._m_limit, take.limit_price)
         buf.set_double(self._m_shares, take.shares)

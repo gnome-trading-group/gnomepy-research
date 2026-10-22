@@ -305,7 +305,8 @@ class _Pos:
 
 
 class _Positions:
-    """Engine position view: filled quantity, average entry, fees, plus pending orders."""
+    """Engine position view: filled quantity, average entry, fees in price units as the OMS keeps them, plus pending
+    orders."""
 
     def __init__(self):
         self.filled: dict = {}
@@ -314,7 +315,7 @@ class _Positions:
     def fill(self, key, shares, price, fee=0.0):
         q, avg, fees = self.filled.get(key, (0, 0, 0.0))
         nq = q + int(shares * S)
-        self.filled[key] = (nq, int((q * avg + int(shares * S) * int(price * P)) / nq), fees + fee)
+        self.filled[key] = (nq, int((q * avg + int(shares * S) * int(price * P)) / nq), fees + fee * P)
 
     def get_position(self, exchange_id, security_id):
         f = self.filled.get((exchange_id, security_id))
@@ -329,10 +330,17 @@ class _Positions:
 
 
 class _Book:
-    def __init__(self, key, asks, ts):
+    def __init__(self, key, asks, ts, bids=()):
         self.exchange_id, self.security_id = key
         self.event_timestamp = ts
         self._asks = asks
+        self._bids = bids
+
+    def bid_price(self, i):
+        return int(self._bids[i][0] * P) if i < len(self._bids) else 0
+
+    def bid_size(self, i):
+        return int(self._bids[i][1] * S) if i < len(self._bids) else 0
 
     def ask_price(self, i):
         return int(self._asks[i][0] * P) if i < len(self._asks) else 0
@@ -421,8 +429,8 @@ def make(tmp_path):
     return _make
 
 
-def _tick(strat, listing, asks, hours_before):
-    return strat.on_market_data(_Book(LISTINGS[listing], asks, K_NS - int(hours_before * HOUR)))
+def _tick(strat, listing, asks, hours_before, bids=()):
+    return strat.on_market_data(_Book(LISTINGS[listing], asks, K_NS - int(hours_before * HOUR), bids))
 
 
 def test_buys_the_underpriced_team_with_an_ioc_limit(make):
@@ -602,6 +610,18 @@ def test_a_held_kelly_size_is_topped_up_only_when_the_price_improves(make):
     assert spent < _kelly_spend(100.0, ask=0.40) + 1.0, "never past the Kelly size at the better price"
 
 
+def test_a_thin_book_is_topped_up_to_the_kelly_size_once_it_deepens(make):
+    s = make(bankroll_usd=100.0)
+    o = _tick(s, 102, [(0.45, 5)], hours_before=6)[0]
+    assert o.take_size == 5 * S, "only 5 shares on offer, short of the Kelly size"
+    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
+    s.positions.fill(LISTINGS[102], shares=5, price=0.45, fee=5 * taker_fee(0.45, 0.07))
+    top_up = _tick(s, 102, [(0.45, 10_000)], hours_before=5.9)
+    assert top_up, "the fee paid on the first fill doesn't use up the stake"
+    spent = (5 + top_up[0].take_size / S) * cost_per_share(0.45, 0.07)
+    assert spent == pytest.approx(_kelly_spend(100.0), abs=cost_per_share(0.45, 0.07))
+
+
 def test_edges_under_the_floor_are_not_bought(make):
     s = make(min_edge=0.02)
     ask = FAIR_B - 0.015 - taker_fee(FAIR_B - 0.015, 0.07)
@@ -712,3 +732,12 @@ def test_each_order_records_the_decision_behind_it(make):
     assert row["shares"] > 0
     assert row["kelly_bankroll"] == pytest.approx(0.5 * 10_000.0) and row["held_shares"] == 0.0
     assert row["fair_xgb"] == pytest.approx(series_of(LOW)) and row["fair_bayes"] == pytest.approx(0.5)
+    assert math.isnan(row["spread"]), "no bid on the book"
+
+
+def test_the_order_row_records_the_spread_it_was_taken_at(make):
+    strat = make()
+    strat._metric_recorder = _Metrics()
+    strat.register_metrics()
+    _tick(strat, 102, [(0.45, 1000)], hours_before=6, bids=[(0.41, 50)])
+    assert strat.metrics.streams["cs2_series_orders"].rows[0]["spread"] == pytest.approx(0.04)
