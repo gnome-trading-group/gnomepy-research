@@ -86,6 +86,26 @@ def test_the_threshold_price_cuts_the_book():
     assert e.shares_available == pytest.approx(50), "the 0.53 level is above the cap"
 
 
+def test_only_best_asks_inside_the_price_band_are_bought():
+    band = dict(min_edge=0.02, fee_rate=0.0, tick=0.01, min_price=0.20, max_price=0.90)
+    assert evaluate_side(0, 0.30, [Level(0.19, 100)], **band) is None, "a long shot under the floor"
+    assert evaluate_side(0, 0.30, [Level(0.20, 100)], **band) is not None, "the floor itself is in the band"
+    assert evaluate_side(0, 0.99, [Level(0.89, 100)], **band) is not None
+    assert evaluate_side(0, 0.99, [Level(0.90, 100)], **band) is None, "the top of the band is out"
+
+
+def test_no_share_is_bought_at_or_above_the_top_of_the_band():
+    e = evaluate_side(0, 0.99, [Level(0.88, 10), Level(0.89, 10), Level(0.90, 10), Level(0.91, 10)],
+                      min_edge=0.02, fee_rate=0.0, tick=0.01, min_price=0.20, max_price=0.90)
+    assert e.limit_price == pytest.approx(0.89) and [lv.price for lv in e.levels] == [0.88, 0.89]
+
+
+def test_choose_entry_applies_the_band_to_each_side():
+    e = choose_entry(0.20, [Level(0.10, 100)], [Level(0.75, 100)], min_edge=0.02, fee_rates=(0.0, 0.0), tick=0.01,
+                     min_price=0.20, max_price=0.90)
+    assert e.side == 1, "team A's 10c ask has the bigger edge but is under the floor"
+
+
 def test_choose_entry_buys_the_underpriced_side_and_respects_allowed_sides():
     asks_a, asks_b = [Level(0.62, 100)], [Level(0.30, 100)]
     e = choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.07, 0.07), tick=0.01)
@@ -445,61 +465,74 @@ def test_buys_the_underpriced_team_with_an_ioc_limit(make):
 def test_nothing_outside_the_entry_window(make):
     s = make()
     assert _tick(s, 102, [(0.45, 1000)], hours_before=13) == [], "the window opens 12h out"
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=-0.1) == [], "nothing after kickoff"
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=3.01) != [], "and is open until the cutoff"
+    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=3) == [], "it closes 3h before kickoff"
 
 
 def test_the_window_follows_the_latest_kickoff(make):
     s = make(states=_states((EARLY + pd.Timedelta(hours=1), {"kickoff": KICKOFF + pd.Timedelta(hours=3)})))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=-1) != [], "past the first kickoff, 2h before the new one"
-    assert not s.is_exiting, "a delayed kickoff isn't a start"
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=-3.1) == [], "and closed at the new kickoff"
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=1) != [], "past the first cutoff, 4h before the new kickoff"
+    assert not s.is_exiting, "a delayed kickoff moves the cutoff"
+    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=-0.1) == [], "and closed at the new cutoff"
+    assert s._control.exits == [("match 7 reached its entry cutoff", False)]
 
 
 @pytest.mark.parametrize("status", ["live", "missing"])
-def test_no_trading_once_hltv_says_live_or_drops_the_match(make, status):
-    s = make(states=_states((KICKOFF - pd.Timedelta(hours=2), {"status": status})))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=3) != []
+def test_the_session_ends_once_hltv_says_live_or_drops_the_match(make, status):
+    s = make(states=_states((KICKOFF - pd.Timedelta(hours=5), {"status": status})))
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=6) != []
     s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=1) == []
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=4.5) == []
+    assert s._control.exits == [(f"match 7 is {status}", False)]
 
 
-def test_the_session_runs_through_the_match_without_trading_and_ends_once_it_is_over(make):
-    s = make(states=_states((KICKOFF, {"status": "live"}), (KICKOFF + pd.Timedelta(hours=2.5), {"status": "missing"})))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=3) != []
-    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
-
-    for hours_before in (0, -1, -2.4):
-        assert _tick(s, 102, [(0.45, 1000)], hours_before=hours_before) == []
-    assert not s.is_exiting, "kickoff and live keep the session up, marking its positions"
-
-    _tick(s, 102, [(0.45, 1000)], hours_before=-2.5)
-    assert s._control.exits == [("match 7 is missing", False)]
-
-
-def test_the_session_ends_keeping_its_positions_once_hltv_drops_the_match(make):
-    s = make(states=_states((KICKOFF - pd.Timedelta(hours=2), {"status": "missing"})))
-    _tick(s, 102, [(0.45, 1000)], hours_before=3)
+@pytest.mark.parametrize("holding", [False, True])
+def test_the_session_ends_at_the_cutoff_keeping_whatever_it_holds(make, holding):
+    s = make()
+    if holding:
+        s.positions.fill(LISTINGS[102], shares=10, price=0.45)
+    _tick(s, 102, [(0.95, 1000)], hours_before=3.5)
     assert not s.is_exiting
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=2.99) == []
+    assert s._control.exits == [("match 7 reached its entry cutoff", False)], "positions are kept, not flattened"
 
-    _tick(s, 102, [(0.45, 1000)], hours_before=1)
-    assert s._control.exits == [("match 7 is missing", False)]
+
+def test_the_session_waits_for_an_order_in_flight_before_ending(make):
+    s = make()
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=3.01) != []
+    _tick(s, 102, [(0.45, 1000)], hours_before=2.99)
+    assert not s.is_exiting, "an IOC still working"
+    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
+    _tick(s, 102, [(0.45, 1000)], hours_before=2.98)
+    assert s._control.exits == [("match 7 reached its entry cutoff", False)]
 
 
-def test_the_session_ends_hours_after_kickoff_even_on_stale_state(make):
-    s = make(states=_states(until=KICKOFF - pd.Timedelta(hours=4)))
-    _tick(s, 102, [(0.45, 1000)], hours_before=0)
-    _tick(s, 102, [(0.45, 1000)], hours_before=-7.9)
-    assert not s.is_exiting, "stale state stops trading but doesn't end the match"
+def test_the_session_ends_at_the_cutoff_even_on_stale_state(make):
+    s = make(states=_states(until=KICKOFF - pd.Timedelta(hours=8)))
+    _tick(s, 102, [(0.45, 1000)], hours_before=3.5)
+    assert not s.is_exiting, "stale state stops trading"
+    _tick(s, 102, [(0.45, 1000)], hours_before=3)
+    assert s._control.exits == [("match 7 reached its entry cutoff", False)]
 
-    _tick(s, 102, [(0.45, 1000)], hours_before=-8)
-    assert s._control.exits == [("match 7 not over 8h after kickoff", False)]
+
+@pytest.mark.parametrize("kw", [{"entry_cutoff_hours": 12.0}, {"min_price": 0.9, "max_price": 0.9}])
+def test_a_session_needs_a_window_and_a_band(make, kw):
+    with pytest.raises(ValueError):
+        make(**kw)
+
+
+def test_a_side_priced_outside_the_band_is_not_bought(make):
+    s = make()
+    assert _tick(s, 102, [(0.19, 1000)], hours_before=6) == [], "team B is cheap enough to clear the edge, but a long shot"
 
 
 def test_no_trading_on_stale_match_state(make):
-    s = make(states=_states(until=KICKOFF - pd.Timedelta(hours=4)))
-    for hours_before, trades in ((4, True), (3.75, True), (3.4, False)):
+    s = make(states=_states(until=KICKOFF - pd.Timedelta(hours=6)))
+    for hours_before, trades in ((6, True), (5.75, True), (5.4, False)):
         out = _tick(s, 102, [(0.45, 1000)], hours_before=hours_before)
-        assert (out != []) == trades, f"{hours_before}h before kickoff, the pipeline stalled 4h before"
+        assert (out != []) == trades, f"{hours_before}h before kickoff, the pipeline stalled 6h before"
         s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
 
 
@@ -512,33 +545,33 @@ def test_the_feed_rereads_faster_near_kickoff(tmp_path):
 
 
 def test_no_trade_before_the_first_features_row(make):
-    s = make(features=[_feature(KICKOFF - pd.Timedelta(hours=3))])
+    s = make(features=[_feature(KICKOFF - pd.Timedelta(hours=5))])
     assert _tick(s, 102, [(0.45, 1000)], hours_before=6) == [], "a replay must not trade on a future row"
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=2.9) != []
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=4.9) != []
 
 
 def test_no_trade_until_both_lineups_are_announced(make):
-    s = make(features=[_feature(EARLY, lineup_a=[]), _feature(KICKOFF - pd.Timedelta(hours=3))])
+    s = make(features=[_feature(EARLY, lineup_a=[]), _feature(KICKOFF - pd.Timedelta(hours=5))])
     assert _tick(s, 102, [(0.45, 1000)], hours_before=6) == []
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=2.9) != []
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=4.9) != []
 
 
 def test_a_lineup_change_stops_top_ups(make):
     changed = [9, 2, 3, 4, 5]
-    s = make(features=[_feature(EARLY), _feature(KICKOFF - pd.Timedelta(hours=3), lineup_a=changed)])
+    s = make(features=[_feature(EARLY), _feature(KICKOFF - pd.Timedelta(hours=4.5), lineup_a=changed)])
     assert _tick(s, 102, [(0.45, 10)], hours_before=6)
     s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
     s.positions.fill(LISTINGS[102], shares=10, price=0.45)
     assert _tick(s, 102, [(0.45, 1000)], hours_before=5) != [], "same lineups: topping up is fine"
     s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=2) == [], "a stand-in is news the model cannot price"
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=4) == [], "a stand-in is news the model cannot price"
 
 
 def test_a_lineup_change_before_any_fill_does_not_block_entry(make):
-    s = make(features=[_feature(EARLY), _feature(KICKOFF - pd.Timedelta(hours=3), lineup_a=[9, 2, 3, 4, 5])])
+    s = make(features=[_feature(EARLY), _feature(KICKOFF - pd.Timedelta(hours=4.5), lineup_a=[9, 2, 3, 4, 5])])
     assert _tick(s, 102, [(0.45, 1000)], hours_before=6)
     s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=2) != [], "nothing was bought on the old lineups"
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=4) != [], "nothing was bought on the old lineups"
 
 
 def test_no_second_order_while_one_is_in_flight(make):
@@ -657,11 +690,11 @@ def test_restart_reads_committed_money_from_positions(make):
 
 
 def test_restart_takes_the_lineups_it_finds_as_the_reference(make):
-    s = make(features=[_feature(EARLY), _feature(KICKOFF - pd.Timedelta(hours=3), lineup_a=[9, 2, 3, 4, 5])])
+    s = make(features=[_feature(EARLY), _feature(KICKOFF - pd.Timedelta(hours=4.5), lineup_a=[9, 2, 3, 4, 5])])
     s.positions.fill(LISTINGS[102], shares=10, price=0.45)
     assert _tick(s, 102, [(0.45, 1000)], hours_before=6) != []
     s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=2) == []
+    assert _tick(s, 102, [(0.45, 1000)], hours_before=4) == []
 
 
 def test_an_order_under_the_venues_minimum_size_is_not_sent(make):

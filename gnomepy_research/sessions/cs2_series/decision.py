@@ -6,6 +6,10 @@ team market, a Polymarket US long or short side - so taking a view on team B mea
 buying team B's listing, never selling team A's. Each side is therefore priced off its
 own ask book, and an entry is only ever a taker buy.
 
+Only prices inside a band are bought. At the low end the model overrates long shots and at the high end it has
+no edge over a market that already agrees (Mar-Sep 2026 replays), so a side whose best ask is outside the band
+is skipped and no share is bought at or above its top.
+
 An entry may reach as deep into the ask book as the edge allows: every share it buys, at its own
 level's price and fee, still clears min_edge. How many it buys is the Kelly size: a share costing u
 (its price plus fee) pays 1 if the side wins, so log-wealth growth is maximised by holding the n
@@ -80,6 +84,10 @@ def _floor_to_tick(price: float, tick: float) -> float:
     return math.floor(price / tick + 1e-9) * tick
 
 
+def _tick_below(price: float, tick: float) -> float:
+    return (math.ceil(price / tick - 1e-9) - 1) * tick
+
+
 def evaluate_side(
     side: int,
     fair: float,
@@ -88,15 +96,22 @@ def evaluate_side(
     min_edge: float,
     fee_rate: float,
     tick: float,
+    min_price: float = 0.0,
+    max_price: float = 1.0,
 ) -> Entry | None:
-    """An entry on one side if its best ask clears min_edge after the fee, with every ask that still does."""
+    """
+    An entry on one side if its best ask clears min_edge after the fee and lies in [min_price, max_price), with
+    every ask that still clears it below max_price.
+    """
     if not asks:
         return None
     best = asks[0].price
+    if best < min_price - 1e-12 or best > max_price - 1e-12:
+        return None
     edge_at_best = fair - best - taker_fee(best, fee_rate)
     if edge_at_best < min_edge:
         return None
-    limit = _floor_to_tick(max_entry_price(fair, min_edge, fee_rate), tick)
+    limit = min(_floor_to_tick(max_entry_price(fair, min_edge, fee_rate), tick), _tick_below(max_price, tick))
     if limit < best - 1e-12:
         return None
     levels = tuple(level for level in asks if level.price <= limit + 1e-12)
@@ -112,13 +127,17 @@ def choose_entry(
     fee_rates: tuple[float, float],
     tick: float,
     allowed_sides: tuple[int, ...] = (0, 1),
+    min_price: float = 0.0,
+    max_price: float = 1.0,
 ) -> Entry | None:
-    """The better of the two sides, if either clears the threshold; fee_rates are each side's listing's taker rate."""
+    """The better of the two sides, if either clears the threshold inside the price band; fee_rates are each side's
+    listing's taker rate."""
     candidates = []
     for side, fair, asks in ((0, fair_team_a, asks_team_a), (1, 1.0 - fair_team_a, asks_team_b)):
         if side not in allowed_sides:
             continue
-        entry = evaluate_side(side, fair, asks, min_edge=min_edge, fee_rate=fee_rates[side], tick=tick)
+        entry = evaluate_side(side, fair, asks, min_edge=min_edge, fee_rate=fee_rates[side], tick=tick,
+                              min_price=min_price, max_price=max_price)
         if entry is not None:
             candidates.append(entry)
     return max(candidates, key=lambda e: e.edge_at_best) if candidates else None

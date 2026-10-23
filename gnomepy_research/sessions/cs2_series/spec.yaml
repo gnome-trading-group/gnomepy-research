@@ -24,7 +24,9 @@ constraints:
     - trading before both lineups are announced (both models price the players; the Bayesian one has no price without them)
     - trading on a Bayesian posterior older than max_posterior_age_days, or fitted after the moment being priced
     - adding to a position after a lineup changes (a stand-in is news the model cannot price)
-    - trading outside the window - 12h before HLTV's latest kickoff, until kickoff - or once HLTV lists the match live or drops it
+    - trading outside the window - 12h until 3h before HLTV's latest kickoff - or once HLTV lists the match live or drops it
+    - buying a side whose best ask is under 0.20 or at/above 0.90, or any share at or above 0.90
+    - running past the entry cutoff - the session ends there keeping its positions, which settle in the ledger unmarked
     - in-play trading - the pre-match model knows nothing about the score
     - buying both teams in one match (no hedging into the spread)
     - adding after the price falls adverse_move below our entry (likely news the model lacks)
@@ -39,6 +41,9 @@ constraints:
     - Capacity (prod cs2_upcoming_books, Oct 21) - when a side clears 5c at the best ask, the median $ still clearing it is ~$1,750 on PM Intl, ~$615 Kalshi, ~$500 PM US; $250 fillable 68-87% of the time, so the stake cap binds before depth does
     - Sizing (Oct 2026) - flat $50 at a 5c threshold replaced by half-Kelly with a 2c floor. Replays without book depth had Kelly at about flat's P&L with lower variance once the cap stops binding; small edges (1-5c) realized ~+1-2c/share on Mar-Sep but lost on Sep-Feb, so the 2c floor is on trial in paper
     - Map 1 and map 2 are a separate session (cs2_maps), not traded here
+    - Price band and cutoff (Oct 2026) - replays of the first bet per match (2c after a 7% fee, market + 1c). Return per $ by how late the bet was placed - Sep-Feb 12h +22% / 6h +20% / 2h +15%, Mar-Sep +14% / +9% / +4% (log loss level with the market at 2h), so the window closes 3h out. Under 0.20 there was no edge at 12h and -40% per $ at 2h on Mar-Sep (won 9.6% against the model's 24%); at 0.90 and above +1-2% per $ with intervals spanning 0, at Kelly sizes that always hit the cap. The first two live days (Oct 22-23, 28 matches, mostly entered 0-6h out) lost 33% per $
+    - Mar-Sep chose the band and the cutoff, so it is no longer a clean test of them - live paper is; judge them per match, not per venue
+    - XGB and Bayes picking different winners was weak on Sep-Feb but not on Mar-Sep 12h out (won 51.4% against a model 51.4%, +18% per $), so it isn't filtered
 
 meta:
   execution_mode: local

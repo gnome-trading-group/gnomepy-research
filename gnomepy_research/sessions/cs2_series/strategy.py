@@ -7,19 +7,21 @@ cs2_upcoming_features row as the pipeline writes it (match_feed.py): the pre-vet
 series DP give one series price, the Bayesian series model (its weekly posterior) another from the
 two announced lineups, and the two are blended (series_pricing.price_blended).
 
-Inside the entry window - from window_hours before HLTV's latest kickoff until kickoff, while
-HLTV still lists the match as upcoming - it buys whichever team's listing is underpriced by at
-least min_edge after the venue's taker fee, sized by the Kelly criterion: the holding that maximises
-log-wealth growth on kelly_fraction of its share of bankroll_usd, where the bankroll is split evenly
-across the venues with a series market for the match, since a session on each takes the same view.
+Inside the entry window - from window_hours until entry_cutoff_hours before HLTV's latest kickoff, while
+HLTV still lists the match as upcoming - it buys whichever team's listing, priced inside
+[min_price, max_price), is underpriced by at least min_edge after the venue's taker fee, sized by the
+Kelly criterion: the holding that maximises log-wealth growth on kelly_fraction of its share of
+bankroll_usd, where the bankroll is split evenly across the venues with a series market for the match,
+since a session on each takes the same view.
 Every book update re-checks the edge and tops the holding up to the Kelly size the current book
 justifies, never past max_stake_usd. An order walks the ask book only as deep as every share still
 clears the threshold and the Kelly size; it is an IOC limit at the deepest level it costed, so it only
 ever takes liquidity it has already priced.
-Positions are held to settlement. Trading stops at kickoff (or once HLTV lists the match live), but
-the session runs on through the match so its positions keep being marked, and ends itself, keeping
-what it holds, once HLTV drops the match from its listing, which it does when the match ends. If
-the pipeline stalls and never says, it ends exit_hours_after_kickoff after kickoff.
+Positions are held to settlement. The edge is in the hours before kickoff: by the last few the market has
+caught up, so trading near kickoff mostly pays fees and spread (Mar-Sep 2026 replays). At the cutoff the
+session ends itself, keeping what it holds, once no order is in flight; it also ends early if HLTV lists
+the match live or drops it. Nothing marks the positions after that: they settle in the ledger. A stalled
+pipeline still ends the session at the cutoff of the last kickoff it saw.
 
 It does not trade until both lineups are announced: both models price players, and the Bayesian
 one has no price without them. Nor does it trade on stale match state: if the newest cs2_upcoming row is
@@ -62,7 +64,6 @@ SIZE_SCALE = Scales.SIZE
 HOUR_NS = 3_600_000_000_000
 TERMINAL = {OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED}
 UPCOMING = "upcoming"
-MISSING = "missing"
 ARTIFACT = "artifact://"
 DEFAULT_MODEL = "artifact://xgboost_model/cs2_prematch_preveto"
 DEFAULT_POSTERIOR = "artifact://bayes_posterior/cs2_series"
@@ -129,15 +130,18 @@ class CS2Series(Strategy):
         kelly_fraction: the share of the Kelly size to hold; under 1 because the model's win probability is an
             estimate, and betting full Kelly on an estimate over-bets.
         window_hours: how long before kickoff the entry window opens.
+        entry_cutoff_hours: how long before kickoff the window closes and the session ends.
+        min_price, max_price: the band of best asks it buys in, [min_price, max_price); no share is bought at or
+            above max_price.
         max_stake_usd: most this session may commit, fees included, however large the Kelly size.
         adverse_move: stop adding once the price has fallen this far below our average entry -
             a big pre-kickoff move is usually news the model cannot see.
         min_order_usd: smallest order worth sending.
         max_state_age_minutes: the oldest match state it trades on; the pipeline writes one every 15 minutes.
         reload_minutes: how often to re-read the match's rows (0 = once, for replays).
-        near_kickoff_reload_minutes, near_kickoff_hours: re-read this often inside this long before kickoff,
-            so HLTV marking the match live stops trading within a minute of the pipeline writing it.
-        exit_hours_after_kickoff: when the session ends if the match state never says the match is over.
+        near_kickoff_reload_minutes, near_kickoff_hours: re-read this often inside this long before the cutoff,
+            so a kickoff HLTV brings forward, or a match it lists live, ends trading within a minute of the
+            pipeline writing it.
         features_source, matches_source, rankings_source: DatasetStore tables, or parquet extracts of them.
     """
 
@@ -154,6 +158,9 @@ class CS2Series(Strategy):
         min_edge: float = 0.02,
         kelly_fraction: float = 0.5,
         window_hours: float = 12.0,
+        entry_cutoff_hours: float = 3.0,
+        min_price: float = 0.20,
+        max_price: float = 0.90,
         max_stake_usd: float = 50.0,
         adverse_move: float = 0.08,
         min_order_usd: float = 1.0,
@@ -163,7 +170,6 @@ class CS2Series(Strategy):
         reload_minutes: float = 5.0,
         near_kickoff_reload_minutes: float = 1.0,
         near_kickoff_hours: float = 1.0,
-        exit_hours_after_kickoff: float = 8.0,
         features_source: str = FEATURES,
         matches_source: str = MATCHES,
         rankings_source: str = RANKINGS,
@@ -173,16 +179,22 @@ class CS2Series(Strategy):
         if bankroll_usd <= 0:
             raise ValueError(f"bankroll_usd must be positive, got {bankroll_usd}")
         self.bankroll_usd = bankroll_usd
+        if not 0 <= entry_cutoff_hours < window_hours:
+            raise ValueError(f"entry_cutoff_hours must be in [0, window_hours), got {entry_cutoff_hours}")
+        if not 0 <= min_price < max_price <= 1:
+            raise ValueError(f"need 0 <= min_price < max_price <= 1, got [{min_price}, {max_price})")
         self.min_edge = min_edge
         self.kelly_fraction = kelly_fraction
         self.window_ns = int(window_hours * HOUR_NS)
+        self.cutoff_ns = int(entry_cutoff_hours * HOUR_NS)
+        self.min_price = min_price
+        self.max_price = max_price
         self.max_stake_usd = max_stake_usd
         self.adverse_move = adverse_move
         self.min_order_usd = min_order_usd
         self.book_depth = book_depth
         self._processing_time_ns = processing_time_ns
         self.max_state_age_ns = int(max_state_age_minutes * 60 * 1e9)
-        self.exit_after_kickoff_ns = int(exit_hours_after_kickoff * HOUR_NS)
         self._metrics_buf = None
         self._entry_lineups = None
 
@@ -205,7 +217,7 @@ class CS2Series(Strategy):
             return priced.series.tolist()
 
         self._feed = MatchFeed(self.match_id, pricer, features_source, matches_source, reload_minutes * 60,
-                               near_kickoff_reload_minutes * 60, near_kickoff_hours * 3600)
+                               near_kickoff_reload_minutes * 60, (near_kickoff_hours + entry_cutoff_hours) * 3600)
 
     @staticmethod
     def _resolve(registry, listing_id: int) -> _Leg:
@@ -269,16 +281,18 @@ class CS2Series(Strategy):
 
     def _evaluate(self, now_ns: int) -> list[Intent]:
         state, quote = self._feed.state(now_ns), self._feed.quote(now_ns)
-        if state is not None and (state.status == MISSING or now_ns >= state.kickoff_ns + self.exit_after_kickoff_ns):
-            # Judged on the last state even when it's stale: a stalled pipeline mustn't keep the session up forever.
-            self.request_exit(f"match {self.match_id} is {state.status}" if state.status == MISSING
-                              else f"match {self.match_id} not over {self.exit_after_kickoff_ns / HOUR_NS:g}h after kickoff")
+        if state is not None and (state.status != UPCOMING or now_ns >= state.kickoff_ns - self.cutoff_ns):
+            # Waits for an in-flight order's final report, so the session never ends with an order working. Judged
+            # on the last state even when it's stale: a stalled pipeline mustn't keep the session up forever.
+            if not any(leg.in_flight for leg in self._legs):
+                self.request_exit(f"match {self.match_id} is {state.status}" if state.status != UPCOMING
+                                  else f"match {self.match_id} reached its entry cutoff")
             return []
-        if state is None or quote is None or state.status != UPCOMING:
+        if state is None or quote is None:
             return []
         if now_ns - state.at_ns > self.max_state_age_ns:
             return []
-        if not (state.kickoff_ns - self.window_ns <= now_ns < state.kickoff_ns):
+        if now_ns < state.kickoff_ns - self.window_ns:
             return []
         if not quote.lineup_known or any(leg.in_flight for leg in self._legs):
             return []
@@ -299,7 +313,8 @@ class CS2Series(Strategy):
         fee_rates = (self._taker_rate(self._legs[0]), self._taker_rate(self._legs[1]))
         entry = choose_entry(quote.p_team_a, self._legs[0].asks, self._legs[1].asks,
                              min_edge=self.min_edge, fee_rates=fee_rates,
-                             tick=self._legs[0].tick, allowed_sides=tuple(held) if held else (0, 1))
+                             tick=self._legs[0].tick, allowed_sides=tuple(held) if held else (0, 1),
+                             min_price=self.min_price, max_price=self.max_price)
         if entry is None:
             return []
         held_shares, held_cost, avg_entry = states[entry.side]
