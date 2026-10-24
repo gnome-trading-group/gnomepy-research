@@ -272,3 +272,14 @@ def test_take_profit_variants_launch_as_their_own_strategies():
     assert by[(9, "kalshi")]["take_profit"] is True and by[(9, "kalshi")]["anchor_weight"] == 1.0
     assert by[(8, "kalshi")]["take_profit"] is True and by[(8, "kalshi")]["anchor_weight"] == 0.25
     assert "take_profit" not in by[(6, "kalshi")], "hold to settlement"
+
+
+def test_a_venues_slate_splits_into_sessions_of_at_most_max_games():
+    """A session's heartbeat lists every market it trades; the registry refuses one over 16 KB (60 markets did)."""
+    out = launch.triggers(_resolved(), _preds(), strategy_ids={"anchor": 6, "raw": 7}, research_commit="abc",
+                          bankroll_usd=10_000.0, now=KICK - pd.Timedelta(hours=5), max_games=1)
+    kalshi = [t for t in out if t["venue"] == "kalshi"]
+    assert len(out) == 6 and len(kalshi) == 4
+    assert sorted(g["game_id"] for t in kalshi if t["data"]["strategy_id"] == 6
+                  for g in t["data"]["strategy_args"]["games"]) == [1, 2]
+    assert all(len(t["data"]["listings"]) == 2 for t in out)

@@ -100,9 +100,11 @@ def cross_check(legs: pd.DataFrame, mids: dict[tuple[int, str], float | None],
 
 
 def triggers(resolved: pd.DataFrame, preds: pd.DataFrame, *, strategy_ids: dict[str, int], research_commit: str,
-             bankroll_usd: float, now: pd.Timestamp, cutoff: pd.Timedelta = CUTOFF) -> list[dict]:
+             bankroll_usd: float, now: pd.Timestamp, cutoff: pd.Timedelta = CUTOFF,
+             max_games: int | None = None) -> list[dict]:
     """One direct_launch trigger per variant in strategy_ids per venue: {venue, variant, deadline, data}; entries close
-    `cutoff` before each kickoff."""
+    `cutoff` before each kickoff. With max_games a venue's slate is split, in kickoff order, into sessions of at most
+    that many games: a session's heartbeat lists every market it trades, and the registry refuses one over 16 KB."""
     kickoffs = preds.set_index("game_id")["kickoff"].map(pd.Timestamp)
     out = []
     for venue in dict.fromkeys(resolved["venue"]):
@@ -110,18 +112,21 @@ def triggers(resolved: pd.DataFrame, preds: pd.DataFrame, *, strategy_ids: dict[
         rows = rows[rows["kickoff"] - cutoff - now > MIN_LEAD].sort_values(["kickoff", "game_id"])
         if rows.empty:
             continue
-        games = [{"game_id": int(r.game_id), "listing_home": int(r.listing_home), "listing_away": int(r.listing_away),
+        every = [{"game_id": int(r.game_id), "listing_home": int(r.listing_home), "listing_away": int(r.listing_away),
                   "kickoff": pd.Timestamp(r.kickoff).isoformat()} for r in rows.itertuples()]
-        listings = [lid for g in games for lid in (g["listing_home"], g["listing_away"])]
-        deadline = (rows["kickoff"].max() - cutoff).isoformat()
-        for variant in strategy_ids:
-            args = VARIANTS[variant]
-            out.append({"venue": venue, "variant": variant, "deadline": deadline, "data": {
-                "strategy_id": int(strategy_ids[variant]), "strategy_type": "python", "strategy_class": STRATEGY_CLASS,
-                "mode": "paper", "research_commit": research_commit, "instance_type": INSTANCE, "listings": listings,
-                "strategy_args": {"games": games, "bankroll_usd": float(bankroll_usd),
-                                  "entry_cutoff_minutes": cutoff.total_seconds() / 60, **args},
-            }})
+        size = max_games or len(every)
+        for start in range(0, len(every), size):
+            games = every[start:start + size]
+            listings = [lid for g in games for lid in (g["listing_home"], g["listing_away"])]
+            deadline = (max(pd.Timestamp(g["kickoff"]) for g in games) - cutoff).isoformat()
+            for variant in strategy_ids:
+                args = VARIANTS[variant]
+                out.append({"venue": venue, "variant": variant, "deadline": deadline, "data": {
+                    "strategy_id": int(strategy_ids[variant]), "strategy_type": "python", "strategy_class": STRATEGY_CLASS,
+                    "mode": "paper", "research_commit": research_commit, "instance_type": INSTANCE, "listings": listings,
+                    "strategy_args": {"games": games, "bankroll_usd": float(bankroll_usd),
+                                      "entry_cutoff_minutes": cutoff.total_seconds() / 60, **args},
+                }})
     return out
 
 
@@ -232,6 +237,7 @@ def main() -> None:
     ap.add_argument("--research-commit", required=True)
     ap.add_argument("--venues", nargs="+", default=list(EXCHANGES), choices=list(EXCHANGES))
     ap.add_argument("--bankroll", type=float, default=10_000.0)
+    ap.add_argument("--max-games", type=int, help="split each venue's slate into sessions of at most this many games")
     ap.add_argument("--cutoff-minutes", type=float, default=CUTOFF.total_seconds() / 60,
                     help="entries close this long before each kickoff (0 = trade up to kickoff)")
     ap.add_argument("--predictions", help="a parquet file of cfb_pregame_predictions rows instead of the table")
@@ -253,7 +259,7 @@ def main() -> None:
     ids = {"anchor": a.anchor_strategy, "raw": a.raw_strategy, "anchor_tp": a.anchor_tp_strategy, "raw_tp": a.raw_tp_strategy}
     out = triggers(checked, preds, strategy_ids={k: v for k, v in ids.items() if v is not None},
                    research_commit=a.research_commit, bankroll_usd=a.bankroll, now=now,
-                   cutoff=pd.Timedelta(minutes=a.cutoff_minutes))
+                   cutoff=pd.Timedelta(minutes=a.cutoff_minutes), max_games=a.max_games)
 
     names = preds.set_index("game_id")
     print(f"{len(preds)} predicted games, {len(checked)} legs kept on {checked['game_id'].nunique()} games")
