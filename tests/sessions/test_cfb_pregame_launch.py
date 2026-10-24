@@ -204,8 +204,11 @@ def test_triggers_one_per_variant_and_venue_with_paper_mode_and_deadline():
     assert by[(8, "kalshi")]["data"]["strategy_args"]["min_edge"] == 0.03
 
 
-def test_games_inside_the_cutoff_are_left_out():
-    now = KICK - pd.Timedelta(minutes=40)
+def test_games_past_their_cutoff_are_left_out_and_any_time_left_is_enough():
+    out = launch.triggers(_resolved(), _preds(), strategy_ids={"anchor": 7, "raw": 8}, research_commit="abc",
+                          bankroll_usd=10_000.0, now=KICK - pd.Timedelta(minutes=31))
+    assert {g["game_id"] for t in out for g in t["data"]["strategy_args"]["games"]} == {1, 2}, "a minute is enough"
+    now = KICK - pd.Timedelta(minutes=20)
     out = launch.triggers(_resolved(), _preds(), strategy_ids={"anchor": 7, "raw": 8}, research_commit="abc",
                           bankroll_usd=10_000.0, now=now)
     kalshi = [t for t in out if t["venue"] == "kalshi"]

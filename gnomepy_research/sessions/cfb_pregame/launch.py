@@ -10,7 +10,7 @@ can trade. The slate is the newest prediction per game in cfb_pregame_prediction
 columns) kicking off in [start, end). Each game's venue market is matched and oriented (slate.py), its two listings
 resolved in the registry, and its legs cross-checked against the books: venues that disagree on the home team's
 price by more than 0.10, or a market more than 0.35 from the model, mean a likely flip, and the game or leg is left
-out. Games whose entry cutoff is under 15 minutes away are left out too.
+out. Games already past their entry cutoff are left out too.
 
 Without --send nothing leaves this machine but reads: it prints the slate and the triggers. With --send each trigger
 goes onto the launcher's FIFO launch queue as gnome-launcher's own scanners send them (launcher/queues.py), for its
@@ -40,7 +40,7 @@ VARIANTS = {"anchor": {"anchor_weight": 0.25, "min_edge": 0.01}, "raw": {"anchor
             "raw_tp": {"anchor_weight": 1.0, "min_edge": 0.03, "take_profit": True}}
 EXCHANGES = {"kalshi": "Kalshi", "polymarket_us": "Polymarket (US)"}
 CUTOFF = pd.Timedelta(minutes=30)
-MIN_LEAD = pd.Timedelta(minutes=15)
+MIN_LEAD = pd.Timedelta(0)
 MAX_VENUE_GAP = 0.10
 MAX_MODEL_GAP = 0.35
 INSTANCE = "t3.small"
@@ -107,7 +107,7 @@ def triggers(resolved: pd.DataFrame, preds: pd.DataFrame, *, strategy_ids: dict[
     out = []
     for venue in dict.fromkeys(resolved["venue"]):
         rows = resolved[resolved["venue"] == venue].assign(kickoff=lambda d: d["game_id"].map(kickoffs))
-        rows = rows[rows["kickoff"] - cutoff - now >= MIN_LEAD].sort_values(["kickoff", "game_id"])
+        rows = rows[rows["kickoff"] - cutoff - now > MIN_LEAD].sort_values(["kickoff", "game_id"])
         if rows.empty:
             continue
         games = [{"game_id": int(r.game_id), "listing_home": int(r.listing_home), "listing_away": int(r.listing_away),
