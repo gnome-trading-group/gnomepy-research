@@ -259,3 +259,13 @@ def test_a_zero_cutoff_trades_up_to_kickoff():
     assert [g["game_id"] for g in kalshi["data"]["strategy_args"]["games"]] == [1, 2], "game 1 kicks off in 20 minutes"
     assert kalshi["data"]["strategy_args"]["entry_cutoff_minutes"] == 0
     assert kalshi["deadline"] == (KICK + pd.Timedelta(hours=1)).isoformat()
+
+
+def test_take_profit_variants_launch_as_their_own_strategies():
+    out = launch.triggers(_resolved(), _preds(), strategy_ids={"anchor": 6, "raw": 7, "anchor_tp": 8, "raw_tp": 9},
+                          research_commit="abc", bankroll_usd=10_000.0, now=KICK - pd.Timedelta(hours=5))
+    by = {(t["data"]["strategy_id"], t["venue"]): t["data"]["strategy_args"] for t in out}
+    assert len(out) == 8
+    assert by[(9, "kalshi")]["take_profit"] is True and by[(9, "kalshi")]["anchor_weight"] == 1.0
+    assert by[(8, "kalshi")]["take_profit"] is True and by[(8, "kalshi")]["anchor_weight"] == 0.25
+    assert "take_profit" not in by[(6, "kalshi")], "hold to settlement"

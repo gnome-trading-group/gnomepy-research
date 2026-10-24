@@ -360,3 +360,77 @@ def test_no_adding_after_the_price_falls_adverse_move_below_the_average_entry(ma
     assert _both(s, 120, home=([(0.50, 1000)], [(0.52, 1000)]), away=([(0.48, 1000)], [(0.50, 1000)])) == [], \
         "0.52 is 8c under the 0.60 entry"
     assert len(_both(s, 110, home=([(0.53, 1000)], [(0.55, 1000)]), away=([(0.45, 1000)], [(0.47, 1000)]))) == 1
+
+
+# ---- take profit ----------------------------------------------------------------------
+
+TP = dict(anchor_weight=1.0, min_edge=0.03, take_profit=True)
+RICH_HOME = ([(0.62, 1000)], [(0.64, 1000)])      # the market now pays more than C2's 0.60 for home
+RICH_AWAY = ([(0.36, 1000)], [(0.38, 1000)])
+FAIR_HOME = ([(0.61, 1000)], [(0.63, 1000)])      # 0.61 less the fee is still under 0.60
+FAIR_AWAY = ([(0.37, 1000)], [(0.39, 1000)])
+
+
+def _tp(make, **kw):
+    s = make(rows=[_row(T0, 1, p_home=0.60), _row(T0, 2)], games=(1,), **{**TP, **kw})
+    s.positions.fill(101, shares=100, price=0.50)
+    return s
+
+
+def test_take_profit_sells_once_the_bid_after_fees_pays_the_fair_price(make):
+    out = _both(_tp(make), 60, home=RICH_HOME, away=RICH_AWAY)
+    assert len(out) == 1
+    o = out[0]
+    assert (o.exchange_id, o.security_id) == LISTINGS[101] and o.take_side == Side.ASK
+    assert o.take_size == 100 * S and o.take_limit_price == int(0.62 * P)
+
+
+def test_take_profit_holds_while_the_bid_is_under_the_fair_price(make):
+    assert _both(_tp(make), 60, home=FAIR_HOME, away=FAIR_AWAY) == []
+
+
+def test_hold_to_settlement_never_sells(make):
+    s = make(rows=[_row(T0, 1, p_home=0.60), _row(T0, 2)], games=(1,), anchor_weight=1.0, min_edge=0.03)
+    s.positions.fill(101, shares=100, price=0.50)
+    assert _both(s, 60, home=RICH_HOME, away=RICH_AWAY) == []
+
+
+def test_after_kickoff_the_last_pregame_fair_price_still_decides_and_the_session_stays_open(make):
+    s = _tp(make)
+    _both(s, 60, home=FAIR_HOME, away=FAIR_AWAY)
+    assert _both(s, -20, home=([(0.55, 1000)], [(0.57, 1000)]), away=([(0.43, 1000)], [(0.45, 1000)])) == []
+    assert not s.is_exiting, "it still holds the home side during the game"
+    out = _both(s, -45, home=([(0.70, 1000)], [(0.72, 1000)]), away=([(0.28, 1000)], [(0.30, 1000)]))
+    assert len(out) == 1 and out[0].take_side == Side.ASK, "the home side rallied past 0.60 in the game"
+
+
+def test_the_session_ends_once_past_kickoff_with_nothing_held(make):
+    s = _tp(make)
+    _both(s, 60, home=RICH_HOME, away=RICH_AWAY)
+    s.positions.filled.pop(LISTINGS[101])
+    s.on_execution_report(_Report(*LISTINGS[101], OrderStatus.FILLED))
+    _both(s, -5, home=RICH_HOME, away=RICH_AWAY)
+    assert s._control.exits == [("slate is past kickoff with nothing held", False)]
+
+
+def test_the_session_ends_when_the_exit_window_closes_whatever_it_holds(make):
+    s = _tp(make, manage_hours=5.0)
+    _both(s, 60, home=FAIR_HOME, away=FAIR_AWAY)
+    _both(s, -301, home=FAIR_HOME, away=FAIR_AWAY)
+    assert s._control.exits == [("exit window closed", False)]
+
+
+def test_a_game_it_took_profit_on_is_not_bought_again(make):
+    s = _tp(make)
+    assert len(_both(s, 90, home=RICH_HOME, away=RICH_AWAY)) == 1
+    s.positions.filled.pop(LISTINGS[101])
+    s.on_execution_report(_Report(*LISTINGS[101], OrderStatus.FILLED))
+    assert _both(s, 80, home=([(0.48, 1000)], [(0.50, 1000)]), away=([(0.50, 1000)], [(0.52, 1000)])) == []
+
+
+def test_an_exit_is_recorded(make):
+    s = _tp(make)
+    _both(s, 60, home=RICH_HOME, away=RICH_AWAY)
+    row = s.metrics.streams["cfb_pregame_exits"].rows[-1]
+    assert row["game_id"] == 1 and row["side"] == 0 and row["fair"] == pytest.approx(0.60)
+    assert row["best_bid"] == pytest.approx(0.62) and row["shares"] == pytest.approx(100) and row["avg_entry"] == pytest.approx(0.50)

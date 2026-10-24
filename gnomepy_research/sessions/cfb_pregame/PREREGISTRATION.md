@@ -41,6 +41,16 @@ consistent orientation (`launch.py`'s cross-check).
 (`entry_cutoff_minutes` 0), not 30 minutes before. The model is C2 (B0 + prior bundle), the best model in the
 2025–26 error lab, built as `live/picks.py` builds it.
 
+**Amended Oct 24, about 15:40 UTC, before any session launched (the user's call):** two more strategies,
+`cfb_pregame_anchor_tp` and `cfb_pregame_raw_tp`. They use the same entries as ANCHOR and RAW, plus a take-profit
+exit:
+- A held side is sold once its best bid, less the taker fee, reaches its fair price. That fair price is the latest
+  before kickoff, frozen from kickoff on.
+- The game is never re-entered.
+- The session manages exits until nothing is held or 5 hours after the last kickoff.
+
+The comparison is hold-to-settlement vs take-profit, on the same entries.
+
 ## Endpoints, per variant × venue and pooled
 
 1. **Primary: the live information weight w.**

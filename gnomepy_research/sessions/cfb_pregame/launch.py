@@ -35,7 +35,9 @@ from gnomepy_research.sessions.cfb_pregame.slate import kalshi_legs, pmus_legs
 
 STRATEGY_CLASS = "gnomepy_research.sessions.cfb_pregame.strategy:CFBPregame"
 RULE_TYPE = "direct_launch"
-VARIANTS = {"anchor": {"anchor_weight": 0.25, "min_edge": 0.01}, "raw": {"anchor_weight": 1.0, "min_edge": 0.03}}
+VARIANTS = {"anchor": {"anchor_weight": 0.25, "min_edge": 0.01}, "raw": {"anchor_weight": 1.0, "min_edge": 0.03},
+            "anchor_tp": {"anchor_weight": 0.25, "min_edge": 0.01, "take_profit": True},
+            "raw_tp": {"anchor_weight": 1.0, "min_edge": 0.03, "take_profit": True}}
 EXCHANGES = {"kalshi": "Kalshi", "polymarket_us": "Polymarket (US)"}
 CUTOFF = pd.Timedelta(minutes=30)
 MIN_LEAD = pd.Timedelta(minutes=15)
@@ -99,8 +101,8 @@ def cross_check(legs: pd.DataFrame, mids: dict[tuple[int, str], float | None],
 
 def triggers(resolved: pd.DataFrame, preds: pd.DataFrame, *, strategy_ids: dict[str, int], research_commit: str,
              bankroll_usd: float, now: pd.Timestamp, cutoff: pd.Timedelta = CUTOFF) -> list[dict]:
-    """One direct_launch trigger per variant per venue: {venue, variant, deadline, data}; entries close `cutoff`
-    before each kickoff."""
+    """One direct_launch trigger per variant in strategy_ids per venue: {venue, variant, deadline, data}; entries close
+    `cutoff` before each kickoff."""
     kickoffs = preds.set_index("game_id")["kickoff"].map(pd.Timestamp)
     out = []
     for venue in dict.fromkeys(resolved["venue"]):
@@ -112,7 +114,8 @@ def triggers(resolved: pd.DataFrame, preds: pd.DataFrame, *, strategy_ids: dict[
                   "kickoff": pd.Timestamp(r.kickoff).isoformat()} for r in rows.itertuples()]
         listings = [lid for g in games for lid in (g["listing_home"], g["listing_away"])]
         deadline = (rows["kickoff"].max() - cutoff).isoformat()
-        for variant, args in VARIANTS.items():
+        for variant in strategy_ids:
+            args = VARIANTS[variant]
             out.append({"venue": venue, "variant": variant, "deadline": deadline, "data": {
                 "strategy_id": int(strategy_ids[variant]), "strategy_type": "python", "strategy_class": STRATEGY_CLASS,
                 "mode": "paper", "research_commit": research_commit, "instance_type": INSTANCE, "listings": listings,
@@ -224,6 +227,8 @@ def main() -> None:
     ap.add_argument("--end", required=True)
     ap.add_argument("--anchor-strategy", type=int, required=True)
     ap.add_argument("--raw-strategy", type=int, required=True)
+    ap.add_argument("--anchor-tp-strategy", type=int, help="the anchored entries with take-profit exits")
+    ap.add_argument("--raw-tp-strategy", type=int, help="the raw entries with take-profit exits")
     ap.add_argument("--research-commit", required=True)
     ap.add_argument("--venues", nargs="+", default=list(EXCHANGES), choices=list(EXCHANGES))
     ap.add_argument("--bankroll", type=float, default=10_000.0)
@@ -245,7 +250,8 @@ def main() -> None:
                  if not ((legs["game_id"] == g) & (legs["venue"] == v)).any()]
     resolved, missing = resolve(legs, RegistryClient())
     checked, flagged = cross_check(resolved, leg_mids(resolved), preds)
-    out = triggers(checked, preds, strategy_ids={"anchor": a.anchor_strategy, "raw": a.raw_strategy},
+    ids = {"anchor": a.anchor_strategy, "raw": a.raw_strategy, "anchor_tp": a.anchor_tp_strategy, "raw_tp": a.raw_tp_strategy}
+    out = triggers(checked, preds, strategy_ids={k: v for k, v in ids.items() if v is not None},
                    research_commit=a.research_commit, bankroll_usd=a.bankroll, now=now,
                    cutoff=pd.Timedelta(minutes=a.cutoff_minutes))
 

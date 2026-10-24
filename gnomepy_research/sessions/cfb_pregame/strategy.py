@@ -12,7 +12,12 @@ least min_edge after the venue's taker fee, sized by the Kelly criterion on kell
 max_game_stake_usd for the game or max_total_stake_usd for the slate; an order walks the asks only as deep as every
 share still clears the threshold, as an IOC limit at the deepest level it costed (decision.py, as in cs2_series). It
 holds one side per game, stops adding once the price has fallen adverse_move below its average entry, and holds to
-settlement. Once every game is past its cutoff and no order is in flight it ends itself, keeping what it holds.
+settlement, or, with take_profit, until the market pays what the model thinks the side is worth: once a held side's
+best bid less the taker fee reaches its fair price (the latest before kickoff, frozen from kickoff on), it sells into
+the bids that clear that price, and never buys that game again. The whole modelled edge is then banked, and holding on
+would be a bet on the game with no edge left; an underdog that goes ahead in the game is sold into the rally instead
+of needing the upset to finish. Once every game is past its cutoff and no order is in flight it ends itself, keeping
+what it holds; with take_profit it stays to manage exits until nothing is held or manage_hours after the last kickoff.
 
 It stays out of a game on a stale prediction, an uncertain QB, a bottom-35 team in weeks 5-9, an FBS newcomer, a wide
 or one-sided book, or a listing with no fee schedule. Each prediction is recorded once against the market (the
@@ -35,7 +40,7 @@ from gnomepy.java.schemas import Schema
 from gnomepy.registry import RegistryClient
 
 from gnomepy_research.fees import registry_fee_rates
-from gnomepy_research.sessions.cfb_pregame.decision import Level, choose_entry, cost_per_share, kelly_take
+from gnomepy_research.sessions.cfb_pregame.decision import Level, choose_entry, cost_per_share, kelly_take, taker_fee
 from gnomepy_research.sessions.cfb_pregame.prediction_feed import PREDICTIONS, PredictionFeed
 from gnomepy_research.sessions.cfb_pregame.pricing import anchored_fair, skip_reason, twin_mid
 
@@ -57,6 +62,7 @@ class _Leg:
     lot: int
     min_size: int
     asks: list[Level] = field(default_factory=list)
+    bids: list[Level] = field(default_factory=list)
     best_bid: float = math.nan
     in_flight: bool = False
     last_limit: float = 0.0
@@ -72,6 +78,9 @@ class _Game:
     legs: tuple[_Leg, _Leg]
     kickoff_ns: int
     marked_at: set[int] = field(default_factory=set)
+    # Each side's latest fair price before kickoff, and whether a take-profit exit has been sent for the game.
+    fair: dict[int, float] = field(default_factory=dict)
+    exited: bool = False
 
 
 class CFBPregame(Strategy):
@@ -95,6 +104,8 @@ class CFBPregame(Strategy):
         min_order_usd: smallest order worth sending.
         reload_minutes: how often to re-read the predictions (0 = once, for replays).
         predictions_source: the DatasetStore table, or a parquet extract of it.
+        take_profit: sell a held side once its bid less the taker fee reaches its fair price (see above).
+        manage_hours: with take_profit, how long after the last kickoff the session keeps managing exits.
     """
 
     def __init__(
@@ -121,6 +132,8 @@ class CFBPregame(Strategy):
         reload_minutes: float = 5.0,
         predictions_source: str = PREDICTIONS,
         processing_time_ns: int = 0,
+        take_profit: bool = False,
+        manage_hours: float = 5.0,
     ):
         if bankroll_usd <= 0:
             raise ValueError(f"bankroll_usd must be positive, got {bankroll_usd}")
@@ -144,6 +157,8 @@ class CFBPregame(Strategy):
         self.min_order_usd = min_order_usd
         self.book_depth = book_depth
         self._processing_time_ns = processing_time_ns
+        self.take_profit = bool(take_profit)
+        self.manage_ns = int(manage_hours * 60 * MINUTE_NS)
         self._fee_rates = registry_fee_rates(self)
         self._metrics_ready = False
         self._no_fees: set[int] = set()
@@ -192,7 +207,12 @@ class CFBPregame(Strategy):
                    for name in ("timestamp", "game_id", "p_model", "market_mid", "fair", "spread_home", "spread_away",
                                 "skipped")}
         marks.freeze()
-        self._orders, self._marks = orders, marks
+        exits = self.metrics.create_stream("cfb_pregame_exits")
+        self._x = {name: (exits.add_long_column(name) if name in ("timestamp", "game_id", "side")
+                          else exits.add_double_column(name))
+                   for name in ("timestamp", "game_id", "side", "fair", "best_bid", "limit_price", "shares", "avg_entry")}
+        exits.freeze()
+        self._orders, self._marks, self._exits = orders, marks, exits
         self._metrics_ready = True
 
     def _taker_rate(self, leg: _Leg) -> float:
@@ -236,7 +256,9 @@ class CFBPregame(Strategy):
         leg = self._games[game_id].legs[side]
         leg.asks = [Level(data.ask_price(i) / PRICE_SCALE, data.ask_size(i) / SIZE_SCALE)
                     for i in range(self.book_depth) if data.ask_size(i) > 0]
-        leg.best_bid = data.bid_price(0) / PRICE_SCALE if data.bid_size(0) > 0 else math.nan
+        leg.bids = [Level(data.bid_price(i) / PRICE_SCALE, data.bid_size(i) / SIZE_SCALE)
+                    for i in range(self.book_depth) if data.bid_size(i) > 0]
+        leg.best_bid = leg.bids[0].price if leg.bids else math.nan
         return self._evaluate(self._games[game_id], data.event_timestamp)
 
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
@@ -249,30 +271,47 @@ class CFBPregame(Strategy):
         known = self._feed.kickoffs()
         return {g: known.get(g, game.kickoff_ns) - self.cutoff_ns for g, game in self._games.items()}
 
+    def _held(self, game: _Game) -> list[tuple[int, float, float]]:
+        """(side, filled shares, average entry) for each side the game holds."""
+        out = []
+        for side, leg in enumerate(game.legs):
+            pos = self.positions.get_position(leg.exchange_id, leg.security_id)
+            if pos and pos.net_quantity > 0:
+                out.append((side, pos.net_quantity / SIZE_SCALE, pos.avg_entry_price / PRICE_SCALE))
+        return out
+
+    def _finished(self, now_ns: int, cutoffs: dict[int, int]) -> str | None:
+        """Why the session is done now, or None."""
+        last = max(cutoffs.values())
+        if not self.take_profit:
+            return "slate reached its last entry cutoff" if now_ns >= last else None
+        if now_ns >= last + self.cutoff_ns + self.manage_ns:
+            return "exit window closed"
+        if now_ns >= last and not any(self._held(g) for g in self._games.values() if g.game_id not in self._no_fees):
+            return "slate is past kickoff with nothing held"
+        return None
+
     def _evaluate(self, game: _Game, now_ns: int) -> list[Intent]:
         cutoffs = self._cutoffs()
-        if now_ns >= max(cutoffs.values()):
+        done = self._finished(now_ns, cutoffs)
+        if done is not None:
             if not self.is_exiting and not any(leg.in_flight for g in self._games.values() for leg in g.legs):
-                self.request_exit("slate reached its last entry cutoff")
+                self.request_exit(done)
             return []
-        if now_ns >= cutoffs[game.game_id] or any(leg.in_flight for leg in game.legs):
+        if any(leg.in_flight for leg in game.legs):
             return []
-        pred = self._feed.latest(game.game_id, now_ns)
-        if pred is None or not self._has_fees(game):
+        before = now_ns < cutoffs[game.game_id]
+        quote = self._quote(game, now_ns) if before else None
+        if self.take_profit and game.game_id not in self._no_fees:
+            sell = self._take_profit(game, now_ns)
+            if sell:
+                return sell
+        if quote is None or game.exited:
             return []
-        home, away = game.legs
-        m = twin_mid(home.best_bid, home.best_ask, away.best_bid, away.best_ask)
-        if math.isnan(m):
-            return []
-        spreads = (home.best_ask - home.best_bid, away.best_ask - away.best_bid)
-        fair_home = anchored_fair(pred.p_home, m, self.anchor_weight)
-        reason = skip_reason(pred, now_ns, **self._rules) or (
-            "wide spread" if max(spreads) > self.max_spread + 1e-12 else None)
-        if pred.at_ns not in game.marked_at:
-            game.marked_at.add(pred.at_ns)
-            self._mark(now_ns, game.game_id, pred.p_home, m, fair_home, spreads, reason is not None)
+        pred, m, spreads, fair_home, reason = quote
         if reason is not None:
             return []
+        home, away = game.legs
 
         states = [self._leg_state(leg) for leg in game.legs]
         held = [side for side, (filled, committed, _) in enumerate(states) if filled > 0 or committed > 0]
@@ -304,6 +343,55 @@ class CFBPregame(Strategy):
         return [Intent(leg.exchange_id, leg.security_id, take_side=Side.BID, take_size=size,
                        take_order_type=OrderType.LIMIT, take_limit_price=round(take.limit_price * PRICE_SCALE))]
 
+    def _quote(self, game: _Game, now_ns: int):
+        """(prediction, market mid, spreads, fair home, skip reason) for a game before its cutoff, recording the game's
+        fair prices and a mark; None when it can't be priced."""
+        pred = self._feed.latest(game.game_id, now_ns)
+        if pred is None or not self._has_fees(game):
+            return None
+        home, away = game.legs
+        m = twin_mid(home.best_bid, home.best_ask, away.best_bid, away.best_ask)
+        if math.isnan(m):
+            return None
+        spreads = (home.best_ask - home.best_bid, away.best_ask - away.best_bid)
+        fair_home = anchored_fair(pred.p_home, m, self.anchor_weight)
+        game.fair = {HOME: fair_home, AWAY: 1 - fair_home}
+        reason = skip_reason(pred, now_ns, **self._rules) or (
+            "wide spread" if max(spreads) > self.max_spread + 1e-12 else None)
+        if pred.at_ns not in game.marked_at:
+            game.marked_at.add(pred.at_ns)
+            self._mark(now_ns, game.game_id, pred.p_home, m, fair_home, spreads, reason is not None)
+        return pred, m, spreads, fair_home, reason
+
+    def _take_profit(self, game: _Game, now_ns: int) -> list[Intent]:
+        """An IOC sell of a held side into the bids that, less the taker fee, pay at least its fair price."""
+        for side, held, avg in self._held(game):
+            fair = game.fair.get(side)
+            if fair is None:
+                continue
+            leg = game.legs[side]
+            rate = self._taker_rate(leg)
+            paying = [lv for lv in leg.bids if lv.price - taker_fee(lv.price, rate) >= fair - 1e-12]
+            if not paying:
+                continue
+            shares, limit = 0.0, paying[0].price
+            for lv in paying:
+                take = min(lv.size, held - shares)
+                if take <= 0:
+                    break
+                shares, limit = shares + take, lv.price
+            lot = leg.lot / SIZE_SCALE
+            shares = math.floor(shares / lot + 1e-9) * lot
+            size = round(shares * SIZE_SCALE)
+            if size <= 0 or size < leg.min_size:
+                continue
+            leg.in_flight = True
+            game.exited = True
+            self._exit(now_ns, game.game_id, side, fair, leg.best_bid, limit, shares, avg)
+            return [Intent(leg.exchange_id, leg.security_id, take_side=Side.ASK, take_size=size,
+                           take_order_type=OrderType.LIMIT, take_limit_price=round(limit * PRICE_SCALE))]
+        return []
+
     # ---- metrics --------------------------------------------------------------------------
 
     def _mark(self, now_ns: int, game_id: int, p_model: float, m: float, fair: float, spreads: tuple[float, float],
@@ -320,6 +408,22 @@ class CFBPregame(Strategy):
         buf.set_double(c["spread_home"], spreads[0])
         buf.set_double(c["spread_away"], spreads[1])
         buf.set_long(c["skipped"], int(skipped))
+        buf.commit()
+
+    def _exit(self, now_ns: int, game_id: int, side: int, fair: float, best_bid: float, limit: float, shares: float,
+              avg_entry: float) -> None:
+        if not self._metrics_ready:
+            return
+        buf, c = self._exits, self._x
+        buf.begin()
+        buf.set_long(c["timestamp"], now_ns)
+        buf.set_long(c["game_id"], game_id)
+        buf.set_long(c["side"], side)
+        buf.set_double(c["fair"], fair)
+        buf.set_double(c["best_bid"], best_bid)
+        buf.set_double(c["limit_price"], limit)
+        buf.set_double(c["shares"], shares)
+        buf.set_double(c["avg_entry"], avg_entry)
         buf.commit()
 
     def _order(self, now_ns: int, game_id: int, entry, take, p_model: float, m: float, spread: float,
