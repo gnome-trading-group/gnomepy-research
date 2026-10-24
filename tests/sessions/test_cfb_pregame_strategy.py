@@ -351,3 +351,12 @@ def test_an_order_records_what_it_was_priced_on(make):
 def test_bad_settings_are_refused(make, kw):
     with pytest.raises(ValueError):
         make(**kw)
+
+
+def test_no_adding_after_the_price_falls_adverse_move_below_the_average_entry(make):
+    """A big pre-kickoff move is usually news the model cannot see (a QB ruled out after the last refresh)."""
+    s = make(rows=[_row(T0, 1, p_home=0.80), _row(T0, 2)])
+    s.positions.fill(101, shares=10, price=0.60)
+    assert _both(s, 120, home=([(0.50, 1000)], [(0.52, 1000)]), away=([(0.48, 1000)], [(0.50, 1000)])) == [], \
+        "0.52 is 8c under the 0.60 entry"
+    assert len(_both(s, 110, home=([(0.53, 1000)], [(0.55, 1000)]), away=([(0.45, 1000)], [(0.47, 1000)]))) == 1
