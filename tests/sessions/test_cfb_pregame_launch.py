@@ -249,3 +249,13 @@ def test_pmus_mid_is_in_long_terms():
                            "offers": [{"px": {"value": "0.34"}, "qty": "5"}]}}
     assert launch.pmus_mid(body) == pytest.approx(0.32)
     assert launch.pmus_mid({"marketData": {"bids": [], "offers": []}}) is None
+
+
+def test_a_zero_cutoff_trades_up_to_kickoff():
+    now = KICK - pd.Timedelta(minutes=20)
+    out = launch.triggers(_resolved(), _preds(), strategy_ids={"anchor": 7, "raw": 8}, research_commit="abc",
+                          bankroll_usd=10_000.0, now=now, cutoff=pd.Timedelta(0))
+    kalshi = [t for t in out if t["venue"] == "kalshi"][0]
+    assert [g["game_id"] for g in kalshi["data"]["strategy_args"]["games"]] == [1, 2], "game 1 kicks off in 20 minutes"
+    assert kalshi["data"]["strategy_args"]["entry_cutoff_minutes"] == 0
+    assert kalshi["deadline"] == (KICK + pd.Timedelta(hours=1)).isoformat()

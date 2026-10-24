@@ -37,6 +37,10 @@ There is one session per variant per venue, over the whole slate:
 **Universe:** FBS vs FBS games in `cfb_pregame_predictions` whose two listings resolve in the registry, with
 consistent orientation (`launch.py`'s cross-check).
 
+**Amended Oct 24, 15:25 UTC, before any session launched (the user's call):** entries run up to each kickoff
+(`entry_cutoff_minutes` 0), not 30 minutes before. The model is C2 (B0 + prior bundle), the best model in the
+2025–26 error lab, built as `live/picks.py` builds it.
+
 ## Endpoints, per variant × venue and pooled
 
 1. **Primary: the live information weight w.**
