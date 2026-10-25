@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gnomepy_research.models.cs2.bayes.data import build_fit_data, prepare_maps
+from gnomepy_research.models.cs2.bayes.data import STAT_NAMES, build_fit_data, prepare_maps
 from gnomepy_research.models.cs2.bayes.model import BayesSeriesConfig, build_model, posterior_from, sample
 from gnomepy_research.models.cs2.hltv.bayes_series import RankStrength
 
@@ -36,9 +36,15 @@ def _world(n_teams=6, n_days=60, seed=0):
             for team, five in ((a + 1, fa), (b + 1, fb)):
                 mean = np.mean([skill[p] for p in five])
                 for slot, p in enumerate(five):
-                    lineups.append({"match_id": mid, "team_id": team, "player_id": p, "slot": slot, "is_standin": False})
+                    lineups.append({"match_id": mid, "team_id": team, "player_id": p, "slot": slot, "is_standin": False,
+                                    "is_awp": slot == 0, "is_igl": slot == 4})
+                    rel = skill[p] - mean
+                    # the AWPer's damage runs high for the role, not the skill
                     stats.append({"match_id": mid, "map_name": "de_nuke", "player_id": p, "team_id": team, "side": "all",
-                                  "rating": 1.05 + 0.3 * (skill[p] - mean) + rng.normal(0, 0.05)})
+                                  "rating": 1.05 + 0.3 * rel + rng.normal(0, 0.05),
+                                  "eadr": 75 + 40 * rel + 8 * (slot == 0) + rng.normal(0, 4),
+                                  "ekast": 70 + 20 * rel + rng.normal(0, 4),
+                                  "ek": rng.poisson(2 + 3 * max(rel, -0.5)), "ed": rng.poisson(2)})
     return pd.DataFrame(hist), pd.DataFrame(lineups), pd.DataFrame(stats), skill
 
 
@@ -90,3 +96,31 @@ def test_fit_recovers_player_skill_order(debut_prior):
     within = np.corrcoef(est - est.groupby(team).transform("mean"), truth - truth.groupby(team).transform("mean"))[0, 1]
     assert within > 0.6, "ratings against teammates should order players inside a fixed five"
     assert post.price(6, list(range(25, 30)), RANKS(6, DAY0), 1, list(range(0, 5)), RANKS(1, DAY0)) > 0.6
+
+
+def test_several_stats_are_standardized_within_team_and_carry_roles():
+    hist, lineups, stats, _ = _world(n_days=20)
+    maps = prepare_maps(hist, lineups)
+    data = build_fit_data(maps, stats, RANKS, DAY0, DAY0 + pd.Timedelta(days=20), STAT_NAMES)
+    assert data.rating_dev.shape == (len(data.rating_player), len(STAT_NAMES))
+    np.testing.assert_allclose(data.rating_dev.std(axis=0, ddof=1), 1.0, rtol=1e-6)
+    lineup = pd.Series([tuple(sorted(r)) for r in data.rating_lineup])
+    sums = pd.DataFrame(data.rating_dev).groupby(lineup).sum().abs().to_numpy()
+    assert sums.max() < 1e-9
+    assert data.rating_awp.sum() == data.rating_igl.sum() == len(data.rating_player) / 5
+
+
+def test_multi_stat_fit_recovers_player_skill_order():
+    hist, lineups, stats, skill = _world()
+    maps = prepare_maps(hist, lineups)
+    cfg = BayesSeriesConfig(draws=200, tune=300, chains=2, stats=STAT_NAMES, roles=True)
+    data = build_fit_data(maps, stats, RANKS, DAY0, DAY0 + pd.Timedelta(days=60), cfg.stats)
+    idata = sample(build_model(data, cfg), cfg)
+    post = posterior_from(idata, data, cfg, DAY0 + pd.Timedelta(days=60))
+    est = pd.Series(post.theta.mean(axis=0), index=post.player_ids)
+    truth = pd.Series(skill).reindex(est.index)
+    team = est.index // 5
+    within = np.corrcoef(est - est.groupby(team).transform("mean"), truth - truth.groupby(team).transform("mean"))[0, 1]
+    assert within > 0.6
+    awp_eadr = float(idata.posterior["role"].mean(("chain", "draw"))[0, STAT_NAMES.index("eadr")])
+    assert awp_eadr > 0, "the AWPer's role damage belongs to the role offset, not to skill"

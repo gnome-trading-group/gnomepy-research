@@ -2,8 +2,8 @@
 Model inputs for one fit window, point in time: only maps dated before the window's end are used.
 
 Each map contributes its regulation rounds (an overtime map counts as 12-12 of 24) between the two announced
-lineups, and each player's map rating relative to his teammates' mean on that map. Skills live on a monthly grid:
-a map indexes the month it was played in.
+lineups, and each player's map stats relative to their teammates' mean on that map (the HLTV rating alone by
+default; any of STAT_NAMES). Skills live on a monthly grid: a map indexes the month it was played in.
 
 A debutant is a player whose first map anywhere in `maps` falls inside the window. Players appearing in the data's
 first DEBUT_GRACE_DAYS are never debutants: the data starting is not the player starting.
@@ -19,6 +19,8 @@ import pandas as pd
 from gnomepy_research.models.cs2.hltv.bayes_series import LINEUP_SIZE, RankStrength, home_regions
 
 DEBUT_GRACE_DAYS = 60
+# eadr/ekast are HLTV's economy-adjusted ADR and KAST; entry is opening kills minus opening deaths per round.
+STAT_NAMES = ("rating", "eadr", "ekast", "entry")
 
 
 @dataclass
@@ -48,7 +50,9 @@ class FitData:
     rating_player: np.ndarray    # (R,)
     rating_month: np.ndarray     # (R,)
     rating_lineup: np.ndarray    # (R, 5) the player's own lineup
-    rating_dev: np.ndarray       # (R,) rating minus his team's mean on that map
+    rating_dev: np.ndarray       # (R,) rating minus the team's mean on that map; with several stats, (R, K) in sd units
+    rating_awp: np.ndarray       # (R,) the player was the team's AWPer on that map
+    rating_igl: np.ndarray       # (R,) the player was the team's in-game leader
 
     @property
     def n_players(self) -> int:
@@ -63,6 +67,12 @@ def prepare_maps(history: pd.DataFrame, lineups: pd.DataFrame) -> pd.DataFrame:
              for k, g in lineups.groupby(["match_id", "team_id"])}
     h["lineup_a"] = [fives.get((m, t)) for m, t in zip(h.match_id, h.team_a_id)]
     h["lineup_b"] = [fives.get((m, t)) for m, t in zip(h.match_id, h.team_b_id)]
+    for role in ("awp", "igl"):
+        col = f"is_{role}"
+        flagged = (lineups[lineups[col].fillna(False).astype(bool)] if col in lineups else lineups.iloc[:0])
+        holders = {k: set(g.player_id.astype(int)) for k, g in flagged.groupby(["match_id", "team_id"])}
+        h[f"{role}_a"] = [holders.get((m, t), set()) for m, t in zip(h.match_id, h.team_a_id)]
+        h[f"{role}_b"] = [holders.get((m, t), set()) for m, t in zip(h.match_id, h.team_b_id)]
     full = h.lineup_a.map(lambda x: x is not None and len(x) == LINEUP_SIZE) \
         & h.lineup_b.map(lambda x: x is not None and len(x) == LINEUP_SIZE)
     h = h[full].copy()
@@ -74,7 +84,7 @@ def prepare_maps(history: pd.DataFrame, lineups: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_fit_data(maps: pd.DataFrame, player_stats: pd.DataFrame, rank_strength: RankStrength,
-                   start: pd.Timestamp, end: pd.Timestamp) -> FitData:
+                   start: pd.Timestamp, end: pd.Timestamp, stats: tuple[str, ...] = ("rating",)) -> FitData:
     """Inputs from the maps played in [start, end); `maps` comes from prepare_maps."""
     tr = maps[(maps.day >= start) & (maps.day < end)].sort_values(["day", "match_id"]).reset_index(drop=True)
     months = sorted(tr.month.unique())
@@ -103,7 +113,7 @@ def build_fit_data(maps: pd.DataFrame, player_stats: pd.DataFrame, rank_strength
     home = home_regions(tr.drop_duplicates("match_id"))
     sidx = {m: i for i, m in enumerate(tr.match_id.unique())}
 
-    ratings = _rating_rows(tr, player_stats, pidx)
+    ratings = _rating_rows(tr, player_stats, pidx, stats)
     return FitData(
         months=months,
         player_ids=np.array(players, dtype=np.int64),
@@ -130,19 +140,38 @@ def build_fit_data(maps: pd.DataFrame, player_stats: pd.DataFrame, rank_strength
         rating_player=ratings.player_id.map(pidx).to_numpy(),
         rating_month=ratings.month.map(midx).to_numpy(),
         rating_lineup=np.array([[pidx[p] for p in five] for five in ratings.own_lineup], dtype=np.int64).reshape(-1, LINEUP_SIZE),
-        rating_dev=ratings.dev.to_numpy(float),
+        rating_dev=ratings["dev_rating"].to_numpy(float) if stats == ("rating",)
+        else ratings[[f"dev_{k}" for k in stats]].to_numpy(float),
+        rating_awp=ratings.awp.to_numpy(float),
+        rating_igl=ratings.igl.to_numpy(float),
     )
 
 
-def _rating_rows(tr: pd.DataFrame, player_stats: pd.DataFrame, pidx: dict[int, int]) -> pd.DataFrame:
-    """One row per lineup player per map with an all-sides rating: the rating minus his team's mean on the map."""
-    stats = player_stats[(player_stats.side == "all") & player_stats.rating.notna()]
-    r = stats[["match_id", "map_name", "player_id", "team_id", "rating"]].merge(
-        tr[["match_id", "map_name", "team_a_id", "team_b_id", "lineup_a", "lineup_b", "month"]], on=["match_id", "map_name"])
+def _rating_rows(tr: pd.DataFrame, player_stats: pd.DataFrame, pidx: dict[int, int],
+                 stats: tuple[str, ...] = ("rating",)) -> pd.DataFrame:
+    """
+    One row per lineup player per map with all-sides stats, each minus the team's mean on the map.
+
+    With several stats each deviation is divided by its spread in the window, so one prior scale serves all of them.
+    """
+    ps = player_stats[player_stats.side == "all"].copy()
+    if "entry" in stats:
+        rounds = tr.assign(n=tr.team_a_score + tr.team_b_score).set_index(["match_id", "map_name"]).n
+        ps["entry"] = (ps.ek - ps.ed) / ps.set_index(["match_id", "map_name"]).index.map(rounds).to_numpy()
+    ps = ps.dropna(subset=list(stats))
+    r = ps[["match_id", "map_name", "player_id", "team_id", *stats]].merge(
+        tr[["match_id", "map_name", "team_a_id", "team_b_id", "lineup_a", "lineup_b", "month",
+            "awp_a", "awp_b", "igl_a", "igl_b"]], on=["match_id", "map_name"])
     r = r[(r.team_id == r.team_a_id) | (r.team_id == r.team_b_id)].copy()
     r["own_lineup"] = [a if t == ta else b for t, ta, a, b in zip(r.team_id, r.team_a_id, r.lineup_a, r.lineup_b)]
     r = r[[int(p) in five for p, five in zip(r.player_id, r.own_lineup)]]
     r = r[r.player_id.astype(int).isin(pidx)].copy()
     r["player_id"] = r.player_id.astype(int)
-    r["dev"] = r.rating - r.groupby(["match_id", "map_name", "team_id"]).rating.transform("mean")
+    for role in ("awp", "igl"):
+        r[role] = [p in (ha if t == ta else hb)
+                   for p, t, ta, ha, hb in zip(r.player_id, r.team_id, r.team_a_id, r[f"{role}_a"], r[f"{role}_b"])]
+    for k in stats:
+        r[f"dev_{k}"] = r[k] - r.groupby(["match_id", "map_name", "team_id"])[k].transform("mean")
+        if stats != ("rating",):
+            r[f"dev_{k}"] /= r[f"dev_{k}"].std() or 1.0
     return r.reset_index(drop=True)

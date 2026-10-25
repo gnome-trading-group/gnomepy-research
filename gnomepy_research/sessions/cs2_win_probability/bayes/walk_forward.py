@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.models.cs2.bayes.data import prepare_maps
+from gnomepy_research.models.cs2.bayes.data import STAT_NAMES, prepare_maps
 from gnomepy_research.models.cs2.bayes.model import BayesSeriesConfig, fit_month
 from gnomepy_research.models.cs2.hltv.bayes_series import RankStrength, SeriesBlend
 
@@ -51,7 +51,8 @@ def fit(data_dir: Path, out_dir: Path, first: str, last: str, cfg: BayesSeriesCo
     history = pd.read_parquet(data_dir / "cs2_match_history.parquet")
     maps = prepare_maps(history, pd.read_parquet(data_dir / "cs2_match_lineups.parquet"))
     stats = pd.read_parquet(data_dir / "cs2_player_map_stats.parquet",
-                            columns=["match_id", "map_name", "player_id", "team_id", "side", "rating"])
+                            columns=["match_id", "map_name", "player_id", "team_id", "side", "rating", "eadr", "ekast",
+                                     "ek", "ed"])
     ranks = RankStrength(pd.read_parquet(data_dir / "cs2_team_rankings.parquet"))
     won = maps.groupby("match_id").team_a_won.agg(lambda w: int(w.sum() * 2 > len(w)))
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -122,14 +123,17 @@ def main() -> None:
     f.add_argument("--no-debut-prior", dest="debut_prior", action="store_false",
                    help="give debutants the regular prior (the model before Oct 2026)")
     f.add_argument("--step", choices=sorted(STEPS), default="month", help="refit every month, week or day")
+    f.add_argument("--stats", default="rating", help=f"comma-separated player stats in the skill likelihood, of {STAT_NAMES}")
+    f.add_argument("--roles", action="store_true", help="per-stat AWPer and in-game-leader offsets")
     s = sub.add_parser("score")
     s.add_argument("out_dir", type=Path)
     s.add_argument("premap_prices", type=Path)
     s.add_argument("confirm_from")
     args = parser.parse_args()
     if args.command == "fit":
-        fit(args.data_dir, args.out_dir, args.first, args.last, BayesSeriesConfig(seed=args.seed, debut_prior=args.debut_prior),
-            args.step)
+        cfg = BayesSeriesConfig(seed=args.seed, debut_prior=args.debut_prior, stats=tuple(args.stats.split(",")),
+                                roles=args.roles)
+        fit(args.data_dir, args.out_dir, args.first, args.last, cfg, args.step)
     else:
         score(args.out_dir, args.premap_prices, args.confirm_from)
 
