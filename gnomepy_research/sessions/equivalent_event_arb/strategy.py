@@ -222,8 +222,8 @@ class EquivalentEventArb(TargetPortfolioStrategy):
             return
         self._maker_prices.begin()
         self._maker_prices.set_long(self._p_ts, timestamp)
-        self._maker_prices.set_int(self._p_exchange, listing[0])
-        self._maker_prices.set_int(self._p_security, listing[1])
+        self._maker_prices.set_int(self._p_exchange, listing.exchange_id)
+        self._maker_prices.set_int(self._p_security, listing.security_id)
         self._maker_prices.set_double(self._p_bid, best_bid / Scales.PRICE)
         self._maker_prices.set_double(self._p_ask, best_ask / Scales.PRICE)
         self._maker_prices.set_double(self._p_price, price / Scales.PRICE)
@@ -256,7 +256,7 @@ class EquivalentEventArb(TargetPortfolioStrategy):
         if listing not in self._portfolio:
             self._debug(
                 report.timestamp_recv, "FILL",
-                eid=listing[0], sid=listing[1],
+                eid=listing.exchange_id, sid=listing.security_id,
                 price=round(report.fill_price / Scales.PRICE, 4),
                 qty=round(report.filled_qty / Scales.SIZE, 4),
                 phase=self._portfolio.phase.name,
@@ -274,7 +274,7 @@ class EquivalentEventArb(TargetPortfolioStrategy):
                 break
         self._debug(
             report.timestamp_recv, "FILL",
-            eid=listing[0], sid=listing[1],
+            eid=listing.exchange_id, sid=listing.security_id,
             price=round(report.fill_price / Scales.PRICE, 4),
             qty=round(report.filled_qty / Scales.SIZE, 4),
             cum_qty=round(cum_qty / Scales.SIZE, 4),
@@ -341,7 +341,7 @@ class EquivalentEventArb(TargetPortfolioStrategy):
                         )
                     self._debug(
                         timestamp, "PRICE_MODEL",
-                        eid=lst[0], sid=lst[1],
+                        eid=lst.exchange_id, sid=lst.security_id,
                         best_bid=round(best_bid / Scales.PRICE, 4),
                         best_ask=round(best_ask / Scales.PRICE, 4),
                         price=round(price / Scales.PRICE, 4),
@@ -356,7 +356,7 @@ class EquivalentEventArb(TargetPortfolioStrategy):
 
             self._debug(
                 timestamp, "TARGET_SET",
-                eid=lst[0], sid=lst[1],
+                eid=lst.exchange_id, sid=lst.security_id,
                 qty=qty // Scales.SIZE,
                 price=round(price / Scales.PRICE, 4) if price else 0,
                 mode=order_mode.name,
@@ -583,7 +583,7 @@ class EquivalentEventArb(TargetPortfolioStrategy):
         parts = []
         for _, lst in pairing.legs:
             depth = self._depth_coverage.get_ask_depth(lst)
-            parts.append(f"({lst[0]},{lst[1]}):cheap_depth={depth:.2f}")
+            parts.append(f"({lst.exchange_id},{lst.security_id}):cheap_depth={depth:.2f}")
         print(f"[{timestamp}] {event}_COVERAGE pairing={pairing.index} {' | '.join(parts)}")
 
     def _log_fill_risk(self, timestamp: int, pairing: VenuePairing, event: str) -> None:
@@ -595,6 +595,6 @@ class EquivalentEventArb(TargetPortfolioStrategy):
             p_fill = self._fill_risk.get_fill_prob(lst)
             penalty = self._fill_risk.cost(lst, 0, Side.BID, 0)
             parts.append(
-                f"({lst[0]},{lst[1]}):spread={spread:.4f},p_fill={p_fill:.3f},penalty={penalty:.4f}"
+                f"({lst.exchange_id},{lst.security_id}):spread={spread:.4f},p_fill={p_fill:.3f},penalty={penalty:.4f}"
             )
         print(f"[{timestamp}] {event} pairing={pairing.index} {' | '.join(parts)}")

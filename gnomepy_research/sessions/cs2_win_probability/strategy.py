@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy import ExecutionReport, Intent, OrderType, Scales, Side, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 from gnomepy.registry import RegistryClient
 
 from gnomepy.data import DatasetStore, resolve_artifact_path
@@ -59,7 +59,7 @@ class Book:
         return bool(self.bids) and bool(self.asks)
 
 
-def _read_book(data: Schema, depth: int = 3) -> Book:
+def _read_book(data: StreamRecord, depth: int = 3) -> Book:
     bids = [BookLevel(data.bid_price(i), data.bid_size(i)) for i in range(depth) if data.bid_size(i) > 0]
     asks = [BookLevel(data.ask_price(i), data.ask_size(i)) for i in range(depth) if data.ask_size(i) > 0]
     return Book(bids=bids, asks=asks, last_ts=data.event_timestamp)
@@ -202,6 +202,7 @@ class CS2WinProbability(Strategy):
         yes_listings = registry.get_listing(listing_id=listing_id_yes)
         if not yes_listings:
             raise ValueError(f"No listing found for listing_id_yes={listing_id_yes}")
+        self._yes_listing_id: int = listing_id_yes
         self._yes_eid: int = yes_listings[0].exchange_id
         self._yes_sid: int = yes_listings[0].security_id
 
@@ -393,8 +394,8 @@ class CS2WinProbability(Strategy):
         buf.freeze()
         self._metrics_buf = buf
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
-        if data.exchange_id != self._yes_eid or data.security_id != self._yes_sid:
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        if self.streams.listing_id(data.stream_id) != self._yes_listing_id:
             return []
 
         self._book_yes = _read_book(data)

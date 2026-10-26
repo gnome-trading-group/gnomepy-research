@@ -97,7 +97,7 @@ class FeeCost:
         pass
 
     def cost(self, listing: Listing, price: int, side: Side, qty: int) -> float:
-        taker_rate, maker_rate = self._fee_rates(listing)
+        taker_rate, maker_rate = self._fee_rates(listing.listing_id)
         rate = maker_rate if self._maker else taker_rate
         if rate == 0.0:
             return 0.0

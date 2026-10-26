@@ -1,0 +1,28 @@
+{
+  "backtest_id": "cs2-series-20261026-132947-45af",
+  "duration_seconds": 32280.0,
+  "market_record_count": 540,
+  "intent_record_count": 93,
+  "fill_count": 38,
+  "total_volume": 5299.79,
+  "total_notional": 1716.99749985905,
+  "final_position": NaN,
+  "final_positions": {
+    "1744070": 5299.79,
+    "1744069": 0.0
+  },
+  "total_fees": 80.229,
+  "final_pnl": -631.2726998590501,
+  "final_pnl_by_symbol": {
+    "1744070": -631.2726998590501,
+    "1744069": 0.0
+  },
+  "max_drawdown": 2133.63249995905,
+  "sharpe": -0.03348248477947885,
+  "sortino": -0.04255845025493662,
+  "sharpe_std": 0.20937919765927027,
+  "pct_positive_buckets": 0.6,
+  "oms_rejects": {},
+  "oms_reject_count": 0,
+  "warnings": []
+}

@@ -20,11 +20,17 @@ def _ts(offset_ns: int) -> pd.Timestamp:
     return pd.Timestamp("2024-01-15 10:00:00") + pd.Timedelta(nanoseconds=offset_ns)
 
 
+def _listing_id(row: dict) -> int:
+    """Results frames key listings by listing id; these fixtures name a listing by its venue's ids, one per pair."""
+    return row["exchange_id"] * 1_000_000 + row["security_id"]
+
+
 def _market_df(rows: list[dict]) -> pd.DataFrame:
     records = [
         {
             "exchange_id": r["exchange_id"],
             "security_id": r["security_id"],
+            "listing_id": _listing_id(r),
             "mid_price": r["mid_price"],
         }
         for r in rows
@@ -39,6 +45,7 @@ def _exec_df(rows: list[dict]) -> pd.DataFrame:
         {
             "exchange_id": r["exchange_id"],
             "security_id": r["security_id"],
+            "listing_id": _listing_id(r),
             "side": r["side"],
             "fill_qty": r["fill_qty"],
             "fill_price": r["fill_price"],

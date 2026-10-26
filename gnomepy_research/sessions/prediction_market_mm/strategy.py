@@ -30,7 +30,7 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
 from gnomepy import ExecutionReport, Intent, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 from gnomepy.registry import RegistryClient
 
 from gnomepy.data import resolve_artifact_path
@@ -74,6 +74,7 @@ class PredictionMarketMaker(Strategy):
         listings = registry.get_listing(listing_id=listing_id)
         if not listings:
             raise ValueError(f"No listing found for listing_id={listing_id}")
+        self.listing_id: int = listing_id
         self.exchange_id: int = listings[0].exchange_id
         self.security_id: int = listings[0].security_id
 
@@ -116,15 +117,15 @@ class PredictionMarketMaker(Strategy):
         q = float(np.clip(position, -self._params.Q, self._params.Q))
         return int(np.argmin(np.abs(self._q_levels - q)))
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
         try:
             return self._on_market_data_impl(data)
         except Exception:
             traceback.print_exc()
             raise
 
-    def _on_market_data_impl(self, data: Schema) -> list[Intent]:
-        if data.security_id != self.security_id or data.exchange_id != self.exchange_id:
+    def _on_market_data_impl(self, data: StreamRecord) -> list[Intent]:
+        if self.streams.listing_id(data.stream_id) != self.listing_id:
             return []
 
         ts = data.event_timestamp

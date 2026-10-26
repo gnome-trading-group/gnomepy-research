@@ -10,14 +10,19 @@ Every strategy subclasses `gnomepy.Strategy` and implements two methods:
 
 ```python
 from gnomepy import ExecutionReport, Intent, Side, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
+from gnomepy_research.listing import Listing
 
 class MyStrategy(Strategy):
     def __init__(self, param_a: float = 1.0, param_b: int = 10):
         self.param_a = param_a
         self.param_b = param_b
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        listing_id = self.streams.listing_id(data.stream_id)
+        if listing_id is None:
+            return []
+        listing = Listing.from_streams(self.streams, listing_id)
         # Called on every market data tick.
         # Return a list of desired orders (Intents).
         return []
@@ -28,15 +33,24 @@ class MyStrategy(Strategy):
         return []
 ```
 
-**`Schema`** is the market data object (SBE-encoded MBP-10). Key accessors:
+**`StreamRecord`** is the market data object (for a listing's book, an SBE-encoded MBP-10). Key accessors:
 ```python
 data.bid_price(level)    # bid price at level 0-9 (scaled int)
 data.ask_price(level)    # ask price at level 0-9 (scaled int)
 data.bid_size(level)     # bid size at level 0-9
 data.ask_size(level)     # ask size at level 0-9
-data.exchange_id         # integer exchange identifier
-data.security_id         # integer security identifier
+data.stream_id           # the stream it came from: a listing's book, or a vendor feed
 data.event_timestamp     # nanoseconds since epoch
+```
+
+**Identity:** market data names only its stream. Orders, positions and execution reports name a listing by its
+venue's exchange and security ids. Key your state by **listing id**, and resolve both sides through `self.streams`:
+```python
+from gnomepy_research.listing import Listing
+
+listing_id = self.streams.listing_id(data.stream_id)        # None for a stream of no listing
+listing = Listing.from_streams(self.streams, listing_id)    # listing_id, exchange_id, security_id
+listing_id = self.streams.listing_id_for(report.exchange_id, report.security_id)   # an execution report's
 ```
 
 **Price scaling:** all prices in the engine are scaled integers. Divide by `Scales.PRICE` (≈ 1e9) to get a human-readable float. Never pass floats to `Intent` — the engine expects scaled integers. Example:
@@ -196,7 +210,11 @@ class MyStrategy(Strategy):
         self._fair_value = MicropriceFairValue()
         self._flow = EWMA(TradeImbalance(horizon_ns=1_000_000_000), alpha=0.95, warmup=30)
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        listing_id = self.streams.listing_id(data.stream_id)
+        if listing_id is None:
+            return []
+        listing = Listing.from_streams(self.streams, listing_id)
         self._fair_value.update(data.event_timestamp, data)
         self._flow.update(data.event_timestamp, data)
 
@@ -253,8 +271,8 @@ cross-asset signals — give each listing its own instance and combine them:
 ```python
 from gnomepy_research.signals import MicropriceFairValue, PerAsset
 
-btc_micro = PerAsset(MicropriceFairValue(), security_id=1)
-eth_micro = PerAsset(MicropriceFairValue(), security_id=2)
+btc_micro = PerAsset(MicropriceFairValue(), stream_id=self.streams.stream_id(btc_listing_id))
+eth_micro = PerAsset(MicropriceFairValue(), stream_id=self.streams.stream_id(eth_listing_id))
 spread = btc_micro - eth_micro
 
 # In on_market_data — feed every tick to each; PerAsset discards the ones it does not own
@@ -262,8 +280,6 @@ spread.update(data.event_timestamp, data)
 if spread.is_ready():
     value = spread.value()
 ```
-
-Pass `exchange_id=` as well when the same `security_id` trades on more than one venue.
 
 ---
 
@@ -274,11 +290,11 @@ The OMS is intent-based: you declare the **desired state** of your orders, not i
 ```python
 from gnomepy import Intent, Side, OrderType
 
-# Passive quote on both sides
+# Passive quote on both sides of a listing (resolved from the market data as above)
 return [
     Intent(
-        exchange_id=data.exchange_id,
-        security_id=data.security_id,
+        exchange_id=listing.exchange_id,
+        security_id=listing.security_id,
         bid_price=bid_price,          # scaled int
         bid_size=100_000,
         ask_price=ask_price,          # scaled int
@@ -289,8 +305,8 @@ return [
 # Aggressive (taker) order — BID buys, ASK sells
 return [
     Intent(
-        exchange_id=data.exchange_id,
-        security_id=data.security_id,
+        exchange_id=listing.exchange_id,
+        security_id=listing.security_id,
         take_side=Side.BID,                 # BID = buy
         take_size=100_000,
         take_order_type=OrderType.MARKET,
@@ -313,11 +329,11 @@ fields cancels everything on the listing.
 
 **Position access:**
 ```python
-pos = self.positions.get_position(exchange_id, security_id)
+pos = self.positions.get_position(listing.exchange_id, listing.security_id)
 net_qty = pos.net_quantity if pos is not None else 0
 
 # Effective quantity (net + pending orders) — use to avoid overshooting position limits
-eff_qty = self.positions.get_effective_quantity(exchange_id, security_id) or 0
+eff_qty = self.positions.get_effective_quantity(listing.exchange_id, listing.security_id) or 0
 ```
 
 ---
@@ -330,7 +346,8 @@ Quote around fair value with a spread proportional to volatility:
 
 ```python
 from gnomepy import Intent, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
+from gnomepy_research.listing import Listing
 from gnomepy_research.signals import MicropriceFairValue, EWMA, SpreadVolatility
 
 class SimpleMarketMaker(Strategy):
@@ -346,7 +363,11 @@ class SimpleMarketMaker(Strategy):
         self._fv = MicropriceFairValue()
         self._vol = EWMA(SpreadVolatility(warmup_ticks=50), alpha=0.95, warmup=20)
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        listing_id = self.streams.listing_id(data.stream_id)
+        if listing_id is None:
+            return []
+        listing = Listing.from_streams(self.streams, listing_id)
         self._fv.update(data.event_timestamp, data)
         self._vol.update(data.event_timestamp, data)
 
@@ -357,14 +378,14 @@ class SimpleMarketMaker(Strategy):
         half_spread = int(self._vol.value() * self.gamma)
         half_spread = max(half_spread, 1)
 
-        pos = self.positions.get_position(data.exchange_id, data.security_id)
+        pos = self.positions.get_position(listing.exchange_id, listing.security_id)
         net = pos.net_quantity if pos else 0
         if abs(net) >= self.max_position:
             return []
 
         return [Intent(
-            exchange_id=data.exchange_id,
-            security_id=data.security_id,
+            exchange_id=listing.exchange_id,
+            security_id=listing.security_id,
             bid_price=fv - half_spread,
             bid_size=self.size,
             ask_price=fv + half_spread,
@@ -381,7 +402,8 @@ Enter aggressively when a flow signal exceeds a threshold:
 
 ```python
 from gnomepy import Intent, OrderType, Side, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
+from gnomepy_research.listing import Listing
 from gnomepy_research.signals import EWMA, TradeImbalance
 
 class MomentumStrategy(Strategy):
@@ -390,7 +412,11 @@ class MomentumStrategy(Strategy):
         self.size = size
         self._signal = EWMA(TradeImbalance(horizon_ns=horizon_ns), alpha=0.95)
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        listing_id = self.streams.listing_id(data.stream_id)
+        if listing_id is None:
+            return []
+        listing = Listing.from_streams(self.streams, listing_id)
         self._signal.update(data.event_timestamp, data)
         if not self._signal.is_ready():
             return []
@@ -398,16 +424,16 @@ class MomentumStrategy(Strategy):
         flow = self._signal.value()
         if flow > self.threshold:
             return [Intent(
-                exchange_id=data.exchange_id,
-                security_id=data.security_id,
+                exchange_id=listing.exchange_id,
+                security_id=listing.security_id,
                 take_side=Side.BID,
                 take_size=self.size,
                 take_order_type=OrderType.MARKET,
             )]
         elif flow < -self.threshold:
             return [Intent(
-                exchange_id=data.exchange_id,
-                security_id=data.security_id,
+                exchange_id=listing.exchange_id,
+                security_id=listing.security_id,
                 take_side=Side.ASK,
                 take_size=self.size,
                 take_order_type=OrderType.MARKET,
@@ -425,7 +451,7 @@ Track spread between listings, enter when z-score exceeds threshold:
 ```python
 # See gnomepy_research/sessions/n_exchange_arb/strategy.py for a full implementation.
 # Key pattern:
-#   - Maintain per-listing bid/ask state in dicts keyed by (exchange_id, security_id)
+#   - Maintain per-listing bid/ask state in dicts keyed by listing id (self.streams.listing_id(data.stream_id))
 #   - Compute EWMA of spread across each pair
 #   - When z-score exceeds entry_z, take aggressive orders on both legs simultaneously
 #   - When z-score reverts below close_z, close both legs

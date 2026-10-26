@@ -8,10 +8,11 @@ from typing import NamedTuple
 
 from gnomepy import ExecutionReport, Intent, OrderType, RejectReason, Scales, Side, Strategy
 from gnomepy.java.enums import ExecType
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 from gnomepy.registry import RegistryClient
 
 from gnomepy_research.fees import FeeRates, registry_fee_rates
+from gnomepy_research.listing import Listing
 
 PRICE_SCALE = Scales.PRICE   # 1_000_000_000
 SIZE_SCALE = Scales.SIZE      # 1_000_000
@@ -79,7 +80,7 @@ class Book:
 
 @dataclass
 class LegState:
-    listing: tuple[int, int]
+    listing: Listing
     target_qty: int = 0
     filled_qty: int = 0
     fill_cost: int = 0  # sum of price * qty (scaled)
@@ -105,7 +106,7 @@ class LegState:
 class Pairing:
     index: int
     label: str
-    legs: list[tuple[int, int]]
+    legs: list[Listing]
 
 
 @dataclass
@@ -126,10 +127,10 @@ class PairingState:
 # ---------------------------------------------------------------------------
 
 class CostComponent:
-    def cost(self, listing: tuple[int, int], price_scaled: int, qty: int, **kwargs) -> float:
+    def cost(self, listing: Listing, price_scaled: int, qty: int, **kwargs) -> float:
         return 0.0
 
-    def on_book_update(self, listing: tuple[int, int], book: Book) -> None:
+    def on_book_update(self, listing: Listing, book: Book) -> None:
         pass
 
 
@@ -138,7 +139,7 @@ class FeeCost(CostComponent):
         self._fee_rates = fee_rates
 
     def cost(self, listing, price_scaled, qty, maker=True, **kwargs) -> float:
-        taker_rate, maker_rate = self._fee_rates(listing)
+        taker_rate, maker_rate = self._fee_rates(listing.listing_id)
         rate = maker_rate if maker else taker_rate
         p = price_scaled / PRICE_SCALE
         return rate * p * (1.0 - p)
@@ -159,8 +160,8 @@ class FillRiskCost(CostComponent):
         self._lambda = fill_risk_lambda
         self._unwind_mult = unwind_spread_mult
         self._use_cst = use_cst_model
-        self._spreads: dict[tuple[int, int], float] = {}
-        self._queue_depths: dict[tuple[int, int], int] = {}
+        self._spreads: dict[Listing, float] = {}
+        self._queue_depths: dict[Listing, int] = {}
 
     def on_book_update(self, listing, book: Book) -> None:
         bid, ask = book.best_bid(), book.best_ask()
@@ -169,7 +170,7 @@ class FillRiskCost(CostComponent):
         if book.bids:
             self._queue_depths[listing] = book.bids[0].size
 
-    def fill_prob(self, listing: tuple[int, int]) -> float:
+    def fill_prob(self, listing: Listing) -> float:
         spread = self._spreads.get(listing, 0.0)
         if self._use_cst:
             queue = self._queue_depths.get(listing, 0) / SIZE_SCALE
@@ -192,7 +193,7 @@ class DepthCoverageCost(CostComponent):
     def __init__(self, depth_mult: float, price_window_cents: int = 2):
         self._depth_mult = depth_mult
         self._window_scaled = price_window_cents * (PRICE_SCALE // 100)
-        self._cheap_depth: dict[tuple[int, int], float] = {}
+        self._cheap_depth: dict[Listing, float] = {}
 
     def on_book_update(self, listing, book: Book) -> None:
         depth = 0
@@ -219,7 +220,7 @@ class CompositeCost:
     def total_cost(self, listing, price_scaled, qty, **kwargs) -> float:
         return sum(c.cost(listing, price_scaled, qty, **kwargs) for c in self._components)
 
-    def on_book_update(self, listing: tuple[int, int], book: Book) -> None:
+    def on_book_update(self, listing: Listing, book: Book) -> None:
         for c in self._components:
             c.on_book_update(listing, book)
 
@@ -232,7 +233,7 @@ class PriceModel:
     def compute_bid(self, listing, best_bid: int, best_ask: int) -> int:
         raise NotImplementedError
 
-    def on_book_update(self, listing: tuple[int, int], book: Book) -> None:
+    def on_book_update(self, listing: Listing, book: Book) -> None:
         pass
 
 
@@ -309,28 +310,28 @@ class CrossPredictionArb(Strategy):
         self._processing_time_ns = processing_time_ns
         self._debug = debug
 
-        def resolve(listing_id: int) -> tuple[tuple[int, int], tuple[int, int, int], int]:
+        def resolve(listing_id: int) -> tuple[Listing, tuple[int, int, int], int]:
             results = registry.get_listing(listing_id=listing_id)
             if not results:
                 raise ValueError(f"No listing for listing_id={listing_id}")
             specs = registry.get_listing_spec(listing_id=listing_id)
             if not specs:
                 raise ValueError(f"No listing spec for listing_id={listing_id}")
-            listing = (results[0].exchange_id, results[0].security_id)
+            listing = Listing(listing_id, results[0].exchange_id, results[0].security_id)
             spec = (int(specs[0].min_notional or 0), int(specs[0].lot_size or 0), int(specs[0].min_size or 0))
             tick_size = int(specs[0].tick_size) if specs[0].tick_size else PRICE_SCALE // 100
             return listing, spec, tick_size
 
         # Build exchange_id → label mapping and resolve per-outcome listings
         self._exchange_id_to_label: dict[int, str] = {}
-        self._tick_sizes: dict[tuple[int, int], int] = {}
-        outcome_listings: list[list[tuple[int, int]]] = []
-        listing_specs: dict[tuple[int, int], tuple[int, int, int]] = {}
+        self._tick_sizes: dict[Listing, int] = {}
+        outcome_listings: list[list[Listing]] = []
+        listing_specs: dict[Listing, tuple[int, int, int]] = {}
         for outcome in outcomes:
             resolved = []
             for label, lid in outcome.items():
                 r, spec, tick_size = resolve(lid)
-                self._exchange_id_to_label[r[0]] = label
+                self._exchange_id_to_label[r.exchange_id] = label
                 self._tick_sizes[r] = tick_size
                 resolved.append(r)
                 listing_specs[r] = spec
@@ -339,11 +340,11 @@ class CrossPredictionArb(Strategy):
         # Generate all exchange assignments via cartesian product
         n_outcomes = len(outcomes)
         choices = [[(oi, lst) for lst in outcome_listings[oi]] for oi in range(n_outcomes)]
-        raw_pairings: list[tuple[int, str, list[tuple[int, int]]]] = []
+        raw_pairings: list[tuple[int, str, list[Listing]]] = []
         idx = 0
         for combo in product(*choices):
             legs = [lst for _, lst in combo]
-            exchange_ids = {lst[0] for lst in legs}
+            exchange_ids = {lst.exchange_id for lst in legs}
             if len(exchange_ids) < 2:
                 eid = next(iter(exchange_ids))
                 lbl = self._exchange_id_to_label.get(eid, "")
@@ -352,7 +353,7 @@ class CrossPredictionArb(Strategy):
                     idx += 1
                 continue
             label_parts = [
-                f"{self._exchange_id_to_label[lst[0]].upper()}_O{oi}"
+                f"{self._exchange_id_to_label[lst.exchange_id].upper()}_O{oi}"
                 for oi, lst in combo
             ]
             raw_pairings.append((idx, "+".join(label_parts), legs))
@@ -362,20 +363,22 @@ class CrossPredictionArb(Strategy):
             raise ValueError(f"Too many pairings ({len(raw_pairings)}) for {n_outcomes} outcomes")
 
         self._pairings: list[Pairing] = []
-        self._tracked_listings: set[tuple[int, int]] = set()
+        self._tracked_listings: set[Listing] = set()
         for p_idx, p_label, p_legs in raw_pairings:
             sorted_legs = sorted(
                 p_legs,
-                key=lambda lg: 0 if self._exchange_id_to_label.get(lg[0], "") in self._taker_labels else 1,
+                key=lambda lg: 0 if self._exchange_id_to_label.get(lg.exchange_id, "") in self._taker_labels else 1,
             )
             self._pairings.append(Pairing(index=p_idx, label=p_label, legs=sorted_legs))
             for leg in p_legs:
                 self._tracked_listings.add(leg)
 
-        self._listing_specs: dict[tuple[int, int], tuple[int, int, int]] = listing_specs
+        self._listing_specs: dict[Listing, tuple[int, int, int]] = listing_specs
+
+        self._listings_by_id: dict[int, Listing] = {lst.listing_id: lst for lst in self._tracked_listings}
 
         # Book storage
-        self._books: dict[tuple[int, int], Book] = {lst: Book() for lst in self._tracked_listings}
+        self._books: dict[Listing, Book] = {lst: Book() for lst in self._tracked_listings}
 
         # Cost model
         cost_components: list[CostComponent] = [
@@ -399,7 +402,7 @@ class CrossPredictionArb(Strategy):
             PairingState(pairing=p) for p in self._pairings
         ]
         # Lookup: listing → pairing states that include it (for fill routing)
-        self._listing_to_ps: dict[tuple[int, int], list[PairingState]] = {}
+        self._listing_to_ps: dict[Listing, list[PairingState]] = {}
         for ps in self._pairing_states:
             for leg in ps.pairing.legs:
                 self._listing_to_ps.setdefault(leg, []).append(ps)
@@ -465,9 +468,9 @@ class CrossPredictionArb(Strategy):
     # Market data entry point
     # ------------------------------------------------------------------
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
-        listing = (data.exchange_id, data.security_id)
-        if listing not in self._tracked_listings:
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        listing = self._listings_by_id.get(self.streams.listing_id(data.stream_id))
+        if listing is None:
             return []
 
         ts = data.event_timestamp
@@ -490,7 +493,9 @@ class CrossPredictionArb(Strategy):
     # ------------------------------------------------------------------
 
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
-        listing = (report.exchange_id, report.security_id)
+        listing = self._listings_by_id.get(self.streams.listing_id_for(report.exchange_id, report.security_id))
+        if listing is None:
+            return []
         if report.exec_type in (ExecType.FILL, ExecType.PARTIAL_FILL):
             for ps in self._listing_to_ps.get(listing, []):
                 if ps.phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
@@ -500,18 +505,18 @@ class CrossPredictionArb(Strategy):
                         continue
                     leg.record_fill(report.fill_price, report.filled_qty, report.fee)
                     if self._debug:
-                        label = self._exchange_id_to_label.get(listing[0], f"eid={listing[0]}")
+                        label = self._exchange_id_to_label.get(listing.exchange_id, f"eid={listing.exchange_id}")
                         price_c = report.fill_price / (PRICE_SCALE // 100)
                         qty_c = report.filled_qty / SIZE_SCALE
-                        filled_legs = [(self._exchange_id_to_label.get(lg.listing[0],"?"), lg.filled_qty/SIZE_SCALE) for lg in ps.legs if lg.filled_qty > 0]
+                        filled_legs = [(self._exchange_id_to_label.get(lg.listing.exchange_id,"?"), lg.filled_qty/SIZE_SCALE) for lg in ps.legs if lg.filled_qty > 0]
                         print(
-                            f"[DEBUG] {"PARTIAL-" if report.exec_type == ExecType.PARTIAL_FILL else ""}FILL {label} sid={listing[1]} "
+                            f"[DEBUG] {"PARTIAL-" if report.exec_type == ExecType.PARTIAL_FILL else ""}FILL {label} sid={listing.security_id} "
                             f"price={price_c:.2f}¢ qty={qty_c:.2f}c "
                             f"pairing={ps.pairing.label} filled_legs={filled_legs}"
                         )
                     return self._check_fill_transitions(ps, report.timestamp_event)
         elif report.exec_type in (ExecType.REJECT, ExecType.EXPIRE):
-            rejected_label = self._exchange_id_to_label.get(listing[0], "")
+            rejected_label = self._exchange_id_to_label.get(listing.exchange_id, "")
             for ps in self._listing_to_ps.get(listing, []):
                 if ps.phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
                     continue
@@ -521,7 +526,7 @@ class CrossPredictionArb(Strategy):
                         self._on_post_only_reject(ps, rejected_leg)
                     if self._debug:
                         print(
-                            f"[DEBUG] POST_ONLY_WOULD_CROSS {rejected_label} sid={listing[1]} "
+                            f"[DEBUG] POST_ONLY_WOULD_CROSS {rejected_label} sid={listing.security_id} "
                             f"pairing={ps.pairing.label} — chase may retry this price"
                         )
                     return []
@@ -530,7 +535,7 @@ class CrossPredictionArb(Strategy):
                 )
                 if self._debug:
                     print(
-                        f"[DEBUG] {"REJECT" if report.exec_type == ExecType.REJECT else "EXPIRE"} {rejected_label} sid={listing[1]} "
+                        f"[DEBUG] {"REJECT" if report.exec_type == ExecType.REJECT else "EXPIRE"} {rejected_label} sid={listing.security_id} "
                         f"pairing={ps.pairing.label} any_other_filled={any_other_filled}"
                     )
                 if any_other_filled:
@@ -538,7 +543,7 @@ class CrossPredictionArb(Strategy):
                     return self._close_all_positions(ps, report.timestamp_event)
                 else:
                     cancel_intents = [
-                        Intent(exchange_id=lg.listing[0], security_id=lg.listing[1])
+                        Intent(exchange_id=lg.listing.exchange_id, security_id=lg.listing.security_id)
                         for lg in ps.legs if lg.listing != listing
                     ]
                     ps.phase = Phase.SCANNING
@@ -546,7 +551,7 @@ class CrossPredictionArb(Strategy):
                     self._reset(ps)
                     return cancel_intents
         elif report.exec_type == ExecType.CANCEL:
-            canceled_label = self._exchange_id_to_label.get(listing[0], "")
+            canceled_label = self._exchange_id_to_label.get(listing.exchange_id, "")
             for ps in self._listing_to_ps.get(listing, []):
                 if ps.phase not in (Phase.ENTERING, Phase.PARTIAL_FILL):
                     continue
@@ -557,7 +562,7 @@ class CrossPredictionArb(Strategy):
                     new_target = canceled_leg.filled_qty
                     if self._debug:
                         print(
-                            f"[DEBUG] TAKER_PARTIAL_CANCEL {canceled_label} sid={listing[1]} "
+                            f"[DEBUG] TAKER_PARTIAL_CANCEL {canceled_label} sid={listing.security_id} "
                             f"pairing={ps.pairing.label} filled={new_target/SIZE_SCALE:.2f}c "
                             f"target was {canceled_leg.target_qty/SIZE_SCALE:.2f}c"
                         )
@@ -573,7 +578,7 @@ class CrossPredictionArb(Strategy):
                 )
                 if self._debug:
                     print(
-                        f"[DEBUG] CANCEL_NOFILL {canceled_label} sid={listing[1]} "
+                        f"[DEBUG] CANCEL_NOFILL {canceled_label} sid={listing.security_id} "
                         f"pairing={ps.pairing.label} any_other_filled={any_other_filled}"
                     )
                 if any_other_filled:
@@ -581,7 +586,7 @@ class CrossPredictionArb(Strategy):
                     return self._close_all_positions(ps, report.timestamp_event)
                 else:
                     cancel_intents = [
-                        Intent(exchange_id=lg.listing[0], security_id=lg.listing[1])
+                        Intent(exchange_id=lg.listing.exchange_id, security_id=lg.listing.security_id)
                         for lg in ps.legs if lg.listing != listing
                     ]
                     ps.phase = Phase.SCANNING
@@ -594,7 +599,7 @@ class CrossPredictionArb(Strategy):
     # Book management
     # ------------------------------------------------------------------
 
-    def _update_book(self, listing: tuple[int, int], data: Schema, ts: int) -> None:
+    def _update_book(self, listing: Listing, data: StreamRecord, ts: int) -> None:
         book = self._books[listing]
         bids: list[BookLevel] = []
         asks: list[BookLevel] = []
@@ -614,7 +619,7 @@ class CrossPredictionArb(Strategy):
         self._cost_model.on_book_update(listing, book)
         self._price_model.on_book_update(listing, book)
 
-    def _is_stale(self, listing: tuple[int, int], ts: int) -> bool:
+    def _is_stale(self, listing: Listing, ts: int) -> bool:
         book = self._books[listing]
         return book.last_update_ts == 0 or (ts - book.last_update_ts) > self._max_staleness_ns
 
@@ -622,13 +627,13 @@ class CrossPredictionArb(Strategy):
     # Fee helpers
     # ------------------------------------------------------------------
 
-    def _maker_fee(self, listing: tuple[int, int], price_scaled: int) -> float:
+    def _maker_fee(self, listing: Listing, price_scaled: int) -> float:
         p = price_scaled / PRICE_SCALE
-        return self._fee_rates(listing)[1] * p * (1.0 - p)
+        return self._fee_rates(listing.listing_id)[1] * p * (1.0 - p)
 
-    def _taker_fee(self, listing: tuple[int, int], price_scaled: int) -> float:
+    def _taker_fee(self, listing: Listing, price_scaled: int) -> float:
         p = price_scaled / PRICE_SCALE
-        return self._fee_rates(listing)[0] * p * (1.0 - p)
+        return self._fee_rates(listing.listing_id)[0] * p * (1.0 - p)
 
     # ------------------------------------------------------------------
     # Edge detection (walks ask books — entry uses asks only)
@@ -687,7 +692,7 @@ class CrossPredictionArb(Strategy):
                 self._cost_model.total_cost(
                     legs[i], current_asks[i],
                     qty,
-                    maker=self._exchange_id_to_label.get(legs[i][0], "") not in self._taker_labels,
+                    maker=self._exchange_id_to_label.get(legs[i].exchange_id, "") not in self._taker_labels,
                     other_listing=legs[1 - i] if len(legs) == 2 else None,
                 )
                 for i in range(len(legs))
@@ -709,7 +714,7 @@ class CrossPredictionArb(Strategy):
                 if remaining[i] <= 0:
                     # Taker orders only fill at level 0 (limit to best ask).
                     # Don't walk deeper — the walk would return qty > actual fill.
-                    if self._exchange_id_to_label.get(legs[i][0], "") in self._taker_labels:
+                    if self._exchange_id_to_label.get(legs[i].exchange_id, "") in self._taker_labels:
                         return total_edge / max(qty, 1), qty
                     next_idx = level_indices[i] + 1
                     if next_idx < len(books[i].asks):
@@ -720,16 +725,16 @@ class CrossPredictionArb(Strategy):
 
         return (total_edge / max(qty, 1), qty) if qty > 0 else (0.0, 0)
 
-    def _compute_maker_bid_prices(self, pairing: Pairing, qty: int) -> dict[tuple[int, int], int] | None:
+    def _compute_maker_bid_prices(self, pairing: Pairing, qty: int) -> dict[Listing, int] | None:
         """Compute entry prices for each leg, respecting the budget constraint.
 
         PM taker legs use ask price + taker fee; Kalshi legs use best_bid + maker fee.
         Budget: sum(entry_i/PRICE_SCALE + fee_i) < 1.0 - min_edge
         """
-        prices: dict[tuple[int, int], int] = {}
+        prices: dict[Listing, int] = {}
         for leg in pairing.legs:
             book = self._books[leg]
-            is_taker = self._exchange_id_to_label.get(leg[0], "") in self._taker_labels
+            is_taker = self._exchange_id_to_label.get(leg.exchange_id, "") in self._taker_labels
             if is_taker:
                 ask = book.best_ask()
                 if ask <= 0:
@@ -748,7 +753,7 @@ class CrossPredictionArb(Strategy):
         total = sum(p / PRICE_SCALE for p in prices.values())
         total_fees = 0.0
         for leg, p in prices.items():
-            if self._exchange_id_to_label.get(leg[0], "") in self._taker_labels:
+            if self._exchange_id_to_label.get(leg.exchange_id, "") in self._taker_labels:
                 total_fees += self._taker_fee(leg, p)
             else:
                 total_fees += self._maker_fee(leg, p)
@@ -761,13 +766,13 @@ class CrossPredictionArb(Strategy):
     # Phase handlers
     # ------------------------------------------------------------------
 
-    def _min_price_for_size(self, listing: tuple[int, int], size: int) -> int:
+    def _min_price_for_size(self, listing: Listing, size: int) -> int:
         mn, _, _ = self._listing_specs[listing]
         if mn <= 0 or size <= 0:
             return 0
         return (mn + size - 1) // size
 
-    def _passes_notional(self, listing: tuple[int, int], price: int, size: int) -> bool:
+    def _passes_notional(self, listing: Listing, price: int, size: int) -> bool:
         mn, _, _ = self._listing_specs[listing]
         if mn <= 0:
             return True
@@ -775,14 +780,14 @@ class CrossPredictionArb(Strategy):
         # actual notional fell short (33 * 3 == 99 < 100 while 100 // 3 == 33).
         return size > 0 and price * size >= mn
 
-    def _align_lot(self, listing: tuple[int, int], size: int) -> int:
+    def _align_lot(self, listing: Listing, size: int) -> int:
         _, lot, min_size = self._listing_specs[listing]
         if lot > 0 and size % lot != 0:
             size = (size // lot) * lot
         # The venue rejects an order under its minimum, so a sub-minimum size is as untradable as a sub-lot one.
         return size if size >= min_size else 0
 
-    def _claimed_base(self, listing: tuple[int, int]) -> int:
+    def _claimed_base(self, listing: Listing) -> int:
         """Position on `listing` already accounted for by any pairing that holds it.
 
         With N>=3 outcomes a listing belongs to several pairings. Comparing against a
@@ -813,7 +818,7 @@ class CrossPredictionArb(Strategy):
             return []
 
         for lg in ps.pairing.legs:
-            eid, sid = lg
+            eid, sid = lg.exchange_id, lg.security_id
             pos = self.positions.get_position(eid, sid)
             current = pos.net_quantity if pos is not None else 0
             if current > self._claimed_base(lg):
@@ -833,7 +838,7 @@ class CrossPredictionArb(Strategy):
 
         current_pos = 0
         for lg in ps.pairing.legs:
-            eid, sid = lg
+            eid, sid = lg.exchange_id, lg.security_id
             pos = self.positions.get_position(eid, sid)
             if pos is not None:
                 current_pos = max(current_pos, pos.net_quantity)
@@ -851,7 +856,7 @@ class CrossPredictionArb(Strategy):
             return []
 
         for lg in ps.pairing.legs:
-            is_taker = self._exchange_id_to_label.get(lg[0], "") in self._taker_labels
+            is_taker = self._exchange_id_to_label.get(lg.exchange_id, "") in self._taker_labels
             price = self._books[lg].best_ask() if is_taker else bid_prices[lg]
             if not self._passes_notional(lg, price, target_qty):
                 return []
@@ -878,13 +883,13 @@ class CrossPredictionArb(Strategy):
         taker_intents = []
         maker_intents = []
         for leg in ps.legs:
-            eid = leg.listing[0]
+            eid = leg.listing.exchange_id
             if self._exchange_id_to_label.get(eid, "") in self._taker_labels:
                 book = self._books[leg.listing]
                 limit_price = book.best_ask()
                 taker_intents.append(Intent(
                     exchange_id=eid,
-                    security_id=leg.listing[1],
+                    security_id=leg.listing.security_id,
                     take_side=Side.BID,
                     take_size=leg.target_qty,
                     take_order_type=OrderType.LIMIT,
@@ -900,7 +905,7 @@ class CrossPredictionArb(Strategy):
                 leg.last_chase_bid = bid
                 maker_intents.append(Intent(
                     exchange_id=eid,
-                    security_id=leg.listing[1],
+                    security_id=leg.listing.security_id,
                     bid_price=bid,
                     bid_size=leg.target_qty,
                     post_only=True,
@@ -909,11 +914,11 @@ class CrossPredictionArb(Strategy):
         self._log_intents(f"entry {ps.pairing.label}", result, ts)
         return result
 
-    def _quantize_price(self, listing: tuple[int, int], price: int) -> int:
+    def _quantize_price(self, listing: Listing, price: int) -> int:
         tick = self._effective_tick(listing)
         return (price // tick) * tick
 
-    def _effective_tick(self, listing: tuple[int, int]) -> int:
+    def _effective_tick(self, listing: Listing) -> int:
         """Tick to quantize to, floored at one cent.
 
         The registry reports $0.001 for every Kalshi listing, but the recorded books
@@ -952,7 +957,7 @@ class CrossPredictionArb(Strategy):
         """
         held = []
         for lg in ps.legs:
-            eid, sid = lg.listing
+            eid, sid = lg.listing.exchange_id, lg.listing.security_id
             pos = self.positions.get_position(eid, sid)
             held.append(pos.net_quantity if pos is not None else 0)
         return min(held) if held else 0
@@ -1019,7 +1024,7 @@ class CrossPredictionArb(Strategy):
         # The fee this leg will pay is itself a function of the price, so charge the
         # worst case (rate/4, the maximum of rate*p*(1-p)) rather than solving it. A rebate's
         # worst case is no rebate at all.
-        worst_maker_rate = max([0.0] + [self._fee_rates(lg.listing)[1] for lg in ps.legs if not lg.is_filled])
+        worst_maker_rate = max([0.0] + [self._fee_rates(lg.listing.listing_id)[1] for lg in ps.legs if not lg.is_filled])
         budget -= int(worst_maker_rate / 4.0 * PRICE_SCALE)
 
         return budget
@@ -1037,7 +1042,7 @@ class CrossPredictionArb(Strategy):
             ps.base_qty = base
             held = []
             for lg in ps.legs:
-                eid, sid = lg.listing
+                eid, sid = lg.listing.exchange_id, lg.listing.security_id
                 pos = self.positions.get_position(eid, sid)
                 held.append(pos.net_quantity if pos is not None else 0)
             if any(q > base for q in held):
@@ -1055,7 +1060,7 @@ class CrossPredictionArb(Strategy):
             return []
 
         if some_filled and ps.phase == Phase.ENTERING:
-            filled = [(self._exchange_id_to_label.get(lg.listing[0],""), lg.filled_qty/SIZE_SCALE) for lg in ps.legs if lg.filled_qty > 0]
+            filled = [(self._exchange_id_to_label.get(lg.listing.exchange_id,""), lg.filled_qty/SIZE_SCALE) for lg in ps.legs if lg.filled_qty > 0]
             if self._debug:
                 print(f"[DEBUG] PARTIAL pairing={ps.pairing.label} → PARTIAL_FILL filled={filled}")
             ps.phase = Phase.PARTIAL_FILL
@@ -1069,7 +1074,7 @@ class CrossPredictionArb(Strategy):
             for lg in (ps.legs if self._enable_chase else []):
                 if lg.is_filled:
                     continue
-                eid = lg.listing[0]
+                eid = lg.listing.exchange_id
                 if self._exchange_id_to_label.get(eid, "") in self._taker_labels:
                     continue
 
@@ -1119,7 +1124,7 @@ class CrossPredictionArb(Strategy):
                 lg.last_chase_bid = target_price
                 chase_intents.append(Intent(
                     exchange_id=eid,
-                    security_id=lg.listing[1],
+                    security_id=lg.listing.security_id,
                     bid_price=target_price,
                     bid_size=remaining,
                     post_only=True,
@@ -1156,7 +1161,7 @@ class CrossPredictionArb(Strategy):
                 and ps.entry_ts > 0
                 and (ts - ps.entry_ts) < _PM_TAKER_SETTLE_NS
                 and any(
-                    self._exchange_id_to_label.get(lg.listing[0], "") in self._taker_labels
+                    self._exchange_id_to_label.get(lg.listing.exchange_id, "") in self._taker_labels
                     and not lg.is_filled
                     for lg in ps.legs
                 )):
@@ -1167,11 +1172,11 @@ class CrossPredictionArb(Strategy):
             bid_prices = self._compute_maker_bid_prices(ps.pairing, unfilled_legs[0].target_qty)
             if bid_prices is None:
                 if self._debug:
-                    labels = [self._exchange_id_to_label.get(lg.listing[0], "?") for lg in unfilled_legs]
+                    labels = [self._exchange_id_to_label.get(lg.listing.exchange_id, "?") for lg in unfilled_legs]
                     print(f"[DEBUG] BUDGET_FAIL pairing={ps.pairing.label} unfilled={labels} → SCANNING")
                 intents = []
                 for leg in unfilled_legs:
-                    intents.append(Intent(exchange_id=leg.listing[0], security_id=leg.listing[1]))
+                    intents.append(Intent(exchange_id=leg.listing.exchange_id, security_id=leg.listing.security_id))
                 if any_filled:
                     ps.phase = Phase.UNWINDING
                     intents.extend(self._close_all_positions(ps, ts))
@@ -1186,7 +1191,7 @@ class CrossPredictionArb(Strategy):
                 print(f"[DEBUG] ENTRY_EXPIRED pairing={ps.pairing.label} "
                       f"elapsed={(ts - ps.entry_ts)/1e9:.1f}s any_filled={any_filled}")
             intents = [
-                Intent(exchange_id=lg.listing[0], security_id=lg.listing[1])
+                Intent(exchange_id=lg.listing.exchange_id, security_id=lg.listing.security_id)
                 for lg in ps.legs if not lg.is_filled
             ]
             if any_filled:
@@ -1207,7 +1212,7 @@ class CrossPredictionArb(Strategy):
         # Use net_quantity (settled fills) not effective_quantity (pending sells) to avoid
         # premature re-entry while close orders are still in flight.
         def _net_qty(lg: LegState) -> int:
-            pos = self.positions.get_position(lg.listing[0], lg.listing[1])
+            pos = self.positions.get_position(lg.listing.exchange_id, lg.listing.security_id)
             return pos.net_quantity if pos is not None else 0
 
         all_at_base = all(_net_qty(lg) <= ps.base_qty for lg in ps.legs)
@@ -1224,13 +1229,13 @@ class CrossPredictionArb(Strategy):
             ps.close_attempts += 1
             intents = []
             for leg in ps.legs:
-                eid, sid = leg.listing
+                eid, sid = leg.listing.exchange_id, leg.listing.security_id
                 eff_qty = self.positions.get_effective_quantity(eid, sid)
                 qty = eff_qty - ps.base_qty
                 if qty > 0:
-                    qty = self._align_lot((eid, sid), qty)
+                    qty = self._align_lot(leg.listing, qty)
                     if qty > 0:
-                        limit_price = max(PRICE_SCALE // 100, self._min_price_for_size((eid, sid), qty))
+                        limit_price = max(PRICE_SCALE // 100, self._min_price_for_size(leg.listing, qty))
                         if limit_price <= 99 * PRICE_SCALE // 100:
                             intents.append(Intent(
                                 exchange_id=eid, security_id=sid,
@@ -1240,9 +1245,9 @@ class CrossPredictionArb(Strategy):
                                 take_limit_price=limit_price,
                             ))
                 elif qty < 0:
-                    abs_qty = self._align_lot((eid, sid), -qty)
+                    abs_qty = self._align_lot(leg.listing, -qty)
                     if abs_qty > 0:
-                        limit_price = max(99 * PRICE_SCALE // 100, self._min_price_for_size((eid, sid), abs_qty))
+                        limit_price = max(99 * PRICE_SCALE // 100, self._min_price_for_size(leg.listing, abs_qty))
                         if limit_price <= PRICE_SCALE:
                             intents.append(Intent(
                                 exchange_id=eid, security_id=sid,
@@ -1278,14 +1283,14 @@ class CrossPredictionArb(Strategy):
             print(f"[DEBUG] CLOSE_ALL pairing={ps.pairing.label} phase={ps.phase.name}")
         intents = []
         for leg in ps.legs:
-            eid, sid = leg.listing
+            eid, sid = leg.listing.exchange_id, leg.listing.security_id
             pos = self.positions.get_position(eid, sid)
             total_qty = pos.net_quantity if pos is not None else 0
             qty = total_qty - ps.base_qty
             if qty > 0:
-                qty = self._align_lot((eid, sid), qty)
+                qty = self._align_lot(leg.listing, qty)
                 if qty > 0:
-                    limit_price = max(PRICE_SCALE // 100, self._min_price_for_size((eid, sid), qty))
+                    limit_price = max(PRICE_SCALE // 100, self._min_price_for_size(leg.listing, qty))
                     if limit_price <= 99 * PRICE_SCALE // 100:
                         intents.append(Intent(
                             exchange_id=eid, security_id=sid,
@@ -1295,9 +1300,9 @@ class CrossPredictionArb(Strategy):
                             take_limit_price=limit_price,
                         ))
             elif qty < 0:
-                abs_qty = self._align_lot((eid, sid), -qty)
+                abs_qty = self._align_lot(leg.listing, -qty)
                 if abs_qty > 0:
-                    limit_price = max(99 * PRICE_SCALE // 100, self._min_price_for_size((eid, sid), abs_qty))
+                    limit_price = max(99 * PRICE_SCALE // 100, self._min_price_for_size(leg.listing, abs_qty))
                     if limit_price <= PRICE_SCALE:
                         intents.append(Intent(
                             exchange_id=eid, security_id=sid,
