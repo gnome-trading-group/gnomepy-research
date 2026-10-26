@@ -145,7 +145,8 @@ code, and `tests/<module>/` for the shared modules.
 
 ## Production code vs sessions
 
-gnome-pipelines and live strategies depend on this package (pinned by git tag). Pipelines import only
+gnome-pipelines depends on this package pinned by git tag; a live session runs a checkout of the commit
+it was launched with (see Operations). Pipelines import only
 from `gnomepy_research/models/`; a live strategy is its session's `strategy.py`, importing only
 `models/`, its own session, and the base-only `fees`/`listing` modules:
 
@@ -162,6 +163,37 @@ models/cfb/hyperparameters/  its fitted hyperparameters
 Sessions build on `models/`, never the other way round: nothing in `models/` imports from
 `sessions/`. When a session's model code goes to production, promote it into `models/` first, and treat
 changes there as production changes: tested, and released by tagging this repo.
+
+## Sessions (live strategies)
+
+A session's `strategy.class` is `gnomepy_research.sessions.<name>.strategy:<Class>`. Its `strategy.args.<key>`
+config entries reach the instance as one `STRATEGY_ARGS_JSON` env var, and gnomepy's runner passes them to the
+class constructor as keyword arguments, so arg names must match `__init__` exactly.
+
+Only `cs2_series` is launched live today (gnome-launcher's `cs2` rule). The rest are backtest/paper research
+whose strategies could be launched the same way.
+
+| Package | Class | Trades | Key args |
+|---|---|---|---|
+| `cs2_series` | `CS2Series` | Pre-match CS2 BO3 series winner, one session per HLTV match per venue (Polymarket Intl, Kalshi, PM US); IOC buys of the underpriced team after taker fee, held to settlement | `match_id`, `listing_team_a`, `listing_team_b` (set by the launcher), `bankroll_usd` (required), `min_edge`, `kelly_fraction`, `max_stake_usd`, `window_hours`, `entry_cutoff_hours`, `min_price`/`max_price`, `model_path`/`posterior_path`/`blend_path` (artifact URIs; unpinned = latest) |
+| `cs2_win_probability` | `CS2WinProbability` | In-play CS2 map/match on Polymarket/Kalshi from GRID telemetry; maker quotes around model fair value | `listing_id_yes`, `listing_id_no`, `model_path`, `level`, `grid_api_key`/`grid_series_id` (live) or `fair_value_series_path` (backtest), `edge_threshold`, `max_position` |
+| `cfb_win_probability` | none | CFB pregame model work; `live/` is a parked drive-level simulator, not a strategy | - |
+| `cross_prediction_arb` | `CrossPredictionArb` | Cross- and intra-venue binary arb (Polymarket/Kalshi) | `outcomes` (list of `{pm, k}` listing pairs), `max_position`, `min_edge_cents`, `price_model` |
+| `cross_prediction_arb__multi` | `CrossPredictionArbMulti` | Same, for events with three or more outcomes | as parent, plus `lead_with_illiquid`, `passive_unwind_attempts` |
+| `dutch_book_arb` | `DutchBookArb` | Polymarket neg-risk multi-outcome sets priced under $1 after fees | `size`, `min_edge_bps` |
+| `equivalent_event_arb` | `EquivalentEventArb` | EQUIVALENT contracts across/within venues: pure arb plus EWMA stat arb | `event_ids`, `max_position`, `min_pure_arb_bps`, `taker_edge_threshold_bps`, `price_model` |
+| `equivalent_event_arb__fix_unfilled_legs` | `EquivalentEventArbFillFix` | Branch: fixes unfilled legs | as parent, plus `min_contract_price` |
+| `equivalent_event_arb__low_vol_changes` | `LowVolEquivalentEventArb` | Branch: maker-only with a volatility-regime entry filter | as parent, plus `vol_regime_*` |
+| `implication_boundary_arb` | `ImplicationBoundaryArb` | A IMPLIES B pairs where price(A) > price(B) | `event_ids`, `size`, `min_edge_bps`, `min_implies_confidence` |
+| `informed_pmm` | `InformedPredictionMarketMaker` | Quotes Kalshi using a Kalman-smoothed Polymarket reference | `ref_listing_id`, `quote_listing_id`, `value_function_path`, `max_position` |
+| `kalshi_sports_mm` | `KalshiSportsMM` | Two-sided MM on both Kalshi contracts of a game; Polymarket as adverse-selection gate | `ref_listing_id`, `team_a_listing_id`, `team_b_listing_id`, `max_exposure`, `base_spread` |
+| `n_exchange_arb` | `NExchangeArb` | Perp futures spread arb across Hyperliquid/Lighter | `size`, `max_position`, `entry_z`, `close_z` |
+| `oracle_spread_maker` | `OracleSpreadMaker` | Quotes YES and NO on Polymarket using Kalshi microprice as oracle | `ref_listing_id`, `quote_listing_id`, `max_position`, `base_spread` |
+| `prediction_market_mm` | `PredictionMarketMaker` | Single-listing HJB market maker | `listing_id`, `value_function_path`, `max_position` |
+| `stablecoin_stat_arb` | `StablecoinStatArb` | Spread z-score stat arb between two stablecoin listings | `size`, `max_position`, `halflife_seconds`, `entry_z`, `close_z`, `stop_z` |
+
+Listings themselves come from the session's `listings` config, not from args, except where an arg names a
+listing id to tell legs apart.
 
 ## Dependency families
 
@@ -248,6 +280,50 @@ AWS_PROFILE=dev poetry run research jobs download <run_id> <dir> [--flat]
 Research runs in prod (`STAGE=prod`, after `STAGE=prod poetry run gnomepy login`), with up to 128 vCPUs across all
 research jobs; dev is capped at 16 for testing the runner. The runner image is gnomepy's `docker/research-job/`.
 
+## Operations
+
+**How a live/paper session runs this repo.** Nothing here is built into an image. The registry's session launcher
+starts an EC2 orchestrator whose `start-session.sh` (gnome-orchestrator `ami/files/`), for `strategy.type=python`:
+- clones this repo and checks out the session's `research_commit` (a launcher rule's or the controller form's
+  `research_commit`); unset, it checks out `main` as of boot, so an unpinned session runs whatever `main` was then.
+  The session row records `research_commit`, not the SHA `main` resolved to.
+- installs it with the strategy package's extras (`dependencies.py extras <strategy class>`), pinned by
+  `constraints.txt`, alongside `gnomepy[strategy,live-data]==$GNOMEPY_VERSION` (the session's `gnomepy_version`,
+  else the latest on PyPI at launch) and the gnome-orchestrator jar (`orchestrator_version`, else the latest).
+- runs `python -m gnomepy.java.strategy.runner`, which builds the class from `STRATEGY_CLASS` and
+  `STRATEGY_ARGS_JSON` and starts the Java orchestrator around it.
+
+So a fix reaches a session only by relaunching it at a commit that has it; a pushed `main` changes every later
+unpinned launch. Release tags (`scripts/release.sh`) are for gnome-pipelines, not sessions.
+
+**Logs.** The instance's stdout/stderr (orchestrator log lines and Python tracebacks) go to CloudWatch
+`/gnome/orchestrator/<region>`, stream `ec2/<instance-id>`; the region is the one the session ran in (placed by
+its listings' exchange). The controller's session view reads them through the registry's `strategy-sessions/logs`
+route. The instance and its disk are terminated when the session ends, so CloudWatch is the only copy.
+
+**What failure looks like.**
+- An exception in `on_market_data`, `on_stream_event` or `on_execution_report` prints its Python traceback, then
+  propagates into the strategy agent. The orchestrator logs `Session error: <exception>`, raises a `FATAL_ERROR`
+  alert, writes the session's `failure_reason`, and exits 1; the instance shuts down and the registry marks the
+  session FAILED. (`Agent error: ...` is the same path in a run without a `session.id`, e.g. local Docker.)
+- An exception in `__init__` (bad or missing `strategy.args`, an artifact that won't load) fails before the
+  orchestrator starts: the traceback is the last thing in the log and the session goes FAILED with
+  `Instance shutting-down without a stop request`. TODO(verify): confirm no FATAL_ERROR alert is raised for a
+  constructor failure (the fatal handler is installed by the Java orchestrator, which starts after the class is built).
+- A strategy ending itself calls `self.request_exit(reason, flatten=...)` (`cs2_series` does at its entry cutoff
+  or when the match leaves UPCOMING): quotes are cancelled, optionally flattened, a `SESSION_EXITED` alert is
+  raised (WARNING if positions it was asked to close remain), and the session ends STOPPED with that reason.
+
+**Research jobs on Batch.** `research jobs` (above) calls the controller API's `research-jobs` routes (`POST`
+submit, `GET` list, `GET`/`DELETE` `{runId}`, `inputs`, `{runId}/tasks/{index}/logs`; logged-in people only).
+Tasks run the `gnomepy-research-job` ECR image (built from gnomepy's `docker/research-job/` on pushes to gnomepy
+`main`, tag `latest`) with this repo checked out at the job's full commit SHA.
+
+**Branches.** `research/*` branches may be pushed without asking, so cloud jobs and sweeps can run at them.
+Pushing `main` (and so `scripts/release.sh`) needs the user's approval: every unpinned session launched after it
+runs it, and a release tag is what gnome-pipelines pins. Ask before submitting a cloud job on a branch the user didn't name. There is no CI in this repo; run
+`poetry run pytest` before anything is pushed.
+
 ## Tutorials
 
 - `tutorials/01_getting_started.md` — session creation through first backtest result
@@ -266,3 +342,15 @@ The signal tables in `03` are generated: `poetry run python scripts/gen_signal_c
 - Signals compose from `gnomepy_research.signals`
 - Prices are scaled integers (divide by 1e9 for display) — never pass floats to `Intent`
 - Return `[]` from `on_execution_report` unless reactive logic is required
+- A live strategy's constructor args are its config contract: renaming or removing one breaks every launcher
+  rule and template that sets it (`strategy.args` keys are passed straight to `__init__`)
+- Session code that goes live gets a test in `tests/sessions/` (`test_cs2_series.py` is the example)
+
+## Model experiments
+
+- CS2: tune on Sep 2025 – Feb 2026, and score on Mar – Sep 2026 once, at the end. Scoring the confirm window
+  repeatedly turns it into a tuning set and its numbers stop meaning anything.
+- Report fit noise (refits under several column orders, as `cs2_win_probability/ablate.py` `--n-repeats` does)
+  alongside the clustered bootstrap (`models/cs2/win_probability/splits.clustered_bootstrap_delta`, resampling
+  whole series). A single-fit delta inside the fit-noise spread is not a result.
+- Features must be point-in-time: a value is only usable if it was known before the match it predicts.
