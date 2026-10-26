@@ -1,6 +1,6 @@
 [project]
 name = "gnomepy-research"
-version = "1.2.2"
+version = "1.3.0"
 description = "Signal research, replay, metrics, and strategy modules for gnomepy"
 authors = [{name = "mprey", email = "masonprey7@gmail.com"}]
 readme = "README.md"
