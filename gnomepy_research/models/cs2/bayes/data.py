@@ -7,6 +7,10 @@ a map indexes the month it was played in.
 
 A debutant is a player whose first map anywhere in `maps` falls inside the window. Players appearing in the data's
 first DEBUT_GRACE_DAYS are never debutants: the data starting is not the player starting.
+
+Extra results are series HLTV doesn't cover (tier-D, from PandaScore): maps won by each side, no rounds, and each
+side's tournament roster rather than the five that played. A side counts only with at least MIN_EXTRA_PLAYERS of
+its roster already in the fit, so they sharpen known players and never introduce new ones.
 """
 from __future__ import annotations
 
@@ -19,6 +23,7 @@ import pandas as pd
 from gnomepy_research.models.cs2.hltv.bayes_series import LINEUP_SIZE, RankStrength, home_regions
 
 DEBUT_GRACE_DAYS = 60
+MIN_EXTRA_PLAYERS = 3
 
 
 @dataclass
@@ -49,6 +54,15 @@ class FitData:
     rating_month: np.ndarray     # (R,)
     rating_lineup: np.ndarray    # (R, 5) the player's own lineup
     rating_dev: np.ndarray       # (R,) rating minus his team's mean on that map
+    extra_lineup_a: np.ndarray   # (X, L) player indices of side A's roster, padded
+    extra_weight_a: np.ndarray   # (X, L) 1/roster size on real slots, 0 on padding
+    extra_lineup_b: np.ndarray
+    extra_weight_b: np.ndarray
+    extra_month: np.ndarray      # (X,)
+    extra_region_a: np.ndarray   # (X,)
+    extra_region_b: np.ndarray
+    extra_maps_a: np.ndarray     # (X,) maps won by A
+    extra_maps: np.ndarray       # (X,) maps played
 
     @property
     def n_players(self) -> int:
@@ -74,8 +88,11 @@ def prepare_maps(history: pd.DataFrame, lineups: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_fit_data(maps: pd.DataFrame, player_stats: pd.DataFrame, rank_strength: RankStrength,
-                   start: pd.Timestamp, end: pd.Timestamp) -> FitData:
-    """Inputs from the maps played in [start, end); `maps` comes from prepare_maps."""
+                   start: pd.Timestamp, end: pd.Timestamp, extra_results: pd.DataFrame | None = None) -> FitData:
+    """
+    Inputs from the maps played in [start, end); `maps` comes from prepare_maps. extra_results, if given, has
+    date, team_a_id, team_b_id (HLTV ids, -1 when unknown), maps_a, maps_b, roster_a and roster_b (HLTV player ids).
+    """
     tr = maps[(maps.day >= start) & (maps.day < end)].sort_values(["day", "match_id"]).reset_index(drop=True)
     months = sorted(tr.month.unique())
     midx = {m: i for i, m in enumerate(months)}
@@ -104,6 +121,7 @@ def build_fit_data(maps: pd.DataFrame, player_stats: pd.DataFrame, rank_strength
     sidx = {m: i for i, m in enumerate(tr.match_id.unique())}
 
     ratings = _rating_rows(tr, player_stats, pidx)
+    extra = _extra_rows(extra_results, start, end, pidx, midx, home)
     return FitData(
         months=months,
         player_ids=np.array(players, dtype=np.int64),
@@ -131,7 +149,38 @@ def build_fit_data(maps: pd.DataFrame, player_stats: pd.DataFrame, rank_strength
         rating_month=ratings.month.map(midx).to_numpy(),
         rating_lineup=np.array([[pidx[p] for p in five] for five in ratings.own_lineup], dtype=np.int64).reshape(-1, LINEUP_SIZE),
         rating_dev=ratings.dev.to_numpy(float),
+        **extra,
     )
+
+
+def _extra_rows(extra: pd.DataFrame | None, start: pd.Timestamp, end: pd.Timestamp, pidx: dict[int, int],
+                midx: dict[pd.Timestamp, int], home: dict[int, int]) -> dict[str, np.ndarray]:
+    rows = []
+    if extra is not None:
+        e = extra[(extra.date >= start) & (extra.date < end) & (extra.maps_a + extra.maps_b > 0)]
+        for r in e.itertuples():
+            month = pd.Timestamp(r.date).to_period("M").to_timestamp()
+            a = [pidx[int(p)] for p in r.roster_a if int(p) in pidx]
+            b = [pidx[int(p)] for p in r.roster_b if int(p) in pidx]
+            if month in midx and len(a) >= MIN_EXTRA_PLAYERS and len(b) >= MIN_EXTRA_PLAYERS:
+                rows.append((a, b, midx[month], home.get(int(r.team_a_id), 0), home.get(int(r.team_b_id), 0),
+                             int(r.maps_a), int(r.maps_a + r.maps_b)))
+    width = max([max(len(a), len(b)) for a, b, *_ in rows], default=1)
+
+    def padded(sides: list[list[int]]) -> tuple[np.ndarray, np.ndarray]:
+        idx, w = np.zeros((len(sides), width), dtype=np.int64), np.zeros((len(sides), width))
+        for i, s in enumerate(sides):
+            idx[i, :len(s)] = s
+            w[i, :len(s)] = 1 / len(s)
+        return idx, w
+
+    lineup_a, weight_a = padded([r[0] for r in rows])
+    lineup_b, weight_b = padded([r[1] for r in rows])
+    cols = list(zip(*rows)) if rows else [[]] * 7
+    return {"extra_lineup_a": lineup_a, "extra_weight_a": weight_a, "extra_lineup_b": lineup_b, "extra_weight_b": weight_b,
+            "extra_month": np.array(cols[2], dtype=np.int64), "extra_region_a": np.array(cols[3], dtype=np.int64),
+            "extra_region_b": np.array(cols[4], dtype=np.int64), "extra_maps_a": np.array(cols[5], dtype=np.int64),
+            "extra_maps": np.array(cols[6], dtype=np.int64)}
 
 
 def _rating_rows(tr: pd.DataFrame, player_stats: pd.DataFrame, pidx: dict[int, int]) -> pd.DataFrame:

@@ -10,7 +10,7 @@ Walk-forward of the Bayesian series model, and scoring of its blend with the pre
            compared on the confirm months
 
 The data dir holds parquet snapshots of cs2_match_history, cs2_match_lineups, cs2_player_map_stats and
-cs2_team_rankings. The pre-map prices file has match_id and xgb (series price from the pre-map walk-forward).
+cs2_team_rankings, and with --extra-results also extra_results.parquet (series HLTV lacks; see bayes/data.py). The pre-map prices file has match_id and xgb (series price from the pre-map walk-forward).
 
     python -m gnomepy_research.sessions.cs2_win_probability.bayes.walk_forward fit <data dir> <out dir> 2025-09 2026-09
     python -m gnomepy_research.sessions.cs2_win_probability.bayes.walk_forward score <out dir> <pre-map prices> 2026-03
@@ -47,12 +47,14 @@ def series_in(maps: pd.DataFrame, start: pd.Timestamp, length) -> pd.DataFrame:
     return maps[(maps.day >= start) & (maps.day < start + length) & (maps.bo_type == 3)].drop_duplicates("match_id")
 
 
-def fit(data_dir: Path, out_dir: Path, first: str, last: str, cfg: BayesSeriesConfig, step: str = "month") -> None:
+def fit(data_dir: Path, out_dir: Path, first: str, last: str, cfg: BayesSeriesConfig, step: str = "month",
+        extra_results: bool = False) -> None:
     history = pd.read_parquet(data_dir / "cs2_match_history.parquet")
     maps = prepare_maps(history, pd.read_parquet(data_dir / "cs2_match_lineups.parquet"))
     stats = pd.read_parquet(data_dir / "cs2_player_map_stats.parquet",
                             columns=["match_id", "map_name", "player_id", "team_id", "side", "rating"])
     ranks = RankStrength(pd.read_parquet(data_dir / "cs2_team_rankings.parquet"))
+    extra = pd.read_parquet(data_dir / "extra_results.parquet") if extra_results else None
     won = maps.groupby("match_id").team_a_won.agg(lambda w: int(w.sum() * 2 > len(w)))
     out_dir.mkdir(parents=True, exist_ok=True)
     freq, length = STEPS[step]
@@ -63,7 +65,7 @@ def fit(data_dir: Path, out_dir: Path, first: str, last: str, cfg: BayesSeriesCo
         if series.empty:
             print(f"{label} no bo3 series, skipped", flush=True)
             continue
-        posterior, diag = fit_month(maps, stats, ranks, start, cfg)
+        posterior, diag = fit_month(maps, stats, ranks, start, cfg, extra)
         if step == "month":
             # A weekly or daily run's dozens of posteriors at ~120 MB each aren't worth keeping; its prices are the result.
             posterior.save(out_dir / f"posterior_{label}.npz")
@@ -122,14 +124,16 @@ def main() -> None:
     f.add_argument("--no-debut-prior", dest="debut_prior", action="store_false",
                    help="give debutants the regular prior (the model before Oct 2026)")
     f.add_argument("--step", choices=sorted(STEPS), default="month", help="refit every month, week or day")
+    f.add_argument("--extra-results", action="store_true", help="also fit extra_results.parquet from the data dir")
+    f.add_argument("--extra-weight", type=float, default=1.0, help="log-likelihood weight of an extra result")
     s = sub.add_parser("score")
     s.add_argument("out_dir", type=Path)
     s.add_argument("premap_prices", type=Path)
     s.add_argument("confirm_from")
     args = parser.parse_args()
     if args.command == "fit":
-        fit(args.data_dir, args.out_dir, args.first, args.last, BayesSeriesConfig(seed=args.seed, debut_prior=args.debut_prior),
-            args.step)
+        cfg = BayesSeriesConfig(seed=args.seed, debut_prior=args.debut_prior, extra_weight=args.extra_weight)
+        fit(args.data_dir, args.out_dir, args.first, args.last, cfg, args.step, args.extra_results)
     else:
         score(args.out_dir, args.premap_prices, args.confirm_from)
 

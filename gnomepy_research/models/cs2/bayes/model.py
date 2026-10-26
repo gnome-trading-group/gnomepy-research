@@ -7,6 +7,8 @@ The Bayesian series model, fitted with NUTS (nutpie) on one window.
     beta ~ N(0, sigma_map);  rho[Europe] = rho[unknown] = 0, others ~ N(0, 0.3)
     eta ~ N(0, sigma_m) per map;  eps ~ N(0, sigma_s) per series
     rating_dev[p, map] ~ N(gamma * (skill[p, t] - mean(skill[own lineup, t])) + style_p, sigma_r),  gamma > 0
+    maps_A ~ Binomial(maps, sigmoid(EXTRA_MAP_SCALE * (mean(skill[roster A, t]) - mean(skill[roster B, t]) + rho + eps')))
+        for each extra result (HLTV-less series: maps won only), its log likelihood weighted by extra_weight
 
 Rounds identify a lineup's mean, not who in a stable five is better; the ratings relative to teammates do, which
 is what helps most when a lineup changes (stand-ins, transfers).
@@ -29,6 +31,10 @@ from gnomepy_research.models.cs2.hltv.bayes_series import REGIONS, RankStrength,
 
 POSTERIOR_VARS = ["theta_last", "beta", "rho", "sigma_m", "sigma_s", "b", "sigma0", "sigma_map", "gamma", "sigma_r"]
 SUMMARY_VARS = ["sigma0", "b", "sigma_map", "rho", "sigma_m", "sigma_s", "gamma", "sigma_u", "sigma_r"]
+# A map's win logit is close to this multiple of its round-logit gap: least squares against regulation_map_win under
+# the per-map noise (sigma_m ~0.37) over gaps of -1.2..1.2, within 0.02 in probability. Extra results have no rounds,
+# and a fixed scale keeps them from moving the round model's own parameters.
+EXTRA_MAP_SCALE = 3.22
 
 
 @dataclass(frozen=True)
@@ -45,6 +51,9 @@ class BayesSeriesConfig:
     # Debutants start from their own prior (offset a_new, about -0.35 round-logit, spread sigma_new) instead of the
     # regular one, which rates an unknown newcomer on a good team too highly. Confirm Mar-Sep 2026: -0.0010* vs off.
     debut_prior: bool = True
+    # Extra (tier-D) results are noisier evidence than HLTV maps: a tournament roster stands in for the five that
+    # played, and the stakes are lower. Below 1 their log likelihood counts for less.
+    extra_weight: float = 1.0
 
 
 def build_model(data: FitData, cfg: BayesSeriesConfig) -> pm.Model:
@@ -85,6 +94,16 @@ def build_model(data: FitData, cfg: BayesSeriesConfig) -> pm.Model:
         own = skill[data.rating_lineup, data.rating_month[:, None]].mean(axis=1)
         mu_r = gamma * (skill[data.rating_player, data.rating_month] - own) + style[data.rating_player]
         pm.Normal("rating", mu_r, sigma_r, observed=data.rating_dev)
+
+        if len(data.extra_maps):
+            def roster_mean(lineup, weight):
+                return (skill[lineup, data.extra_month[:, None]] * weight).sum(axis=1)
+
+            eps_x = sigma_s * pm.Normal("eps_extra_z", 0, 1, shape=len(data.extra_maps))
+            gap = (roster_mean(data.extra_lineup_a, data.extra_weight_a) - roster_mean(data.extra_lineup_b, data.extra_weight_b)
+                   + rho[data.extra_region_a] - rho[data.extra_region_b] + eps_x)
+            logp = pm.logp(pm.Binomial.dist(n=data.extra_maps, p=pm.math.sigmoid(EXTRA_MAP_SCALE * gap)), data.extra_maps_a)
+            pm.Potential("extra_results", cfg.extra_weight * logp.sum())
     return model
 
 
@@ -127,12 +146,14 @@ def posterior_from(idata: az.InferenceData, data: FitData, cfg: BayesSeriesConfi
 
 
 def fit_month(maps: pd.DataFrame, player_stats: pd.DataFrame, rank_strength: RankStrength, month: pd.Timestamp,
-              cfg: BayesSeriesConfig = BayesSeriesConfig()) -> tuple[SeriesPosterior, dict]:
+              cfg: BayesSeriesConfig = BayesSeriesConfig(), extra_results: pd.DataFrame | None = None) -> tuple[SeriesPosterior, dict]:
     """Fit on the window_months before `month` and return the posterior that prices `month`'s series."""
-    data = build_fit_data(maps, player_stats, rank_strength, month - pd.DateOffset(months=cfg.window_months), month)
+    data = build_fit_data(maps, player_stats, rank_strength, month - pd.DateOffset(months=cfg.window_months), month,
+                          extra_results)
     idata = sample(build_model(data, cfg), cfg)
     diag = diagnostics(idata)
     diag.update({"maps": len(data.rounds), "players": data.n_players, "rating_obs": len(data.rating_dev),
+                 "extra_results": len(data.extra_maps),
                  **{k: float(idata.posterior[k].mean()) for k in ("gamma", "sigma0", "sigma_m", "sigma_s")
                     + (("a_new", "sigma_new") if cfg.debut_prior else ())}})
     return posterior_from(idata, data, cfg, month), diag
