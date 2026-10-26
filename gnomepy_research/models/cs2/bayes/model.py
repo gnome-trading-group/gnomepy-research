@@ -7,7 +7,7 @@ The Bayesian series model, fitted with NUTS (nutpie) on one window.
     beta ~ N(0, sigma_map);  rho[Europe] = rho[unknown] = 0, others ~ N(0, 0.3)
     eta ~ N(0, sigma_m) per map;  eps ~ N(0, sigma_s) per series
     rating_dev[p, map] ~ N(gamma * (skill[p, t] - mean(skill[own lineup, t])) + style_p, sigma_r),  gamma > 0
-    maps_A ~ Binomial(maps, sigmoid(EXTRA_MAP_SCALE * (mean(skill[roster A, t]) - mean(skill[roster B, t]) + rho + eps')))
+    maps_A ~ Binomial(maps, sigmoid(EXTRA_MAP_SCALE * (mean(skill[roster A, t]) - mean(skill[roster B, t]) + rho + eps_x)))
         for each extra result (HLTV-less series: maps won only), its log likelihood weighted by extra_weight
 
 Rounds identify a lineup's mean, not who in a stable five is better; the ratings relative to teammates do, which
@@ -99,7 +99,10 @@ def build_model(data: FitData, cfg: BayesSeriesConfig) -> pm.Model:
             def roster_mean(lineup, weight):
                 return (skill[lineup, data.extra_month[:, None]] * weight).sum(axis=1)
 
-            eps_x = sigma_s * pm.Normal("eps_extra_z", 0, 1, shape=len(data.extra_maps))
+            # Its own series noise: shared with HLTV series, sigma_s fell from ~0.17 to ~0.10 and mixed badly (r_hat
+            # 1.29), and pricing an HLTV series uses sigma_s.
+            sigma_x = pm.HalfNormal("sigma_extra", 0.5)
+            eps_x = sigma_x * pm.Normal("eps_extra_z", 0, 1, shape=len(data.extra_maps))
             gap = (roster_mean(data.extra_lineup_a, data.extra_weight_a) - roster_mean(data.extra_lineup_b, data.extra_weight_b)
                    + rho[data.extra_region_a] - rho[data.extra_region_b] + eps_x)
             logp = pm.logp(pm.Binomial.dist(n=data.extra_maps, p=pm.math.sigmoid(EXTRA_MAP_SCALE * gap)), data.extra_maps_a)
@@ -109,14 +112,16 @@ def build_model(data: FitData, cfg: BayesSeriesConfig) -> pm.Model:
 
 def sample(model: pm.Model, cfg: BayesSeriesConfig) -> az.InferenceData:
     with model:
-        extra = ["a_new", "sigma_new"] if cfg.debut_prior else []
+        kept = ["a_new", "sigma_new"] if cfg.debut_prior else []
+        if "sigma_extra" in model.named_vars:
+            kept.append("sigma_extra")
         return pm.sample(draws=cfg.draws, tune=cfg.tune, chains=cfg.chains, random_seed=cfg.seed, nuts_sampler="nutpie",
                          target_accept=cfg.target_accept, progressbar=False,
-                         var_names=POSTERIOR_VARS + ["sigma_u"] + extra)
+                         var_names=POSTERIOR_VARS + ["sigma_u"] + kept)
 
 
 def diagnostics(idata: az.InferenceData) -> dict:
-    s = az.summary(idata, var_names=SUMMARY_VARS, kind="diagnostics")
+    s = az.summary(idata, var_names=SUMMARY_VARS + [v for v in ("sigma_extra",) if v in idata.posterior], kind="diagnostics")
     skills = az.summary(idata, var_names=["theta_last"], kind="diagnostics")
     return {"max_rhat": float(s["r_hat"].max()), "worst_rhat_param": str(s["r_hat"].idxmax()),
             "min_ess_bulk": float(s["ess_bulk"].min()), "skill_max_rhat": float(skills["r_hat"].max()),
@@ -155,5 +160,5 @@ def fit_month(maps: pd.DataFrame, player_stats: pd.DataFrame, rank_strength: Ran
     diag.update({"maps": len(data.rounds), "players": data.n_players, "rating_obs": len(data.rating_dev),
                  "extra_results": len(data.extra_maps),
                  **{k: float(idata.posterior[k].mean()) for k in ("gamma", "sigma0", "sigma_m", "sigma_s")
-                    + (("a_new", "sigma_new") if cfg.debut_prior else ())}})
+                    + (("a_new", "sigma_new") if cfg.debut_prior else ()) + (("sigma_extra",) if len(data.extra_maps) else ())}})
     return posterior_from(idata, data, cfg, month), diag

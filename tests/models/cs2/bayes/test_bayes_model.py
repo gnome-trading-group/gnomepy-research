@@ -115,7 +115,8 @@ def test_extra_results_need_the_window_and_enough_known_players():
 
     plain = build_fit_data(maps, stats, RANKS, start, end)
     assert len(plain.extra_maps) == 0
-    assert "eps_extra_z" not in build_model(plain, BayesSeriesConfig()).named_vars
+    assert not {"eps_extra_z", "sigma_extra"} & set(build_model(plain, BayesSeriesConfig()).named_vars)
+    assert {"eps_extra_z", "sigma_extra"} <= set(build_model(data, BayesSeriesConfig()).named_vars)
 
 
 def test_extra_results_move_a_thinly_covered_team_toward_its_skill():
