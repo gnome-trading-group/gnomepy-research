@@ -51,7 +51,6 @@ class Params:
     hybrid_min: int = 1
     blend_rest: float = 0.5
     blend_thin: float = 1.15
-    hltv_scale: float = 1.0
 
 
 MAX_LOGIT = 30.0
