@@ -1,0 +1,169 @@
+"""
+Credibility rating: player and team skills from both sources, fitted as one penalised likelihood (a MAP estimate).
+
+    rounds_A ~ Binomial(n, sigmoid(D)),  D = mean(theta[five A]) - mean(theta[five B]) + gamma[A] - gamma[B]
+    theta_p ~ N(F_p . beta, sigma0)      class prior: team rank strength, ESEA division, HLTV-seen, debut
+    gamma_t ~ N(0, sigma_team)
+
+Each map's log-likelihood is multiplied by credibility[source] * 0.5^(age / half_life). The credibility factor is the
+share of a map's nominal binomial information that is real: rounds within a map are correlated (map noise), and an
+online FACEIT map says less about a team's HLTV strength than an HLTV map does. With a Gaussian prior this is
+Buhlmann-Straub credibility: a player's estimate is his class mean plus Z times his own evidence, with
+Z = e / (e + 1/sigma0^2) where e is his credibility-weighted, decayed number of rounds. FACEIT data enters as more
+evidence at its own (lower) credibility, and as the class (ESEA division) that sets the prior of a player HLTV has
+never seen.
+
+A series is priced pre-veto: every map slot has the same expected gap, the map's own noise is integrated per map and
+a series-level noise is shared by the three slots, so P(series) = E[p^2 (3 - 2p)].
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import numpy as np
+import pandas as pd
+import scipy.optimize as opt
+import scipy.sparse as sp
+
+from gnomepy_research.models.cs2.hltv.bayes_series import UNRANKED
+from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
+from gnomepy_research.sessions.cs2_comp.e15.data import FACEIT, HLTV, LINEUP_SIZE, N_DIVISIONS
+
+_GH_X, _GH_W = np.polynomial.hermite_e.hermegauss(21)
+_GH_W = _GH_W / _GH_W.sum()
+_GRID = np.linspace(-8.0, 8.0, 3201)
+
+
+@dataclass(frozen=True)
+class Config:
+    window_days: int = 365
+    half_life_days: float = 120.0
+    credibility_hltv: float = 0.5
+    credibility_faceit: float = 0.25
+    sigma0: float = 0.25
+    sigma_team: float = 0.15
+    debut_days: int = 60
+    map_noise: float = 0.37
+    series_noise: float = 0.2
+
+
+@dataclass
+class Fit:
+    cfg: Config
+    pidx: dict
+    theta: np.ndarray
+    tidx: dict
+    gamma: np.ndarray
+    beta: np.ndarray
+    rank_strength: dict          # team -> latest -log rank before the cutoff
+    strength_mu: float
+    strength_sd: float
+    latest_five: dict            # team -> five of its latest map before the cutoff
+    hltv_seen: set = field(default_factory=set)
+    map_table: np.ndarray = None
+
+    def __post_init__(self):
+        self.map_table = regulation_map_win(_GRID[:, None] + self.cfg.map_noise * _GH_X[None, :]) @ _GH_W
+
+
+def _rank_strength(rankings: pd.DataFrame, cutoff: pd.Timestamp, max_age_days: int = 120) -> dict:
+    r = rankings[rankings.date >= pd.Timestamp(cutoff) - pd.Timedelta(days=max_age_days)].sort_values("date")
+    latest = r.groupby("team_id")["rank"].last()
+    return {int(t): -np.log(float(k)) for t, k in latest.items()}
+
+
+def _features(strength: np.ndarray, div: np.ndarray, seen: np.ndarray, debut: np.ndarray) -> np.ndarray:
+    onehot = np.zeros((len(strength), N_DIVISIONS))
+    onehot[np.arange(len(strength)), div] = 1.0
+    return np.column_stack([strength, onehot[:, 1:], 1.0 - seen, debut])
+
+
+def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: Config, career_first: pd.Series) -> Fit:
+    """`maps` holds the window's maps (data.before); career_first is each player's first map day before the cutoff."""
+    cutoff = pd.Timestamp(cutoff)
+    strength_of = _rank_strength(rankings, cutoff)
+    unranked = -np.log(UNRANKED)
+
+    fa = np.array([list(f) for f in maps.five_a], dtype=np.int64)
+    fb = np.array([list(f) for f in maps.five_b], dtype=np.int64)
+    players, inv = np.unique(np.concatenate([fa.ravel(), fb.ravel()]), return_inverse=True)
+    ia, ib = inv[: fa.size].reshape(fa.shape), inv[fa.size:].reshape(fb.shape)
+    teams, tinv = np.unique(np.concatenate([maps.team_a.to_numpy(), maps.team_b.to_numpy()]), return_inverse=True)
+    ta, tb = tinv[: len(maps)], tinv[len(maps):]
+    n_m, n_p, n_t = len(maps), len(players), len(teams)
+
+    # Each player's class: the rank strength of the first team he played for in the window, the highest ESEA
+    # division he played in it, whether HLTV has seen him, and whether he debuted inside the window.
+    first_team = np.full(n_p, -1, dtype=np.int64)
+    order = np.argsort(maps.known_at.to_numpy(), kind="stable")
+    for i in order[::-1]:
+        first_team[ia[i]] = maps.team_a.iat[i]
+        first_team[ib[i]] = maps.team_b.iat[i]
+    strength_raw = np.array([strength_of.get(int(t), unranked) for t in first_team])
+    mu, sd = float(strength_raw.mean()), float(strength_raw.std()) or 1.0
+    div = np.zeros(n_p, dtype=int)
+    seen = np.zeros(n_p)
+    src = maps.src.to_numpy()
+    mdiv = maps.division.to_numpy()
+    for side in (ia, ib):
+        np.maximum.at(div, side.ravel(), np.repeat(mdiv, LINEUP_SIZE))
+        np.maximum.at(seen, side.ravel(), np.repeat((src == HLTV).astype(float), LINEUP_SIZE))
+    grace = career_first.min() + pd.Timedelta(days=cfg.debut_days) if len(career_first) else cutoff
+    start = cutoff - pd.Timedelta(days=cfg.window_days)
+    first_day = career_first.reindex(players).to_numpy()
+    debut = (first_day >= np.datetime64(max(start, grace))).astype(float)
+    F = _features((strength_raw - mu) / sd, div, seen, debut)
+
+    rows = np.repeat(np.arange(n_m), LINEUP_SIZE)
+    A = sp.csr_matrix((np.full(fa.size, 1.0 / LINEUP_SIZE), (rows, ia.ravel())), shape=(n_m, n_p)) \
+        - sp.csr_matrix((np.full(fb.size, 1.0 / LINEUP_SIZE), (rows, ib.ravel())), shape=(n_m, n_p))
+    T = sp.csr_matrix((np.ones(n_m), (np.arange(n_m), ta)), shape=(n_m, n_t)) \
+        - sp.csr_matrix((np.ones(n_m), (np.arange(n_m), tb)), shape=(n_m, n_t))
+    age = (np.datetime64(cutoff) - maps.day.to_numpy()).astype("timedelta64[s]").astype(float) / 86400.0
+    w = np.where(src == FACEIT, cfg.credibility_faceit, cfg.credibility_hltv) * 0.5 ** (age / cfg.half_life_days)
+    k = maps.rounds_a.to_numpy(float)
+    n = maps.rounds.to_numpy(float)
+    AT, TT = A.T.tocsr(), T.T.tocsr()
+    n_f = F.shape[1]
+    inv0, invt = 1.0 / cfg.sigma0 ** 2, 1.0 / cfg.sigma_team ** 2
+
+    def objective(x):
+        theta, gamma, beta = x[:n_p], x[n_p:n_p + n_t], x[n_p + n_t:]
+        d = A @ theta + T @ gamma
+        log_p = -np.logaddexp(0.0, -d)
+        log_q = -np.logaddexp(0.0, d)
+        resid = theta - F @ beta
+        f = -np.sum(w * (k * log_p + (n - k) * log_q)) + 0.5 * inv0 * resid @ resid + 0.5 * invt * gamma @ gamma \
+            + 0.5 * beta @ beta
+        r = w * (k - n / (1.0 + np.exp(-d)))
+        g = np.concatenate([-(AT @ r) + inv0 * resid, -(TT @ r) + invt * gamma, -inv0 * (F.T @ resid) + beta])
+        return f, g
+
+    res = opt.minimize(objective, np.zeros(n_p + n_t + n_f), jac=True, method="L-BFGS-B",
+                       options={"maxiter": 5000, "maxcor": 20, "ftol": 1e-14, "gtol": 1e-8})
+    x = res.x
+    latest: dict = {}
+    for i in order:
+        latest[int(maps.team_a.iat[i])] = maps.five_a.iat[i]
+        latest[int(maps.team_b.iat[i])] = maps.five_b.iat[i]
+    return Fit(cfg=cfg, pidx={int(p): i for i, p in enumerate(players)}, theta=x[:n_p],
+               tidx={int(t): i for i, t in enumerate(teams)}, gamma=x[n_p:n_p + n_t], beta=x[n_p + n_t:],
+               rank_strength=strength_of, strength_mu=mu, strength_sd=sd, latest_five=latest,
+               hltv_seen={int(p) for p, s in zip(players, seen) if s > 0})
+
+
+def team_rating(f: Fit, team: int) -> float:
+    """Expected round-logit strength of a team's latest five plus its team effect; unseen players take their class."""
+    unranked = -np.log(UNRANKED)
+    s = (f.rank_strength.get(int(team), unranked) - f.strength_mu) / f.strength_sd
+    newcomer = float((_features(np.array([s]), np.array([0]), np.array([1.0]), np.array([1.0])) @ f.beta)[0])
+    five = f.latest_five.get(int(team))
+    skills = [f.theta[f.pidx[p]] if p in f.pidx else newcomer for p in five] if five else [newcomer] * LINEUP_SIZE
+    g = f.gamma[f.tidx[int(team)]] if int(team) in f.tidx else 0.0
+    return float(np.mean(skills) + g)
+
+
+def series_price(f: Fit, team_a: int, team_b: int) -> float:
+    d = team_rating(f, team_a) - team_rating(f, team_b)
+    p = np.interp(d + f.cfg.series_noise * _GH_X, _GRID, f.map_table)
+    return float(np.clip((p * p * (3 - 2 * p)) @ _GH_W, 1e-4, 1 - 1e-4))
