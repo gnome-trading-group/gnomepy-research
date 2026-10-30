@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.e17.data import hltv_maps, hltv_series, monday
-from gnomepy_research.sessions.cs2_comp.e17.predict import calibrate, snapshot
+from gnomepy_research.sessions.cs2_comp.e17.predict import calibrate, filter_config, snapshot
 from gnomepy_research.sessions.cs2_comp.e17.skill import SourceConfig
 
 
@@ -60,6 +60,7 @@ def main() -> None:
     ap.add_argument("--faceit-prior-offset", type=float, default=SourceConfig.faceit_prior_offset)
     ap.add_argument("--faceit-sigma0", type=float, default=SourceConfig.faceit_sigma0)
     ap.add_argument("--calibration-months", type=int, nargs="+", default=[12])
+    ap.add_argument("--filter", action="append", metavar="NAME=VALUE")
     ap.add_argument("--name", default="dev")
     ap.add_argument("--out-dir", default=os.environ.get("OUTPUT_DIR"))
     a = ap.parse_args()
@@ -70,13 +71,13 @@ def main() -> None:
     if snap_path and snap_path.exists():
         snap = pd.read_parquet(snap_path)
     else:
-        snap = snapshot(a.data, targets, a.faceit, src)
+        snap = snapshot(a.data, targets, a.faceit, src, filter_config(a.filter))
         if snap_path:
             out_dir.mkdir(parents=True, exist_ok=True)
             snap.to_parquet(snap_path, index=False)
     lines = []
     for months in a.calibration_months:
-        label = f"faceit={a.faceit} w={a.faceit_weight} a={a.faceit_prior_offset} s0={a.faceit_sigma0} months={months}"
+        label = f"faceit={a.faceit} w={a.faceit_weight} a={a.faceit_prior_offset} s0={a.faceit_sigma0} filter={a.filter} months={months}"
         for extra in (False, True):
             for calibration in ("pooled", "coverage") if a.faceit else ("pooled",):
                 pred = calibrate(snap, a.faceit, months, calibration, extra, log=lambda *_: None)

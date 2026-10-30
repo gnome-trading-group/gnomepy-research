@@ -2,7 +2,7 @@
 
     python -m gnomepy_research.sessions.cs2_comp.e17.predict --data <bundle dir> --targets <targets parquet> --out <parquet>
         [--no-faceit] [--faceit-weight W] [--faceit-prior-offset A] [--faceit-sigma0 S] [--calibration-months M]
-        [--calibration pooled|coverage] [--no-extra-features]
+        [--calibration pooled|coverage] [--no-extra-features] [--filter NAME=VALUE ...]
 
 The map stream (HLTV, plus FACEIT unless --no-faceit) is consumed chronologically by an HLTV-only filter and a unified
 filter. At each Monday every series of the coming week is priced from the state at that Monday: a team's lineup is the
@@ -15,6 +15,7 @@ Everything is deterministic, so a rerun on a bundle cut at one week's cutoff rep
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import math
 import os
 import time
@@ -107,7 +108,17 @@ def _features(f: SkillFilter, lineups: LastLineups, sources: tuple[int, ...], ra
             "rating": lineup_rating(ratings, five_a, c64) - lineup_rating(ratings, five_b, c64)}
 
 
-def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src: SourceConfig = SourceConfig(), log=print) -> pd.DataFrame:
+def filter_config(overrides: list[str] | None) -> PlayerSkillConfig:
+    """The fitted filter settings, with `name=value` overrides from the command line."""
+    cfg = PlayerSkillConfig()
+    for item in overrides or ():
+        name, value = item.split("=")
+        cfg = dataclasses.replace(cfg, **{name: type(getattr(cfg, name))(value)})
+    return cfg
+
+
+def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src: SourceConfig = SourceConfig(),
+             cfg: PlayerSkillConfig = PlayerSkillConfig(), log=print) -> pd.DataFrame:
     """Filter the map stream and price every training and target series at its week's Monday: one row each."""
     targets = targets.copy()
     targets["week_cutoff"] = pd.to_datetime(targets.week_cutoff)
@@ -123,7 +134,6 @@ def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src:
     train["day"] = train.time.dt.normalize()
     log(f"stream {len(stream)} maps ({int((stream.source == FACEIT).sum())} FACEIT), {len(train)} bo3 series, loaded in {time.time() - t0:.0f}s")
 
-    cfg = PlayerSkillConfig()
     filters = {"h": (SkillFilter(cfg, src, ranks, use_faceit=False), (HLTV,))}
     if use_faceit:
         filters["u"] = (SkillFilter(cfg, src, ranks, use_faceit=True), (HLTV, FACEIT))
@@ -167,8 +177,9 @@ def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src:
 
 
 def run(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src: SourceConfig = SourceConfig(),
-        calibration_months: int = 12, calibration: str = "coverage", extra: bool = True, log=print) -> pd.DataFrame:
-    return calibrate(snapshot(data_dir, targets, use_faceit, src, log), use_faceit, calibration_months, calibration, extra, log)
+        calibration_months: int = 12, calibration: str = "coverage", extra: bool = True, cfg: PlayerSkillConfig = PlayerSkillConfig(),
+        log=print) -> pd.DataFrame:
+    return calibrate(snapshot(data_dir, targets, use_faceit, src, cfg, log), use_faceit, calibration_months, calibration, extra, log)
 
 
 def _design(g: pd.DataFrame, use_faceit: bool, calibration: str, extra: bool) -> np.ndarray:
@@ -225,10 +236,11 @@ def main() -> None:
     ap.add_argument("--calibration-months", type=int, default=12)
     ap.add_argument("--calibration", choices=("pooled", "coverage"), default="coverage")
     ap.add_argument("--no-extra-features", dest="extra", action="store_false", help="drop the team Elo and HLTV rating channel from the calibration")
+    ap.add_argument("--filter", action="append", metavar="NAME=VALUE", help="override a PlayerSkillConfig field, e.g. tau=0.02")
     a = ap.parse_args()
     targets = pd.read_parquet(a.targets)
     src = SourceConfig(a.faceit_weight, a.faceit_prior_offset, a.faceit_sigma0)
-    pred = run(a.data, targets, a.faceit, src, a.calibration_months, a.calibration, a.extra)
+    pred = run(a.data, targets, a.faceit, src, a.calibration_months, a.calibration, a.extra, filter_config(a.filter))
     pred = targets[["match_id"]].merge(pred, on="match_id", how="left")
     pred["fit_cutoff"] = pd.to_datetime(pred.fit_cutoff)
     out = Path(os.path.expandvars(a.out))
