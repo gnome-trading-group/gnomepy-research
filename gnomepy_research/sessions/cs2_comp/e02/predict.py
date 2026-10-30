@@ -24,12 +24,12 @@ from gnomepy_research.sessions.cs2_comp.e02.features import Queries, build_queri
 BEST_OF = 3
 SEED = 0
 GBM_PARAMS = {
-    "n_estimators": 300,
-    "max_depth": 3,
+    "n_estimators": 400,
+    "max_depth": 4,
     "learning_rate": 0.03,
     "subsample": 0.8,
     "colsample_bytree": 0.8,
-    "min_child_weight": 40,
+    "min_child_weight": 80,
     "reg_lambda": 5.0,
     "tree_method": "hist",
     "n_jobs": 2,
@@ -91,9 +91,12 @@ def run(data_dir: str, targets: pd.DataFrame, faceit: bool, config: Config = Con
     out = []
     for week in sorted(targets.week_cutoff.unique()):
         week = pd.Timestamp(week)
-        models = fit(queries, week, faceit, config)
         mask = (queries.meta.is_target & (queries.meta.week == week)).to_numpy()
-        q = predict_week(models, queries, mask, faceit)
+        q = predict_week(fit(queries, week, False, config), queries, mask, False)
+        if faceit:
+            q_faceit = predict_week(fit(queries, week, True, config), queries, mask, True)
+            linked = np.minimum(queries.ab.a_fcov.to_numpy()[mask], queries.ab.b_fcov.to_numpy()[mask]) >= 1
+            q = np.where(linked, q_faceit, q)
         out.append(pd.DataFrame({"match_id": queries.meta.match_id[mask].to_numpy(), "q": q, "fit_cutoff": week}))
     return pd.concat(out, ignore_index=True)
 

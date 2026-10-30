@@ -9,27 +9,27 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.e02.features import build_queries
-from gnomepy_research.sessions.cs2_comp.e02.predict import Config, fit, predict_week
+from gnomepy_research.sessions.cs2_comp.e02.predict import GBM_PARAMS, Config, fit, predict_week
 
 DEV_CUT = pd.Timestamp("2026-03-30")
 DEV_WEEKS = pd.date_range("2026-01-05", "2026-03-23", freq="7D")
-BASE = Config()
+def gbm(**overrides) -> Config:
+    return Config(gbm={**GBM_PARAMS, **overrides})
+
+
 VARIANTS = {
-    "faceit_gbm": (True, BASE),
-    "hltv_gbm": (False, BASE),
-    "faceit_lr": (True, replace(BASE, models=("lr",))),
-    "faceit_ens": (True, replace(BASE, models=("gbm", "lr"))),
-    "faceit_gbm_deep": (True, replace(BASE, gbm={**BASE.gbm, "max_depth": 4, "n_estimators": 400, "min_child_weight": 80})),
-    "faceit_gbm_shallow": (True, replace(BASE, gbm={**BASE.gbm, "max_depth": 2, "n_estimators": 600, "min_child_weight": 20})),
-    "faceit_gbm_365d": (True, replace(BASE, window_days=365)),
-    "hltv_gbm_365d": (False, replace(BASE, window_days=365)),
+    "faceit_d4": (True, gbm(max_depth=4, n_estimators=400, min_child_weight=80)),
+    "faceit_d5": (True, gbm(max_depth=5, n_estimators=400, min_child_weight=120)),
+    "faceit_d4_slow": (True, gbm(max_depth=4, n_estimators=800, learning_rate=0.015, min_child_weight=80)),
+    "faceit_d4_mcw200": (True, gbm(max_depth=4, n_estimators=400, min_child_weight=200)),
+    "hltv_d4": (False, gbm(max_depth=4, n_estimators=400, min_child_weight=80)),
+    "hltv_d5": (False, gbm(max_depth=5, n_estimators=400, min_child_weight=120)),
 }
 
 
