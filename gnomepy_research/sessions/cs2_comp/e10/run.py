@@ -28,6 +28,8 @@ HLTV, FACEIT = 0, 1
 
 TRAIN_START = pd.Timestamp("2024-07-01")
 WEEK = pd.Timedelta(days=7)
+DAY_NS = 86_400 * 10 ** 9
+TOGETHER_DAYS, ACTIVE_DAYS = 60, 30
 
 
 @dataclass(frozen=True)
@@ -41,7 +43,8 @@ class RunConfig:
     shift_min_games: int = 20
     thin_games: int = 20
     use_moves: bool = True
-    decay: float = 0.5
+    decay: float = 0.4
+    faceit_offset_var: float = 0.04
     standin_weight: float = 0.3
 
 
@@ -91,6 +94,10 @@ def roster_moves(data_dir: Path, before: pd.Timestamp) -> dict[int, list[tuple[n
     for v in out.values():
         v.sort(key=lambda x: x[0])
     return out
+
+
+def _team_id(value) -> int:
+    return -1 if pd.isna(value) else int(value)
 
 
 def _arr(values) -> np.ndarray:
@@ -143,7 +150,7 @@ def build_events(data_dir: Path, before: pd.Timestamp, index: PlayerIndex, cfg: 
             if len(set(ia.tolist() + ib.tolist())) != 2 * LINEUP:
                 continue
             events.append(Event(int(r.time.value), FACEIT, int(day), ia, ib, int(r.team_a_score), int(r.team_b_score), dev_a, dev_b,
-                                -1, -1, r.match_id, fa, fb))
+                                _team_id(r.team_a_id), _team_id(r.team_b_id), r.match_id, fa, fb))
         info["faceit_maps"] = len(events) - info["hltv_maps"]
     events.sort(key=lambda e: e.time)
     return hm, events, info
@@ -180,6 +187,8 @@ class Pass:
         self.moves = roster_moves(data_dir, last_cutoff) if cfg.use_moves else {}
         self.standins = self._standins(data_dir, last_cutoff)
         self.last_time: dict[int, int] = {}
+        self.by_player: dict[int, list[int]] = collections.defaultdict(list)
+        self.faceit_recent: dict[int, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=cfg.k_series))
         self.series = self._series_table()
         self.actual: dict = {}
         for ev in self.events:
@@ -224,6 +233,14 @@ class Pass:
             f.observe_rating(ev.day, ev.a, ev.dev_a)
         if ev.dev_b is not None:
             f.observe_rating(ev.day, ev.b, ev.dev_b)
+        if ev.source == FACEIT:
+            for team, players in ((ev.team_a, ev.a), (ev.team_b, ev.b)):
+                if team >= 0:
+                    q = self.faceit_recent[team]
+                    if q and q[-1][0] == ev.match_id:
+                        q[-1][1] = tuple(players.tolist())
+                    else:
+                        q.append([ev.match_id, tuple(players.tolist())])
         if ev.source == HLTV:
             for team, players in ((ev.team_a, ev.a), (ev.team_b, ev.b)):
                 self.last_time[team] = ev.time
@@ -239,6 +256,8 @@ class Pass:
             ev = self.events[self.pos]
             if ev.source == HLTV or self.cfg.use_faceit:
                 self._process(ev)
+                for p in ev.a.tolist() + ev.b.tolist():
+                    self.by_player[p].append(self.pos)
             self.pos += 1
 
     def lineup(self, team: int, cutoff: pd.Timestamp) -> np.ndarray | None:
@@ -246,7 +265,7 @@ class Pass:
         departures since its last series removed and arrivals put first."""
         q = self.recent.get(int(team))
         if not q:
-            return None
+            return self._faceit_lineup(int(team))
         score: dict[int, tuple[float, int]] = {}
         for age, (match_id, players) in enumerate(reversed(q)):
             standin = self.standins.get((match_id, int(team)), ())
@@ -274,6 +293,18 @@ class Pass:
             ordered = arrived[::-1] + [p for p in ordered if p not in gone and p not in arrived]
         return _arr(ordered[:LINEUP]) if ordered else None
 
+    def _faceit_lineup(self, team: int) -> np.ndarray | None:
+        """A team with no HLTV map yet is known, where FACEIT matched it, by the players of its latest FACEIT matches."""
+        q = self.faceit_recent.get(team)
+        if not q:
+            return None
+        score: dict[int, tuple[float, int]] = {}
+        for age, (_, players) in enumerate(reversed(q)):
+            for p in players:
+                total, latest = score.get(p, (0.0, -len(q)))
+                score[p] = (total + self.cfg.decay ** age, max(latest, -age))
+        return _arr(sorted(score, key=lambda p: (-score[p][0], -score[p][1]))[:LINEUP])
+
     def _virtual(self, team: int, day: pd.Timestamp) -> tuple[float, float]:
         cfg = self.cfg.hltv
         return cfg.a + cfg.b * math.log1p(self.rank.points(team, day)), cfg.sigma0 ** 2 / LINEUP
@@ -285,14 +316,18 @@ class Pass:
             return 0.0
         return float(np.median(self.ff.s.mu[both] - self.fh.s.mu[both]))
 
-    def _state(self, lineup: np.ndarray, team: int, day: int, cutoff: pd.Timestamp) -> tuple[np.ndarray, np.ndarray]:
-        """HLTV-filter mean and variance of the lineup; a player with no HLTV map yet gets the newcomer prior."""
+    def _state(self, lineup: np.ndarray, team: int, day: int, cutoff: pd.Timestamp, shift: float) -> tuple[np.ndarray, np.ndarray]:
+        """HLTV-filter mean and variance of the lineup. A player with no HLTV map yet takes his FACEIT skill, moved to
+        the HLTV scale, if he has one, and the newcomer prior otherwise."""
         mu, var = self.fh.current(lineup, day)
         unknown = self.fh.s.seen[lineup] == NEWCOMER
         if unknown.any():
-            prior, prior_var = self._virtual(team, cutoff)
+            prior, _ = self._virtual(team, cutoff)
             mu, var = mu.copy(), var.copy()
-            mu[unknown], var[unknown] = prior, self.cfg.hltv.sigma0 ** 2
+            on_faceit = self.ff.s.seen[lineup] != NEWCOMER
+            mu_f, var_f = self.ff.current(lineup, day)
+            mu[unknown] = np.where(on_faceit, mu_f - shift, prior)[unknown]
+            var[unknown] = np.where(on_faceit, var_f + self.cfg.faceit_offset_var, self.cfg.hltv.sigma0 ** 2)[unknown]
         return mu, var
 
     def _faceit_residual(self, lineup: np.ndarray, mu_h: np.ndarray, shift: float) -> tuple[float, float, float, int]:
@@ -305,21 +340,39 @@ class Pass:
         thin = self.fh.s.games[lineup] < self.cfg.thin_games
         return float(resid[thin].sum() / LINEUP), float(resid[~thin].sum() / LINEUP), float(weight.mean()), int((g >= 10).sum())
 
+    def _practice(self, lineup: np.ndarray, cutoff: pd.Timestamp) -> tuple[int, float]:
+        """Maps in the last TOGETHER_DAYS where at least four of the five played side by side (either source), and the
+        lineup's mean number of maps over the last ACTIVE_DAYS."""
+        now = cutoff.value
+        together: collections.Counter = collections.Counter()
+        active = 0
+        for p in lineup.tolist():
+            for eid in reversed(self.by_player.get(p, ())):
+                t = self.events[eid].time
+                if t < now - TOGETHER_DAYS * DAY_NS:
+                    break
+                together[eid] += 1
+                active += t >= now - ACTIVE_DAYS * DAY_NS
+        return sum(1 for c in together.values() if c >= 4), active / len(lineup)
+
     def price(self, cutoff: pd.Timestamp, team_a: int, team_b: int, shift: float = 0.0) -> dict:
         f, day = self.fh, day_number(cutoff)
         a, b = self.lineup(team_a, cutoff), self.lineup(team_b, cutoff)
         row = {"known_a": 0 if a is None else len(a), "known_b": 0 if b is None else len(b)}
         if a is not None and b is not None and len(a) == LINEUP and len(b) == LINEUP and not set(a.tolist()) & set(b.tolist()):
-            (mu_a, var_a), (mu_b, var_b) = self._state(a, team_a, day, cutoff), self._state(b, team_b, day, cutoff)
+            (mu_a, var_a), (mu_b, var_b) = self._state(a, team_a, day, cutoff, shift), self._state(b, team_b, day, cutoff, shift)
             d, s2 = f.gap(a, b, day, (mu_a, mu_b), (var_a, var_b))
             lo_a, hi_a, wa, na = self._faceit_residual(a, mu_a, shift)
             lo_b, hi_b, wb, nb = self._faceit_residual(b, mu_b, shift)
+            row.update(zip(("coh_a", "act_a"), self._practice(a, cutoff)))
+            row.update(zip(("coh_b", "act_b"), self._practice(b, cutoff)))
         else:
             ma, va = self._virtual(team_a, cutoff) if a is None else (float(f.current(a, day)[0].mean()), float(f.current(a, day)[1].sum()) / len(a) ** 2)
             mb, vb = self._virtual(team_b, cutoff) if b is None else (float(f.current(b, day)[0].mean()), float(f.current(b, day)[1].sum()) / len(b) ** 2)
             d, s2 = ma - mb, va + vb
             lo_a = hi_a = lo_b = hi_b = wa = wb = 0.0
             na = nb = 0
+            row.update({"coh_a": 0, "act_a": 0.0, "coh_b": 0, "act_b": 0.0})
         p_map = map_win_prob(d, s2)
         p_series = p_map * p_map * (3 - 2 * p_map)
         row.update({"d": d, "sd": math.sqrt(max(s2, 0.0)), "p_series": min(max(p_series, 1e-4), 1 - 1e-4),

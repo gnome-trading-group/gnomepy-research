@@ -38,6 +38,10 @@ def design(f: pd.DataFrame, spec: str) -> np.ndarray:
     if "s" in tokens:
         cols.append(3.0 * f.fres_lo.to_numpy())
         cols.append(3.0 * f.fres_hi.to_numpy())
+    if "c" in tokens:
+        cols.append(np.log1p(f.coh_a.to_numpy()) - np.log1p(f.coh_b.to_numpy()))
+    if "a" in tokens:
+        cols.append(np.log1p(f.act_a.to_numpy()) - np.log1p(f.act_b.to_numpy()))
     if "sd" in tokens:
         cols.append(f.d.to_numpy() * f.sd.to_numpy())
     if "new" in tokens:
