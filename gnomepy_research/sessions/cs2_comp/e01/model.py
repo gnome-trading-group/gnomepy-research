@@ -124,7 +124,8 @@ def build_performance(data: str, before: pd.Timestamp, cfg: Config) -> pd.DataFr
                           "src": pd.Series([], dtype=int), "z": pd.Series([], dtype=float)})
     if cfg.perf_weight <= 0:
         return empty
-    hist = load(data, "hltv/cs2_match_history", before, ["match_id", "event_name", "format"]).drop_duplicates("match_id")
+    hist = load(data, "hltv/cs2_match_history", before,
+                ["match_id", "match_date", "match_time", "event_name", "format"]).drop_duplicates("match_id")
     keep_ids = hist.match_id[~showmatch_mask(hist).to_numpy()]
     ps = load(data, "hltv/cs2_player_map_stats", before, ["match_id", "match_date", "player_id", "side", "rating"])
     ps = ps[(ps.side == "all") & ps.rating.notna() & ps.player_id.notna() & ps.match_id.isin(keep_ids)]

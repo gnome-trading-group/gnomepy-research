@@ -21,20 +21,18 @@ from gnomepy_research.sessions.cs2_comp.e01.model import (
     predict,
 )
 
+LONG = {"half_life_days": 1000.0, "window_days": 1000}
 CONFIGS = {
-    "hltv": Config(faceit=False),
-    "w03": Config(faceit_weight=0.3),
-    "w02": Config(faceit_weight=0.2),
-    "w05": Config(faceit_weight=0.5),
-    "w03_r": Config(faceit_weight=0.3, round_weighted=True),
-    "w03_hl1000": Config(faceit_weight=0.3, half_life_days=1000.0, window_days=1000),
-    "w03_C07": Config(faceit_weight=0.3, C=0.7),
-    "w03_C15": Config(faceit_weight=0.3, C=1.5),
-    "hltv_p03": Config(faceit=False, perf_weight=0.3),
-    "w03_p003": Config(faceit_weight=0.3, perf_weight=0.03),
-    "w03_p01": Config(faceit_weight=0.3, perf_weight=0.1),
-    "w03_p03": Config(faceit_weight=0.3, perf_weight=0.3),
-    "w03_p1": Config(faceit_weight=0.3, perf_weight=1.0),
+    "j_hltv_long": Config(faceit=False, **LONG),
+    "j_w03": Config(faceit_weight=0.3),
+    "j_w03_long": Config(faceit_weight=0.3, **LONG),
+    "j_w03_long_C07": Config(faceit_weight=0.3, C=0.7, **LONG),
+    "j_w03_long_C05": Config(faceit_weight=0.3, C=0.5, **LONG),
+    "j_w02_long": Config(faceit_weight=0.2, **LONG),
+    "j_w05_long": Config(faceit_weight=0.5, **LONG),
+    "j_w03_long_p003": Config(faceit_weight=0.3, perf_weight=0.003, **LONG),
+    "j_w03_long_p01": Config(faceit_weight=0.3, perf_weight=0.01, **LONG),
+    "j_hltv_long_p01": Config(faceit=False, perf_weight=0.01, **LONG),
 }
 
 
