@@ -4,17 +4,18 @@ Pre-match bo3 series prices for the competition targets, one fit per distinct we
     python -m gnomepy_research.sessions.cs2_comp.e16.predict --data <bundle> --targets <targets parquet> --out <parquet>
         [--no-faceit] [--weeks 2026-04-06,2026-04-13] [--set name=value ...]
 
+Each target is priced on its announced fives (team_x_lineup_ids). A target without one falls back to each team's
+latest five, with HLTV roster moves dated after that sighting applied.
+
 Each week fits the HLTV-only model. Without FACEIT that fit prices every target. With FACEIT a second, joint fit
 over HLTV and FACEIT maps (FACEIT impact rows, FACEIT skill level and ESEA division priors) runs as well, and:
-  - each team is priced with its latest five across HLTV and FACEIT maps (a FACEIT qualifier is often the freshest
-    sighting of an online team), with HLTV roster moves dated after that sighting applied;
-  - a player of that five whom the HLTV-only fit never saw takes his skill from the joint fit (shifted onto the
+  - a player of the five whom the HLTV-only fit never saw takes his skill from the joint fit (shifted onto the
     HLTV-only scale) instead of the newcomer prior;
+  - the latest-five fallback looks across HLTV and FACEIT maps (a FACEIT qualifier is often the freshest sighting
+    of an online team);
   - cfg.faceit_weight > 0 also mixes in the joint fit's own gaps (0 by default: pooling FACEIT results moved
     established HLTV players too far and scored worse on the tune period).
-When the targets carry announced lineups (team_x_lineup_ids, team_x_standin_ids) those fives are priced instead of
-the latest five; announced stand-ins can be marked down by cfg.standin_shift. --set overrides a Config field, for
-tuning on the dev period only.
+--set overrides a Config field, for tuning on the dev period only.
 """
 from __future__ import annotations
 
@@ -49,10 +50,6 @@ def _announced(ids) -> list[str] | None:
     return [f"h{int(x)}" for x in ids]
 
 
-def _keys(ids) -> frozenset:
-    return frozenset() if ids is None else frozenset(f"h{int(x)}" for x in ids if not pd.isna(x))
-
-
 def _gaps(maps: pd.DataFrame, ratings: pd.DataFrame, levels: pd.DataFrame | None, b: Bundle, targets: pd.DataFrame,
           cutoff: pd.Timestamp, cfg: Config, lineup_maps: pd.DataFrame,
           prefit: Fit | None = None) -> tuple[np.ndarray, np.ndarray, Fit]:
@@ -68,12 +65,10 @@ def _gaps(maps: pd.DataFrame, ratings: pd.DataFrame, levels: pd.DataFrame | None
     for r in targets.itertuples():
         ka, kb = f"h{int(r.team_a_id)}", f"h{int(r.team_b_id)}"
         five_a, five_b = (_five(fives, k, moves, cfg) for k in (ka, kb))
-        st_a, st_b = frozenset(), frozenset()
         if announced:
             five_a = _announced(r.team_a_lineup_ids) or five_a
             five_b = _announced(r.team_b_lineup_ids) or five_b
-            st_a, st_b = _keys(r.team_a_standin_ids), _keys(r.team_b_standin_ids)
-        gaps.append(f.gap(ka, five_a, rank_of.get(ka, 0.0), kb, five_b, rank_of.get(kb, 0.0), st_a, st_b))
+        gaps.append(f.gap(ka, five_a, rank_of.get(ka, 0.0), kb, five_b, rank_of.get(kb, 0.0)))
     g = np.array(gaps, dtype=float).reshape(-1, 2)
     return g[:, 0], g[:, 1], f
 
