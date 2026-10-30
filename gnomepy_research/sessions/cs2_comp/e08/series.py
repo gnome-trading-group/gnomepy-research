@@ -35,7 +35,7 @@ _GRID = np.linspace(-8.0, 8.0, 3201)
 class SeriesParams:
     sigma_m: float = 0.30
     sigma_s: float = 0.10
-    sigma_lu: float = 0.35
+    sigma_lu: float = 0.5
     slope: float = 1.0
 
 

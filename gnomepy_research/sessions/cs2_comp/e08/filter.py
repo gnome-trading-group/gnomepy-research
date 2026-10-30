@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from gnomepy_research.sessions.cs2_comp.e08.data import FACEIT, FIVE, HLTV
+from gnomepy_research.sessions.cs2_comp.e08.data import FIVE, HLTV
 
 NS_PER_DAY = 86_400e9
 
@@ -38,20 +38,19 @@ class Params:
     a_f: float = -1.0
     b_f: float = 0.10
     comp_off: tuple[float, ...] = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-    sigma0_f: float = 1.0
+    sigma0_f: float = 1.3
     kappa_f: float = 1.0
     rho_h: float = 0.017231894894383412
     rho_f: float = 0.02
-    gamma_h: float = 0.2
+    gamma_h: float = 0.3
     sig_r_h: float = 0.5
-    gamma_f: float = 0.4
+    gamma_f: float = 0.5
     sig_r_f: float = 0.5
-    style_shrink: float = 20.0
-    f_floor: float = 0.0
+    style_shrink: float = 40.0
     use_faceit: bool = True
     hybrid_min: int = 1
-    blend_rest: float = 0.44
-    blend_thin: float = 1.10
+    blend_rest: float = 0.5
+    blend_thin: float = 1.15
 
 
 MAX_LOGIT = 30.0
@@ -162,10 +161,6 @@ class SkillFilter:
                     mu_a, ca = mu, cov
                 else:
                     mu_b, cb = mu, cov
-
-        if src == FACEIT and p.f_floor > 0.0:
-            ca = ca + np.diag(np.maximum(p.f_floor ** 2 - np.diag(ca), 0.0))
-            cb = cb + np.diag(np.maximum(p.f_floor ** 2 - np.diag(cb), 0.0))
 
         for players, mu, cov in ((pa, mu_a, ca), (pb, mu_b, cb)):
             for i, pl in enumerate(players):
