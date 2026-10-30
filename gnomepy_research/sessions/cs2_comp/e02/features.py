@@ -240,9 +240,14 @@ def feature_columns(faceit: bool) -> list[str]:
 
 
 def _load_faceit(data_dir: str, cut: pd.Timestamp) -> tuple[PlayerLog, dict]:
-    fm = load(data_dir, "faceit/faceit_matches", cut, ["match_id", "finished_at"])
-    fpm = load(data_dir, "faceit/faceit_player_map_stats", cut, ["match_id", "faceit_id", "k_d_ratio", "adr"])
-    fpm = fpm.merge(fm, on="match_id").dropna(subset=["k_d_ratio", "adr"])
+    fm = load(data_dir, "faceit/faceit_matches", cut, ["match_id", "finished_at", "has_stats"])
+    excl = load(data_dir, "faceit/faceit_exclusions", cut, ["match_id", "map_name"])
+    fm = fm[fm.has_stats.astype(bool) & ~fm.match_id.isin(excl.match_id[excl.map_name.isna()])]
+    fpm = load(data_dir, "faceit/faceit_player_map_stats", cut, ["match_id", "map_name", "faceit_id", "k_d_ratio", "adr"])
+    map_excl = excl[excl.map_name.notna()].rename(columns={"map_name": "excluded_map"})
+    fpm = fpm.merge(map_excl, left_on=["match_id", "map_name"], right_on=["match_id", "excluded_map"], how="left")
+    fpm = fpm[fpm.excluded_map.isna() & fpm.match_id.isin(fm.match_id)]
+    fpm = fpm.merge(fm[["match_id", "finished_at"]], on="match_id").dropna(subset=["k_d_ratio", "adr"])
     log = PlayerLog(fpm, "faceit_id", "finished_at", ["k_d_ratio", "adr"])
     hm = load(data_dir, "faceit/hltv_faceit_map", None)
     return log, dict(zip(hm.hltv_id.astype(int), hm.faceit_id))
