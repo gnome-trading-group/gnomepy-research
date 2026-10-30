@@ -4,11 +4,14 @@ Series prices for the competition targets: one fit per distinct week_cutoff, eac
     python -m gnomepy_research.sessions.cs2_comp.e14.predict --data <bundle> --targets <targets parquet> --out <parquet>
         [--no-faceit] [--weeks 2026-04-06,2026-04-13]
 
+A relative --out is written under $OUTPUT_DIR when that is set (Batch).
+
 --no-faceit fits the same model on HLTV maps alone (no FACEIT maps, rating rows or newcomer features).
 """
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from pathlib import Path
 
@@ -51,9 +54,13 @@ def main() -> None:
         keep = pd.to_datetime(args.weeks.split(","))
         targets = targets[pd.to_datetime(targets.week_cutoff).isin(keep)]
     p = predict(args.data, targets, faceit=args.faceit)
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    p.to_parquet(args.out, index=False)
-    print(f"wrote {len(p)} predictions to {args.out}")
+    out = Path(args.out)
+    # On Batch a relative --out lands in the task's output directory, the only place a task's files are kept.
+    if not out.is_absolute() and "OUTPUT_DIR" in os.environ:
+        out = Path(os.environ["OUTPUT_DIR"]) / out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    p.to_parquet(out, index=False)
+    print(f"wrote {len(p)} predictions to {out}")
 
 
 if __name__ == "__main__":
