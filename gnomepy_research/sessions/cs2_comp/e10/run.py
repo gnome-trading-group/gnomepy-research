@@ -229,28 +229,22 @@ class Pass:
         self._introduce(ev)
         f = self.fh if ev.source == HLTV else self.ff
         f.observe_map(ev.day, ev.a, ev.b, ev.ra, ev.rb)
-        if ev.source == FACEIT and not self.cfg.faceit_rating:
-            return
-        if ev.dev_a is not None:
-            f.observe_rating(ev.day, ev.a, ev.dev_a)
-        if ev.dev_b is not None:
-            f.observe_rating(ev.day, ev.b, ev.dev_b)
-        if ev.source == FACEIT:
-            for team, players in ((ev.team_a, ev.a), (ev.team_b, ev.b)):
-                if team >= 0:
-                    q = self.faceit_recent[team]
-                    if q and q[-1][0] == ev.match_id:
-                        q[-1][1] = tuple(players.tolist())
-                    else:
-                        q.append([ev.match_id, tuple(players.tolist())])
-        if ev.source == HLTV:
-            for team, players in ((ev.team_a, ev.a), (ev.team_b, ev.b)):
+        if ev.source == HLTV or self.cfg.faceit_rating:
+            if ev.dev_a is not None:
+                f.observe_rating(ev.day, ev.a, ev.dev_a)
+            if ev.dev_b is not None:
+                f.observe_rating(ev.day, ev.b, ev.dev_b)
+        recent = self.recent if ev.source == HLTV else self.faceit_recent
+        for team, players in ((ev.team_a, ev.a), (ev.team_b, ev.b)):
+            if team < 0:
+                continue
+            if ev.source == HLTV:
                 self.last_time[team] = ev.time
-                q = self.recent[team]
-                if q and q[-1][0] == ev.match_id:
-                    q[-1][1] = tuple(players.tolist())
-                else:
-                    q.append([ev.match_id, tuple(players.tolist())])
+            q = recent[team]
+            if q and q[-1][0] == ev.match_id:
+                q[-1][1] = tuple(players.tolist())
+            else:
+                q.append([ev.match_id, tuple(players.tolist())])
 
     def advance(self, cutoff: pd.Timestamp) -> None:
         limit = int(cutoff.value)
