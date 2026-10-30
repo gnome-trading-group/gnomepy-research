@@ -17,26 +17,17 @@ def ll(p: np.ndarray, y: np.ndarray) -> np.ndarray:
 def designs(d: pd.DataFrame, zcol: str = "q_soft") -> dict[str, np.ndarray]:
     """Candidate stackers by letter; the HLTV filter's price comes from `zcol`."""
     d = d.assign(q_soft=d[zcol])
-    sets = {"A": ["z_hltv"], "RK": ["z_hltv", "rank_points"], "E": ["z_hltv", "elo_team"], "RH": ["z_hltv", "rating_hltv"], "ZU": ["z_hltv", "z_unstable"], "ZM": ["z_hltv", "z_moved"]}
+    sets = {"A": ["z_hltv"], "RK": ["z_hltv", "rank_points"], "ZU": ["z_hltv", "z_unstable"], "ZM": ["z_hltv", "z_moved"]}
     if "f_s_a" in d:
-        sets.update({"B": ["z_hltv", "faceit_skill"], "K": ["z_hltv", "faceit_skill", "faceit_skill_thin"],
-                     "R": ["z_hltv", "faceit_skill_unsure"], "S": ["z_hltv", "faceit_skill", "faceit_skill_unsure"],
-                     "T": ["z_hltv", "faceit_skill_unsure", "faceit_skill_thin"],
-                     "O": ["z_hltv", "faceit_skill", "faceit_skill_thin", "faceit_coverage"],
-                     "P": ["z_hltv", "faceit_skill", "five_maps"], "L": ["z_hltv", "faceit_skill", "faceit_skill_thin", "z_thin"],
-                     "U": ["z_hltv", "faceit_skill", "faceit_skill_unsure", "rank_points"],
-                     "V": ["z_hltv", "faceit_skill", "elo_team", "elo_team_faceit"], "W": ["z_hltv", "faceit_skill", "elo_team"],
-                     "RF": ["z_hltv", "faceit_skill", "rating_faceit"], "RR": ["z_hltv", "faceit_skill", "rating_hltv", "rating_faceit"],
-                     "RE": ["z_hltv", "faceit_skill", "elo_team", "rating_hltv", "rating_faceit"],
-                     "FL": ["z_hltv", "faceit_skill_online", "faceit_skill_lan"],
-                     "FZ": ["z_hltv", "z_lan", "faceit_skill_online", "faceit_skill_lan"],
-                     "FR": ["z_hltv", "faceit_skill_online", "faceit_skill_lan", "rank_points", "rating_hltv", "rating_faceit"],
-                     "PR": ["z_hltv", "faceit_skill", "rank_points", "faceit_coverage", "practice_14", "practice_90"],
-                     "PR1": ["z_hltv", "faceit_skill", "rank_points", "faceit_coverage", "practice_90"],
-                     "FM": ["z_hltv", "faceit_skill", "faceit_form"], "FMY": ["z_hltv", "faceit_skill", "faceit_form", "rank_points"],
-                     "SB": ["z_hltv", "faceit_skill_soft"], "SC": ["z_hltv", "faceit_skill_soft", "faceit_coverage_soft"],
-                     "SD": ["z_hltv", "faceit_skill_soft", "faceit_coverage_soft", "rank_points"],
-                     "X": ["z_hltv", "faceit_skill", "elo_team", "elo_team_faceit", "rank_points"]})
+        sets.update({
+            "B": ["z_hltv", "faceit_skill"], "C3": ["z_hltv", "faceit_skill", "faceit_coverage"],
+            "C4": ["z_hltv", "faceit_skill", "faceit_coverage", "rank_points"],
+            "Y": ["z_hltv", "faceit_skill", "rank_points"],
+            "K": ["z_hltv", "faceit_skill", "faceit_skill_thin"], "R": ["z_hltv", "faceit_skill_unsure"],
+            "FL": ["z_hltv", "faceit_skill_online", "faceit_skill_lan"],
+            "SB": ["z_hltv", "faceit_skill_soft"], "SC": ["z_hltv", "faceit_skill_soft", "faceit_coverage_soft"],
+            "SD": ["z_hltv", "faceit_skill_soft", "faceit_coverage_soft", "rank_points"],
+            "SE": ["z_hltv", "faceit_skill", "faceit_skill_soft", "faceit_coverage_soft"]})
     return {k: design(d, names) for k, names in sets.items()}
 
 
@@ -53,7 +44,7 @@ def report(p: pd.DataFrame) -> dict:
     months = pd.to_datetime(p.cutoff).dt.to_period("M").astype(str).to_numpy()
     thin = ((p.is_lan == 0) & (np.minimum(p.tm90_a, p.tm90_b) <= THIN_MAPS)).to_numpy()
     out = {"n": len(p), "n_thin": int(thin.sum())}
-    for col in ("q_last", "q_h", "q_soft", "q_ens"):
+    for col in ("q_last", "q_h", "q_soft"):
         if col in p:
             out[f"ll_{col}"] = float(ll(p[col].to_numpy(), y).mean())
     if "q_oracle" in p:
@@ -68,7 +59,7 @@ def report(p: pd.DataFrame) -> dict:
         out["ll_last_changed"] = float(ll(p.q_last.to_numpy()[changed], y[changed]).mean())
         out["ll_h_changed"] = float(ll(p.q_h.to_numpy()[changed], y[changed]).mean())
         out["ll_oracle_changed"] = float(ll(p.q_oracle.to_numpy()[changed], y[changed]).mean())
-    for zcol in ("q_last", "q_h", "q_soft", "q_ens"):
+    for zcol in ("q_last", "q_h", "q_soft"):
         base = None
         for name, x in designs(p, zcol).items():
             pred = cv(x, y, months)
@@ -80,6 +71,6 @@ def report(p: pd.DataFrame) -> dict:
             out[key] = {"ll": float(loss.mean()), "d_vs_A": float(d.mean()), "se": float(d.std() / np.sqrt(len(y))),
                         "d_thin": float(d[thin].mean()) if thin.any() else None, "d_rest": float(d[~thin].mean()),
                         "w": [round(float(v), 3) for v in fit(x, y)]}
-            if zcol not in ("q_soft", "q_ens") and name != "A":
+            if zcol != "q_soft" and name != "A":
                 del out[key]
     return out

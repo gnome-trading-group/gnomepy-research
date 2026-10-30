@@ -24,10 +24,7 @@ def _thin_weight(maps: pd.Series) -> np.ndarray:
 FEATURES = {
     "z_hltv": lambda d: logit(d.q_soft.to_numpy()),
     "z_last": lambda d: logit(d.q_last.to_numpy()),
-    "z_ens": lambda d: logit(d.q_ens.to_numpy()),
-    "z_avg": lambda d: 0.5 * (logit(d.q_soft.to_numpy()) + logit(d.q_last.to_numpy())),
     "faceit_skill": lambda d: (d.f_s_a - d.f_s_b).to_numpy(float),
-    "faceit_form": lambda d: ((d.ff_s_a - d.f_s_a) - (d.ff_s_b - d.f_s_b)).to_numpy(float),
     "faceit_skill_soft": lambda d: (d.fw_s_a - d.fw_s_b).to_numpy(float),
     "faceit_coverage_soft": lambda d: (d.fw_n_a - d.fw_n_b).to_numpy(float),
     "faceit_skill_unsure": lambda d: (d.f_su_a - d.f_su_b).to_numpy(float),
@@ -39,13 +36,6 @@ FEATURES = {
     "z_lan": lambda d: logit(d.q_soft.to_numpy()) * d.is_lan.to_numpy(float),
     "z_unstable": lambda d: logit(d.q_soft.to_numpy()) * ((d.inst_a + d.inst_b) / 2.0).to_numpy(float),
     "z_moved": lambda d: logit(d.q_soft.to_numpy()) * ((d.swap_a + d.swap_b) > 0).to_numpy(float),
-    "elo_team": lambda d: (d.elo_h_a - d.elo_h_b).to_numpy(float),
-    "elo_team_faceit": lambda d: (d.elo_f_a - d.elo_f_b).to_numpy(float),
-    "rating_hltv": lambda d: (d.rat_h_a - d.rat_h_b).to_numpy(float),
-    "rating_faceit": lambda d: (d.rat_f_a - d.rat_f_b).to_numpy(float),
-    "practice_14": lambda d: (d.prac14_a - d.prac14_b).to_numpy(float),
-    "practice_90": lambda d: (d.prac90_a - d.prac90_b).to_numpy(float),
-    "five_maps": lambda d: (np.log1p(d.five_h_a) - np.log1p(d.five_h_b) + np.log1p(d.five_f_a) - np.log1p(d.five_f_b)).to_numpy(float),
     "z_thin": lambda d: logit(d.q_soft.to_numpy()) * (np.minimum(d.tm90_a, d.tm90_b) <= THIN_MAPS).to_numpy(float),
 }
 

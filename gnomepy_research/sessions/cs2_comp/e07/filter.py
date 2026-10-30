@@ -52,10 +52,8 @@ class FilterConfig:
     use_faceit: bool = True
     use_hltv: bool = True
     selection_var: float = 1.0
-    elo_k: float = 0.08
-    rating_decay: float = 0.95
-    rating_shrink: float = 5.0
     recency: float = 0.9
+    newcomer_shift: float = 0.0
     rank_prior_faceit: bool = True
 
 
@@ -74,13 +72,8 @@ class Filter:
         self.games = np.zeros(n, dtype=np.int64)
         self.faceit_games = np.zeros(n, dtype=np.int64)
         self.cov: dict[tuple[int, int], float] = {}
-        self.five_times: dict[frozenset, list[float]] = {}
-        self.player_times: dict[int, list[float]] = {}
         self.team_times: dict[int, list[float]] = {}
         self.team_fives: dict[int, list[np.ndarray]] = {}
-        self.elo: dict[int, float] = {}
-        self.rat_mean = np.zeros(n)
-        self.rat_weight = np.zeros(n)
         self.faceit_fives: dict[int, list[tuple[float, np.ndarray]]] = {}
         self.rank_points = rank_points
         self.last_five: dict[int, tuple[np.ndarray, float]] = {}
@@ -155,17 +148,6 @@ class Filter:
         f = curv * scale ** 2 / denom
         Pa = Pa - np.outer(va, va) * f
         Pb = Pb - np.outer(vb, vb) * f
-        ta_id, tb_id = int(s.team_a[m]), int(s.team_b[m])
-        if ta_id >= 0 and tb_id >= 0 and ta_id != tb_id:
-            ea, eb = self.elo.get(ta_id, 0.0), self.elo.get(tb_id, 0.0)
-            step = c.elo_k * ((1.0 if ra > rb else 0.0) - 1.0 / (1.0 + math.exp(eb - ea)))
-            self.elo[ta_id], self.elo[tb_id] = ea + step, eb - step
-        for ids, raw in ((ia, s.rat_a[m]), (ib, s.rat_b[m])):
-            ok = np.isfinite(raw)
-            if ok.any():
-                w_old = self.rat_weight[ids[ok]] * c.rating_decay
-                self.rat_mean[ids[ok]] = (self.rat_mean[ids[ok]] * w_old + raw[ok]) / (w_old + 1.0)
-                self.rat_weight[ids[ok]] = w_old + 1.0
         gamma = c.gamma_faceit if src == FACEIT else c.gamma_hltv
         if gamma > 0.0:
             sig = c.sigma_r_faceit if src == FACEIT else c.sigma_r_hltv
@@ -184,10 +166,6 @@ class Filter:
         if src == FACEIT:
             self.faceit_games[ia] += 1
             self.faceit_games[ib] += 1
-        for ids in (ia, ib):
-            self.five_times.setdefault(frozenset(ids.tolist()), []).append(t)
-            for p in ids.tolist():
-                self.player_times.setdefault(p, []).append(t)
         if src == FACEIT:
             for team, ids in ((int(s.team_a[m]), ia), (int(s.team_b[m]), ib)):
                 if team >= 0:
@@ -258,7 +236,7 @@ class Filter:
     def weighted_state(self, slots: list[tuple[int | None, float]], team: int, t: float, day: float) -> tuple[float, float]:
         """Mean and variance of a lineup given as (player or None, probability he plays); the probabilities sum to 5."""
         c = self.cfg
-        prior = self._prior(team, day, np.nan, HLTV)
+        prior = self._prior(team, day, np.nan, HLTV) - c.newcomer_shift
         known = [(i, w / LINEUP) for i, w in slots if i is not None and not np.isnan(self.seen[i])]
         unknown_w = sum(w / LINEUP for i, w in slots if i is None or np.isnan(self.seen[i]))
         mean = prior * unknown_w
@@ -291,22 +269,9 @@ class Filter:
             return self._prior(team, day, np.nan, HLTV), self.cfg.sigma0 ** 2 / LINEUP
         return self.ids_state(ids, t)
 
-    def five_maps(self, ids: np.ndarray, t: float, days: float) -> int:
-        times = self.five_times.get(frozenset(ids.tolist()))
-        return 0 if not times else len(times) - bisect.bisect_left(times, t - days)
-
     def team_maps(self, team: int, t: float, days: float) -> int:
         times = self.team_times.get(team)
         return 0 if not times else len(times) - bisect.bisect_left(times, t - days)
-
-    def activity(self, ids: np.ndarray, t: float, days: float) -> float:
-        """Mean over the five of the maps each played in the last `days` days."""
-        total = 0
-        for p in ids.tolist():
-            times = self.player_times.get(p)
-            if times:
-                total += len(times) - bisect.bisect_left(times, t - days)
-        return total / LINEUP
 
     def profile_weighted(self, slots: list[tuple[int | None, float]], t: float) -> tuple[float, float]:
         """Like profile, for a lineup given as (player or None, probability he plays): the probability-weighted sum of
@@ -317,17 +282,6 @@ class Filter:
                 total += w * (self.mu[i] - self.cfg.faceit_prior)
                 mass += w
         return total / LINEUP, mass / LINEUP
-        
-    def rating_level(self, ids: np.ndarray) -> float:
-        """Mean over the five of the recent rating above 1.0, shrunk toward zero for players with few maps."""
-        if not len(ids):
-            return 0.0
-        w = self.rat_weight[ids]
-        return float(((self.rat_mean[ids] - 1.0) * w / (w + self.cfg.rating_shrink)).sum() / LINEUP)
-
-    def faceit_coverage(self, team: int) -> int:
-        known = self.last_five.get(team)
-        return 0 if known is None else int((self.faceit_games[known[0]] > 0).sum())
 
     def profile(self, ids: np.ndarray, t: float) -> tuple[float, float, int]:
         """Sum over the players with a map in this filter of (skill - prior centre) / 5, its variance, and how many."""

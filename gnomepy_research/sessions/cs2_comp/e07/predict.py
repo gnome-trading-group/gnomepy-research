@@ -34,8 +34,7 @@ def run(data_dir: Path, targets: pd.DataFrame, cfg: ModelConfig, features_out: P
     streams = data.build(data_dir, last, cfg.use_faceit)
     weights = STACK_FACEIT if cfg.use_faceit else STACK_HLTV
     model = Model(cfg, streams, data.RankPoints(bundle.load(data_dir, "hltv/cs2_team_rankings", last)),
-                  RosterMoves(bundle.load(data_dir, "hltv/cs2_roster_moves", last)),
-                  data.practice_times(data_dir, last, streams.index) if any(n.startswith("practice") for n in weights) else None)
+                  RosterMoves(bundle.load(data_dir, "hltv/cs2_roster_moves", last)))
     out, tables = [], []
     for cutoff in cutoffs:
         cutoff_day = pd.Timestamp(cutoff).to_datetime64().astype("datetime64[ns]").astype(np.int64) / data.NS_PER_DAY
