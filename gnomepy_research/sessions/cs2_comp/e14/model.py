@@ -29,6 +29,8 @@ from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
 from gnomepy_research.sessions.cs2_comp.e14.data import DIVISIONS, FACEIT, HLTV, LINEUP, Bundle
 
 N_REGIONS = 7
+LEAVE_KINDS = {"leave", "transfer", "benched", "to_coach", "to_substitute", "loan"}
+JOIN_KINDS = {"join", "transfer", "activated", "loan", "loan_return"}
 _GH_X, _GH_W = np.polynomial.hermite_e.hermegauss(21)
 _GH_W = _GH_W / _GH_W.sum()
 _GRID = np.linspace(-8.0, 8.0, 3201)
@@ -49,6 +51,7 @@ class Config:
     # more than one step from any HLTV lineup and mostly costs fitting time.
     faceit_scope: str = "touch"
     lineup_source: str = "any"
+    roster_moves: bool = True
     maxiter: int = 2000
 
 
@@ -95,7 +98,8 @@ class Fit:
         if not five:
             f = self._features(-1, team)
             return float(f @ self.coef), self.cfg.sigma0 ** 2 / LINEUP
-        mean, var = 0.0, 0.0
+        unknown = float(self._features(-1, team) @ self.coef)
+        mean, var = unknown * (LINEUP - len(five)), self.cfg.sigma0 ** 2 * (LINEUP - len(five))
         for p in five:
             i = self.pidx.get(int(p))
             if i is None:
@@ -133,12 +137,26 @@ def _home_regions(maps: pd.DataFrame) -> dict[int, int]:
     return dict(zip(c.drop_duplicates("team").team.astype(np.int64), c.drop_duplicates("team").region.astype(int)))
 
 
-def _latest_lineups(maps: pd.DataFrame) -> dict[int, list[int]]:
-    a = maps[["avail", "team_a", "la"]].set_axis(["avail", "team", "five"], axis=1)
-    b = maps[["avail", "team_b", "lb"]].set_axis(["avail", "team", "five"], axis=1)
+def _latest_lineups(maps: pd.DataFrame, moves: pd.DataFrame | None) -> dict[int, list[int]]:
+    """Each team's five on its latest map, updated by the HLTV roster moves announced since that map's day: leavers
+    out, active joiners in (newest first when that makes more than five)."""
+    a = maps[["avail", "day", "team_a", "la"]].set_axis(["avail", "day", "team", "five"], axis=1)
+    b = maps[["avail", "day", "team_b", "lb"]].set_axis(["avail", "day", "team", "five"], axis=1)
     t = pd.concat([a, b], ignore_index=True).sort_values("avail", kind="mergesort")
     last = t.drop_duplicates("team", keep="last")
-    return {int(k): list(v) for k, v in zip(last.team, last.five)}
+    lineups = {int(k): [int(p) for p in v] for k, v in zip(last.team, last.five)}
+    if moves is None or not len(moves):
+        return lineups
+    since = dict(zip(last.team.astype(np.int64), last.day))
+    for m in moves.itertuples():
+        out_team = int(m.from_team_id) if pd.notna(m.from_team_id) else 0
+        in_team = int(m.to_team_id) if pd.notna(m.to_team_id) else 0
+        if out_team in lineups and m.event_date > since[out_team] and m.kind in LEAVE_KINDS:
+            lineups[out_team] = [p for p in lineups[out_team] if p != int(m.person_id)]
+        if in_team in lineups and m.event_date > since[in_team] and m.kind in JOIN_KINDS and m.to_status == "active" \
+                and int(m.person_id) not in lineups[in_team]:
+            lineups[in_team] = [int(m.person_id)] + lineups[in_team]
+    return {k: v[:LINEUP] for k, v in lineups.items()}
 
 
 def fit(bundle: Bundle, cutoff: pd.Timestamp, cfg: Config = Config()) -> Fit:
@@ -266,5 +284,7 @@ def fit(bundle: Bundle, cutoff: pd.Timestamp, cfg: Config = Config()) -> Fit:
         gam = np.where(r_src == FACEIT, gf, gh)
         h_diag = h_diag + (G.multiply(G)).T @ (r_w * gam ** 2 / r_sig2)
     return Fit(cutoff=cutoff, cfg=cfg, player_ids=players, theta=theta, var=1.0 / h_diag, coef=c, rho=rho,
-               kappa_f=float(np.exp(logk)), home=_home_regions(known), lineups=_latest_lineups(known if cfg.lineup_source == "any" else known[known.source == HLTV]), rank=rank,
+               kappa_f=float(np.exp(logk)), home=_home_regions(known), lineups=_latest_lineups(known if cfg.lineup_source != "hltv" else known[known.source == HLTV],
+                                       bundle.moves[bundle.moves.event_date < cutoff] if cfg.roster_moves else None),
+               rank=rank,
                strength_mu=mu, strength_sd=sd, level_at=level_at, div_at=div_at, hltv_players=hltv_players)

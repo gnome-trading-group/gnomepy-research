@@ -49,6 +49,7 @@ class Bundle:
     ratings: pd.DataFrame    # one row per player per map: map row, side (0 = A), player, rating deviation from own five
     ranks: pd.DataFrame      # HLTV rankings (date, team_id, rank)
     levels: pd.DataFrame     # FACEIT skill level per player per series (player, avail, level)
+    moves: pd.DataFrame      # HLTV roster moves (event_date, person_id, kind, from/to team and status)
 
 
 def _rounds(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -182,4 +183,8 @@ def load_bundle(data: str | Path, before: pd.Timestamp, faceit: bool = True) -> 
         fst = fst.rename(columns={"map_position_in_series": "map_pos"})
         ratings.append(_rating_rows(maps[maps.source == FACEIT], fst, ["match_id", "map_name", "map_pos"]).assign(source=FACEIT))
     ranks = load(data, "hltv/cs2_team_rankings", before, ["date", "team_id", "rank"])
-    return Bundle(maps=maps, ratings=pd.concat(ratings, ignore_index=True), ranks=ranks, levels=levels)
+    moves = load(data, "hltv/cs2_roster_moves", before,
+                 ["event_date", "person_id", "kind", "from_team_id", "from_status", "to_team_id", "to_status"])
+    moves = moves.assign(event_date=_naive(moves.event_date)).sort_values(["event_date", "person_id"], kind="mergesort")
+    return Bundle(maps=maps, ratings=pd.concat(ratings, ignore_index=True), ranks=ranks, levels=levels,
+                  moves=moves.reset_index(drop=True))

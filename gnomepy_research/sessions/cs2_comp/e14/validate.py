@@ -10,6 +10,7 @@ online series where a team is thin (at most 15 HLTV maps in the prior 90 days) o
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import time
 from pathlib import Path
@@ -34,9 +35,37 @@ VARIANTS = {
     "phi03": (True, Config(phi=(0.3, 0.2))),
     "sig02": (True, Config(sigma0=0.2)),
     "fall": (True, Config(faceit_scope="all")),
+    "nf_sig06": (False, Config(faceit_priors=False, sigma0=0.6)),
+    "nf_sig10": (False, Config(faceit_priors=False, sigma0=1.0)),
+    "nf_phi1": (False, Config(faceit_priors=False, phi=(1.0, 1.0))),
+    "nf_hl240": (False, Config(faceit_priors=False, half_life_days=240.0)),
+    "nf_nomoves": (False, Config(faceit_priors=False, roster_moves=False)),
+    "nomoves": (True, Config(roster_moves=False)),
+    "nf_nor": (False, Config(faceit_priors=False, use_ratings=False)),
     "luhltv": (True, Config(lineup_source="hltv")),
     "sig045": (True, Config(sigma0=0.45)),
 }
+
+
+def variant(name: str) -> tuple[bool, Config]:
+    """A named variant, or "f" / "nf" followed by /field:value overrides, e.g. nf/sigma0:1.5/phi:1.0-0.3."""
+    if name in VARIANTS:
+        return VARIANTS[name]
+    head, *pairs = name.split("/")
+    faceit = head == "f"
+    kw: dict = {"faceit_priors": faceit}
+    for pair in pairs:
+        k, v = pair.split(":")
+        default = getattr(Config(), k)
+        if isinstance(default, tuple):
+            kw[k] = tuple(float(x) for x in v.split("-"))
+        elif isinstance(default, bool):
+            kw[k] = v not in ("0", "false")
+        elif isinstance(default, str):
+            kw[k] = v
+        else:
+            kw[k] = type(default)(float(v))
+    return faceit, dataclasses.replace(Config(), **kw)
 
 
 def pseudo_targets(data, first: pd.Timestamp, last: pd.Timestamp) -> pd.DataFrame:
@@ -96,12 +125,12 @@ def main() -> None:
     names = args.variants.split(",")
     bundles = {}
     for name in names:
-        faceit, _ = VARIANTS[name]
+        faceit, _ = variant(name)
         if faceit not in bundles:
             bundles[faceit] = load_bundle(args.data, last, faceit=faceit)
     cuts = sorted(tg.week_cutoff.unique())
     for name in names:
-        faceit, cfg = VARIANTS[name]
+        faceit, cfg = variant(name)
         q = np.empty(len(tg))
         t0 = time.time()
         for c in cuts:
@@ -122,7 +151,7 @@ def main() -> None:
             d = ll(tg[names[0]], y) - ll(tg[name], y)
             b = d[rng.integers(0, len(d), (2000, len(d)))].mean(1)
             print(f"{names[0]} - {name}: {d.mean():+.4f} [{np.percentile(b, 2.5):+.4f},{np.percentile(b, 97.5):+.4f}]")
-    out = args.out or (str(Path(os.environ["OUTPUT_DIR"]) / f"validate_{'_'.join(names)}.parquet")
+    out = args.out or (str(Path(os.environ["OUTPUT_DIR"]) / f"validate_{abs(hash(args.variants)) % 10**8}.parquet")
                        if "OUTPUT_DIR" in os.environ else None)
     if out:
         tg.to_parquet(out, index=False)
