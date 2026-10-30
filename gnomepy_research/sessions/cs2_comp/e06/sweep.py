@@ -25,12 +25,13 @@ def as_params(values: dict) -> Params:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", type=Path, required=True)
-    ap.add_argument("--configs", type=Path, required=True)
+    ap.add_argument("--configs", type=Path)
+    ap.add_argument("--configs-json")
     ap.add_argument("--out", type=Path)
     ap.add_argument("--slice", default="0/1", help="i/n: take every n-th config starting at i")
     args = ap.parse_args()
     i, n = (int(x) for x in args.slice.split("/"))
-    configs = json.loads(args.configs.read_text())[i::n]
+    configs = json.loads(args.configs_json or args.configs.read_text())[i::n]
     events, rankings, moves = load_inputs(args.data, True)
     hltv_only = [e for e in events if e.source == HLTV]
     results = []
@@ -41,8 +42,9 @@ def main() -> None:
                               joint=c.get("joint", True))
         results.append({"name": c["name"], **summary})
         print(json.dumps(results[-1]), flush=True)
-    if args.out:
-        args.out.write_text(json.dumps(results, indent=1))
+    out = args.out or (Path(os.environ["OUTPUT_DIR"]) / f"sweep_{i}_{n}.json" if "OUTPUT_DIR" in os.environ else None)
+    if out:
+        out.write_text(json.dumps(results, indent=1))
 
 
 if __name__ == "__main__":

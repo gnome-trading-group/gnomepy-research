@@ -63,6 +63,8 @@ def summarize(res: pd.DataFrame, q: pd.DataFrame) -> dict:
     d = q.merge(res, on="match_id")
     d["ll"] = log_loss(d.q, d.y)
     out = {"n": len(d), "ll": float(d.ll.mean())}
+    early = pd.to_datetime(d.week_cutoff) < pd.Timestamp("2026-01-01")
+    out["ll_early"], out["ll_late"] = float(d.ll[early].mean()), float(d.ll[~early].mean())
     for name, g in [("thin", d[d.thin]), ("rest", d[~d.thin])] + [(f"cov{c}", d[d.faceit_depth.between(lo, hi)])
                                                                    for c, (lo, hi) in {"0": (0, 0), "1-3": (1, 3), "4-5": (4, 5)}.items()]:
         out[name] = {"n": len(g), "ll": float(g.ll.mean()) if len(g) else None}
