@@ -70,10 +70,11 @@ def summarize(res: pd.DataFrame, q: pd.DataFrame) -> dict:
 
 
 def evaluate(data_dir: Path, params: Params, start: str, end: str, use_faceit: bool = True, oracle: bool = False,
-             preloaded=None) -> tuple[dict, pd.DataFrame]:
+             preloaded=None, joint: bool = True) -> tuple[dict, pd.DataFrame]:
     events, rankings, moves = preloaded or load_inputs(data_dir, use_faceit)
     q, lineups = build_queries(data_dir, start, end)
-    res = run_pass(events, rankings, moves, params, q, known_lineups=lineups if oracle else None, use_faceit=use_faceit)
+    res = run_pass(events, rankings, moves, params, q, known_lineups=lineups if oracle else None, use_faceit=use_faceit,
+                   joint=joint)
     return summarize(res, q), res.merge(q, on="match_id")
 
 

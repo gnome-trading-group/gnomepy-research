@@ -92,7 +92,9 @@ class SkillFilter:
         self.seen: dict[int, float] = {}
         self.cov: dict[tuple[int, int], float] = {}
         self.games: collections.Counter = collections.Counter()
+        self.faceit_games: collections.Counter = collections.Counter()
         self.five_days: dict[frozenset, collections.deque] = collections.defaultdict(collections.deque)
+        self.rank_limit = math.inf
         self._rank_days: list[float] = []
         self._rank_points: list[dict[int, float]] = []
         if rankings is not None and len(rankings):
@@ -102,7 +104,7 @@ class SkillFilter:
                 self._rank_points.append(dict(zip(g["team_id"].astype(int), g["points"].astype(float))))
 
     def _points(self, team: int, day: float) -> float:
-        i = bisect.bisect_left(self._rank_days, day) - 1
+        i = bisect.bisect_left(self._rank_days, min(day, self.rank_limit)) - 1
         return self._rank_points[i].get(team, 0.0) if i >= 0 else 0.0
 
     def _prior(self, source: int, team: int, day: float, division: int) -> tuple[float, float]:
@@ -185,6 +187,8 @@ class SkillFilter:
             self.var[pl] = var_l[i]
             self.seen[pl] = ev.day
             self.games[pl] += 1
+            if faceit:
+                self.faceit_games[pl] += 1
         for base in (0, FIVE):
             for i in range(FIVE):
                 for j in range(i + 1, FIVE):

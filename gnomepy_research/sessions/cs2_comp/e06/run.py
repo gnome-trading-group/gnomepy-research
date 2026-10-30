@@ -30,15 +30,16 @@ def load_inputs(data_dir: Path, use_faceit: bool):
 
 def run_pass(events: list[MapEvent], rankings, moves: list, params: Params, queries: pd.DataFrame,
              roster_params: RosterParams | None = None, known_lineups: dict | None = None,
-             use_faceit: bool = True) -> pd.DataFrame:
+             use_faceit: bool = True, joint: bool = True) -> pd.DataFrame:
     """queries: match_id, week_cutoff, kickoff (UTC seconds), team_a_id, team_b_id. known_lineups maps match_id to the
     two announced fives and is for diagnostics only."""
-    filt = Combined(params, rankings, use_faceit)
+    filt = Combined(params, rankings, use_faceit, joint)
     rosters = Rosters(roster_params)
     ei, mi = 0, 0
     out = []
     for cutoff, wk in queries.groupby("week_cutoff", sort=True):
         cs = to_seconds(cutoff)
+        filt.h.rank_limit = cs / 86400.0
         while ei < len(events) and events[ei].t < cs:
             e = events[ei]
             filt.observe(e)

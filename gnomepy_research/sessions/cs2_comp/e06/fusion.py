@@ -35,10 +35,11 @@ class Bridge:
 
 
 class Combined:
-    def __init__(self, params: Params, rankings: pd.DataFrame | None, use_faceit: bool):
+    def __init__(self, params: Params, rankings: pd.DataFrame | None, use_faceit: bool, joint: bool = True):
         self.p = params
+        self.joint = joint
         self.h = SkillFilter(params, rankings)
-        self.f = SkillFilter(params, None) if use_faceit else None
+        self.f = SkillFilter(params, None) if use_faceit and not joint else None
         self.bridge: Bridge | None = None
         self._week: float | None = None
 
@@ -51,7 +52,7 @@ class Combined:
 
     def observe(self, ev: MapEvent) -> None:
         self.advance(ev.t)
-        (self.f if ev.source == FACEIT else self.h).observe(ev)
+        (self.f if ev.source == FACEIT and not self.joint else self.h).observe(ev)
 
     def _fit_bridge(self) -> Bridge | None:
         p, h, f = self.p, self.h, self.f
@@ -133,4 +134,5 @@ class Combined:
         return self.price(day, team_a, [(pl, 1.0) for pl in lineup_a], [], team_b, [(pl, 1.0) for pl in lineup_b], [], cap=1.0)
 
     def faceit_depth(self, players) -> int:
-        return 0 if self.f is None else sum(1 for pl in players if self.f.games.get(pl, 0) > 0)
+        counts = self.h.faceit_games if self.joint else (self.f.games if self.f is not None else {})
+        return sum(1 for pl in players if counts.get(pl, 0) > 0)
