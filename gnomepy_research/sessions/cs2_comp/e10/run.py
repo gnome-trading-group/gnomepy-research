@@ -18,10 +18,9 @@ import pandas as pd
 from gnomepy_research.models.cs2.hltv.player_skill import map_win_prob
 from gnomepy_research.sessions.cs2_comp.bundle import load
 from gnomepy_research.sessions.cs2_comp.e10.data import (
-    FACEIT_STAT_KEYS, LINEUP, PlayerIndex, day_number, faceit_maps, faceit_stats, first_skill_level, hltv_maps,
-    hltv_rating_dev, new_index, naive_utc,
+    LINEUP, PlayerIndex, day_number, faceit_maps, faceit_stats, first_skill_level, hltv_maps, hltv_rating_dev, new_index,
 )
-from gnomepy_research.sessions.cs2_comp.e10.ratings import RatingMaps, fit_rating_maps
+from gnomepy_research.sessions.cs2_comp.e10.ratings import fit_rating_maps
 from gnomepy_research.sessions.cs2_comp.e10.skill import NEWCOMER, SkillConfig, SkillFilter
 
 HLTV, FACEIT = 0, 1
@@ -29,7 +28,7 @@ HLTV, FACEIT = 0, 1
 TRAIN_START = pd.Timestamp("2024-07-01")
 WEEK = pd.Timedelta(days=7)
 DAY_NS = 86_400 * 10 ** 9
-TOGETHER_DAYS, ACTIVE_DAYS = 60, 30
+TOGETHER_DAYS = 60
 
 
 @dataclass(frozen=True)
@@ -43,7 +42,6 @@ class RunConfig:
     shift_min_games: int = 20
     thin_games: int = 20
     use_moves: bool = True
-    elo_step: float = 0.15
     decay: float = 0.4
     faceit_offset_var: float = 0.04
     standin_weight: float = 0.3
@@ -188,7 +186,6 @@ class Pass:
         self.moves = roster_moves(data_dir, last_cutoff) if cfg.use_moves else {}
         self.standins = self._standins(data_dir, last_cutoff)
         self.last_time: dict[int, int] = {}
-        self.team_elo: dict[int, float] = collections.defaultdict(float)
         self.by_player: dict[int, list[int]] = collections.defaultdict(list)
         self.faceit_recent: dict[int, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=cfg.k_series))
         self.series = self._series_table()
@@ -210,7 +207,7 @@ class Pass:
         h = self.hm[self.hm.bo_type == 3]
         g = h.groupby("match_id", sort=False)
         t = g.agg(time=("time", "min"), team_a_id=("team_a_id", "first"), team_b_id=("team_b_id", "first"),
-                  wins=("team_a_won", "sum"), n=("team_a_won", "size"), lan=("is_lan", "first"), tier=("event_tier", "first"))
+                  wins=("team_a_won", "sum"), n=("team_a_won", "size"))
         t["y"] = (t.wins * 2 > t.n).astype(int)
         return t.reset_index()
 
@@ -244,10 +241,6 @@ class Pass:
                     else:
                         q.append([ev.match_id, tuple(players.tolist())])
         if ev.source == HLTV:
-            gap = self.team_elo[ev.team_a] - self.team_elo[ev.team_b]
-            step = self.cfg.elo_step * ((ev.ra > ev.rb) - 1 / (1 + math.exp(-gap)))
-            self.team_elo[ev.team_a] += step
-            self.team_elo[ev.team_b] -= step
             for team, players in ((ev.team_a, ev.a), (ev.team_b, ev.b)):
                 self.last_time[team] = ev.time
                 q = self.recent[team]
@@ -268,26 +261,16 @@ class Pass:
 
     def lineup(self, team: int, cutoff: pd.Timestamp) -> np.ndarray | None:
         """The team's five at the cutoff."""
-        ordered, _ = self._ranked(team, cutoff)
+        ordered = self._ranked(team, cutoff)
         return _arr(ordered[:LINEUP]) if ordered else None
 
-    def lineup_doubt(self, team: int, cutoff: pd.Timestamp) -> tuple[float, float]:
-        """How unsettled the five is: the weight of the sixth candidate against the fifth player, and the log of the days
-        since the team last played."""
-        ordered, weight = self._ranked(team, cutoff)
-        age = math.log1p((cutoff.value - self.last_time[team]) / DAY_NS) if team in self.last_time else math.log1p(365)
-        if len(ordered) <= LINEUP:
-            return 0.0, age
-        fifth, sixth = weight[ordered[LINEUP - 1]], weight[ordered[LINEUP]]
-        return sixth / (fifth + sixth) if fifth + sixth > 0 else 0.5, age
-
-    def _ranked(self, team: int, cutoff: pd.Timestamp) -> tuple[list[int], dict[int, float]]:
+    def _ranked(self, team: int, cutoff: pd.Timestamp) -> list[int]:
         """Candidate players, most likely first: recency-weighted appearances over the team's last series (stand-ins
         count less), then the transfer log's departures since its last series removed and arrivals put first."""
         q = self.recent.get(int(team))
         if not q:
             fallback = self._faceit_lineup(int(team))
-            return ([] if fallback is None else fallback.tolist()), {}
+            return [] if fallback is None else fallback.tolist()
         score: dict[int, tuple[float, int]] = {}
         for age, (match_id, players) in enumerate(reversed(q)):
             standin = self.standins.get((match_id, int(team)), ())
@@ -297,11 +280,10 @@ class Pass:
                 score[p] = (total + weight, max(latest, -age))
         ordered = sorted(score, key=lambda p: (-score[p][0], -score[p][1]))
         moves = self.moves.get(int(team))
-        arrived: list[int] = []
         if moves:
             last = np.datetime64(pd.Timestamp(self.last_time[int(team)]).normalize())
             end = np.datetime64(cutoff)
-            gone = set()
+            gone, arrived = set(), []
             for date, pid, delta in moves:
                 if last < date < end:
                     idx = self.index.hltv.get(pid)
@@ -314,7 +296,7 @@ class Pass:
                         gone.discard(idx)
                         arrived.append(idx)
             ordered = arrived[::-1] + [p for p in ordered if p not in gone and p not in arrived]
-        return ordered, {p: score[p][0] if p in score and p not in arrived else 1.0 for p in ordered}
+        return ordered
 
     def _faceit_lineup(self, team: int) -> np.ndarray | None:
         """A team with no HLTV map yet is known, where FACEIT matched it, by the players of its latest FACEIT matches."""
@@ -363,20 +345,16 @@ class Pass:
         thin = self.fh.s.games[lineup] < self.cfg.thin_games
         return float(resid[thin].sum() / LINEUP), float(resid[~thin].sum() / LINEUP), float(weight.mean()), int((g >= 10).sum())
 
-    def _practice(self, lineup: np.ndarray, cutoff: pd.Timestamp) -> tuple[int, float]:
-        """Maps in the last TOGETHER_DAYS where at least four of the five played side by side (either source), and the
-        lineup's mean number of maps over the last ACTIVE_DAYS."""
+    def _together(self, lineup: np.ndarray, cutoff: pd.Timestamp) -> int:
+        """Maps, from either source, in the last TOGETHER_DAYS where at least four of the five played side by side."""
         now = cutoff.value
-        together: collections.Counter = collections.Counter()
-        active = 0
+        count: collections.Counter = collections.Counter()
         for p in lineup.tolist():
             for eid in reversed(self.by_player.get(p, ())):
-                t = self.events[eid].time
-                if t < now - TOGETHER_DAYS * DAY_NS:
+                if self.events[eid].time < now - TOGETHER_DAYS * DAY_NS:
                     break
-                together[eid] += 1
-                active += t >= now - ACTIVE_DAYS * DAY_NS
-        return sum(1 for c in together.values() if c >= 4), active / len(lineup)
+                count[eid] += 1
+        return sum(1 for c in count.values() if c >= 4)
 
     def _series_price(self, a: np.ndarray, b: np.ndarray, team_a: int, team_b: int, day: int, cutoff: pd.Timestamp,
                       shift: float) -> tuple[float, float, float, np.ndarray, np.ndarray]:
@@ -393,8 +371,7 @@ class Pass:
             p_series, d, s2, mu_a, mu_b = self._series_price(a, b, team_a, team_b, day, cutoff, shift)
             lo_a, hi_a, wa, na = self._faceit_residual(a, mu_a, shift)
             lo_b, hi_b, wb, nb = self._faceit_residual(b, mu_b, shift)
-            row.update(zip(("coh_a", "act_a"), self._practice(a, cutoff)))
-            row.update(zip(("coh_b", "act_b"), self._practice(b, cutoff)))
+            row["coh_a"], row["coh_b"] = self._together(a, cutoff), self._together(b, cutoff)
         else:
             ma, va = self._virtual(team_a, cutoff) if a is None else (float(f.current(a, day)[0].mean()), float(f.current(a, day)[1].sum()) / len(a) ** 2)
             mb, vb = self._virtual(team_b, cutoff) if b is None else (float(f.current(b, day)[0].mean()), float(f.current(b, day)[1].sum()) / len(b) ** 2)
@@ -403,10 +380,7 @@ class Pass:
             p_series = p_map * p_map * (3 - 2 * p_map)
             lo_a = hi_a = lo_b = hi_b = wa = wb = 0.0
             na = nb = 0
-            row.update({"coh_a": 0, "act_a": 0.0, "coh_b": 0, "act_b": 0.0})
-        for side, team in (("a", team_a), ("b", team_b)):
-            row[f"doubt_{side}"], row[f"age_{side}"] = self.lineup_doubt(team, cutoff)
-        row["elo"] = self.team_elo.get(team_a, 0.0) - self.team_elo.get(team_b, 0.0)
+            row.update({"coh_a": 0, "coh_b": 0})
         row.update({"d": d, "sd": math.sqrt(max(s2, 0.0)), "p_series": min(max(p_series, 1e-4), 1 - 1e-4),
                     "fres_lo": lo_a - lo_b, "fres_hi": hi_a - hi_b, "fw_a": wa, "fw_b": wb, "nf_a": na, "nf_b": nb})
         for side, lu in (("a", a), ("b", b)):
@@ -422,7 +396,7 @@ class Pass:
             seen = set()
             if targets is not None:
                 for r in targets[targets.week_cutoff == c].itertuples(index=False):
-                    rows.append({"match_id": r.match_id, "week_cutoff": c, "is_target": True, "lan": float(r.is_lan), "tier": float(pd.to_numeric(r.event_tier, errors="coerce")),
+                    rows.append({"match_id": r.match_id, "week_cutoff": c, "is_target": True,
                                  "y": float(week.set_index("match_id").y.get(r.match_id, np.nan)),
                                  **self.price(c, int(r.team_a_id), int(r.team_b_id), shift)})
                     seen.add(r.match_id)
@@ -436,7 +410,7 @@ class Pass:
                     row["ovl_a"] = -1 if la is None else len(act[0] & set(la.tolist()))
                     row["ovl_b"] = -1 if lb is None else len(act[1] & set(lb.tolist()))
                 rows.append({"match_id": r.match_id, "week_cutoff": c, "is_target": False, "y": float(r.y),
-                             "lan": float(r.lan), "tier": float(r.tier), **row})
+                             **row})
         return pd.DataFrame(rows)
 
 

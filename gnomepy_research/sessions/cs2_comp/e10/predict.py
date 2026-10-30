@@ -30,33 +30,20 @@ def logit(p) -> np.ndarray:
 
 
 def design(f: pd.DataFrame, spec: str) -> np.ndarray:
-    """Columns antisymmetric under swapping the teams, so q(A, B) = 1 - q(B, A) with no intercept."""
+    """Columns antisymmetric under swapping the teams, so q(A, B) = 1 - q(B, A) with no intercept.
+
+    s: the FACEIT-over-HLTV skill residual, split by whether the HLTV skill is thin; new: the price scaled by how many
+    lineup players are new to the data; c: the log-ratio of maps the two fives have played together recently."""
     z = logit(f.p_series)
     cols = [z]
     tokens = set(spec.split("+"))
-    if "f" in tokens:
-        cols.append(3.0 * (f.fres_lo + f.fres_hi).to_numpy())
     if "s" in tokens:
         cols.append(3.0 * f.fres_lo.to_numpy())
         cols.append(3.0 * f.fres_hi.to_numpy())
-    if "c" in tokens:
-        cols.append(np.log1p(f.coh_a.to_numpy()) - np.log1p(f.coh_b.to_numpy()))
-    if "a" in tokens:
-        cols.append(np.log1p(f.act_a.to_numpy()) - np.log1p(f.act_b.to_numpy()))
-    if "u" in tokens:
-        cols.append(z * (f.doubt_a + f.doubt_b).to_numpy())
-    if "age" in tokens:
-        cols.append(z * (f.age_a + f.age_b).to_numpy() / 5.0)
-    if "elo" in tokens:
-        cols.append(f.elo.to_numpy())
-    if "lan" in tokens:
-        cols.append(z * f.lan.fillna(0).to_numpy())
-    if "tier" in tokens:
-        cols.append(z * f.tier.fillna(0).to_numpy())
-    if "sd" in tokens:
-        cols.append(f.d.to_numpy() * f.sd.to_numpy())
     if "new" in tokens:
         cols.append(z * (f.nnew_a + f.nnew_b).to_numpy() / 10.0)
+    if "c" in tokens:
+        cols.append(np.log1p(f.coh_a.to_numpy()) - np.log1p(f.coh_b.to_numpy()))
     return np.column_stack(cols)
 
 
