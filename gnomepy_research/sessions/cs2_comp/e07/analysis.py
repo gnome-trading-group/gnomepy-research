@@ -4,9 +4,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cs2_comp.e07.stack import fit, logit
+from gnomepy_research.sessions.cs2_comp.e07.stack import THIN_MAPS, design, fit
 
-THIN_MAPS = 15.0
 Q_FLOOR = 0.02
 
 
@@ -15,25 +14,18 @@ def ll(p: np.ndarray, y: np.ndarray) -> np.ndarray:
     return -(y * np.log(p) + (1 - y) * np.log(1 - p))
 
 
-def _w(tm: pd.Series) -> np.ndarray:
-    return 1.0 / (1.0 + tm.to_numpy(float) / THIN_MAPS)
-
-
-def designs(d: pd.DataFrame, zcol: str = "q_h") -> dict[str, np.ndarray]:
-    z = logit(d[zcol].to_numpy())
-    drank = (d.rank_a - d.rank_b).to_numpy()
-    out = {"A": np.c_[z], "RK": np.c_[z, drank]}
+def designs(d: pd.DataFrame, zcol: str = "q_soft") -> dict[str, np.ndarray]:
+    """Candidate stackers by letter; the HLTV filter's price comes from `zcol`."""
+    d = d.assign(q_soft=d[zcol])
+    sets = {"A": ["z_hltv"], "RK": ["z_hltv", "rank_points"]}
     if "f_s_a" in d:
-        dfs = (d.f_s_a - d.f_s_b).to_numpy()
-        thin = (d.f_s_a * _w(d.tm90_a) - d.f_s_b * _w(d.tm90_b)).to_numpy()
-        thin_any = (np.minimum(d.tm90_a, d.tm90_b) <= THIN_MAPS).to_numpy(float)
-        dn = ((d.f_n_a - d.f_n_b) / 5).to_numpy()
-        d5 = (np.log1p(d.five_h_a) - np.log1p(d.five_h_b) + np.log1p(d.five_f_a) - np.log1p(d.five_f_b)).to_numpy()
-        dsu = (d.f_su_a - d.f_su_b).to_numpy()
-        out.update({"R": np.c_[z, dsu], "S": np.c_[z, dfs, dsu], "T": np.c_[z, dsu, thin]})
-        out.update({"B": np.c_[z, dfs], "K": np.c_[z, dfs, thin], "L": np.c_[z, dfs, thin, z * thin_any],
-                    "O": np.c_[z, dfs, thin, dn], "P": np.c_[z, dfs, d5], "Q": np.c_[z, thin]})
-    return out
+        sets.update({"B": ["z_hltv", "faceit_skill"], "K": ["z_hltv", "faceit_skill", "faceit_skill_thin"],
+                     "R": ["z_hltv", "faceit_skill_unsure"], "S": ["z_hltv", "faceit_skill", "faceit_skill_unsure"],
+                     "T": ["z_hltv", "faceit_skill_unsure", "faceit_skill_thin"],
+                     "O": ["z_hltv", "faceit_skill", "faceit_skill_thin", "faceit_coverage"],
+                     "P": ["z_hltv", "faceit_skill", "five_maps"], "L": ["z_hltv", "faceit_skill", "faceit_skill_thin", "z_thin"],
+                     "U": ["z_hltv", "faceit_skill", "faceit_skill_unsure", "rank_points"]})
+    return {k: design(d, names) for k, names in sets.items()}
 
 
 def cv(x: np.ndarray, y: np.ndarray, months: np.ndarray) -> np.ndarray:

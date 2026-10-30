@@ -1,7 +1,7 @@
 """
 The last stage: a logistic regression without an intercept (so a series stays symmetric in A and B) on features that
-are each antisymmetric in the two teams, with weights fitted on HLTV series of Oct 2025 - Mar 2026 and frozen in
-final_config.py. Every tune target is after that window.
+are each antisymmetric in the two teams, with weights fitted on HLTV series before the tune period and frozen in
+final_config.py.
 """
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 Q_LIMIT = 1e-4
+THIN_MAPS = 15.0
 
 
 def logit(p: np.ndarray) -> np.ndarray:
@@ -16,13 +17,25 @@ def logit(p: np.ndarray) -> np.ndarray:
     return np.log(p / (1 - p))
 
 
-def design(d: pd.DataFrame, faceit: bool) -> tuple[np.ndarray, list[str]]:
-    cols = [logit(d.q_h.to_numpy())]
-    names = ["z_hltv"]
-    if faceit:
-        cols.append((d.f_s_a - d.f_s_b).to_numpy(float))
-        names.append("faceit_skill_diff")
-    return np.column_stack(cols), names
+def _thin_weight(maps: pd.Series) -> np.ndarray:
+    return 1.0 / (1.0 + maps.to_numpy(float) / THIN_MAPS)
+
+
+FEATURES = {
+    "z_hltv": lambda d: logit(d.q_soft.to_numpy()),
+    "z_last": lambda d: logit(d.q_last.to_numpy()),
+    "faceit_skill": lambda d: (d.f_s_a - d.f_s_b).to_numpy(float),
+    "faceit_skill_unsure": lambda d: (d.f_su_a - d.f_su_b).to_numpy(float),
+    "faceit_skill_thin": lambda d: (d.f_s_a * _thin_weight(d.tm90_a) - d.f_s_b * _thin_weight(d.tm90_b)).to_numpy(float),
+    "faceit_coverage": lambda d: ((d.f_n_a - d.f_n_b) / 5.0).to_numpy(float),
+    "rank_points": lambda d: (d.rank_a - d.rank_b).to_numpy(float),
+    "five_maps": lambda d: (np.log1p(d.five_h_a) - np.log1p(d.five_h_b) + np.log1p(d.five_f_a) - np.log1p(d.five_f_b)).to_numpy(float),
+    "z_thin": lambda d: logit(d.q_soft.to_numpy()) * (np.minimum(d.tm90_a, d.tm90_b) <= THIN_MAPS).to_numpy(float),
+}
+
+
+def design(d: pd.DataFrame, names: list[str]) -> np.ndarray:
+    return np.column_stack([FEATURES[n](d) for n in names])
 
 
 def fit(x: np.ndarray, y: np.ndarray, l2: float = 1e-3) -> np.ndarray:
@@ -37,7 +50,5 @@ def fit(x: np.ndarray, y: np.ndarray, l2: float = 1e-3) -> np.ndarray:
     return w
 
 
-def apply(d: pd.DataFrame, weights: dict, faceit: bool) -> np.ndarray:
-    x, names = design(d, faceit)
-    w = np.array([weights[n] for n in names])
-    return 1 / (1 + np.exp(-x @ w))
+def apply(d: pd.DataFrame, weights: dict[str, float]) -> np.ndarray:
+    return 1 / (1 + np.exp(-design(d, list(weights)) @ np.array(list(weights.values()))))
