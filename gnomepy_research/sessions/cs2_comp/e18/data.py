@@ -22,6 +22,8 @@ REGULATION = 24
 DIVISIONS = {"entry": 0.0, "open": 1.0, "intermediate": 2.0, "main": 3.0, "advanced": 4.0}
 _DIVISION_RE = re.compile(r"\b(entry|open|intermediate|main|advanced)\b", re.I)
 COVARIATES = ["rank_z", "unranked", "level", "has_level", "division", "has_division"]
+LEAVING = {"leave", "benched", "transfer", "to_coach", "to_substitute", "loan"}
+JOINING = {"join", "transfer", "activated", "loan", "loan_return"}
 
 
 @dataclass
@@ -126,7 +128,32 @@ def faceit_levels(data_dir, cutoff: pd.Timestamp) -> dict[str, float]:
     return {key(f): float(l) for f, l in zip(last.faceit_id, last.skill_level)}
 
 
-def build(data_dir, cutoff: pd.Timestamp, faceit: bool, window_days: int) -> Observations:
+def apply_roster_moves(data_dir, cutoff: pd.Timestamp, latest: dict[str, list[str]], latest_day: dict[str, pd.Timestamp]) -> dict[str, list[str]]:
+    """Lineups updated by the HLTV roster moves announced after a team's last map: departures drop out, players
+    joining as active come in, and the newest five stay when that makes more than five."""
+    mv = load(data_dir, "hltv/cs2_roster_moves", cutoff)
+    mv = mv[(mv.person_role == "player")].copy()
+    mv["event_date"] = pd.to_datetime(mv.event_date)
+    mv = mv.sort_values(["event_date", "person_id"], kind="stable")
+    out = dict(latest)
+    for r in mv.itertuples():
+        for team_id, joining in ((r.from_team_id, False), (r.to_team_id, True)):
+            if pd.isna(team_id) or int(team_id) == 0:
+                continue
+            team = f"h{int(team_id)}"
+            if team not in out or r.event_date <= latest_day[team]:
+                continue
+            player = f"h{int(r.person_id)}"
+            five = [p for p in out[team] if p != player]
+            if joining and r.kind in JOINING and r.to_status == "active":
+                five.append(player)
+            elif not (joining or r.kind in LEAVING):
+                continue
+            out[team] = five[-LINEUP:]
+    return out
+
+
+def build(data_dir, cutoff: pd.Timestamp, faceit: bool, window_days: int, roster_moves: bool = True) -> Observations:
     cutoff = pd.Timestamp(cutoff)
     parts = [hltv_maps(data_dir, cutoff)]
     if faceit:
@@ -143,18 +170,21 @@ def build(data_dir, cutoff: pd.Timestamp, faceit: bool, window_days: int) -> Obs
                              "division": np.repeat(fd.division.to_numpy(), LINEUP).tolist() * 2})
         divisions = rows.groupby("player").division.mean().to_dict()
     latest: dict[str, list[str]] = {}
-    for team, five in zip(maps.team_a, maps.lineup_a):
-        latest[team] = five
-    for team, five in zip(maps.team_b, maps.lineup_b):
-        latest[team] = five
+    latest_day: dict[str, pd.Timestamp] = {}
+    for team, five, day in zip(maps.team_a, maps.lineup_a, maps.day):
+        latest[team], latest_day[team] = five, day
+    for team, five, day in zip(maps.team_b, maps.lineup_b, maps.day):
+        latest[team], latest_day[team] = five, day
+    if roster_moves:
+        latest = apply_roster_moves(data_dir, cutoff, latest, latest_day)
     return Observations(maps=maps, ranks=ranks, levels=levels, divisions=divisions, latest_lineup=latest)
 
 
-def player_prior_inputs(obs: Observations) -> pd.DataFrame:
+def player_prior_inputs(obs: Observations, maps: pd.DataFrame | None = None) -> pd.DataFrame:
     """One row per player in the maps: the team and day of the player's first map in the window."""
     rows = []
     seen: set[str] = set()
-    for r in obs.maps.itertuples():
+    for r in (obs.maps if maps is None else maps).itertuples():
         for five, team in ((r.lineup_a, r.team_a), (r.lineup_b, r.team_b)):
             for p in five:
                 if p not in seen:

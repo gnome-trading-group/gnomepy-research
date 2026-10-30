@@ -21,7 +21,7 @@ from gnomepy_research.sessions.cs2_comp.e18.model import Config, Fit, fit_model,
 
 
 def predict_week(data_dir, cutoff: pd.Timestamp, targets: pd.DataFrame, cfg: Config) -> tuple[pd.DataFrame, Fit]:
-    obs = build(data_dir, cutoff, cfg.faceit, cfg.window_days)
+    obs = build(data_dir, cutoff, cfg.faceit, cfg.window_days, cfg.roster_moves)
     fit = fit_model(obs, cutoff, cfg)
     rows = []
     for r in targets.itertuples():

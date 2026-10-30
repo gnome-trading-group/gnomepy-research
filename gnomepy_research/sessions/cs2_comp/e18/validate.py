@@ -58,9 +58,9 @@ def main() -> None:
         cache: dict[tuple, object] = {}
         for c in configs:
             cfg = Config(**{k: v for k, v in c.items() if k != "name"})
-            key = (cfg.faceit, cfg.window_days)
+            key = (cfg.faceit, cfg.window_days, cfg.roster_moves)
             if key not in cache:
-                cache[key] = build(a.data, cutoff, cfg.faceit, cfg.window_days)
+                cache[key] = build(a.data, cutoff, cfg.faceit, cfg.window_days, cfg.roster_moves)
             obs = cache[key]
             fit = fit_model(obs, cutoff, cfg)
             faceit_players = {p for five in obs.maps.lineup_a[obs.maps.source == "faceit"] for p in five} \
@@ -75,12 +75,20 @@ def main() -> None:
             print(f"{cutoff:%Y-%m-%d} {c['name']:12s} series {len(series)} {json.dumps(fit.info)}", flush=True)
     d = pd.DataFrame(rows)
     d.to_parquet(out_dir / "walk_forward.parquet", index=False)
-    d["ll"] = log_loss(d.q, d.y)
-    d["cov_bin"] = pd.cut(d.faceit_cov, [-1, 0, 3, 5], labels=["0", "1-3", "4-5"])
-    summary = d.groupby("config").ll.agg(["mean", "count"]).join(d.pivot_table(index="config", columns="cov_bin", values="ll", aggfunc="mean", observed=False))
-    summary["no_lineup"] = d[~d.has_lineups].groupby("config").ll.mean()
+    summary = summarize(d)
     print(summary.round(4).to_string())
     (out_dir / "summary.json").write_text(summary.to_json(orient="index"))
+
+
+def summarize(d: pd.DataFrame) -> pd.DataFrame:
+    d = d.copy()
+    d["ll"] = log_loss(d.q, d.y)
+    d["cov_bin"] = np.where(d.faceit_cov == 0, "cov0", np.where(d.faceit_cov <= 3, "cov1-3", "cov4-5"))
+    summary = d.groupby("config").ll.agg(["mean", "count"])
+    for name, g in d.groupby("cov_bin"):
+        summary[str(name)] = g.groupby("config").ll.mean()
+    summary["no_lineup"] = d[~d.has_lineups].groupby("config").ll.mean()
+    return summary
 
 
 if __name__ == "__main__":
