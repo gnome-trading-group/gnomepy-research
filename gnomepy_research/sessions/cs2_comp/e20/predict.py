@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -87,8 +89,10 @@ def main() -> None:
     a = ap.parse_args()
     targets = pd.read_parquet(a.targets)
     pred = run(a.data, targets, config_from(a), a.faceit, a.weeks)
-    pred.to_parquet(a.out, index=False)
-    print(json.dumps({"n": len(pred), "faceit": a.faceit, "out": a.out}))
+    # A relative --out lands in the Batch task's upload directory when there is one.
+    out = Path(os.environ.get("OUTPUT_DIR", ""), a.out)
+    pred.to_parquet(out, index=False)
+    print(json.dumps({"n": len(pred), "faceit": a.faceit, "out": str(out)}))
 
 
 if __name__ == "__main__":
