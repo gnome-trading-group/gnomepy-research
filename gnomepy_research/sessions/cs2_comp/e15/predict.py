@@ -33,7 +33,7 @@ def career_first(raw: Raw) -> pd.Series:
 
 def predict_week(raw: Raw, first: pd.Series, targets: pd.DataFrame, cutoff: pd.Timestamp, cfg: Config) -> pd.DataFrame:
     maps, rankings = before(raw, cutoff, cfg.window_days)
-    f = fit(maps, rankings, cutoff, cfg, first[first < np.datetime64(pd.Timestamp(cutoff))])
+    f = fit(maps, rankings, cutoff, cfg, first[first < np.datetime64(pd.Timestamp(cutoff))], raw.ratings)
     q = [series_price(f, int(a), int(b)) for a, b in zip(targets.team_a_id, targets.team_b_id)]
     return pd.DataFrame({"match_id": targets.match_id.to_numpy(), "q": q, "fit_cutoff": pd.Timestamp(cutoff)})
 
@@ -44,7 +44,7 @@ def run(data: Path, targets_path: Path, use_faceit: bool, weeks: list[str] | Non
     cutoffs = sorted(targets.week_cutoff.unique())
     if weeks:
         cutoffs = [c for c in cutoffs if f"{pd.Timestamp(c):%Y-%m-%d}" in set(weeks)]
-    raw = load_raw(data, use_faceit)
+    raw = load_raw(data, use_faceit, ratings=cfg.rating_weight > 0)
     first = career_first(raw)
     out = []
     for c in cutoffs:

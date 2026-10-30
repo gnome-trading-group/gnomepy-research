@@ -49,6 +49,7 @@ def division(competition_name: str | None) -> int:
 class Raw:
     maps: pd.DataFrame        # one row per map, both sources, sorted by (known_at, match_id, map position)
     rankings: pd.DataFrame
+    ratings: pd.DataFrame     # match_id, map_name, player, src, perf: one row per player per map
 
 
 def _rounds(score_a: np.ndarray, score_b: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -80,6 +81,7 @@ def _hltv_maps(data_dir: Path) -> pd.DataFrame:
         "match_id": h.match_id.astype(str).to_numpy(), "src": HLTV,
         "known_at": np.maximum(match_date.to_numpy(), match_time.fillna(match_date).to_numpy()),
         "day": match_date.dt.normalize().to_numpy(), "pos": h.map_position_in_series.fillna(0).to_numpy(int),
+        "map_name": h.map_name.astype(str).to_numpy(),
         "team_a": h.team_a_id.astype(np.int64).to_numpy(), "team_b": h.team_b_id.astype(np.int64).to_numpy(),
         "five_a": h.five_a.to_numpy(), "five_b": h.five_b.to_numpy(), "rounds_a": ka, "rounds": n,
         "bo_type": h.bo_type.fillna(0).to_numpy(int), "tier": h.event_tier.fillna(0).to_numpy(int),
@@ -119,6 +121,7 @@ def _faceit_maps(data_dir: Path) -> pd.DataFrame:
     return pd.DataFrame({
         "match_id": fh.match_id.to_numpy(), "src": FACEIT, "known_at": finished.to_numpy(),
         "day": pd.to_datetime(fh.match_date).dt.normalize().to_numpy(), "pos": fh.map_position_in_series.fillna(0).to_numpy(int),
+        "map_name": fh.map_name.astype(str).to_numpy(),
         "team_a": team(fh.team_a_id, fh.team_a_faceit_id), "team_b": team(fh.team_b_id, fh.team_b_faceit_id),
         "five_a": fh.five_a.to_numpy(), "five_b": fh.five_b.to_numpy(), "rounds_a": ka, "rounds": n,
         "bo_type": fh.bo_type.fillna(0).to_numpy(int), "tier": -1, "is_lan": fh.is_lan.fillna(0).to_numpy(int),
@@ -126,7 +129,28 @@ def _faceit_maps(data_dir: Path) -> pd.DataFrame:
     })
 
 
-def load_raw(data_dir: str | Path, use_faceit: bool) -> Raw:
+def _hltv_ratings(data_dir: Path) -> pd.DataFrame:
+    r = load(data_dir, "hltv/cs2_player_map_stats", columns=["match_id", "map_name", "player_id", "side", "rating"])
+    r = r[(r.side == "all") & r.rating.notna()]
+    return pd.DataFrame({"match_id": r.match_id.astype(str).to_numpy(), "map_name": r.map_name.astype(str).to_numpy(),
+                         "player": r.player_id.astype(np.int64).to_numpy(), "src": HLTV, "perf": r.rating.to_numpy(float)})
+
+
+def _faceit_ratings(data_dir: Path, link: dict) -> pd.DataFrame:
+    """A per-map performance score from FACEIT stats: kill-death margin per round plus damage per round."""
+    r = pd.read_parquet(data_dir / "faceit/faceit_player_map_stats.parquet",
+                        columns=["match_id", "map_name", "faceit_id", "kills", "deaths", "adr"])
+    fh = pd.read_parquet(data_dir / "faceit/faceit_match_history.parquet", columns=["match_id", "map_name", "team_a_score", "team_b_score"])
+    rounds = dict(zip(zip(fh.match_id, fh.map_name), fh.team_a_score + fh.team_b_score))
+    n = np.array([rounds.get(k, np.nan) for k in zip(r.match_id, r.map_name)], dtype=float)
+    perf = (r.kills.to_numpy(float) - r.deaths.to_numpy(float)) / n + r.adr.to_numpy(float) / 100.0
+    out = pd.DataFrame({"match_id": r.match_id.to_numpy(), "map_name": r.map_name.astype(str).to_numpy(),
+                        "player": [int(link[f]) if f in link else hashed_id(f) for f in r.faceit_id],
+                        "src": FACEIT, "perf": perf})
+    return out[np.isfinite(out.perf)]
+
+
+def load_raw(data_dir: str | Path, use_faceit: bool, ratings: bool = True) -> Raw:
     data_dir = Path(data_dir)
     parts = [_hltv_maps(data_dir)] + ([_faceit_maps(data_dir)] if use_faceit else [])
     maps = pd.concat(parts, ignore_index=True).sort_values(["known_at", "match_id", "pos"], kind="stable").reset_index(drop=True)
@@ -134,7 +158,15 @@ def load_raw(data_dir: str | Path, use_faceit: bool) -> Raw:
     rankings = rankings.assign(date=pd.to_datetime(rankings["date"]))
     if rankings.date.dt.tz is not None:
         rankings["date"] = rankings.date.dt.tz_convert(None)
-    return Raw(maps=maps, rankings=rankings)
+    rating_parts = []
+    if ratings:
+        rating_parts.append(_hltv_ratings(data_dir))
+        if use_faceit:
+            m = pd.read_parquet(data_dir / "faceit/hltv_faceit_map.parquet")
+            rating_parts.append(_faceit_ratings(data_dir, dict(zip(m.faceit_id, m.hltv_id.astype(np.int64)))))
+    rt = pd.concat(rating_parts, ignore_index=True) if rating_parts else \
+        pd.DataFrame({"match_id": [], "map_name": [], "player": np.array([], np.int64), "src": [], "perf": []})
+    return Raw(maps=maps, rankings=rankings, ratings=rt)
 
 
 def before(raw: Raw, cutoff: pd.Timestamp, window_days: int) -> tuple[pd.DataFrame, pd.DataFrame]:

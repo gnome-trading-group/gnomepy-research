@@ -45,6 +45,12 @@ class Config:
     debut_days: int = 60
     map_noise: float = 0.37
     series_noise: float = 0.2
+    # Price with each rating's own uncertainty (a diagonal Laplace approximation) on top of the series noise: a team
+    # whose five has little credible evidence gets a price closer to a coin flip than its point rating implies.
+    parameter_risk: bool = False
+    # Second measurement per source: each player's map performance relative to his own five's mean, which splits a
+    # five's strength among its players (rounds only see the five's mean). Weight is its credibility, like a map's.
+    rating_weight: float = 0.0
 
 
 @dataclass
@@ -60,6 +66,8 @@ class Fit:
     strength_sd: float
     latest_five: dict            # team -> five of its latest map before the cutoff
     hltv_seen: set = field(default_factory=set)
+    theta_var: np.ndarray = None
+    gamma_var: np.ndarray = None
     map_table: np.ndarray = None
 
     def __post_init__(self):
@@ -78,7 +86,26 @@ def _features(strength: np.ndarray, div: np.ndarray, seen: np.ndarray, debut: np
     return np.column_stack([strength, onehot[:, 1:], 1.0 - seen, debut])
 
 
-def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: Config, career_first: pd.Series) -> Fit:
+def _rating_rows(maps: pd.DataFrame, ratings: pd.DataFrame, ia: np.ndarray, ib: np.ndarray, pidx: dict) -> pd.DataFrame:
+    """Performance rows of window maps whose player is in one of the map's fives: map row, own side, deviation."""
+    key = pd.DataFrame({"match_id": maps.match_id.to_numpy(), "map_name": maps.map_name.to_numpy(), "row": np.arange(len(maps))})
+    key = key.drop_duplicates(["match_id", "map_name"])
+    r = ratings.merge(key, on=["match_id", "map_name"])
+    if r.empty:
+        return r.assign(side=[], col=[], dev=[])
+    col = r.player.map(pidx)
+    r = r[col.notna()].assign(col=col[col.notna()].astype(np.int64))
+    in_a = (ia[r.row.to_numpy()] == r.col.to_numpy()[:, None]).any(axis=1)
+    in_b = (ib[r.row.to_numpy()] == r.col.to_numpy()[:, None]).any(axis=1)
+    r = r.assign(side=np.where(in_a, 0, np.where(in_b, 1, -1)))
+    r = r[r.side >= 0]
+    g = r.groupby(["row", "side"]).perf
+    r = r.assign(dev=r.perf - g.transform("mean"), cnt=g.transform("size"))
+    return r[r.cnt == LINEUP_SIZE].reset_index(drop=True)
+
+
+def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: Config, career_first: pd.Series,
+        ratings: pd.DataFrame | None = None) -> Fit:
     """`maps` holds the window's maps (data.before); career_first is each player's first map day before the cutoff."""
     cutoff = pd.Timestamp(cutoff)
     strength_of = _rank_strength(rankings, cutoff)
@@ -127,8 +154,24 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
     n_f = F.shape[1]
     inv0, invt = 1.0 / cfg.sigma0 ** 2, 1.0 / cfg.sigma_team ** 2
 
+    rr = _rating_rows(maps, ratings, ia, ib, {int(p): i for i, p in enumerate(players)}) \
+        if cfg.rating_weight > 0 and ratings is not None else pd.DataFrame()
+    n_r = len(rr)
+    if n_r:
+        own = np.where(rr.side.to_numpy()[:, None] == 0, ia[rr.row.to_numpy()], ib[rr.row.to_numpy()])
+        B = sp.csr_matrix((np.ones(n_r), (np.arange(n_r), rr.col.to_numpy())), shape=(n_r, n_p)) \
+            - sp.csr_matrix((np.full(own.size, 1.0 / LINEUP_SIZE), (np.repeat(np.arange(n_r), LINEUP_SIZE), own.ravel())),
+                            shape=(n_r, n_p))
+        BT = B.T.tocsr()
+        r_src = rr.src.to_numpy().astype(int)
+        dev = rr.dev.to_numpy(float)
+        r_sd = np.array([dev[r_src == s].std() if (r_src == s).any() else 1.0 for s in (HLTV, FACEIT)])
+        r_age = age[rr.row.to_numpy()]
+        omega = cfg.rating_weight * 0.5 ** (r_age / cfg.half_life_days) / r_sd[r_src] ** 2
+    n_g = 2 if n_r else 0
+
     def objective(x):
-        theta, gamma, beta = x[:n_p], x[n_p:n_p + n_t], x[n_p + n_t:]
+        theta, gamma, beta = x[:n_p], x[n_p:n_p + n_t], x[n_p + n_t:n_p + n_t + n_f]
         d = A @ theta + T @ gamma
         log_p = -np.logaddexp(0.0, -d)
         log_q = -np.logaddexp(0.0, d)
@@ -136,34 +179,61 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
         f = -np.sum(w * (k * log_p + (n - k) * log_q)) + 0.5 * inv0 * resid @ resid + 0.5 * invt * gamma @ gamma \
             + 0.5 * beta @ beta
         r = w * (k - n / (1.0 + np.exp(-d)))
-        g = np.concatenate([-(AT @ r) + inv0 * resid, -(TT @ r) + invt * gamma, -inv0 * (F.T @ resid) + beta])
+        g_theta = -(AT @ r) + inv0 * resid
+        extra = []
+        if n_r:
+            slope = x[n_p + n_t + n_f:]
+            bt = B @ theta
+            e = dev - slope[r_src] * bt
+            f += 0.5 * np.sum(omega * e * e) + 0.5 * np.sum((slope - 1.0) ** 2)
+            g_theta = g_theta - BT @ (omega * e * slope[r_src])
+            extra = [np.array([-np.sum((omega * e * bt)[r_src == s]) for s in (HLTV, FACEIT)]) + (slope - 1.0)]
+        g = np.concatenate([g_theta, -(TT @ r) + invt * gamma, -inv0 * (F.T @ resid) + beta] + extra)
         return f, g
 
-    res = opt.minimize(objective, np.zeros(n_p + n_t + n_f), jac=True, method="L-BFGS-B",
+    x0 = np.concatenate([np.zeros(n_p + n_t + n_f), np.ones(n_g)])
+    res = opt.minimize(objective, x0, jac=True, method="L-BFGS-B",
                        options={"maxiter": 5000, "maxcor": 20, "ftol": 1e-12, "gtol": 1e-6})
     x = res.x
+    d = A @ x[:n_p] + T @ x[n_p:n_p + n_t]
+    s_ = 1.0 / (1.0 + np.exp(-d))
+    h = w * n * s_ * (1.0 - s_)
+    info = A.multiply(A).T @ h + inv0
+    if n_r:
+        slope = x[n_p + n_t + n_f:]
+        info = info + B.multiply(B).T @ (omega * slope[r_src] ** 2)
+    theta_var = 1.0 / info
+    gamma_var = 1.0 / (T.multiply(T).T @ h + invt)
     latest: dict = {}
     for i in order:
         latest[int(maps.team_a.iat[i])] = maps.five_a.iat[i]
         latest[int(maps.team_b.iat[i])] = maps.five_b.iat[i]
     return Fit(cfg=cfg, pidx={int(p): i for i, p in enumerate(players)}, theta=x[:n_p],
-               tidx={int(t): i for i, t in enumerate(teams)}, gamma=x[n_p:n_p + n_t], beta=x[n_p + n_t:],
+               tidx={int(t): i for i, t in enumerate(teams)}, gamma=x[n_p:n_p + n_t], beta=x[n_p + n_t:n_p + n_t + n_f],
                rank_strength=strength_of, strength_mu=mu, strength_sd=sd, latest_five=latest,
-               hltv_seen={int(p) for p, s in zip(players, seen) if s > 0})
+               hltv_seen={int(p) for p, s in zip(players, seen) if s > 0},
+               theta_var=np.asarray(theta_var).ravel(), gamma_var=np.asarray(gamma_var).ravel())
 
 
-def team_rating(f: Fit, team: int) -> float:
-    """Expected round-logit strength of a team's latest five plus its team effect; unseen players take their class."""
+def team_rating(f: Fit, team: int) -> tuple[float, float]:
+    """Round-logit strength of a team's latest five plus its team effect, and its variance; unseen players take
+    their class mean with the prior's variance."""
     unranked = -np.log(UNRANKED)
     s = (f.rank_strength.get(int(team), unranked) - f.strength_mu) / f.strength_sd
     newcomer = float((_features(np.array([s]), np.array([0]), np.array([1.0]), np.array([1.0])) @ f.beta)[0])
-    five = f.latest_five.get(int(team))
-    skills = [f.theta[f.pidx[p]] if p in f.pidx else newcomer for p in five] if five else [newcomer] * LINEUP_SIZE
-    g = f.gamma[f.tidx[int(team)]] if int(team) in f.tidx else 0.0
-    return float(np.mean(skills) + g)
+    five = f.latest_five.get(int(team)) or (None,) * LINEUP_SIZE
+    known = [f.pidx.get(p) for p in five]
+    mean = np.mean([f.theta[i] if i is not None else newcomer for i in known])
+    var = sum(f.theta_var[i] if i is not None else f.cfg.sigma0 ** 2 for i in known) / LINEUP_SIZE ** 2
+    t = f.tidx.get(int(team))
+    if t is None:
+        return float(mean), float(var + f.cfg.sigma_team ** 2)
+    return float(mean + f.gamma[t]), float(var + f.gamma_var[t])
 
 
 def series_price(f: Fit, team_a: int, team_b: int) -> float:
-    d = team_rating(f, team_a) - team_rating(f, team_b)
-    p = np.interp(d + f.cfg.series_noise * _GH_X, _GRID, f.map_table)
+    mean_a, var_a = team_rating(f, team_a)
+    mean_b, var_b = team_rating(f, team_b)
+    shared = f.cfg.series_noise ** 2 + (var_a + var_b if f.cfg.parameter_risk else 0.0)
+    p = np.interp(mean_a - mean_b + np.sqrt(shared) * _GH_X, _GRID, f.map_table)
     return float(np.clip((p * p * (3 - 2 * p)) @ _GH_W, 1e-4, 1 - 1e-4))

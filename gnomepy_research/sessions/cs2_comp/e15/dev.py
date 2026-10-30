@@ -70,7 +70,7 @@ def main() -> None:
     targets["fit_week"] = targets.week_cutoff.map(fit_week)
     rows, preds = [], []
     for source in a.sources.split(","):
-        raw = load_raw(a.data, source == "faceit")
+        raw = load_raw(a.data, source == "faceit", ratings=any(c.get("rating_weight", 0) > 0 for c in json.loads(a.configs)))
         first = career_first(raw)
         for ci, overrides in enumerate(json.loads(a.configs)):
             cfg = dataclasses.replace(Config(), **overrides)
