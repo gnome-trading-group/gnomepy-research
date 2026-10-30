@@ -43,7 +43,7 @@ def main() -> None:
     ap.add_argument("variants", nargs="*", default=["{}"])
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
-    targets = pd.DataFrame({"match_id": [0], "team_a_id": [0], "team_b_id": [0], "week_cutoff": [DEV_END]})
+    targets = pd.DataFrame({"match_id": [0], "team_a_id": [0], "team_b_id": [0], "is_lan": [False], "week_cutoff": [DEV_END]})
     b = build(a.data, DEV_END, a.faceit)
     lines = []
     for i, text in enumerate(a.variants):
