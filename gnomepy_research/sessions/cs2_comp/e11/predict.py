@@ -1,12 +1,14 @@
 """
 e11: the HLTV Bayes series price, moved by what FACEIT results say about the two fives.
 
-    logit q = logit(q_bayes) + K_FACEIT * (logit(q_filter_faceit) - logit(q_filter_hltv))
+    logit q = logit(q_bayes) + K_FACEIT * [coverage >= 1] * (logit(q_filter_faceit) - logit(q_filter_hltv))
 
 q_bayes is the current Bayes series model (bayes_part.py) priced on each team's latest five. The two filters are the
 same player-skill filter (skill.py) run over HLTV maps alone and over HLTV + FACEIT maps, priced on the same fives;
-their gap is FACEIT's evidence, added to the Bayes price at a weight fitted on series before the tune period. With
---no-faceit the price is q_bayes on HLTV fives alone.
+their gap is FACEIT's evidence, added to the Bayes price at a weight fitted on series before the tune period
+(evaluate.py). It is added only when both fives have at least one player with FACEIT history: when one has none, the
+gap compares a FACEIT-rated five with an HLTV-only one across two scales, and on the development series it added
+nothing there. With --no-faceit the price is q_bayes on HLTV fives alone.
 
 Every target is priced from data available before its week_cutoff: the filters see exactly the maps available
 before it (stream.py), and the Bayes posterior is fitted at the week's anchor, at most REFIT_WEEKS - 1 weeks earlier.
@@ -31,7 +33,8 @@ from gnomepy_research.sessions.cs2_comp.e11.stream import FACEIT, HLTV, build_st
 
 FACEIT_CONFIG = FilterConfig(w_faceit=0.5, a_faceit=-0.2, s_faceit=0.05)
 HLTV_CONFIG = FilterConfig()
-K_FACEIT = 1.0
+K_FACEIT = 0.55
+MIN_COVERAGE = 1
 UNKNOWN_BASE = -4 * 10 ** 18
 
 
@@ -70,8 +73,10 @@ def filter_prices(data: Path, targets: pd.DataFrame, use_faceit: bool, cfg_f: Fi
             five_a = fives[a][1] if a in fives else _placeholder(a)
             five_b = fives[b][1] if b in fives else _placeholder(b)
             q = [f.price(five_a, a, five_b, b, day)[0] for f, *_ in runs]
+            last_filter = runs[-1][0]
+            cov = min(last_filter.coverage(five_a), last_filter.coverage(five_b))
             rows.append({"match_id": r.match_id, "fit_cutoff": cutoff, "five_a": five_a, "five_b": five_b,
-                         "q_h": q[0], "q_f": q[-1]})
+                         "q_h": q[0], "q_f": q[-1], "cov": cov})
     return pd.DataFrame(rows)
 
 
@@ -93,7 +98,8 @@ def bayes_prices(data: Path, priced: pd.DataFrame, targets: pd.DataFrame, cache:
 def predict(data: Path, targets: pd.DataFrame, use_faceit: bool, cache: Path | None = None) -> pd.DataFrame:
     p = filter_prices(data, targets, use_faceit)
     p["q_bayes"] = bayes_prices(data, p, targets, cache)
-    z = _logit(p.q_bayes) + (K_FACEIT * (_logit(p.q_f) - _logit(p.q_h)) if use_faceit else 0.0)
+    gate = (p["cov"] >= MIN_COVERAGE).to_numpy(float)
+    z = _logit(p.q_bayes) + (K_FACEIT * gate * (_logit(p.q_f) - _logit(p.q_h)) if use_faceit else 0.0)
     p["q"] = 1 / (1 + np.exp(-z))
     return p
 

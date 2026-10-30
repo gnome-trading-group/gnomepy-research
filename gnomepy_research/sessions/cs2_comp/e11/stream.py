@@ -54,7 +54,8 @@ class MapStream:
         idx = np.flatnonzero(keep)
         return MapStream(
             avail=self.avail[idx], day=self.day[idx], source=self.source[idx], team_a=self.team_a[idx],
-            team_b=self.team_b[idx], players_a=[self.players_a[i] for i in idx], players_b=[self.players_b[i] for i in idx],
+            team_b=self.team_b[idx], players_a=[self.players_a[i] for i in idx],
+            players_b=[self.players_b[i] for i in idx],
             rounds_a=self.rounds_a[idx], rounds_b=self.rounds_b[idx], series_key=self.series_key[idx],
             skill_a=self.skill_a[idx], skill_b=self.skill_b[idx])
 
@@ -112,7 +113,8 @@ def build_stream(data: Path, before: pd.Timestamp, use_faceit: bool) -> MapStrea
         "team_a": h.team_a_id.astype(np.int64).to_numpy(), "team_b": h.team_b_id.astype(np.int64).to_numpy(),
         "players_a": [_ids(x) for x in h.team_a_player_ids], "players_b": [_ids(x) for x in h.team_b_player_ids],
         "rounds_a": h.team_a_score.astype(int).to_numpy(), "rounds_b": h.team_b_score.astype(int).to_numpy(),
-        "series_key": h.match_id.astype(str).to_numpy(), "pos": h.map_position_in_series.fillna(0).astype(int).to_numpy(),
+        "series_key": h.match_id.astype(str).to_numpy(),
+        "pos": h.map_position_in_series.fillna(0).astype(int).to_numpy(),
         "skill_a": np.nan, "skill_b": np.nan,
     })]
     if use_faceit:
@@ -133,7 +135,8 @@ def build_stream(data: Path, before: pd.Timestamp, use_faceit: bool) -> MapStrea
             "team_b": f.team_b_id.fillna(-1).astype(np.int64).to_numpy(),
             "players_a": [keys(x) for x in f.team_a_faceit_ids], "players_b": [keys(x) for x in f.team_b_faceit_ids],
             "rounds_a": f.team_a_score.astype(int).to_numpy(), "rounds_b": f.team_b_score.astype(int).to_numpy(),
-            "series_key": f.match_id.astype(str).to_numpy(), "pos": f.map_position_in_series.fillna(0).astype(int).to_numpy(),
+            "series_key": f.match_id.astype(str).to_numpy(),
+            "pos": f.map_position_in_series.fillna(0).astype(int).to_numpy(),
             "skill_a": [mean_skill(m, x) for m, x in zip(f.match_id, f.team_a_faceit_ids)],
             "skill_b": [mean_skill(m, x) for m, x in zip(f.match_id, f.team_b_faceit_ids)],
         }))

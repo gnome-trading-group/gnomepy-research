@@ -34,7 +34,8 @@ def anchor(week_cutoff: pd.Timestamp) -> pd.Timestamp:
     return week_cutoff - pd.Timedelta(weeks=((week_cutoff - ANCHOR_EPOCH).days // 7) % REFIT_WEEKS)
 
 
-def fit_posterior(data: Path, cutoff: pd.Timestamp, cfg: BayesSeriesConfig = BayesSeriesConfig()) -> tuple[SeriesPosterior, dict]:
+def fit_posterior(data: Path, cutoff: pd.Timestamp,
+                  cfg: BayesSeriesConfig = BayesSeriesConfig()) -> tuple[SeriesPosterior, dict]:
     history = bundle.load(data, "hltv/cs2_match_history", cutoff)
     maps = prepare_maps(history, bundle.load(data, "hltv/cs2_match_lineups", cutoff))
     stats = bundle.load(data, "hltv/cs2_player_map_stats", cutoff, STATS_COLUMNS)

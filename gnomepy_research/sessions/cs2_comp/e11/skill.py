@@ -49,6 +49,7 @@ class SkillFilter:
         self._seen: dict[int, int] = {}
         self._cov: dict[tuple[int, int], float] = {}
         self.games: collections.Counter = collections.Counter()
+        self.faceit_players: set[int] = set()
         self._five_days: dict[frozenset, collections.deque] = collections.defaultdict(collections.deque)
         self._rank_days: list[int] = []
         self._rank_points: list[dict[int, float]] = []
@@ -111,6 +112,10 @@ class SkillFilter:
         cov = self._block(pa + pb, va + vb)
         return ta - tb, float(w @ cov @ w), cov, w, pa + pb, mua + mub
 
+    def coverage(self, five) -> int:
+        """How many of the five (HLTV ids) have played a FACEIT map this filter has seen."""
+        return sum(1 for p in five if p in self.faceit_players)
+
     def price(self, players_a, team_a, players_b, team_b, day) -> tuple[float, float]:
         """P(A wins a bo3) and the round-logit gap, pre-veto, from the current state."""
         d, s2, *_ = self.gap(players_a, team_a, players_b, team_b, day)
@@ -139,6 +144,8 @@ class SkillFilter:
             self._var[p] = max(1e-6, float(cov[i, i]))
             self._seen[p] = day
             self.games[p] += 1
+            if source == FACEIT and p > 0:
+                self.faceit_players.add(p)
             for j in range(i + 1, len(players)):
                 q = players[j]
                 self._cov[(p, q) if p < q else (q, p)] = float(cov[i, j])
