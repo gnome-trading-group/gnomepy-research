@@ -2,7 +2,8 @@
 
 `load(data_dir, table, before)` returns the rows of one bundle table dated strictly before `before` (a naive UTC
 timestamp, normally a target's week_cutoff). Tables without a date of their own are cut through the FACEIT matches
-they belong to. Using this for every read is the simplest way to stay point-in-time."""
+they belong to; every FACEIT table is cut by its match's finished_at. Using this for every read is the simplest way to
+stay point-in-time."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,10 +20,11 @@ DATE_COLUMN = {
     "hltv/cs2_team_recent_form": "match_date",
     "hltv/cs2_team_rankings": "date",
     "hltv/cs2_roster_moves": "event_date",
-    "faceit/faceit_match_history": "match_date",
-    "faceit/faceit_lineups": "match_date",
 }
-BY_FACEIT_MATCH = {"faceit/faceit_rosters", "faceit/faceit_player_map_stats", "faceit/faceit_exclusions"}
+# A FACEIT match counts as known once FACEIT finalised it (finished_at), not when it was played: some April ESEA maps
+# were only finalised in late May. Every FACEIT table follows its match, so all of them agree on what was known.
+BY_FACEIT_MATCH = {"faceit/faceit_match_history", "faceit/faceit_lineups", "faceit/faceit_rosters",
+                   "faceit/faceit_player_map_stats", "faceit/faceit_exclusions"}
 UNIX_SECONDS = {"faceit/faceit_matches": "finished_at", "faceit/history_matches": "finished_at"}
 
 
