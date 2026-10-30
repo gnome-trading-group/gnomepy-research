@@ -44,6 +44,7 @@ def run(data_dir: Path, targets: pd.DataFrame, cfg: ModelConfig) -> pd.DataFrame
         t_days = t_match.to_numpy("datetime64[ns]").astype(np.int64) / data.NS_PER_DAY
         feats = pd.DataFrame([model.features(int(r.team_a_id), int(r.team_b_id), float(td), cutoff_day)
                               for r, td in zip(wk.itertuples(), t_days)])
+        feats["is_lan"] = wk.is_lan.to_numpy(float)
         q = np.clip(stack.apply(feats, weights), Q_FLOOR, 1 - Q_FLOOR)
         out.append(pd.DataFrame({"match_id": wk.match_id.to_numpy(), "q": q, "fit_cutoff": pd.Timestamp(cutoff)}))
     return pd.concat(out, ignore_index=True)
