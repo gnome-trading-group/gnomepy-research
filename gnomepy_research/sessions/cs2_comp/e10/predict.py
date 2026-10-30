@@ -31,13 +31,15 @@ def design(f: pd.DataFrame, spec: str) -> np.ndarray:
     """Columns antisymmetric under swapping the teams, so q(A, B) = 1 - q(B, A) with no intercept."""
     z = logit(f.p_series)
     cols = [z]
-    if "f" in spec:
-        cols.append(3.0 * f.fres.to_numpy())
-    if "g" in spec:
-        cols.append(3.0 * f.fres.to_numpy() * (f.fw_a + f.fw_b).to_numpy())
-    if "sd" in spec:
+    tokens = set(spec.split("+"))
+    if "f" in tokens:
+        cols.append(3.0 * (f.fres_lo + f.fres_hi).to_numpy())
+    if "s" in tokens:
+        cols.append(3.0 * f.fres_lo.to_numpy())
+        cols.append(3.0 * f.fres_hi.to_numpy())
+    if "sd" in tokens:
         cols.append(f.d.to_numpy() * f.sd.to_numpy())
-    if "new" in spec:
+    if "new" in tokens:
         cols.append(z * (f.nnew_a + f.nnew_b).to_numpy() / 10.0)
     return np.column_stack(cols)
 
@@ -77,7 +79,8 @@ def build_config(use_faceit: bool, overrides: dict) -> RunConfig:
     hltv = replace(base.hltv, **{k[2:]: v for k, v in overrides.items() if k.startswith("h_")})
     faceit = replace(base.faceit_skill, **{k[2:]: v for k, v in overrides.items() if k.startswith("f_")})
     run = {k: v for k, v in overrides.items() if k in RunConfig.__dataclass_fields__ and k not in ("hltv", "faceit_skill")}
-    return replace(base, hltv=hltv, faceit_skill=faceit, use_faceit=use_faceit, faceit_rating=use_faceit, **run)
+    run["faceit_rating"] = use_faceit and run.get("faceit_rating", True)
+    return replace(base, hltv=hltv, faceit_skill=faceit, use_faceit=use_faceit, **run)
 
 
 def predict(data_dir: Path, targets: pd.DataFrame, use_faceit: bool, overrides: dict | None = None, spec: str = "") -> pd.DataFrame:

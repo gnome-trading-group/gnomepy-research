@@ -39,6 +39,7 @@ class RunConfig:
     k_series: int = 5
     games_half: float = 20.0
     shift_min_games: int = 20
+    thin_games: int = 20
 
 
 class Event(NamedTuple):
@@ -229,13 +230,15 @@ class Pass:
             return 0.0
         return float(np.median(self.ff.s.mu[both] - self.fh.s.mu[both]))
 
-    def _faceit_residual(self, lineup: np.ndarray, day: int, shift: float) -> tuple[float, float, int]:
+    def _faceit_residual(self, lineup: np.ndarray, day: int, shift: float) -> tuple[float, float, float, int]:
         """Mean over the lineup of how far each player's FACEIT skill sits above his HLTV skill (net of the level
-        shift), weighted by how many FACEIT maps stand behind it; the weight is zero for a player with none."""
+        shift), weighted by how many FACEIT maps stand behind it (zero with none). Split by whether the HLTV skill
+        is itself thin: that is where a second measurement should count most."""
         g = self.ff.s.games[lineup].astype(float)
         weight = g / (g + self.cfg.games_half)
-        resid = self.ff.s.mu[lineup] - shift - self.fh.current(lineup, day)[0]
-        return float((weight * resid).mean()), float(weight.mean()), int((g >= 10).sum())
+        resid = weight * (self.ff.s.mu[lineup] - shift - self.fh.current(lineup, day)[0])
+        thin = self.fh.s.games[lineup] < self.cfg.thin_games
+        return float(resid[thin].sum() / LINEUP), float(resid[~thin].sum() / LINEUP), float(weight.mean()), int((g >= 10).sum())
 
     def price(self, cutoff: pd.Timestamp, team_a: int, team_b: int, shift: float = 0.0) -> dict:
         f, day = self.fh, day_number(cutoff)
@@ -243,18 +246,18 @@ class Pass:
         row = {"known_a": 0 if a is None else len(a), "known_b": 0 if b is None else len(b)}
         if a is not None and b is not None and len(a) == LINEUP and len(b) == LINEUP and not set(a.tolist()) & set(b.tolist()):
             d, s2 = f.gap(a, b, day)
-            fa, wa, na = self._faceit_residual(a, day, shift)
-            fb, wb, nb = self._faceit_residual(b, day, shift)
+            lo_a, hi_a, wa, na = self._faceit_residual(a, day, shift)
+            lo_b, hi_b, wb, nb = self._faceit_residual(b, day, shift)
         else:
             ma, va = self._virtual(team_a, cutoff) if a is None else (float(f.current(a, day)[0].mean()), float(f.current(a, day)[1].sum()) / len(a) ** 2)
             mb, vb = self._virtual(team_b, cutoff) if b is None else (float(f.current(b, day)[0].mean()), float(f.current(b, day)[1].sum()) / len(b) ** 2)
             d, s2 = ma - mb, va + vb
-            fa = fb = wa = wb = 0.0
+            lo_a = hi_a = lo_b = hi_b = wa = wb = 0.0
             na = nb = 0
         p_map = map_win_prob(d, s2)
         p_series = p_map * p_map * (3 - 2 * p_map)
         row.update({"d": d, "sd": math.sqrt(max(s2, 0.0)), "p_series": min(max(p_series, 1e-4), 1 - 1e-4),
-                    "fres": fa - fb, "fw_a": wa, "fw_b": wb, "nf_a": na, "nf_b": nb})
+                    "fres_lo": lo_a - lo_b, "fres_hi": hi_a - hi_b, "fw_a": wa, "fw_b": wb, "nf_a": na, "nf_b": nb})
         for side, lu in (("a", a), ("b", b)):
             row[f"nnew_{side}"] = LINEUP if lu is None else int((f.s.games[lu] < 20).sum()) + LINEUP - len(lu)
         return row
