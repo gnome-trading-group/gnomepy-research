@@ -48,10 +48,10 @@ class Params:
     sig_r_f: float = 0.3
     style_shrink: float = 20.0
     use_faceit: bool = True
-    joint: bool = True
+    joint: bool = False
     link_a: float = 0.0
     link_b: float = 0.5
-    link_s: float = 0.25
+    link_s: float = 0.7
 
 
 MAX_LOGIT = 30.0
