@@ -171,19 +171,20 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
         if actual_fives else None
 
     def price(team_a: int, team_b: int, w: pd.Timestamp, now: float, match_id=None) -> dict:
+        fa, ua = rosters.five(team_a, now, use_moves)
+        fb, ub = rosters.five(team_b, now, use_moves)
+        same = {}
         if played is not None and str(match_id) in played.index:
-            fa, fb = played.loc[str(match_id)]
-            fa, fb, ua, ub = list(fa), list(fb), 0, 0
-        else:
-            fa, ua = rosters.five(team_a, now, use_moves)
-            fb, ub = rosters.five(team_b, now, use_moves)
+            pa, pb = played.loc[str(match_id)]
+            same = {"same_a": len(set(pa) & set(fa)), "same_b": len(set(pb) & set(fb))}
+            fa, fb, ua, ub = list(pa), list(pb), 0, 0
         la = f.lineup(tuple(fa), team_a, w, now, 0, -1, ua)
         lb = f.lineup(tuple(fb), team_b, w, now, 0, -1, ub)
         d, s2, _, _ = f.gap(la, lb)
         return {"p_raw": series_price(d, s2, curve, sigma_series), "d": d, "gap_sd": math.sqrt(max(s2, 0)),
                 "unk_a": ua, "unk_b": ub, "fonly_a": la.faceit_only, "fonly_b": lb.faceit_only,
                 "five_a": la.five_maps, "five_b": lb.five_maps,
-                "games_min": min(la.games + lb.games) if la.games and lb.games else 0}
+                "games_min": min(la.games + lb.games) if la.games and lb.games else 0, **same}
 
     hist_rows, out_rows = [], []
     maps = b.maps
