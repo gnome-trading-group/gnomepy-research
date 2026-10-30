@@ -34,6 +34,7 @@ def run_pass(events: list[MapEvent], rankings, moves: list, params: Params, quer
     """queries: match_id, week_cutoff, kickoff (UTC seconds), team_a_id, team_b_id. known_lineups maps match_id to the
     two announced fives and is for diagnostics only."""
     filt = Combined(params, rankings, use_faceit, joint)
+    base = Combined(params, rankings, False) if use_faceit else None
     rosters = Rosters(roster_params)
     ei, mi = 0, 0
     out = []
@@ -43,11 +44,16 @@ def run_pass(events: list[MapEvent], rankings, moves: list, params: Params, quer
         while ei < len(events) and events[ei].t < cs:
             e = events[ei]
             filt.observe(e)
+            if base is not None and e.source == HLTV:
+                base.observe(e)
             if e.source == HLTV:
                 rosters.observe_map(e.team_a, e.day, e.players_a)
                 rosters.observe_map(e.team_b, e.day, e.players_b)
             ei += 1
         filt.advance(cs)
+        if base is not None:
+            base.advance(cs)
+            base.h.rank_limit = cs / 86400.0
         while mi < len(moves) and to_seconds(moves[mi].event_date) < cs:
             rosters.observe_move(moves[mi])
             mi += 1
@@ -62,5 +68,16 @@ def run_pass(events: list[MapEvent], rankings, moves: list, params: Params, quer
             else:
                 res = filt.price(day, int(r.team_a_id), ea, xa, int(r.team_b_id), eb, xb)
                 depth = min(filt.faceit_depth([pl for pl, _ in ea]), filt.faceit_depth([pl for pl, _ in eb]))
-            out.append({"match_id": r.match_id, "fit_cutoff": cutoff, **res, "faceit_depth": depth})
+            ta, tb = int(r.team_a_id), int(r.team_b_id)
+            thin = not r.is_lan and (min(rosters.maps_within(ta, cs / 86400.0, 90.0), rosters.maps_within(tb, cs / 86400.0, 90.0))
+                                     <= params.thin_maps or min(filt.h.rank_of(ta, day), filt.h.rank_of(tb, day)) > params.thin_rank)
+            if base is not None:
+                bres = base.price(day, ta, ea, xa, tb, eb, xb) if known_lineups is None else base.price_known(day, ta, la, tb, lb)
+                q_final = stacked(res["q"], bres["q"], thin, params)
+                extra = {"q_faceit": res["q"], "q_base": bres["q"]}
+            else:
+                q_final = stacked(res["q"], res["q"], thin, params)
+                extra = {"q_faceit": res["q"], "q_base": res["q"]}
+            out.append({"match_id": r.match_id, "fit_cutoff": cutoff, **res, "q": q_final, **extra, "thin_hat": bool(thin),
+                        "faceit_depth": depth})
     return pd.DataFrame(out)

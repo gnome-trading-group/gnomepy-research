@@ -24,6 +24,7 @@ from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
 from gnomepy_research.sessions.cs2_comp.e06.events import FACEIT, FIVE, N_DIVISIONS, MapEvent
 
 TIE_TOLERANCE = 1e-9
+HLTV_DEPTH = 60
 _X, _W = np.polynomial.hermite_e.hermegauss(21)
 _W = _W / _W.sum()
 _GRID = np.linspace(-8.0, 8.0, 3201)
@@ -42,12 +43,12 @@ class Params:
     rho: float = 0.017231894894383412
     chem_days: int = 180
     new_player_maps: int = 20
-    gamma_f: float = 1.1
-    rho_f: float = 0.1
-    tau_f: float = 0.006
-    sigma0_f: float = 0.3
-    a_f: float = -0.6
-    div_offsets: tuple = (0.0, 0.17, 0.34, 0.595, 0.17, 0.0)
+    gamma_f: float = 1.14
+    rho_f: float = 0.105
+    tau_f: float = 0.0076
+    sigma0_f: float = 0.32
+    a_f: float = -0.53
+    div_offsets: tuple = (0.0, 0.144, 0.288, 0.504, 0.144, 0.0)
     sigma_m: float = 0.37
     sigma_s: float = 0.15
     min_games_h: int = 15
@@ -59,10 +60,16 @@ class Params:
     sub_gap: float = 0.1
     sigma_sub: float = 0.25
     k_h: float = 0.5
-    r_h: float = 0.29
-    k_f: float = 0.5
-    r_f: float = 0.3
-    omega: float = 0.05
+    r_h: float = 0.285
+    k_f: float = 0.58
+    r_f: float = 0.36
+    omega: float = 0.085
+    eta_f: float = 0.0
+    q_scale: float = 1.2
+    w_thin: float = 0.8
+    w_rest: float = 0.45
+    thin_maps: int = 15
+    thin_rank: int = 100
 
     def with_values(self, **kv) -> Params:
         return replace(self, **kv)
@@ -72,6 +79,18 @@ class Params:
 
 
 NAMES = tuple(f.name for f in fields(Params))
+
+
+def logit(p):
+    p = min(max(p, 1e-6), 1 - 1e-6)
+    return math.log(p / (1 - p))
+
+
+def stacked(q_faceit: float, q_base: float, thin: bool, p: Params) -> float:
+    """FACEIT's shift of the HLTV-only logit, weighted by how thin the HLTV evidence is, then rescaled."""
+    w = p.w_thin if thin else p.w_rest
+    z = p.q_scale * (logit(q_base) + w * (logit(q_faceit) - logit(q_base)))
+    return 1 / (1 + math.exp(-z))
 
 
 def bo3(p):
@@ -113,6 +132,15 @@ class SkillFilter:
     def _points(self, team: int, day: float) -> float:
         i = bisect.bisect_left(self._rank_days, min(day, self.rank_limit)) - 1
         return self._rank_points[i].get(team, 0.0) if i >= 0 else 0.0
+
+    def rank_of(self, team: int, day: float) -> int:
+        """Rank by points in the latest weekly ranking before day (999 when unranked)."""
+        i = bisect.bisect_left(self._rank_days, min(day, self.rank_limit)) - 1
+        if i < 0:
+            return 999
+        pts = self._rank_points[i]
+        mine = pts.get(team)
+        return 999 if mine is None else 1 + sum(1 for v in pts.values() if v > mine)
 
     def _prior(self, source: int, team: int, day: float, division: int) -> tuple[float, float]:
         p = self.p
@@ -183,6 +211,9 @@ class SkillFilter:
         n = ev.rounds_a + ev.rounds_b
         pi = 1 / (1 + math.exp(-max(-8.0, min(8.0, d))))
         inflation = 1 + (n - 1) * rho
+        if faceit and p.eta_f > 0:
+            hltv_depth = np.mean([min(self.games[pl] - self.faceit_games[pl], HLTV_DEPTH) / HLTV_DEPTH for pl in players])
+            inflation *= 1 + p.eta_f * hltv_depth
         grad, curv = (ev.rounds_a - n * pi) / inflation, n * pi * (1 - pi) / inflation
         cw = cov @ w
         denom = 1 + curv * s2

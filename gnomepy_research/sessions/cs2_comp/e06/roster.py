@@ -6,6 +6,7 @@ team's last map lifts a player, a leave or bench after the last map he played fo
 """
 from __future__ import annotations
 
+import bisect
 import collections
 from dataclasses import dataclass
 
@@ -25,11 +26,17 @@ class Rosters:
     def __init__(self, params: RosterParams | None = None):
         self.p = params or RosterParams()
         self.recent: dict[int, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=DEPTH))
+        self.days: dict[int, list[float]] = collections.defaultdict(list)
         self.joined: dict[int, dict[int, float]] = collections.defaultdict(dict)
         self.left: dict[int, dict[int, float]] = collections.defaultdict(dict)
 
     def observe_map(self, team: int, day: float, five: tuple) -> None:
         self.recent[team].append((day, five))
+        self.days[team].append(day)
+
+    def maps_within(self, team: int, day: float, window: float) -> int:
+        d = self.days.get(team, [])
+        return bisect.bisect_left(d, day) - bisect.bisect_left(d, day - window)
 
     def observe_move(self, row) -> None:
         day = pd.Timestamp(row.event_date).value / 1e9 / 86400.0

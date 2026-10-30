@@ -26,6 +26,7 @@ def queries_from_targets(targets: pd.DataFrame) -> pd.DataFrame:
         "kickoff": kick.astype("datetime64[ns]").astype("int64").to_numpy() / 1e9,
         "team_a_id": targets.team_a_id.to_numpy(),
         "team_b_id": targets.team_b_id.to_numpy(),
+        "is_lan": targets.is_lan.astype(bool).to_numpy(),
     })
 
 

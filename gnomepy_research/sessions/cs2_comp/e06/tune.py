@@ -59,10 +59,32 @@ def log_loss(p, y):
     return -(y * np.log(p) + (1 - y) * np.log(1 - p))
 
 
+def _logit(p):
+    p = np.clip(np.asarray(p, float), 1e-4, 1 - 1e-4)
+    return np.log(p / (1 - p))
+
+
+def refit_stack(d: pd.DataFrame) -> tuple[np.ndarray, float]:
+    """Logistic fit of the outcome on the HLTV-only logit and FACEIT's shift in the thin and the rest segments."""
+    dl = _logit(d.q_faceit) - _logit(d.q_base)
+    th = d.thin_hat.to_numpy(bool)
+    x = np.column_stack([_logit(d.q_base), dl * th, dl * ~th])
+    y = d.y.to_numpy(float)
+    w = np.array([1.0, 0.5, 0.5])
+    for _ in range(30):
+        pr = 1 / (1 + np.exp(-x @ w))
+        w += np.linalg.solve(x.T @ (x * (pr * (1 - pr))[:, None]) + 1e-6 * np.eye(3), x.T @ (y - pr))
+    return w, float(log_loss(1 / (1 + np.exp(-x @ w)), y).mean())
+
+
 def summarize(res: pd.DataFrame, q: pd.DataFrame) -> dict:
     d = q.merge(res, on="match_id")
     d["ll"] = log_loss(d.q, d.y)
-    out = {"n": len(d), "ll": float(d.ll.mean())}
+    d["ll_faceit"] = log_loss(d.q_faceit, d.y)
+    d["ll_base"] = log_loss(d.q_base, d.y)
+    out = {"n": len(d), "ll": float(d.ll.mean()), "ll_faceit": float(d.ll_faceit.mean()), "ll_base": float(d.ll_base.mean())}
+    w, ll_refit = refit_stack(d)
+    out["ll_refit"], out["stack_coefs"] = ll_refit, [float(x) for x in w]
     early = pd.to_datetime(d.week_cutoff) < pd.Timestamp("2026-01-01")
     out["ll_early"], out["ll_late"] = float(d.ll[early].mean()), float(d.ll[~early].mean())
     for name, g in [("thin", d[d.thin]), ("rest", d[~d.thin])] + [(f"cov{c}", d[d.faceit_depth.between(lo, hi)])
