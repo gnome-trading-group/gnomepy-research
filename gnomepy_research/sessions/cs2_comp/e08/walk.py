@@ -95,6 +95,7 @@ def walk(maps: Maps, targets: pd.DataFrame, moves: Moves, ranks: RankPoints, par
                 "match_id": r.match_id, "q_joint": q_joint, "q_hltv": q_hltv, "gap": mean, "gap_var": var,
                 "fit_cutoff": cutoff, "n_face_a": n_face[0], "n_face_b": n_face[1],
                 "guess": sum(1 - p for p in lineups[0][1]) + sum(1 - p for p in lineups[1][1]), "thin_pit": thin,
+                "points_a": fe[0], "points_b": fe[1], "recent_a": recent_maps[0], "recent_b": recent_maps[1],
             })
     out = pd.DataFrame(rows)
     covered = np.minimum(out.n_face_a, out.n_face_b) >= params.hybrid_min
