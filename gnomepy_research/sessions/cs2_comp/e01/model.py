@@ -1,9 +1,10 @@
-"""One lineup rating over HLTV and FACEIT maps, refit at each cutoff.
+"""One player-skill scale over HLTV and FACEIT, refit at each cutoff.
 
-Each map is a logistic comparison of the two five-player lineups: a player's skill enters with weight 1/5, and the
-map's log-odds is the difference of the two lineup sums. HLTV and FACEIT maps share one player scale because linked
-FACEIT players carry their HLTV id; FACEIT maps are down-weighted, since FACEIT is a noisier, lower-tier signal.
-Unlinked FACEIT players keep their own id so that their results still connect the rating graph.
+Two measurements share one skill per player. Map results are logistic comparisons of the two five-player lineups: a
+player's skill enters with weight 1/5 and the map's log-odds is the difference of the lineup sums. Per-player map
+performance (HLTV rating, FACEIT K/D) is a second, Gaussian measurement of the same skill, which sharpens skill for
+players with few results. FACEIT measurements are down-weighted, since FACEIT is a noisier, lower-tier signal.
+Linked FACEIT players carry their HLTV id; unlinked ones keep a FACEIT id so that their results still connect the graph.
 """
 from __future__ import annotations
 
@@ -13,7 +14,8 @@ from math import comb
 import numpy as np
 import pandas as pd
 from scipy import sparse
-from sklearn.linear_model import LogisticRegression
+from scipy.optimize import minimize
+from scipy.special import expit
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.bundle import load
@@ -30,8 +32,7 @@ class Config:
     window_days: int = 730
     lineup_days: int = 120
     C: float = 1.0
-    dev_scale: float = 0.0
-    team_scale: float = 0.0
+    perf_weight: float = 0.0
     round_weighted: bool = False
 
 
@@ -40,20 +41,37 @@ def naive(ts) -> pd.Timestamp:
     return ts.tz_convert(None) if ts.tzinfo is not None else ts
 
 
+def _player_key(faceit_id: str, lut: dict) -> str:
+    h = lut.get(faceit_id)
+    return str(h) if h is not None else f"f{faceit_id}"
+
+
+def _faceit_lookup(data: str) -> dict:
+    return {r.faceit_id: int(r.hltv_id) for r in load(data, "faceit/hltv_faceit_map").itertuples()}
+
+
+def _faceit_series(data: str, before: pd.Timestamp) -> pd.Index:
+    fm = load(data, "faceit/faceit_matches", before, ["match_id", "has_stats"])
+    return fm[fm.has_stats.astype(bool)].match_id
+
+
+def _faceit_exclusions(data: str, before: pd.Timestamp):
+    ex = load(data, "faceit/faceit_exclusions", before, ["match_id", "map_name"])
+    return ex.match_id[ex.map_name.isna()], ex.dropna(subset=["map_name"]).assign(bad=1)
+
+
 def _hltv_maps(data: str, before: pd.Timestamp) -> pd.DataFrame:
     cols = ["match_id", "match_date", "match_time", "team_a_id", "team_b_id", "team_a_player_ids",
             "team_b_player_ids", "team_a_won", "team_a_score", "team_b_score", "event_name", "format"]
     h = load(data, "hltv/cs2_match_history", before, cols)
     h = h[~showmatch_mask(h)].dropna(subset=["team_a_won", "team_a_player_ids", "team_b_player_ids", "team_a_score",
                                              "team_b_score"])
-    a = [tuple(str(int(x)) for x in ids if pd.notna(x)) for ids in h.team_a_player_ids]
-    b = [tuple(str(int(x)) for x in ids if pd.notna(x)) for ids in h.team_b_player_ids]
     out = pd.DataFrame({
         "match_id": h.match_id.to_numpy(),
         "date": pd.to_datetime(h.match_date).to_numpy(),
         "src": HLTV,
-        "a": a,
-        "b": b,
+        "a": [tuple(str(int(x)) for x in ids if pd.notna(x)) for ids in h.team_a_player_ids],
+        "b": [tuple(str(int(x)) for x in ids if pd.notna(x)) for ids in h.team_b_player_ids],
         "y": h.team_a_won.astype(int).to_numpy(),
         "ra": h.team_a_score.astype(float).to_numpy(),
         "rb": h.team_b_score.astype(float).to_numpy(),
@@ -63,11 +81,6 @@ def _hltv_maps(data: str, before: pd.Timestamp) -> pd.DataFrame:
     return out[(out.a.map(len) >= MIN_LINEUP) & (out.b.map(len) >= MIN_LINEUP)]
 
 
-def _faceit_series(data: str, before: pd.Timestamp) -> pd.Index:
-    fm = load(data, "faceit/faceit_matches", before, ["match_id", "has_stats"])
-    return fm[fm.has_stats.astype(bool)].match_id
-
-
 def _faceit_maps(data: str, before: pd.Timestamp) -> pd.DataFrame:
     ids = _faceit_series(data, before)
     cols = ["match_id", "match_date", "map_name", "map_position_in_series", "team_a_faceit_ids", "team_b_faceit_ids",
@@ -75,33 +88,20 @@ def _faceit_maps(data: str, before: pd.Timestamp) -> pd.DataFrame:
             "team_b_score"]
     fh = load(data, "faceit/faceit_match_history", before, cols)
     fh = fh[fh.match_id.isin(ids)].drop_duplicates(["match_id", "map_position_in_series"])
-
-    ex = load(data, "faceit/faceit_exclusions", before, ["match_id", "map_name"])
-    whole = ex.match_id[ex.map_name.isna()]
-    fh = fh[~fh.match_id.isin(whole)]
-    per_map = ex.dropna(subset=["map_name"]).assign(bad=1)
-    fh = fh.merge(per_map, on=["match_id", "map_name"], how="left")
+    whole, per_map = _faceit_exclusions(data, before)
+    fh = fh[~fh.match_id.isin(whole)].merge(per_map, on=["match_id", "map_name"], how="left")
     fh = fh[fh.bad.isna()]
-
-    lut = {r.faceit_id: int(r.hltv_id) for r in load(data, "faceit/hltv_faceit_map").itertuples()}
+    lut = _faceit_lookup(data)
 
     def keys(ids_list) -> tuple:
-        out = []
-        for f in ids_list:
-            if f is None or (isinstance(f, float) and np.isnan(f)):
-                continue
-            h = lut.get(f)
-            out.append(str(h) if h is not None else f"f{f}")
-        return tuple(out)
+        return tuple(_player_key(f, lut) for f in ids_list if isinstance(f, str))
 
-    a = [keys(x) for x in fh.team_a_faceit_ids]
-    b = [keys(x) for x in fh.team_b_faceit_ids]
     out = pd.DataFrame({
         "match_id": fh.match_id.to_numpy(),
         "date": pd.to_datetime(fh.match_date).to_numpy(),
         "src": FACEIT,
-        "a": a,
-        "b": b,
+        "a": [keys(x) for x in fh.team_a_faceit_ids],
+        "b": [keys(x) for x in fh.team_b_faceit_ids],
         "y": fh.team_a_won.astype(int).to_numpy(),
         "ra": fh.team_a_score.astype(float).to_numpy(),
         "rb": fh.team_b_score.astype(float).to_numpy(),
@@ -119,40 +119,87 @@ def build_maps(data: str, before: pd.Timestamp, cfg: Config) -> pd.DataFrame:
     return maps[maps.date < before]
 
 
+def build_performance(data: str, before: pd.Timestamp, cfg: Config) -> pd.DataFrame:
+    empty = pd.DataFrame({"date": pd.to_datetime([]), "key": pd.Series([], dtype=object),
+                          "src": pd.Series([], dtype=int), "z": pd.Series([], dtype=float)})
+    if cfg.perf_weight <= 0:
+        return empty
+    hist = load(data, "hltv/cs2_match_history", before, ["match_id", "event_name", "format"]).drop_duplicates("match_id")
+    keep_ids = hist.match_id[~showmatch_mask(hist).to_numpy()]
+    ps = load(data, "hltv/cs2_player_map_stats", before, ["match_id", "match_date", "player_id", "side", "rating"])
+    ps = ps[(ps.side == "all") & ps.rating.notna() & ps.player_id.notna() & ps.match_id.isin(keep_ids)]
+    hltv_perf = pd.DataFrame({
+        "date": pd.to_datetime(ps.match_date).to_numpy(),
+        "key": ps.player_id.astype(int).astype(str).to_numpy(),
+        "src": HLTV,
+        "z": np.log(ps.rating.clip(lower=0.05)).to_numpy(),
+    })
+
+    if not cfg.faceit:
+        perf = hltv_perf.dropna(subset=["date"])
+        return perf[perf.date < before].reset_index(drop=True)
+
+    ids = _faceit_series(data, before)
+    fm = load(data, "faceit/faceit_matches", before, ["match_id", "finished_at"])
+    finished = dict(zip(fm.match_id, pd.to_datetime(fm.finished_at, unit="s")))
+    whole, _ = _faceit_exclusions(data, before)
+    fp = load(data, "faceit/faceit_player_map_stats", before, ["match_id", "hltv_id", "faceit_id", "k_d_ratio"])
+    fp = fp[fp.match_id.isin(ids) & ~fp.match_id.isin(whole) & fp.k_d_ratio.notna()]
+    lut = _faceit_lookup(data)
+    faceit_perf = pd.DataFrame({
+        "date": [finished.get(m) for m in fp.match_id],
+        "key": [str(int(h)) if pd.notna(h) else _player_key(f, lut) for h, f in zip(fp.hltv_id, fp.faceit_id)],
+        "src": FACEIT,
+        "z": np.log(fp.k_d_ratio.clip(0.05, 5.0)).to_numpy(),
+    })
+    frames = [hltv_perf] if not cfg.faceit else [hltv_perf, faceit_perf]
+    perf = pd.concat(frames, ignore_index=True).dropna(subset=["date"])
+    perf["date"] = pd.to_datetime(perf.date)
+    return perf[perf.date < before].reset_index(drop=True)
+
+
 @dataclass
 class Fitted:
     skill: dict
-    team_effect: dict
     lineups: dict
 
 
-def _design(m: pd.DataFrame, cfg: Config):
-    vocab: dict = {}
+def _outcome_rows(m: pd.DataFrame, vocab: dict):
     rows, cols, vals = [], [], []
-    for i, (aa, bb, s, ta, tb) in enumerate(zip(m.a, m.b, m.src.to_numpy(), m.ta, m.tb)):
+    for i, (aa, bb) in enumerate(zip(m.a, m.b)):
         for side, sign in ((aa, 1.0), (bb, -1.0)):
             scale = sign / len(side)
             for k in side:
-                terms = [(k, scale)]
-                if cfg.dev_scale > 0 and s == FACEIT:
-                    terms.append((("F", k), scale * cfg.dev_scale))
-                for key, v in terms:
-                    j = vocab.setdefault(key, len(vocab))
-                    rows.append(i)
-                    cols.append(j)
-                    vals.append(v)
-        if cfg.team_scale > 0:
-            for team, sign in ((ta, 1.0), (tb, -1.0)):
-                if team:
-                    j = vocab.setdefault(("T", team), len(vocab))
-                    rows.append(i)
-                    cols.append(j)
-                    vals.append(sign * cfg.team_scale)
-    X = sparse.csr_matrix((vals, (rows, cols)), shape=(len(m), len(vocab)))
-    return X, vocab
+                rows.append(i)
+                cols.append(vocab.setdefault(k, len(vocab)))
+                vals.append(scale)
+    return rows, cols, vals
 
 
-def fit(maps: pd.DataFrame, before: pd.Timestamp, cfg: Config) -> Fitted:
+def _joint_fit(X, y, w, D, z, v, src, lam):
+    n_beta = X.shape[1]
+    n_src = 2
+
+    def objective(theta):
+        beta, alpha = theta[:n_beta], theta[n_beta:]
+        eta = X @ beta
+        loss = np.sum(w * (np.logaddexp(0.0, eta) - y * eta))
+        grad = X.T @ (w * (expit(eta) - y))
+        grad_alpha = np.zeros(n_src)
+        if D is not None:
+            r = D @ beta + alpha[src] - z
+            loss += 0.5 * np.sum(v * r * r)
+            grad += D.T @ (v * r)
+            grad_alpha = np.bincount(src, weights=v * r, minlength=n_src)
+        loss += 0.5 * lam * beta @ beta
+        grad += lam * beta
+        return loss, np.concatenate([grad, grad_alpha])
+
+    res = minimize(objective, np.zeros(n_beta + n_src), jac=True, method="L-BFGS-B", options={"maxiter": 1000})
+    return res.x[:n_beta]
+
+
+def fit(maps: pd.DataFrame, perf: pd.DataFrame, before: pd.Timestamp, cfg: Config) -> Fitted:
     m = maps[maps.date >= before - pd.Timedelta(days=cfg.window_days)].reset_index(drop=True)
     age = (before - m.date).dt.total_seconds().to_numpy() / 86400.0
     w = 0.5 ** (age / cfg.half_life_days) * np.where(m.src.to_numpy() == FACEIT, cfg.faceit_weight, 1.0)
@@ -162,21 +209,33 @@ def fit(maps: pd.DataFrame, before: pd.Timestamp, cfg: Config) -> Fitted:
         y = np.concatenate([np.ones(len(share)), np.zeros(len(share))])
         w = np.concatenate([w * share, w * (1 - share)])
     else:
-        y = m.y.to_numpy()
+        y = m.y.to_numpy().astype(float)
     w = w / w.mean()
-    X, vocab = _design(m, cfg)
-    clf = LogisticRegression(C=cfg.C, fit_intercept=False, solver="lbfgs", max_iter=2000)
-    clf.fit(X, y, sample_weight=w)
-    beta = clf.coef_.ravel()
-    skill, team_effect = {}, {}
-    for key, j in vocab.items():
-        if isinstance(key, tuple) and key[0] == "T":
-            team_effect[key[1]] = cfg.team_scale * beta[j]
-        elif isinstance(key, tuple):
-            skill[key[1]] = skill.get(key[1], 0.0) + cfg.dev_scale * beta[j]
-        else:
-            skill[key] = skill.get(key, 0.0) + beta[j]
-    return Fitted(skill=skill, team_effect=team_effect, lineups=_latest_lineups(maps, before, cfg))
+
+    vocab: dict = {}
+    p = perf[perf.date >= before - pd.Timedelta(days=cfg.window_days)].reset_index(drop=True)
+    p_cols = [vocab.setdefault(k, len(vocab)) for k in p.key]
+    rows, cols, vals = _outcome_rows(m, vocab)
+    n_beta = len(vocab)
+    X = sparse.csr_matrix((vals, (rows, cols)), shape=(len(m), n_beta))
+
+    D = z = v = src = None
+    if len(p):
+        D = sparse.csr_matrix((np.ones(len(p)), (np.arange(len(p)), p_cols)), shape=(len(p), n_beta))
+        z = np.empty(len(p))
+        for s in (HLTV, FACEIT):
+            mask = p.src.to_numpy() == s
+            if mask.any():
+                vals_s = p.z[mask].to_numpy()
+                z[mask] = (vals_s - vals_s.mean()) / vals_s.std()
+        age_p = (before - p.date).dt.total_seconds().to_numpy() / 86400.0
+        v = 0.5 ** (age_p / cfg.half_life_days) * np.where(p.src.to_numpy() == FACEIT, cfg.faceit_weight, 1.0)
+        v = cfg.perf_weight * len(m) * v / v.sum()
+        src = p.src.to_numpy()
+
+    beta = _joint_fit(X, y, w, D, z, v, src, 1.0 / cfg.C)
+    skill = {k: float(beta[j]) for k, j in vocab.items()}
+    return Fitted(skill=skill, lineups=_latest_lineups(maps, before, cfg))
 
 
 def _latest_lineups(maps: pd.DataFrame, before: pd.Timestamp, cfg: Config) -> dict:
@@ -195,8 +254,6 @@ def _latest_lineups(maps: pd.DataFrame, before: pd.Timestamp, cfg: Config) -> di
 def map_logit(fitted: Fitted, a_keys: tuple, b_keys: tuple) -> float:
     s = 0.0
     for sign, keys in ((1.0, a_keys), (-1.0, b_keys)):
-        if not keys:
-            continue
         for k in keys:
             s += sign * fitted.skill.get(k, 0.0) / len(keys)
     return s
@@ -213,7 +270,5 @@ def predict(fitted: Fitted, targets: pd.DataFrame) -> np.ndarray:
         ta = str(int(r.team_a_id)) if pd.notna(r.team_a_id) else ""
         tb = str(int(r.team_b_id)) if pd.notna(r.team_b_id) else ""
         eta = map_logit(fitted, fitted.lineups.get(ta, ()), fitted.lineups.get(tb, ()))
-        eta += fitted.team_effect.get(ta, 0.0) - fitted.team_effect.get(tb, 0.0)
-        p = 1.0 / (1.0 + np.exp(-eta))
-        q[i] = series_prob(p, int(r.bo_type))
+        q[i] = series_prob(1.0 / (1.0 + np.exp(-eta)), int(r.bo_type))
     return q
