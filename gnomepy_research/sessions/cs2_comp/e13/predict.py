@@ -31,6 +31,7 @@ from gnomepy_research.sessions.cs2_comp.e13.rating import RatingConfig, RatingFi
 
 CAL_WEEKS = 26
 CORE_MAPS = 1
+RICH_RECAL = False
 SIGMA_MAP = 0.15
 SIGMA_SERIES = 0.10
 EPOCH = pd.Timestamp("2020-01-01")
@@ -111,16 +112,29 @@ def _days(t) -> float:
     return (pd.Timestamp(t) - EPOCH).total_seconds() / 86400.0
 
 
-def _fit_logistic(x: np.ndarray, y: np.ndarray, ridge: float = 1.0) -> np.ndarray:
-    X = np.column_stack([x, np.ones(len(x))])
-    w = np.array([1.0, 0.0])
-    prior = np.array([1.0, 0.0])
+def _fit_logistic(X: np.ndarray, y: np.ndarray, ridge: float = 1.0) -> np.ndarray:
+    """Ridge logistic regression shrunk toward the identity map (slope 1 on the first column, 0 elsewhere)."""
+    prior = np.zeros(X.shape[1])
+    prior[0] = 1.0
+    w = prior.copy()
     for _ in range(30):
         p = 1 / (1 + np.exp(-X @ w))
         g = X.T @ (y - p) - ridge * (w - prior)
-        h = X.T @ (X * (p * (1 - p))[:, None]) + ridge * np.eye(2)
+        h = X.T @ (X * (p * (1 - p))[:, None]) + ridge * np.eye(len(w))
         w = w + np.linalg.solve(h, g)
     return w
+
+
+def recal_features(d: pd.DataFrame, rich: bool) -> np.ndarray:
+    """The recalibration design: logit of the raw price, and with rich, its interactions with how little is known
+    about the two fives (a new or incomplete five, thin history), so uncertain matchups are shrunk harder."""
+    x = _logit(d.p_raw.to_numpy(float))
+    cols = [x]
+    if rich:
+        new_five = ((np.minimum(d.five_a, d.five_b) < 3) | (d.unk_a + d.unk_b > 0)).to_numpy(float)
+        thin = (d.games_min < 40).to_numpy(float)
+        cols += [x * new_five, x * thin]
+    return np.column_stack(cols + [np.ones(len(x))])
 
 
 def _logit(p):
@@ -134,7 +148,7 @@ def data_cutoff(targets: pd.DataFrame) -> pd.Timestamp:
 
 def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = True,
         sigma_map: float = SIGMA_MAP, sigma_series: float = SIGMA_SERIES, history_from: pd.Timestamp | None = None,
-        actual_fives: bool = False, core_maps: int = CORE_MAPS) -> tuple[pd.DataFrame, pd.DataFrame]:
+        actual_fives: bool = False, core_maps: int = CORE_MAPS, rich_recal: bool = RICH_RECAL) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Returns (target prices, HLTV bo3 series priced at each cutoff from history_from on); b is built at
     data_cutoff(targets). actual_fives prices the history series with the fives that went on to play them, which
     only a diagnostic may do: it measures what predicting the fives costs."""
@@ -168,6 +182,7 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
         d, s2, _, _ = f.gap(la, lb)
         return {"p_raw": series_price(d, s2, curve, sigma_series), "d": d, "gap_sd": math.sqrt(max(s2, 0)),
                 "unk_a": ua, "unk_b": ub, "fonly_a": la.faceit_only, "fonly_b": lb.faceit_only,
+                "five_a": la.five_maps, "five_b": lb.five_maps,
                 "games_min": min(la.games + lb.games) if la.games and lb.games else 0}
 
     hist_rows, out_rows = [], []
@@ -204,12 +219,12 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
         cal = hist[(hist.week < w) & (hist.week >= w - pd.Timedelta(weeks=CAL_WEEKS))]
         if len(cal) < 50:
             continue
-        coef = _fit_logistic(_logit(cal.p_raw), cal.y.to_numpy(float))
+        coef = _fit_logistic(recal_features(cal, rich_recal), cal.y.to_numpy(float))
         sel = hist.week == w
-        hist.loc[sel, "q"] = 1 / (1 + np.exp(-(coef[0] * _logit(hist.loc[sel, "p_raw"]) + coef[1])))
+        hist.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(hist[sel], rich_recal) @ coef))
         if len(out):
             sel = out.fit_cutoff == w
-            out.loc[sel, "q"] = 1 / (1 + np.exp(-(coef[0] * _logit(out.loc[sel, "p_raw"]) + coef[1])))
+            out.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(out[sel], rich_recal) @ coef))
     return out, hist
 
 
