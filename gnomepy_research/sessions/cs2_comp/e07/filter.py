@@ -308,6 +308,16 @@ class Filter:
                 total += len(times) - bisect.bisect_left(times, t - days)
         return total / LINEUP
 
+    def profile_weighted(self, slots: list[tuple[int | None, float]], t: float) -> tuple[float, float]:
+        """Like profile, for a lineup given as (player or None, probability he plays): the probability-weighted sum of
+        (skill - prior centre) / 5 over players with a map in this filter, and the probability mass of those players."""
+        total, mass = 0.0, 0.0
+        for i, w in slots:
+            if i is not None and self.faceit_games[i] > 0:
+                total += w * (self.mu[i] - self.cfg.faceit_prior)
+                mass += w
+        return total / LINEUP, mass / LINEUP
+        
     def rating_level(self, ids: np.ndarray) -> float:
         """Mean over the five of the recent rating above 1.0, shrunk toward zero for players with few maps."""
         if not len(ids):

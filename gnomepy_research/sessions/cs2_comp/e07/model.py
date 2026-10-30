@@ -30,6 +30,8 @@ class ModelConfig:
     faceit_lineup_weight: float = 0.5
     faceit_lineup_days: float = 21.0
     newcomer_prob: float = 0.0
+    newcomer_curve: tuple = ((0.0, 0.02), (3.0, 0.025), (7.0, 0.035), (14.0, 0.06), (30.0, 0.12), (60.0, 0.21), (120.0, 0.34))
+    newcomer_scale: float = 0.0
     hltv_variants: tuple = ()
     faceit_fast_tau: float = 0.03
 
@@ -88,7 +90,7 @@ class Model:
         roster = self.moves.roster(team, [self.keys[i] for i in ids], last_t, cutoff_day)
         return [self.index.get(k) if isinstance(k, int) else None for k in roster], last_t
 
-    def soft_lineup(self, team: int, cutoff_day: float, h: Filter | None = None) -> list[tuple[int | None, float]]:
+    def soft_lineup(self, team: int, t: float, cutoff_day: float, h: Filter | None = None) -> list[tuple[int | None, float]]:
         """Probability that each recent player of the team plays: recency-weighted appearances over its last maps,
         edited by the roster moves since the last map."""
         h = h or self.h
@@ -124,6 +126,9 @@ class Model:
         joiners = len(unknown_joiners)
         slots = self._normalise(probs, joiners)
         pi = self.cfg.newcomer_prob
+        if self.cfg.newcomer_scale > 0:
+            gap = t - h.last_five[team][1]
+            pi = self.cfg.newcomer_scale * float(np.interp(gap, *zip(*self.cfg.newcomer_curve)))
         if pi > 0:
             slots = [(i, w * (1.0 - pi)) for i, w in slots] + [(None, LINEUP * pi)]
         return slots
@@ -151,12 +156,12 @@ class Model:
             q, mean, var = q_last, mean_last, var_last
         else:
             q, mean, var = self.h.price(team_a, team_b, t, cutoff_day, lineups=(slots["a"][0], slots["b"][0]))
-        soft_a, soft_b = self.soft_lineup(team_a, cutoff_day), self.soft_lineup(team_b, cutoff_day)
+        soft_a, soft_b = self.soft_lineup(team_a, t, cutoff_day), self.soft_lineup(team_b, t, cutoff_day)
         q_soft, mean_soft, var_soft = self.h.price(team_a, team_b, t, cutoff_day, weighted=(soft_a, soft_b))
         q_members = [q_soft]
         for h in self.extra:
             q_members.append(h.price(team_a, team_b, t, cutoff_day,
-                                     weighted=(self.soft_lineup(team_a, cutoff_day, h), self.soft_lineup(team_b, cutoff_day, h)))[0])
+                                     weighted=(self.soft_lineup(team_a, t, cutoff_day, h), self.soft_lineup(team_b, t, cutoff_day, h)))[0])
         q_ens = float(1 / (1 + np.exp(-np.mean([np.log(x / (1 - x)) for x in q_members]))))
         row = {"q_h": q, "mean_h": mean, "var_h": var, "q_last": q_last, "q_soft": q_soft, "mean_soft": mean_soft,
                "var_soft": var_soft, "q_ens": q_ens,
@@ -179,6 +184,8 @@ class Model:
                 continue
             s, v, n = (0.0, 0.0, 0) if not len(ids) else self.f.profile(ids, t)
             row[f"f_s_{side}"], row[f"f_v_{side}"], row[f"f_n_{side}"] = s, v, n
+            soft = soft_a if side == "a" else soft_b
+            row[f"fw_s_{side}"], row[f"fw_n_{side}"] = self.f.profile_weighted(soft, t)
             if self.f_fast is not None:
                 row[f"ff_s_{side}"] = 0.0 if not len(ids) else self.f_fast.profile(ids, t)[0]
             row[f"f_su_{side}"] = 0.0 if not len(ids) else self._uncertainty_weighted(ids, t)
