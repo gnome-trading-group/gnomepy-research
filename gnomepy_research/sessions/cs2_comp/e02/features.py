@@ -26,6 +26,7 @@ SHRINK_MAPS = 20.0
 RATING_PRIOR = 1.0
 KD_PRIOR = 1.0
 ADR_PRIOR = 70.0
+WIN_PRIOR = 0.5
 
 HISTORY_COLUMNS = [
     "match_id", "match_date", "match_time", "event_name", "format", "event_tier", "is_lan", "bo_type",
@@ -129,7 +130,8 @@ def _shrink(mean: float | None, n: int, prior: float) -> float:
 class Ratings:
     """Running team state, advanced one week at a time; queries for a week see only earlier weeks."""
 
-    def __init__(self, ranks: Ranks, hltv_rating: PlayerLog, faceit_log: PlayerLog | None, hltv_to_faceit: dict):
+    def __init__(self, ranks: Ranks, hltv_rating: PlayerLog, faceit_log: PlayerLog | None,
+                 faceit_results: PlayerLog | None, hltv_to_faceit: dict):
         self.elo = defaultdict(lambda: ELO_START)
         self.form = defaultdict(lambda: deque(maxlen=FORM_GAMES))
         self.recent = defaultdict(deque)
@@ -137,6 +139,7 @@ class Ratings:
         self.ranks = ranks
         self.hltv_rating = hltv_rating
         self.faceit_log = faceit_log
+        self.faceit_results = faceit_results
         self.hltv_to_faceit = hltv_to_faceit
 
     def features(self, team, week: pd.Timestamp) -> dict:
@@ -158,9 +161,9 @@ class Ratings:
 
     def _lineup_features(self, lineup, cut_day: int, cut_sec: int) -> dict:
         if not lineup:
-            return {"hrat": np.nan, "hcov": 0, "kd": np.nan, "adr": np.nan, "fmaps": np.nan, "fcov": 0}
+            return {"hrat": np.nan, "hcov": 0, "kd": np.nan, "adr": np.nan, "fmaps": np.nan, "fcov": 0, "wr": np.nan}
         ratings, hcov = [], 0
-        kd, adr, fmaps, fcov = [], [], 0, 0
+        kd, adr, wr, fmaps, fcov = [], [], [], 0, 0
         for pid in lineup:
             mean, n = self.hltv_rating.last_mean(pid, cut_day, RATING_MAPS)
             hcov += n > 0
@@ -171,16 +174,19 @@ class Ratings:
             if fid is None:
                 kd.append(KD_PRIOR)
                 adr.append(ADR_PRIOR)
+                wr.append(WIN_PRIOR)
                 continue
             mean, n = self.faceit_log.last_mean(fid, cut_sec, FACEIT_MAPS)
             kd.append(_shrink(mean[0] if n else None, n, KD_PRIOR))
             adr.append(_shrink(mean[1] if n else None, n, ADR_PRIOR))
+            won, n_won = self.faceit_results.last_mean(fid, cut_sec, FACEIT_MAPS)
+            wr.append(_shrink(won[0] if n_won else None, n_won, WIN_PRIOR))
             seen = self.faceit_log.count_between(fid, cut_sec - FACEIT_HISTORY_DAYS * 86400, cut_sec)
             fmaps += seen
             fcov += seen > 0
         out = {"hrat": float(np.mean(ratings)), "hcov": hcov}
         if self.faceit_log is not None:
-            out.update({"kd": float(np.mean(kd)), "adr": float(np.mean(adr)),
+            out.update({"kd": float(np.mean(kd)), "adr": float(np.mean(adr)), "wr": float(np.mean(wr)),
                         "fmaps": float(np.log1p(fmaps)), "fcov": fcov})
         return out
 
@@ -218,6 +224,7 @@ def _pair_row(fa: dict, fb: dict, is_lan, tier, faceit: bool) -> dict:
         row.update({
             "d_kd": fa["kd"] - fb["kd"],
             "d_adr": fa["adr"] - fb["adr"],
+            "d_wr": fa["wr"] - fb["wr"],
             "d_fmaps": fa["fmaps"] - fb["fmaps"],
             "a_fcov": fa["fcov"],
             "b_fcov": fb["fcov"],
@@ -235,14 +242,20 @@ class Queries:
 def feature_columns(faceit: bool) -> list[str]:
     cols = ["d_elo", "d_pts", "d_form", "d_act", "d_hrat", "a_hcov", "b_hcov", "is_lan", "tier"]
     if faceit:
-        cols += ["d_kd", "d_adr", "d_fmaps", "a_fcov", "b_fcov"]
+        cols += ["d_kd", "d_adr", "d_wr", "d_fmaps", "a_fcov", "b_fcov"]
     return cols
 
 
-def _load_faceit(data_dir: str, cut: pd.Timestamp) -> tuple[PlayerLog, dict]:
-    fm = load(data_dir, "faceit/faceit_matches", cut, ["match_id", "finished_at", "has_stats"])
+def _load_faceit(data_dir: str, cut: pd.Timestamp) -> tuple[PlayerLog, PlayerLog, dict]:
+    fm = load(data_dir, "faceit/faceit_matches", cut, ["match_id", "finished_at", "has_stats", "winner"])
     excl = load(data_dir, "faceit/faceit_exclusions", cut, ["match_id", "map_name"])
-    fm = fm[fm.has_stats.astype(bool) & ~fm.match_id.isin(excl.match_id[excl.map_name.isna()])]
+    fm = fm[fm.has_stats.astype(bool) & fm.winner.isin(["faction1", "faction2"])
+            & ~fm.match_id.isin(excl.match_id[excl.map_name.isna()])]
+    rosters = load(data_dir, "faceit/faceit_rosters", cut, ["match_id", "faceit_id", "faction", "played"])
+    rosters = rosters[rosters.played.astype(bool) & rosters.faction.isin(["faction1", "faction2"])]
+    rosters = rosters.merge(fm[["match_id", "finished_at", "winner"]], on="match_id")
+    results = rosters.assign(won=(rosters.faction == rosters.winner).astype(float))
+    result_log = PlayerLog(results, "faceit_id", "finished_at", ["won"])
     fpm = load(data_dir, "faceit/faceit_player_map_stats", cut, ["match_id", "map_name", "faceit_id", "k_d_ratio", "adr"])
     map_excl = excl[excl.map_name.notna()].rename(columns={"map_name": "excluded_map"})
     fpm = fpm.merge(map_excl, left_on=["match_id", "map_name"], right_on=["match_id", "excluded_map"], how="left")
@@ -250,7 +263,7 @@ def _load_faceit(data_dir: str, cut: pd.Timestamp) -> tuple[PlayerLog, dict]:
     fpm = fpm.merge(fm[["match_id", "finished_at"]], on="match_id").dropna(subset=["k_d_ratio", "adr"])
     log = PlayerLog(fpm, "faceit_id", "finished_at", ["k_d_ratio", "adr"])
     hm = load(data_dir, "faceit/hltv_faceit_map", None)
-    return log, dict(zip(hm.hltv_id.astype(int), hm.faceit_id))
+    return log, result_log, dict(zip(hm.hltv_id.astype(int), hm.faceit_id))
 
 
 def build_queries(data_dir: str, cut: pd.Timestamp, targets: pd.DataFrame | None, faceit: bool) -> Queries:
@@ -260,8 +273,8 @@ def build_queries(data_dir: str, cut: pd.Timestamp, targets: pd.DataFrame | None
     pms = load(data_dir, "hltv/cs2_player_map_stats", cut, ["match_date", "player_id", "side", "rating"])
     pms = pms[(pms.side == "all") & pms.rating.notna()].assign(day=lambda d: (d.match_date - EPOCH).dt.days)
     hltv_rating = PlayerLog(pms, "player_id", "day", ["rating"])
-    faceit_log, hltv_to_faceit = _load_faceit(data_dir, cut) if faceit else (None, {})
-    state = Ratings(ranks, hltv_rating, faceit_log, hltv_to_faceit)
+    faceit_log, faceit_results, hltv_to_faceit = _load_faceit(data_dir, cut) if faceit else (None, None, {})
+    state = Ratings(ranks, hltv_rating, faceit_log, faceit_results, hltv_to_faceit)
 
     target_weeks = {} if targets is None else {w: g for w, g in targets.groupby("week_cutoff")}
     series_weeks = {w: g.sort_values("match_time") for w, g in series.groupby("week")}

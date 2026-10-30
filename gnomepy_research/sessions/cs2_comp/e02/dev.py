@@ -24,12 +24,8 @@ def gbm(**overrides) -> Config:
 
 
 VARIANTS = {
-    "faceit_d4": (True, gbm(max_depth=4, n_estimators=400, min_child_weight=80)),
-    "faceit_d5": (True, gbm(max_depth=5, n_estimators=400, min_child_weight=120)),
-    "faceit_d4_slow": (True, gbm(max_depth=4, n_estimators=800, learning_rate=0.015, min_child_weight=80)),
-    "faceit_d4_mcw200": (True, gbm(max_depth=4, n_estimators=400, min_child_weight=200)),
+    "faceit_d4_wr": (True, gbm(max_depth=4, n_estimators=400, min_child_weight=80)),
     "hltv_d4": (False, gbm(max_depth=4, n_estimators=400, min_child_weight=80)),
-    "hltv_d5": (False, gbm(max_depth=5, n_estimators=400, min_child_weight=120)),
 }
 
 
@@ -49,6 +45,8 @@ def main() -> None:
     args = ap.parse_args()
     queries = build_queries(args.data, DEV_CUT, None, faceit=True)
     cov = coverage(queries.ab.a_fcov.to_numpy(), queries.ab.b_fcov.to_numpy())
+    print("share of series with a non-prior win rate on a side:",
+          round(float(((queries.ab.d_wr.abs() > 1e-9)).mean()), 4), flush=True)
     rows = []
     for name, (faceit, config) in VARIANTS.items():
         for week in DEV_WEEKS:
