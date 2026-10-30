@@ -21,7 +21,8 @@ def _w(tm: pd.Series) -> np.ndarray:
 
 def designs(d: pd.DataFrame, zcol: str = "q_h") -> dict[str, np.ndarray]:
     z = logit(d[zcol].to_numpy())
-    out = {"A": np.c_[z]}
+    drank = (d.rank_a - d.rank_b).to_numpy()
+    out = {"A": np.c_[z], "RK": np.c_[z, drank]}
     if "f_s_a" in d:
         dfs = (d.f_s_a - d.f_s_b).to_numpy()
         thin = (d.f_s_a * _w(d.tm90_a) - d.f_s_b * _w(d.tm90_b)).to_numpy()

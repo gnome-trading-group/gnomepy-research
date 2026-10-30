@@ -75,6 +75,7 @@ class Filter:
         self.player_times: dict[int, list[float]] = {}
         self.team_times: dict[int, list[float]] = {}
         self.team_fives: dict[int, list[np.ndarray]] = {}
+        self.faceit_fives: dict[int, list[tuple[float, np.ndarray]]] = {}
         self.rank_points = rank_points
         self.last_five: dict[int, tuple[np.ndarray, float]] = {}
         self.pos = 0
@@ -170,6 +171,13 @@ class Filter:
             self.five_times.setdefault(frozenset(ids.tolist()), []).append(t)
             for p in ids.tolist():
                 self.player_times.setdefault(p, []).append(t)
+        if src == FACEIT:
+            for team, ids in ((int(s.team_a[m]), ia), (int(s.team_b[m]), ib)):
+                if team >= 0:
+                    fives = self.faceit_fives.setdefault(team, [])
+                    fives.append((t, ids.copy()))
+                    if len(fives) > 2 * RECENT_MAPS:
+                        del fives[: len(fives) - RECENT_MAPS]
         if src == HLTV:
             ta, tb = int(s.team_a[m]), int(s.team_b[m])
             if ta >= 0:
@@ -190,6 +198,10 @@ class Filter:
     def recent_fives(self, team: int) -> list[np.ndarray]:
         """The fives of the team's last maps, most recent first."""
         return self.team_fives.get(team, [])[-RECENT_MAPS:][::-1]
+
+    def recent_faceit_fives(self, team: int, t: float, days: float) -> list[np.ndarray]:
+        """Fives the team (as inferred from FACEIT) fielded in the last `days`, most recent first."""
+        return [ids for ft, ids in self.faceit_fives.get(team, [])[::-1] if t - days <= ft <= t][:RECENT_MAPS]
 
     def advance(self, before_day: float) -> None:
         t = self.s.t

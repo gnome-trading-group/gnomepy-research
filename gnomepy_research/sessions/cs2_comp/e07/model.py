@@ -27,12 +27,15 @@ class ModelConfig:
                                                                        faceit_prior=0.0))
     use_faceit: bool = True
     roster_moves: bool = True
+    faceit_lineup_weight: float = 0.5
+    faceit_lineup_days: float = 21.0
 
 
 class Model:
     def __init__(self, cfg: ModelConfig, streams: Streams, rank_points: RankPoints, moves: RosterMoves | None = None):
         self.cfg = cfg
         self.keys = list(streams.index)
+        self.rank_points = rank_points
         self.index = streams.index
         self.moves = moves if cfg.roster_moves else None
         self.h = Filter(cfg.hltv, streams, rank_points)
@@ -78,6 +81,12 @@ class Model:
             for i in ids.tolist():
                 probs[i] = probs.get(i, 0.0) + decay ** r
             total += decay ** r
+        if self.f is not None and self.cfg.faceit_lineup_weight > 0:
+            w0 = self.cfg.faceit_lineup_weight
+            for r, ids in enumerate(self.f.recent_faceit_fives(team, cutoff_day, self.cfg.faceit_lineup_days)):
+                for i in ids.tolist():
+                    probs[i] = probs.get(i, 0.0) + w0 * decay ** r
+                total += w0 * decay ** r
         probs = {i: v / total for i, v in probs.items()}
         unknown_joiners: set[int] = set()
         if self.moves is not None:
@@ -128,6 +137,7 @@ class Model:
             row[f"act_h_{side}"] = 0.0 if not len(ids) else self.h.activity(ids, t, ACTIVITY_DAYS)
             row[f"days_h_{side}"] = 999.0 if last_t is None else t - last_t
             row[f"tm90_{side}"] = self.h.team_maps(team, t, 90.0)
+            row[f"rank_{side}"] = float(np.log1p(self.rank_points(team, cutoff_day)))
             row[f"swap_{side}"] = 0 if last_t is None else int(len(ids) < 5 or set(ids.tolist()) != set(self.h.last_five[team][0].tolist()))
             if self.f is None:
                 continue
