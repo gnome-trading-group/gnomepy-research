@@ -38,18 +38,23 @@ _GRID = np.linspace(-8.0, 8.0, 3201)
 
 @dataclass(frozen=True)
 class Config:
+    """Defaults are the submitted entry, chosen on the Jan-Mar 2026 walk-forward (see the submission README)."""
     window_days: int = 450
     halflife_days: float = 150.0
-    sigma0: float = 0.35
+    # Wider than the first guess of 0.35: with 60k players the ridge toward the group mean was shrinking real
+    # gaps (under-confident at 0.35, calibrated at 0.7, over-confident at 1.0).
+    sigma0: float = 0.7
     sigma_group: float = 1.0
     scale_faceit: float = 1.0
-    w_faceit: float = 1.0
+    # A FACEIT round is noisier evidence than an HLTV round: half weight beat full and quarter weight.
+    w_faceit: float = 0.5
     sigma_m: float = 0.35
     sigma_s: float = 0.15
     ratings: bool = True
-    w_ratings: float = 1.0
+    # The rating channel compresses skills when it carries full weight.
+    w_ratings: float = 0.25
     sigma_style: float = 0.2
-    # Out-of-sample logit slope of the raw bo3 price, from the Jan-Mar 2026 diagnostic walk-forward.
+    # Multiplies the logit of the raw bo3 price; the entry is calibrated by construction.
     calibration: float = 1.0
     max_iter: int = 1500
 
