@@ -6,8 +6,8 @@ e12 predictions: P(team A wins the bo3) for every target series, from data befor
 
 Per distinct week_cutoff: an HLTV-only skill fit, and with FACEIT on a second fit on HLTV + FACEIT maps whose fives
 come from the newest appearance in either source. The logistic layer below combines them; its weights were fitted by
-`dev.py` on the Oct 2025 - Mar 2026 weekly walk-forward, all of it before the first tune cutoff, so they are
-point-in-time for every target.
+`dev.py` on the Apr 2025 - Mar 2026 weekly walk-forward (run as two half-year pieces), all of it before the first
+tune cutoff, so they are point-in-time for every target.
 """
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ from gnomepy_research.sessions.cs2_comp.e12.model import Config, series_price
 
 CONFIG_HLTV = Config(sigma=0.5, half_life_days=300.0)
 CONFIG_FACEIT = Config(sigma=0.5, half_life_days=300.0)
-LAYER_HLTV = {"zh": 0.559890, "zh_thin": -0.071839, "standin": -0.160991, "idle": -0.029098}
-LAYER_FACEIT = {"zh": 0.226468, "zh_thin": -0.034366, "standin": -0.176084, "idle": -0.007562, "zf": 0.366925, "zf_thin": -0.052526}
+LAYER_HLTV = {"zh": 0.572098, "zh_thin": -0.069003, "standin": -0.110552, "idle": -0.030159}
+LAYER_FACEIT = {"zh": 0.240466, "zh_thin": -0.031155, "standin": -0.124941, "idle": -0.007357, "zf": 0.360769, "zf_thin": -0.052988}
 
 
 def _logit(p: np.ndarray) -> np.ndarray:

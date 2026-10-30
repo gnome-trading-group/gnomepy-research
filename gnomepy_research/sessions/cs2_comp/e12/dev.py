@@ -6,9 +6,12 @@ following week, with their outcome. Then the layer's weights for both variants (
 month-held-out log loss, and the FACEIT variant's gain split by how many of the less-linked five's players have a
 FACEIT id.
 
-    python -m gnomepy_research.sessions.cs2_comp.e12.dev --data <bundle> --out <dir> --first 2025-10-06 --last 2026-03-23
+    python -m gnomepy_research.sessions.cs2_comp.e12.dev --data <bundle> --out <early> --first 2025-03-31 --last 2025-09-29
+    python -m gnomepy_research.sessions.cs2_comp.e12.dev --data <bundle> --out <late> --first 2025-10-06 --last 2026-03-23 \
+        --also <early>
 
-Only cutoffs before the first tune week (2026-03-30) are used for the weights in predict.py.
+`--also` adds the rows saved by earlier runs to the layer fit, so a long period can run in local-sized pieces. The
+weights in predict.py come from the second command: Apr 2025 - Mar 2026, all before the first tune week (2026-03-30).
 """
 from __future__ import annotations
 
@@ -53,6 +56,7 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--first", required=True)
     ap.add_argument("--last", required=True)
+    ap.add_argument("--also", nargs="*", default=[], help="earlier output dirs whose rows join the layer fit")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -64,6 +68,8 @@ def main() -> None:
     h, f = rows(inputs, targets, True, verbose=True)
     h.to_parquet(out / "dev_hltv.parquet", index=False)
     f.to_parquet(out / "dev_faceit.parquet", index=False)
+    h = pd.concat([pd.read_parquet(Path(d) / "dev_hltv.parquet") for d in a.also] + [h], ignore_index=True)
+    f = pd.concat([pd.read_parquet(Path(d) / "dev_faceit.parquet") for d in a.also] + [f], ignore_index=True)
     y = h.y.to_numpy(float)
     months = pd.to_datetime(h.week_cutoff).dt.to_period("M").astype(str).to_numpy()
     result, losses = {}, {}

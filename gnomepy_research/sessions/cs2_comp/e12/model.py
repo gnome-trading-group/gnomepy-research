@@ -15,7 +15,7 @@ Lineups going into a series are not known before it (the target's own lineup row
 team plays the five it fielded last. With FACEIT on, a team's most recent FACEIT five wins when it is newer than its
 last HLTV map: online teams play ESEA every week, and a roster change shows there first.
 
-The logistic layer (fitted on Oct 2025 - Mar 2026 weekly walk-forward predictions, before every tune cutoff) takes
+The logistic layer (fitted on Apr 2025 - Mar 2026 weekly walk-forward predictions, before every tune cutoff) takes
 logit of the skill price and A-minus-B differences of availability features (recent stand-in use, days since the five
 last played), and lets the skill gap's weight shrink for fives carrying players the fit barely knows.
 """
