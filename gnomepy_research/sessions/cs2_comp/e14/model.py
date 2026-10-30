@@ -23,12 +23,15 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 from scipy.optimize import minimize
+from scipy.sparse.linalg import LinearOperator, cg
 
 from gnomepy_research.models.cs2.hltv.bayes_series import RankStrength
 from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
 from gnomepy_research.sessions.cs2_comp.e14.data import DIVISIONS, FACEIT, HLTV, LINEUP, Bundle
 
 N_REGIONS = 7
+# Players whose first HLTV map falls this close to the cutoff set the prior for a player the fit has never seen.
+NEWCOMER_DAYS = 90
 LEAVE_KINDS = {"leave", "transfer", "benched", "to_coach", "to_substitute", "loan"}
 JOIN_KINDS = {"join", "transfer", "activated", "loan", "loan_return"}
 _GH_X, _GH_W = np.polynomial.hermite_e.hermegauss(21)
@@ -40,8 +43,8 @@ _GRID = np.linspace(-8.0, 8.0, 3201)
 class Config:
     window_days: int = 365
     half_life_days: float = 120.0
-    phi: tuple[float, float] = (0.5, 0.3)
-    sigma0: float = 0.3
+    phi: tuple[float, float] = (1.0, 0.6)
+    sigma0: float = 1.5
     sigma_r: tuple[float, float] = (0.2, 0.25)
     sigma_m: float = 0.37
     sigma_s: float = 0.25
@@ -50,9 +53,19 @@ class Config:
     # "touch": only FACEIT maps with an HLTV team or a player who has HLTV maps; the rest of the FACEIT graph is
     # more than one step from any HLTV lineup and mostly costs fitting time.
     faceit_scope: str = "touch"
-    lineup_source: str = "any"
+    # "hltv_first": a team's latest HLTV five where it has one, else its latest FACEIT five.
+    lineup_source: str = "hltv_first"
     roster_moves: bool = True
-    maxiter: int = 2000
+    # A team effect on top of its players (how the five plays together); 0 turns it off.
+    sigma_team: float = 0.0
+    # A team with no map under its HLTV id: "newcomer" prices five recent-debutant players; "blend" goes halfway
+    # from there to its opponent's level, because organisers seed debut teams against teams near their own level.
+    unknown_team: str = "blend"
+    maxiter: int = 20000
+    # Tight enough that a rerun on another machine lands on the same optimum: the prior makes every skill direction
+    # curve by at least 1 / sigma0^2, so a gradient this small pins each skill far below a price's 1e-6.
+    ftol: float = 1e-15
+    gtol: float = 1e-8
 
 
 def _softplus(x: np.ndarray) -> np.ndarray:
@@ -75,12 +88,8 @@ class Fit:
     kappa_f: float
     home: dict[int, int]
     lineups: dict[int, list[int]]
-    rank: RankStrength
-    strength_mu: float
-    strength_sd: float
-    level_at: dict[int, int]
-    div_at: dict[int, int]
-    hltv_players: set
+    newcomer: tuple[float, float] = (0.0, 1.0)
+    team_effect: dict[int, float] = field(default_factory=dict)
     pidx: dict[int, int] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -88,23 +97,18 @@ class Fit:
         table = regulation_map_win(_GRID[:, None] + self.cfg.sigma_m * _GH_X[None, :]) @ _GH_W
         self._map_table = table
 
-    def _features(self, player: int, team: int) -> np.ndarray:
-        s = (self.rank(team, self.cutoff) - self.strength_mu) / self.strength_sd
-        return feature_row(s, int(player) in self.hltv_players, self.div_at.get(int(player), 0),
-                           self.level_at.get(int(player), 0), self.cfg.faceit_priors)
-
     def team_skill(self, team: int) -> tuple[float, float]:
-        five = self.lineups.get(int(team))
-        if not five:
-            f = self._features(-1, team)
-            return float(f @ self.coef), self.cfg.sigma0 ** 2 / LINEUP
-        unknown = float(self._features(-1, team) @ self.coef)
-        mean, var = unknown * (LINEUP - len(five)), self.cfg.sigma0 ** 2 * (LINEUP - len(five))
+        """Mean skill of the team's expected five and its variance. A player the fit has never seen is about to
+        play an HLTV-listed match, so the prior is what recent HLTV debutants turned out to be, not the
+        feature-based prior that the mass of FACEIT-only players pulls far down."""
+        five = self.lineups.get(int(team)) or []
+        new_mean, new_var = self.newcomer
+        mean, var = new_mean * (LINEUP - len(five)), new_var * (LINEUP - len(five))
         for p in five:
             i = self.pidx.get(int(p))
             if i is None:
-                mean += float(self._features(p, team) @ self.coef)
-                var += self.cfg.sigma0 ** 2
+                mean += new_mean
+                var += new_var
             else:
                 mean += self.theta[i]
                 var += self.var[i]
@@ -113,7 +117,13 @@ class Fit:
     def price(self, team_a: int, team_b: int, bo_type: int = 3) -> float:
         ma, va = self.team_skill(team_a)
         mb, vb = self.team_skill(team_b)
-        gap = ma - mb + self.rho[self.home.get(int(team_a), 0)] - self.rho[self.home.get(int(team_b), 0)]
+        if self.cfg.unknown_team == "blend":
+            known_a, known_b = bool(self.lineups.get(int(team_a))), bool(self.lineups.get(int(team_b)))
+            if not known_a and known_b:
+                ma = 0.5 * (ma + mb)
+            if not known_b and known_a:
+                mb = 0.5 * (ma + mb)
+        gap = ma - mb + self.team_effect.get(int(team_a), 0.0) - self.team_effect.get(int(team_b), 0.0) + self.rho[self.home.get(int(team_a), 0)] - self.rho[self.home.get(int(team_b), 0)]
         sd = np.sqrt(va + vb + self.cfg.sigma_s ** 2)
         p = np.interp(gap + sd * _GH_X, _GRID, self._map_table)
         series = p if bo_type == 1 else p * p * (3 - 2 * p)
@@ -157,6 +167,33 @@ def _latest_lineups(maps: pd.DataFrame, moves: pd.DataFrame | None) -> dict[int,
                 and int(m.person_id) not in lineups[in_team]:
             lineups[in_team] = [int(m.person_id)] + lineups[in_team]
     return {k: v[:LINEUP] for k, v in lineups.items()}
+
+
+def _polish(x, objective, fixed: np.ndarray, P: int, X, G, w, n, r_w, r_sig2, s0, steps: int = 3):
+    """Newton steps on every free parameter, Hessian-vector products from central differences of the exact gradient.
+
+    L-BFGS stops where the objective's rounding error hides further progress, which leaves parameters loose enough
+    that prices differ by ~1e-6 between machines; the gradient itself stays exact, so Newton on it pins the optimum.
+    Parameters at a bound (`fixed`) stay where they are."""
+    x = x.copy()
+    free = ~fixed
+    rough = np.ones(len(x))
+    rough[:P] = (X.multiply(X)).T @ (w * n * 0.25) + (G.multiply(G)).T @ (r_w / r_sig2) + s0
+
+    def grad(z):
+        return objective(z)[1] * free
+
+    for _ in range(steps):
+        g = grad(x)
+        eps = 1e-6 * (1.0 + np.abs(x).max())
+
+        def hv(v):
+            return (grad(x + eps * v * free) - grad(x - eps * v * free)) / (2 * eps) + fixed * v
+
+        step, _ = cg(LinearOperator((len(x), len(x)), matvec=hv, dtype=float), -g, rtol=1e-10, maxiter=500,
+                     M=LinearOperator((len(x), len(x)), matvec=lambda v: v / rough, dtype=float))
+        x = x + step * free
+    return x
 
 
 def fit(bundle: Bundle, cutoff: pd.Timestamp, cfg: Config = Config()) -> Fit:
@@ -233,17 +270,27 @@ def fit(bundle: Bundle, cutoff: pd.Timestamp, cfg: Config = Config()) -> Fit:
     s0 = 1.0 / cfg.sigma0 ** 2
     has_f = bool(is_f.any())
 
+    teams = np.unique(np.concatenate([win.team_a.to_numpy(np.int64), win.team_b.to_numpy(np.int64)])) \
+        if cfg.sigma_team > 0 else np.zeros(0, np.int64)
+    T = len(teams)
+    TM = (sp.csr_matrix((np.ones(M), (np.arange(M), np.searchsorted(teams, win.team_a.to_numpy(np.int64)))), shape=(M, T))
+          - sp.csr_matrix((np.ones(M), (np.arange(M), np.searchsorted(teams, win.team_b.to_numpy(np.int64)))), shape=(M, T))).tocsr() \
+        if T else sp.csr_matrix((M, 0))
+    st2 = 1.0 / cfg.sigma_team ** 2 if T else 0.0
+    NR = N_REGIONS - 2
+
     def unpack(x):
         theta = x[:P]
         c = x[P:P + J]
         logk, gh, gf = x[P + J:P + J + 3]
-        rho = np.concatenate([[0.0, 0.0], x[P + J + 3:]])
-        return theta, c, logk, gh, gf, rho
+        rho = np.concatenate([[0.0, 0.0], x[P + J + 3:P + J + 3 + NR]])
+        u = x[P + J + 3 + NR:]
+        return theta, c, logk, gh, gf, rho, u
 
     def objective(x):
-        theta, c, logk, gh, gf, rho = unpack(x)
+        theta, c, logk, gh, gf, rho, u = unpack(x)
         kap = np.where(is_f, np.exp(logk), 1.0)
-        xt = X @ theta
+        xt = X @ theta + TM @ u
         D = kap * xt + R @ rho
         nll = float(np.sum(w * (n * _softplus(D) - k * D)))
         gD = w * (n * _sigmoid(D) - k)
@@ -265,26 +312,42 @@ def fit(bundle: Bundle, cutoff: pd.Timestamp, cfg: Config = Config()) -> Fit:
         g_c = -s0 * (F.T @ resid) + c
         g_rho = g_rho + rho[2:] / 0.09
         g_logk = g_logk + logk / 0.25 if has_f else 0.0
-        grad = np.concatenate([g_theta, g_c, [g_logk, g_gh + gh, g_gf + gf], g_rho])
+        g_u = TM.T @ (kap * gD) + st2 * u
+        nll += 0.5 * st2 * float(u @ u)
+        grad = np.concatenate([g_theta, g_c, [g_logk, g_gh + gh, g_gf + gf], g_rho, g_u])
         return nll, grad
 
-    x0 = np.zeros(P + J + 3 + N_REGIONS - 2)
+    x0 = np.zeros(P + J + 3 + NR + T)
     x0[P + J + 1] = 1.0
     x0[P + J + 2] = 1.0
     bounds = [(None, None)] * (P + J) + [(-1.5, 1.5) if has_f else (0.0, 0.0), (0.0, None), (0.0, None)] \
-        + [(None, None)] * (N_REGIONS - 2)
+        + [(None, None)] * (NR + T)
     res = minimize(objective, x0, jac=True, method="L-BFGS-B", bounds=bounds,
-                   options={"maxiter": cfg.maxiter, "maxfun": cfg.maxiter * 2, "ftol": 1e-12, "gtol": 1e-7})
-    theta, c, logk, gh, gf, rho = unpack(res.x)
+                   options={"maxiter": cfg.maxiter, "maxfun": cfg.maxiter * 2, "ftol": cfg.ftol, "gtol": cfg.gtol})
+    lo = np.array([b[0] if b[0] is not None else -np.inf for b in bounds])
+    hi = np.array([b[1] if b[1] is not None else np.inf for b in bounds])
+    x = _polish(res.x, objective, (res.x <= lo + 1e-9) | (res.x >= hi - 1e-9), P, X, G, w, n, r_w, r_sig2, s0)
+    theta, c, logk, gh, gf, rho, u = unpack(x)
     kap = np.where(is_f, np.exp(logk), 1.0)
-    D = kap * (X @ theta) + R @ rho
+    D = kap * (X @ theta + TM @ u) + R @ rho
     curv = w * n * _sigmoid(D) * (1 - _sigmoid(D)) * kap ** 2
     h_diag = (X.multiply(X)).T @ curv + s0
     if Rn:
         gam = np.where(r_src == FACEIT, gf, gh)
         h_diag = h_diag + (G.multiply(G)).T @ (r_w * gam ** 2 / r_sig2)
+    first_hltv = pd.concat([known.loc[known.source == HLTV, ["day", "la"]].set_axis(["day", "five"], axis=1),
+                            known.loc[known.source == HLTV, ["day", "lb"]].set_axis(["day", "five"], axis=1)]) \
+        .explode("five").groupby("five").day.min()
+    recent = first_hltv[(first_hltv >= cutoff - pd.Timedelta(days=NEWCOMER_DAYS))
+                        & (first_hltv >= known.day.min() + pd.Timedelta(days=NEWCOMER_DAYS))].index.astype(np.int64)
+    ni = np.searchsorted(players, recent[np.isin(recent, players)])
+    newcomer = (float(theta[ni].mean()), float(theta[ni].var() + np.mean(1.0 / h_diag[ni]))) if len(ni) >= 20 \
+        else (float(np.median(theta)), cfg.sigma0 ** 2)
+    moves = bundle.moves[bundle.moves.event_date < cutoff] if cfg.roster_moves else None
+    lineups = _latest_lineups(known, moves)
+    if cfg.lineup_source != "any":
+        hltv_lineups = _latest_lineups(known[known.source == HLTV], moves)
+        lineups = hltv_lineups if cfg.lineup_source == "hltv" else {**lineups, **hltv_lineups}
     return Fit(cutoff=cutoff, cfg=cfg, player_ids=players, theta=theta, var=1.0 / h_diag, coef=c, rho=rho,
-               kappa_f=float(np.exp(logk)), home=_home_regions(known), lineups=_latest_lineups(known if cfg.lineup_source != "hltv" else known[known.source == HLTV],
-                                       bundle.moves[bundle.moves.event_date < cutoff] if cfg.roster_moves else None),
-               rank=rank,
-               strength_mu=mu, strength_sd=sd, level_at=level_at, div_at=div_at, hltv_players=hltv_players)
+               kappa_f=float(np.exp(logk)), home=_home_regions(known), lineups=lineups, newcomer=newcomer,
+               team_effect=dict(zip(teams.tolist(), u.tolist())))
