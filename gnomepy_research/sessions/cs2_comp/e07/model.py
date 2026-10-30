@@ -138,6 +138,9 @@ class Model:
             row[f"days_h_{side}"] = 999.0 if last_t is None else t - last_t
             row[f"tm90_{side}"] = self.h.team_maps(team, t, 90.0)
             row[f"rank_{side}"] = float(np.log1p(self.rank_points(team, cutoff_day)))
+            row[f"elo_h_{side}"] = self.h.elo.get(team, 0.0)
+            if self.f is not None:
+                row[f"elo_f_{side}"] = self.f.elo.get(team, 0.0)
             row[f"swap_{side}"] = 0 if last_t is None else int(len(ids) < 5 or set(ids.tolist()) != set(self.h.last_five[team][0].tolist()))
             if self.f is None:
                 continue

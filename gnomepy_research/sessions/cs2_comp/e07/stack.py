@@ -29,6 +29,8 @@ FEATURES = {
     "faceit_skill_thin": lambda d: (d.f_s_a * _thin_weight(d.tm90_a) - d.f_s_b * _thin_weight(d.tm90_b)).to_numpy(float),
     "faceit_coverage": lambda d: ((d.f_n_a - d.f_n_b) / 5.0).to_numpy(float),
     "rank_points": lambda d: (d.rank_a - d.rank_b).to_numpy(float),
+    "elo_team": lambda d: (d.elo_h_a - d.elo_h_b).to_numpy(float),
+    "elo_team_faceit": lambda d: (d.elo_f_a - d.elo_f_b).to_numpy(float),
     "five_maps": lambda d: (np.log1p(d.five_h_a) - np.log1p(d.five_h_b) + np.log1p(d.five_f_a) - np.log1p(d.five_f_b)).to_numpy(float),
     "z_thin": lambda d: logit(d.q_soft.to_numpy()) * (np.minimum(d.tm90_a, d.tm90_b) <= THIN_MAPS).to_numpy(float),
 }

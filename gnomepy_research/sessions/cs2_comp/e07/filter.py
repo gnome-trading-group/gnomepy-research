@@ -52,6 +52,7 @@ class FilterConfig:
     use_faceit: bool = True
     use_hltv: bool = True
     selection_var: float = 1.0
+    elo_k: float = 0.08
     recency: float = 0.9
     rank_prior_faceit: bool = True
 
@@ -75,6 +76,7 @@ class Filter:
         self.player_times: dict[int, list[float]] = {}
         self.team_times: dict[int, list[float]] = {}
         self.team_fives: dict[int, list[np.ndarray]] = {}
+        self.elo: dict[int, float] = {}
         self.faceit_fives: dict[int, list[tuple[float, np.ndarray]]] = {}
         self.rank_points = rank_points
         self.last_five: dict[int, tuple[np.ndarray, float]] = {}
@@ -149,6 +151,11 @@ class Filter:
         f = curv * scale ** 2 / denom
         Pa = Pa - np.outer(va, va) * f
         Pb = Pb - np.outer(vb, vb) * f
+        ta_id, tb_id = int(s.team_a[m]), int(s.team_b[m])
+        if ta_id >= 0 and tb_id >= 0 and ta_id != tb_id:
+            ea, eb = self.elo.get(ta_id, 0.0), self.elo.get(tb_id, 0.0)
+            step = c.elo_k * ((1.0 if ra > rb else 0.0) - 1.0 / (1.0 + math.exp(eb - ea)))
+            self.elo[ta_id], self.elo[tb_id] = ea + step, eb - step
         gamma = c.gamma_faceit if src == FACEIT else c.gamma_hltv
         if gamma > 0.0:
             sig = c.sigma_r_faceit if src == FACEIT else c.sigma_r_hltv
