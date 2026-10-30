@@ -25,7 +25,7 @@ from gnomepy_research.models.cs2.hltv.bayes_series import RankStrength, SeriesPo
 from gnomepy_research.sessions.cs2_comp import bundle
 
 ANCHOR_EPOCH = pd.Timestamp("2024-01-08")
-REFIT_WEEKS = 4
+REFIT_WEEKS = 2
 STATS_COLUMNS = ["match_id", "match_date", "map_name", "player_id", "team_id", "side", "rating"]
 
 
