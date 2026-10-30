@@ -57,6 +57,11 @@ class FilterConfig:
     roster_moves: bool = True
     # When a team's last five held a stand-in (HLTV lineups flag), expect the most recent absent regular back.
     standin_fix: bool = False
+    # Stack interaction: separate channel weights for thin series (either team with at most thin_maps HLTV maps in
+    # the prior thin_days days, or neither team ranked), where FACEIT has the most to say.
+    thin_interaction: bool = False
+    thin_maps: int = 15
+    thin_days: int = 90
     # Team effect on top of the five: what a lineup is worth beyond its players (roles, preparation, form), a
     # random walk per team with faster drift than a player's skill. 0 switches it off.
     team_sigma0: float = 0.0

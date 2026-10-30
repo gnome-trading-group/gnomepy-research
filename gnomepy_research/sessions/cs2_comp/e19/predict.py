@@ -32,6 +32,7 @@ target's cutoff fits a no-intercept logistic regression of the outcome on the ch
 from __future__ import annotations
 
 import argparse
+import collections
 import math
 import time
 from dataclasses import fields, replace
@@ -250,13 +251,16 @@ def logit(q):
     return np.log(q / (1 - q))
 
 
-def features(rows: pd.DataFrame, channels: tuple[str, ...]) -> np.ndarray:
+def features(rows: pd.DataFrame, channels: tuple[str, ...], interaction: bool = False) -> np.ndarray:
     cols = []
     for c in channels:
         x = logit(rows[f"q_{c}"])
         if c == "faceit":
             x = x * rows["cov_faceit"].to_numpy(float)
         cols.append(x)
+    if interaction:
+        thin = rows["thin"].to_numpy(float)
+        cols += [x * thin for x in cols]
     return np.column_stack(cols)
 
 
@@ -292,12 +296,13 @@ def apply_stack(X: np.ndarray, w: np.ndarray) -> np.ndarray:
     return 1 / (1 + np.exp(-(X @ w)))
 
 
-def calibrate(weekly: pd.DataFrame, at: pd.Timestamp, channels: tuple[str, ...], weeks: int = CALIBRATION_WEEKS) -> np.ndarray:
+def calibrate(weekly: pd.DataFrame, at: pd.Timestamp, channels: tuple[str, ...], weeks: int = CALIBRATION_WEEKS,
+              interaction: bool = False) -> np.ndarray:
     """Stack weights from the weekly prices of the `weeks` before `at`, all dated before it."""
     cal = weekly[(weekly.week >= at - weeks * WEEK) & (weekly.week < at) & (weekly.eff < at)]
     if len(cal) < CALIBRATION_MIN:
-        return np.eye(len(channels))[0]
-    return fit_stack(features(cal, channels), cal.y.to_numpy(float))
+        return np.eye(len(channels) * (2 if interaction else 1))[0]
+    return fit_stack(features(cal, channels, interaction), cal.y.to_numpy(float))
 
 
 def run(data_dir: Path, targets: pd.DataFrame, cfg: FilterConfig, faceit: bool, dev_from: pd.Timestamp | None = None,
@@ -338,9 +343,16 @@ def run(data_dir: Path, targets: pd.DataFrame, cfg: FilterConfig, faceit: bool, 
     targets_by_cutoff = {c: targets[targets.week_cutoff == c] for c in cutoffs}
     weekly_rows: list[dict] = []
     out: list[dict] = []
+    hltv_days: dict[int, collections.deque] = collections.defaultdict(collections.deque)
+
+    def thin(key_a: int, key_b: int, at: pd.Timestamp) -> int:
+        since = at - pd.Timedelta(days=cfg.thin_days)
+        counts = [sum(1 for d in hltv_days.get(k, ()) if d >= since) for k in (key_a, key_b)]
+        unranked = all(filters[main].points(k, at) <= 0 for k in (key_a, key_b))
+        return int(min(counts) <= cfg.thin_maps or unranked)
 
     def priced(key_a: int, key_b: int, at: pd.Timestamp) -> dict:
-        row = {}
+        row = {"thin": thin(key_a, key_b, at)}
         for c in channels:
             if c in raters:
                 row[f"q_{c}"], row[f"cov_{c}"] = price_ridge(raters[c], filters[main], pricer, key_a, key_b, at, moves)
@@ -360,10 +372,10 @@ def run(data_dir: Path, targets: pd.DataFrame, cfg: FilterConfig, faceit: bool, 
         if m not in targets_by_cutoff:
             return
         weekly = pd.DataFrame(weekly_rows)
-        w = calibrate(weekly, m, channels)
+        w = calibrate(weekly, m, channels, interaction=cfg.thin_interaction)
         rows = pd.DataFrame([{"match_id": r.match_id, **priced(int(r.team_a_id), int(r.team_b_id), m)}
                              for r in targets_by_cutoff[m].itertuples()])
-        rows["q"] = apply_stack(features(rows, channels), w)
+        rows["q"] = apply_stack(features(rows, channels, cfg.thin_interaction), w)
         rows["fit_cutoff"] = m
         out.append(rows)
         log(f"{m:%Y-%m-%d} targets {len(rows)} stack {np.round(w, 3).tolist()} {time.time() - t0:.0f}s")
@@ -386,6 +398,13 @@ def run(data_dir: Path, targets: pd.DataFrame, cfg: FilterConfig, faceit: bool, 
                                            row.standins_a, row.standins_b)
             if cfg.rating_channel and filters[main].last_gap is not None and row.source in takes[main]:
                 update_residuals(resid, cfg, filters[main].last_gap, team_stats)
+            if row.source == HLTV:
+                day = pd.Timestamp(row.day)
+                for k in (row.key_a, row.key_b):
+                    q = hltv_days[k]
+                    q.append(day)
+                    while q and q[0] < day - pd.Timedelta(days=cfg.thin_days):
+                        q.popleft()
             i += 1
             row = next(rows, None)
         snapshot(m)
