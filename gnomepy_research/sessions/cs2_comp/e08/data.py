@@ -95,41 +95,6 @@ class RankPoints:
         return out
 
 
-class FaceitFives:
-    """Fives of HLTV-linked players who played an organised FACEIT match together, indexed by player.
-
-    A team's HLTV history lags its roster: a new player shows up in FACEIT play before the team's next HLTV map. The
-    team is identified only through its players, so no label derived after the match is used."""
-
-    def __init__(self, lineups: pd.DataFrame):
-        lu = lineups[lineups.player_id.notna()].copy()
-        lu["match_date"] = _naive(lu.match_date)
-        self.by_player: dict[int, list[tuple[pd.Timestamp, tuple[int, ...]]]] = {}
-        for (_, _, date), g in lu.groupby(["match_id", "faceit_team_id", "match_date"], sort=False):
-            ids = tuple(sorted({int(p) for p in g.player_id}))
-            if len(ids) == FIVE:
-                for p in ids:
-                    self.by_player.setdefault(p, []).append((date, ids))
-        for fives in self.by_player.values():
-            fives.sort(key=lambda x: x[0])
-
-    def newer_five(self, last_five: list[int], after: pd.Timestamp, before: pd.Timestamp, max_age_days: int,
-                   min_overlap: int) -> tuple[int, ...] | None:
-        """The most recent FACEIT five after `after` sharing at least min_overlap players with last_five."""
-        best = None
-        for p in last_five:
-            for date, ids in reversed(self.by_player.get(p, ())):
-                if date >= before:
-                    continue
-                if date <= after or (before - date).days > max_age_days:
-                    break
-                overlap = len(set(ids) & set(last_five))
-                if overlap >= min_overlap and (best is None or (overlap, date) > best[:2]):
-                    best = (overlap, date, ids)
-                break
-        return best[2] if best else None
-
-
 def _five(ids) -> list[int] | None:
     if ids is None:
         return None

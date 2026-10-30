@@ -1,12 +1,13 @@
 """
-Player skill as a Gaussian state, updated map by map from two noisy measurement channels per source.
+Player skill as a Gaussian state, updated map by map from HLTV and FACEIT maps alike.
 
 Skill is in round-logit units. A map between fives A and B gives A each round with probability
 sigmoid(kappa_src * (S_A - S_B)), where S is the weighted mean of the five's skills (extra weight on the best
-player). The rounds are overdispersed (beta-binomial inflation rho_src), and FACEIT rounds are a second, noisier
-measurement of the same skill: they get their own overdispersion and their own scale kappa_f, because online
-FACEIT play is not the HLTV top 30. Teammates' errors are kept correlated (a fixed five only reveals its sum), but
-only within a team, so every map touches two 5x5 blocks.
+player). The rounds are overdispersed (beta-binomial inflation rho_src). FACEIT rounds are a second noisy measurement
+of the same skill: they have their own overdispersion and scale kappa_f, and the unlinked players they bring in (most
+of the FACEIT population) get a wide prior well below the HLTV newcomer prior, so that linked players are not
+credited for beating weaker opposition. Teammates' errors are kept correlated (a fixed five only reveals its sum),
+but only within a team, so every map touches two 5x5 blocks.
 
 Each map also carries a within-team performance measurement: the player's stat score minus his team's mean on that
 map, a noisy view of skill minus teammates' mean skill. Its persistent part (role, style) is absorbed by a per-player
@@ -18,41 +19,37 @@ points on HLTV, the FACEIT skill level and competition tier on FACEIT.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
-from gnomepy_research.sessions.cs2_comp.e08.data import FIVE, HLTV
+from gnomepy_research.sessions.cs2_comp.e08.data import FACEIT, FIVE, HLTV
 
 NS_PER_DAY = 86_400e9
 
 
 @dataclass(frozen=True)
 class Params:
-    tau2: float = 0.009319191322975635 ** 2
-    tau2_f: float = 0.009319191322975635 ** 2
+    tau2: float = 0.00012
     lam: float = 0.0761331162651603
     a_h: float = -0.1081114476105491
     b_h: float = 0.14696262712175345
     sigma0_h: float = 0.2536091079975324
-    a_f: float = -0.45
+    a_f: float = -1.0
     b_f: float = 0.10
     comp_off: tuple[float, ...] = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-    sigma0_f: float = 0.35
+    sigma0_f: float = 1.0
     kappa_f: float = 1.0
     rho_h: float = 0.017231894894383412
     rho_f: float = 0.02
-    gamma_h: float = 0.0
-    sig_r_h: float = 0.3
-    gamma_f: float = 0.0
-    sig_r_f: float = 0.3
+    gamma_h: float = 0.2
+    sig_r_h: float = 0.5
+    gamma_f: float = 0.4
+    sig_r_f: float = 0.5
     style_shrink: float = 20.0
+    f_floor: float = 0.0
     use_faceit: bool = True
-    joint: bool = False
-    fives: bool = True
-    link_a: float = 0.0
-    link_b: float = 0.5
-    link_s: float = 0.7
+    hybrid_min: int = 1
 
 
 MAX_LOGIT = 30.0
@@ -65,20 +62,17 @@ def _sigmoid(x: float) -> float:
 
 
 class SkillFilter:
-    def __init__(self, p: Params, src: int = HLTV):
+    def __init__(self, p: Params):
         self.p = p
-        self.tau2 = p.tau2 if src == HLTV else p.tau2_f
+        self.tau2 = p.tau2
         self.track_from = -(2 ** 62)
         self.mu: dict[int, float] = {}
         self.var: dict[int, float] = {}
         self.seen: dict[int, int] = {}
         self.cov: dict[tuple[int, int], float] = {}
-        self.maps: dict[int, int] = {}
         self.style_sum: dict[int, float] = {}
         self.style_n: dict[int, float] = {}
-        self.fmaps: dict[int, int] = {}
         self.nll = np.zeros(2)
-        self.linked_nll = 0.0
         self.nmaps = np.zeros(2)
 
     def _prior(self, feat: float, src: int, comp: int) -> tuple[float, float]:
@@ -106,12 +100,6 @@ class SkillFilter:
                 if c is not None:
                     cov[i, j] = cov[j, i] = c
         return mu, cov
-
-    def peek(self, player: int, t: int) -> tuple[float, float] | None:
-        m = self.mu.get(player)
-        if m is None:
-            return None
-        return m, self.var[player] + self.tau2 * max((t - self.seen[player]) / NS_PER_DAY, 0.0)
 
     def weights(self, mu: np.ndarray) -> np.ndarray:
         w = np.full(FIVE, (1 - self.p.lam) / FIVE)
@@ -173,12 +161,15 @@ class SkillFilter:
                 else:
                     mu_b, cb = mu, cov
 
+        if src == FACEIT and p.f_floor > 0.0:
+            ca = ca + np.diag(np.maximum(p.f_floor ** 2 - np.diag(ca), 0.0))
+            cb = cb + np.diag(np.maximum(p.f_floor ** 2 - np.diag(cb), 0.0))
+
         for players, mu, cov in ((pa, mu_a, ca), (pb, mu_b, cb)):
             for i, pl in enumerate(players):
                 self.mu[pl] = min(max(float(mu[i]), -MAX_SKILL), MAX_SKILL)
                 self.var[pl] = max(1e-6, float(cov[i, i]))
                 self.seen[pl] = t
-                self.maps[pl] = self.maps.get(pl, 0) + 1
                 for j in range(i + 1, FIVE):
                     q = players[j]
                     self.cov[(pl, q) if pl < q else (q, pl)] = float(cov[i, j])
@@ -187,26 +178,3 @@ class SkillFilter:
         pi = min(max(_sigmoid(d), 1e-9), 1 - 1e-9)
         self.nll[src] -= (ra * math.log(pi) + (n - ra) * math.log(1 - pi)) / n
         self.nmaps[src] += 1
-
-
-def combine(fh: SkillFilter, ff: SkillFilter | None, players, feats, t: int) -> tuple[np.ndarray, np.ndarray]:
-    """A five's HLTV-scale state with each linked player's FACEIT skill added as a second noisy measurement of it:
-    FACEIT skill maps to HLTV skill through link_a + link_b * skill, plus a player-specific error of sd link_s."""
-    mu, cov = fh.block(players, feats, HLTV, 0, t)
-    if ff is None:
-        return mu, cov
-    p = fh.p
-    rows, y, d = [], [], []
-    for i, pl in enumerate(players):
-        s = ff.peek(pl, t)
-        if s is not None:
-            rows.append(i)
-            y.append(p.link_a + p.link_b * s[0])
-            d.append(p.link_b ** 2 * s[1] + p.link_s ** 2)
-    if not rows:
-        return mu, cov
-    crows = cov[:, rows]
-    gain = np.linalg.solve(cov[np.ix_(rows, rows)] + np.diag(d), crows.T).T
-    mu = mu + gain @ (np.array(y) - mu[rows])
-    cov = cov - gain @ crows.T
-    return mu, cov

@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.bundle import load
-from gnomepy_research.sessions.cs2_comp.e08.data import FaceitFives, RankPoints, build_maps
+from gnomepy_research.sessions.cs2_comp.e08.data import RankPoints, build_maps
 from gnomepy_research.sessions.cs2_comp.e08.dev import DEV_END, TRACK_FROM, apply_overrides, dev_targets, ll
 from gnomepy_research.sessions.cs2_comp.e08.series import Moves
 from gnomepy_research.sessions.cs2_comp.e08.walk import walk
@@ -40,16 +40,15 @@ def run(spec: str) -> dict:
     s = STATE
     params, sp = apply_overrides([x for x in spec.split(",") if x])
     try:
-        out, f, ff = walk(s["maps"], s["targets"], s["moves"], s["ranks"], params, sp, s["fives"], track_from=TRACK_FROM)
+        out, f = walk(s["maps"], s["targets"], s["moves"], s["ranks"], params, sp, track_from=TRACK_FROM)
     except (OverflowError, FloatingPointError, np.linalg.LinAlgError) as e:
         return {"spec": spec, "error": repr(e)}
     out = out.merge(s["targets"][["match_id", "y", "thin"]], on="match_id")
     if s["save"] is not None:
         out.to_parquet(s["save"] / (re.sub(r"[^A-Za-z0-9._=-]", "_", spec) + ".parquet"))
     res = {"spec": spec, **score(out), "round_ll_hltv": float(f.nll[0] / max(f.nmaps[0], 1)),
-           "round_ll_faceit": float((ff or f).nll[1] / max((ff or f).nmaps[1], 1))}
-    if ff is not None and ff is not f:
-        res["round_ll_linked"] = float(f.linked_nll / max(f.nmaps[0], 1))
+           "round_ll_faceit": float(f.nll[1] / max(f.nmaps[1], 1)),
+           "all_joint": float(ll(out.q_joint, out.y).mean()), "all_hltv": float(ll(out.q_hltv, out.y).mean())}
     return res
 
 
@@ -67,7 +66,6 @@ def main() -> None:
     STATE["maps"] = build_maps(args.data, end, use_faceit=True)
     STATE["ranks"] = RankPoints(load(args.data, "hltv/cs2_team_rankings", end))
     STATE["moves"] = Moves(load(args.data, "hltv/cs2_roster_moves", end))
-    STATE["fives"] = FaceitFives(load(args.data, "faceit/faceit_lineups", end, ["match_id", "faceit_team_id", "match_date", "player_id"]))
     out = args.out or Path(os.environ.get("OUTPUT_DIR", ".")) / "sweep.jsonl"
     STATE["save"] = out.parent / "preds" if args.save_preds else None
     if STATE["save"] is not None:

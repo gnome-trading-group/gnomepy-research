@@ -18,8 +18,8 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
-from gnomepy_research.sessions.cs2_comp.e08.data import FIVE, FaceitFives
-from gnomepy_research.sessions.cs2_comp.e08.filter import SkillFilter, combine
+from gnomepy_research.sessions.cs2_comp.e08.data import FIVE, HLTV
+from gnomepy_research.sessions.cs2_comp.e08.filter import SkillFilter
 
 RECENT_MAPS = 10
 PLACEHOLDER_BASE = -1
@@ -34,12 +34,9 @@ _GRID = np.linspace(-8.0, 8.0, 3201)
 @dataclass(frozen=True)
 class SeriesParams:
     sigma_m: float = 0.30
-    sigma_s: float = 0.15
+    sigma_s: float = 0.10
     sigma_lu: float = 0.35
     slope: float = 1.0
-    five_days: int = 45
-    five_prob: float = 0.8
-    five_overlap: int = 3
 
 
 class MapTable:
@@ -73,19 +70,10 @@ class Moves:
         return [p for d, p in sorted(self.joining.get(team, ()), reverse=True) if after < d < before]
 
 
-def infer_lineup(team: int, recent: dict[int, collections.deque], moves: Moves, cutoff: pd.Timestamp,
-                 fives: FaceitFives | None = None, sp: SeriesParams | None = None) -> tuple[list[int], list[float]]:
-    """The five and, per player, the probability that he plays (1.0 for a regular, lower for a guess).
-
-    A FACEIT five that shares players with the team's last HLTV five and was played after that map is newer than
-    anything the HLTV history knows, so it replaces the HLTV guess, unless one of its players has since left."""
+def infer_lineup(team: int, recent: dict[int, collections.deque], moves: Moves, cutoff: pd.Timestamp
+                 ) -> tuple[list[int], list[float]]:
+    """The five and, per player, the probability that he plays (1.0 for a regular, lower for a guess)."""
     hist = recent.get(team)
-    if hist and fives is not None:
-        last_day, last_five = hist[-1]
-        newer = fives.newer_five(last_five, last_day, cutoff, sp.five_days, sp.five_overlap)
-        if newer is not None and not moves.left(team, last_day, cutoff) & set(newer):
-            regulars = collections.Counter(p for _, five in hist for p in five)
-            return list(newer), [1.0 if regulars[p] > len(hist) / 2 else sp.five_prob for p in newer]
     if not hist:
         return [PLACEHOLDER_BASE - i for i in range(FIVE)], [0.0] * FIVE
     last_day, last_five = hist[-1]
@@ -109,12 +97,11 @@ def infer_lineup(team: int, recent: dict[int, collections.deque], moves: Moves, 
     return five, [prob[p] for p in five]
 
 
-def price_series(f: SkillFilter, ff: SkillFilter | None, table: MapTable, sp: SeriesParams, t: int, five_a: list[int],
-                 prob_a: list[float], feat_a: float, five_b: list[int], prob_b: list[float], feat_b: float
-                 ) -> tuple[float, float, float]:
+def price_series(f: SkillFilter, table: MapTable, sp: SeriesParams, t: int, five_a: list[int], prob_a: list[float],
+                 feat_a: float, five_b: list[int], prob_b: list[float], feat_b: float) -> tuple[float, float, float]:
     """(q, mean gap, variance of the gap) for team A against team B, as of time t."""
-    mu_a, ca = combine(f, ff, five_a, [feat_a] * FIVE, t)
-    mu_b, cb = combine(f, ff, five_b, [feat_b] * FIVE, t)
+    mu_a, ca = f.block(five_a, [feat_a] * FIVE, HLTV, 0, t)
+    mu_b, cb = f.block(five_b, [feat_b] * FIVE, HLTV, 0, t)
     wa, wb = f.weights(mu_a), f.weights(mu_b)
     mean = float(wa @ mu_a - wb @ mu_b)
     var = float(wa @ ca @ wa + wb @ cb @ wb)
