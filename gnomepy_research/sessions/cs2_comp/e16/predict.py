@@ -12,7 +12,8 @@ over HLTV and FACEIT maps (FACEIT impact rows, FACEIT skill level and ESEA divis
     HLTV-only scale) instead of the newcomer prior;
   - cfg.faceit_weight > 0 also mixes in the joint fit's own gaps (0 by default: pooling FACEIT results moved
     established HLTV players too far and scored worse on the tune period).
-A target's lineups are not known before its cutoff, hence the latest five. --set overrides a Config field, for
+When the targets carry announced lineups (team_x_lineup_ids, team_x_standin_ids) those fives are priced instead of
+the latest five; announced stand-ins can be marked down by cfg.standin_shift. --set overrides a Config field, for
 tuning on the dev period only.
 """
 from __future__ import annotations
@@ -27,7 +28,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cs2_comp.e16.data import Bundle, apply_moves, read_bundle, team_lineups
+from gnomepy_research.sessions.cs2_comp.e16.data import LINEUP, Bundle, apply_moves, read_bundle, team_lineups
 from gnomepy_research.sessions.cs2_comp.e16.model import Config, Fit, fit, rank_feature
 
 
@@ -42,6 +43,16 @@ def _five(fives: dict, team: str, moves: pd.DataFrame, cfg: Config) -> list[str]
     return apply_moves(five, seen, team, moves)
 
 
+def _announced(ids) -> list[str] | None:
+    if ids is None or len(ids) != LINEUP or any(pd.isna(x) for x in ids):
+        return None
+    return [f"h{int(x)}" for x in ids]
+
+
+def _keys(ids) -> frozenset:
+    return frozenset() if ids is None else frozenset(f"h{int(x)}" for x in ids if not pd.isna(x))
+
+
 def _gaps(maps: pd.DataFrame, ratings: pd.DataFrame, levels: pd.DataFrame | None, b: Bundle, targets: pd.DataFrame,
           cutoff: pd.Timestamp, cfg: Config, lineup_maps: pd.DataFrame,
           prefit: Fit | None = None) -> tuple[np.ndarray, np.ndarray, Fit]:
@@ -52,11 +63,17 @@ def _gaps(maps: pd.DataFrame, ratings: pd.DataFrame, levels: pd.DataFrame | None
     teams = {f"h{int(t)}" for t in pd.concat([targets.team_a_id, targets.team_b_id])}
     fives = team_lineups(lineup_maps, teams, bool(cfg.revert_standins))
     moves = b.moves[b.moves.event_date < cutoff]
+    announced = bool(cfg.announced_lineups) and "team_a_lineup_ids" in targets.columns
     gaps = []
     for r in targets.itertuples():
         ka, kb = f"h{int(r.team_a_id)}", f"h{int(r.team_b_id)}"
         five_a, five_b = (_five(fives, k, moves, cfg) for k in (ka, kb))
-        gaps.append(f.gap(ka, five_a, rank_of.get(ka, 0.0), kb, five_b, rank_of.get(kb, 0.0)))
+        st_a, st_b = frozenset(), frozenset()
+        if announced:
+            five_a = _announced(r.team_a_lineup_ids) or five_a
+            five_b = _announced(r.team_b_lineup_ids) or five_b
+            st_a, st_b = _keys(r.team_a_standin_ids), _keys(r.team_b_standin_ids)
+        gaps.append(f.gap(ka, five_a, rank_of.get(ka, 0.0), kb, five_b, rank_of.get(kb, 0.0), st_a, st_b))
     g = np.array(gaps, dtype=float).reshape(-1, 2)
     return g[:, 0], g[:, 1], f
 

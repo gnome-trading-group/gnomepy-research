@@ -59,10 +59,16 @@ class Config:
     sigma_offset: float = 0.0
     faceit_weight: float = 0.0
     faceit_lineups: int = 1
-    # Players the HLTV-only fit never saw take their skill from the joint fit instead of the prior.
+    # Players the HLTV-only fit never saw take their skill from the joint fit instead of the prior, and so do players
+    # whose HLTV-only skill variance is above fallback_var (too few HLTV maps to say much).
     faceit_fallback: int = 1
+    fallback_var: float = 1e9
     roster_moves: int = 1
     revert_standins: int = 0
+    # Price each target with its announced fives when the targets carry them.
+    announced_lineups: int = 1
+    # Skill taken off an announced stand-in: a stand-in rarely plays at his own level in someone else's system.
+    standin_shift: float = 0.0
 
 
 @dataclass
@@ -89,20 +95,23 @@ class Fit:
 
     def player(self, key: str, team_rank: float) -> tuple[float, float]:
         i = self.players.get_indexer([key])[0]
-        if i >= 0:
+        if i >= 0 and (self.fallback is None or self.var[i] <= self.cfg.fallback_var):
             return float(self.theta[i]), float(self.var[i])
         if self.fallback is not None:
             other, shift = self.fallback
             j = other.players.get_indexer([key])[0]
             if j >= 0:
                 return float(other.theta[j] + shift), float(other.var[j])
+        if i >= 0:
+            return float(self.theta[i]), float(self.var[i])
         x = np.zeros(len(FEATURES))
         x[0], x[1], x[4] = 1.0, team_rank, 1.0
         return float(x @ self.beta), self.cfg.sigma0 ** 2
 
-    def gap(self, team_a: str, five_a, rank_a: float, team_b: str, five_b, rank_b: float) -> tuple[float, float]:
+    def gap(self, team_a: str, five_a, rank_a: float, team_b: str, five_b, rank_b: float,
+            standins_a: frozenset = frozenset(), standins_b: frozenset = frozenset()) -> tuple[float, float]:
         mean, var = 0.0, 0.0
-        for five, rank, sign in ((five_a, rank_a, 1.0), (five_b, rank_b, -1.0)):
+        for five, rank, standins, sign in ((five_a, rank_a, standins_a, 1.0), (five_b, rank_b, standins_b, -1.0)):
             if five is None:
                 m, v = self.player("", rank)
                 mean += sign * m
@@ -110,6 +119,8 @@ class Fit:
             else:
                 for p in five:
                     m, v = self.player(p, rank)
+                    if p in standins:
+                        m -= self.cfg.standin_shift
                     mean += sign * m / LINEUP
                     var += v / LINEUP ** 2
         for t, sign in ((team_a, 1.0), (team_b, -1.0)):

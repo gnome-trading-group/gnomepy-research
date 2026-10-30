@@ -27,8 +27,14 @@ def build(data: Path, out: Path) -> None:
         match_date=("match_date", "first"), team_a_id=("team_a_id", "first"), team_b_id=("team_b_id", "first"),
         a=("team_a_won", "sum"), n=("team_a_won", "size"), rank_a=("team_a_rank", "first"),
         rank_b=("team_b_rank", "first"), is_lan=("is_lan", "first"), pa=("team_a_player_ids", "first"),
-        pb=("team_b_player_ids", "first")).reset_index()
+        pb=("team_b_player_ids", "first"), team_a_lineup_ids=("team_a_lineup_ids", "first"),
+        team_b_lineup_ids=("team_b_lineup_ids", "first")).reset_index()
     s = s[(s.n >= 2) & (s.a * 2 != s.n)]
+    lu = pd.read_parquet(data / "hltv/cs2_match_lineups.parquet", columns=["match_id", "team_id", "player_id", "is_standin"])
+    lu = lu[lu.is_standin.fillna(False).astype(bool) & lu.player_id.notna()]
+    standins = lu.groupby(["match_id", "team_id"]).player_id.agg(lambda x: [int(v) for v in x]).to_dict()
+    s["team_a_standin_ids"] = [standins.get((m, t), []) for m, t in zip(s.match_id, s.team_a_id)]
+    s["team_b_standin_ids"] = [standins.get((m, t), []) for m, t in zip(s.match_id, s.team_b_id)]
     s["y"] = (s.a * 2 > s.n).astype(int)
     s["week_cutoff"] = s.match_date - pd.to_timedelta(s.match_date.dt.weekday, unit="D")
     lu = pd.read_parquet(data / "faceit/faceit_lineups.parquet", columns=["player_id", "match_date"]).dropna()
