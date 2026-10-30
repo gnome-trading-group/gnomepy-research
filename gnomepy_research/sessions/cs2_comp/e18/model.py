@@ -35,7 +35,7 @@ _GRID = np.linspace(-8.0, 8.0, 3201)
 
 @dataclass(frozen=True)
 class Config:
-    half_life_days: float = 120.0
+    half_life_days: float = 365.0
     window_days: int = 365
     lam_player: float = 4.0
     lam_team: float = 4.0
@@ -44,7 +44,7 @@ class Config:
     faceit_weight: float = 0.5
     lam_delta: float = 0.5
     sigma_map: float = 0.37
-    sigma_series: float = 0.45
+    sigma_series: float = 0.3
     faceit: bool = True
     # With faceit_rows off, FACEIT still supplies lineups and the skill-level and division prior covariates, but its
     # rounds are not fitted.
@@ -117,7 +117,7 @@ def fit_model(obs: Observations, cutoff: pd.Timestamp, cfg: Config) -> Fit:
         return value, grad
 
     res = minimize(objective, np.zeros(2 * n_p + 2 * n_t + 2 * n_c), jac=True, method="L-BFGS-B",
-                   options={"maxiter": 2000, "maxfun": 4000, "gtol": 1e-8, "ftol": 1e-14})
+                   options={"maxiter": 4000, "maxfun": 8000, "gtol": 1e-5, "ftol": 1e-14})
     beta = res.x
     map_table = regulation_map_win(_GRID[:, None] + cfg.sigma_map * _GH_X[None, :]) @ _GH_W
     info = {"maps": n_maps, "players": n_p, "teams": n_t, "iterations": int(res.nit), "converged": bool(res.success),
