@@ -19,7 +19,7 @@ class Params:
     score_clip: float = 0.05
     overlap_power: float = 2.0
     shrink_games: float = 0.0
-    calibration: float = 1.0
+    calibration: float = 1.1
 
 
 @dataclass
