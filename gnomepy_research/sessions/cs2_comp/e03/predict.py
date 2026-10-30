@@ -8,6 +8,7 @@ dated before the same cutoff. A run on a bundle truncated at one week's cutoff t
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import numpy as np
@@ -175,8 +176,11 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     targets = pd.read_parquet(a.targets)
     out = predict(Path(a.data), targets, faceit=not a.no_faceit)
-    out.to_parquet(a.out, index=False)
-    print(f"wrote {len(out)} predictions to {a.out} (faceit={not a.no_faceit})")
+    out_path = Path(a.out)
+    if not out_path.is_absolute() and "OUTPUT_DIR" in os.environ:
+        out_path = Path(os.environ["OUTPUT_DIR"]) / out_path
+    out.to_parquet(out_path, index=False)
+    print(f"wrote {len(out)} predictions to {out_path} (faceit={not a.no_faceit})")
     return 0
 
 
