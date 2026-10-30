@@ -47,6 +47,10 @@ def standin_table(lineups: pd.DataFrame) -> dict[tuple[str, int], frozenset]:
     return {k: frozenset(v) for k, v in table.items()}
 
 
+def _divergence(samples: list[tuple[int, ...]], top: tuple[int, ...]) -> float:
+    return float(np.mean([5 - len(set(s) & set(top)) for s in samples])) / 5.0
+
+
 def priced_lineups(team: int, cutoff_day: float, history: TeamHistory, moves: Moves, rng: np.random.Generator,
                    n: int) -> tuple[list[tuple[int, ...]], tuple[int, ...]]:
     cands, x = candidate_features(team, cutoff_day, list(history.recent.get(team, ())), moves)
@@ -60,7 +64,7 @@ def priced_lineups(team: int, cutoff_day: float, history: TeamHistory, moves: Mo
 
 
 def walk(data_dir: str | Path, targets: pd.DataFrame, params: Params, maps: pd.DataFrame | None = None,
-         ranks: RankPoints | None = None, track_from: float = float("inf")) -> tuple[pd.DataFrame, Filter]:
+         ranks: RankPoints | None = None) -> tuple[pd.DataFrame, Filter]:
     cutoffs = sorted(pd.to_datetime(targets.week_cutoff).unique())
     last = pd.Timestamp(cutoffs[-1])
     if maps is None:
@@ -70,7 +74,6 @@ def walk(data_dir: str | Path, targets: pd.DataFrame, params: Params, maps: pd.D
     if ranks is None:
         ranks = RankPoints(load(data_dir, "hltv/cs2_team_rankings", last))
     f = Filter(params, ranks)
-    f.track_from = track_from
     history = TeamHistory(standin_table(load(data_dir, "hltv/cs2_match_lineups", last, ["match_id", "match_date", "team_id", "player_id", "is_standin"])))
     moves = Moves(load(data_dir, "hltv/cs2_roster_moves", last))
     avail = maps.avail_day.to_numpy()
@@ -99,6 +102,10 @@ def walk(data_dir: str | Path, targets: pd.DataFrame, params: Params, maps: pd.D
             else:
                 sa_, top_a = priced_lineups(ta, cut_day, history, moves, rng, params_samples)
                 sb_, top_b = priced_lineups(tb, cut_day, history, moves, rng, params_samples)
+                for team, top in ((ta, top_a), (tb, top_b)):
+                    core = [f.mu[p] for p in top if p in f.mu]
+                    if core:
+                        f.anchor[team] = float(np.mean(core))
             qs, gaps, vars_ = [], [], []
             for la, lb in zip(sa_, sb_):
                 q, g = f.series_price(ta, tb, la, lb, kick)
@@ -106,7 +113,7 @@ def walk(data_dir: str | Path, targets: pd.DataFrame, params: Params, maps: pd.D
                 gaps.append(g.mean)
                 vars_.append(g.var)
             out.append({"match_id": r.match_id, "q": float(np.mean(qs)), "fit_cutoff": pd.Timestamp(cutoff), "gap": float(np.mean(gaps)),
-                        "gap_var": float(np.mean(vars_)), "cov_a": sum(f.faceit_games[p] > 0 for p in top_a),
+                        "gap_var": float(np.mean(vars_)), "div_a": _divergence(sa_, top_a), "div_b": _divergence(sb_, top_b), "cov_a": sum(f.faceit_games[p] > 0 for p in top_a),
                         "cov_b": sum(f.faceit_games[p] > 0 for p in top_b)})
         f.rank_cap = float("inf")
     return pd.DataFrame(out), f

@@ -4,8 +4,10 @@ Every map, from either source, is one observation of the gap between two fives, 
 FACEIT-only key) is one Gaussian node. Skill is in round-logit units: a gap D gives each round to team A with
 probability sigmoid(D). A FACEIT map is a noisier and rescaled measurement of the same latent skill (`faceit_scale`,
 `faceit_rho`), so players linked across sources bridge the two tiers and carry their level into FACEIT-only
-opponents. A debutant starts from the running mean of players who debuted in the same competition class, which is how
-an ESEA Open player is placed below an ESEA Main one before any result.
+opponents. A FACEIT-only player is his competition class's offset (one shared node per class, learned through the linked
+players he meets) plus his own deviation, which is how an ESEA Open player is placed below an ESEA Main one before any
+result. HLTV and FACEIT maps also carry a per-player performance channel: the team's mean rating gap measures the skill
+gap, and each player's rating relative to his teammates measures who in the five is better.
 
 Compared with models/cs2/hltv/player_skill.py the covariance is kept inside each five only: nodes number in the
 hundreds of thousands once every FACEIT player is a node, and opponents' covariances are second order."""
@@ -22,6 +24,7 @@ import pandas as pd
 from gnomepy_research.models.cs2.hltv.player_skill import map_win_prob
 
 LINEUP_SIZE = 5
+UNKNOWN_BASE = 10 ** 9
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,9 @@ class Params:
     class_sigma: float = 0.4
     class_tau: float = 0.003
     use_faceit: bool = True
+    newcomer_anchor: float = 0.0
+    newcomer_shift: float = 0.0
+    newcomer_sigma: float = 0.2536091079975324
     hltv_perf_gamma: float = 0.0
     hltv_perf_sigma: float = 0.2
     faceit_perf_gamma: float = 0.0
@@ -104,9 +110,7 @@ class Filter:
         self.class_seen: dict[str, float] = {}
         self.faceit_games: collections.Counter = collections.Counter()
         self.rank_cap = math.inf
-        self.track_from = math.inf
-        self.calib: list | None = None
-        self.track: dict[tuple[str, str], list[float]] = collections.defaultdict(lambda: [0.0, 0.0])
+        self.anchor: dict[int, float] = {}
 
     def _class_state(self, comp: str, day: float) -> tuple[float, float]:
         if comp not in self.class_mu:
@@ -115,9 +119,13 @@ class Filter:
         return self.class_mu[comp], self.class_var[comp] + self.p.class_tau ** 2 * idle
 
     def _state(self, player: int, team: int, day: float, src: str, comp: str) -> tuple[float, float, float]:
-        """State mean, effective skill (state mean plus its class offset for a FACEIT-only player) and variance."""
-        if player < 0:
-            home = self.home.setdefault(player, comp)
+        """State mean, effective skill and variance. A FACEIT-only player lives under the competition class he debuted in: his
+        skill is the class offset plus his own deviation, so the class level, learned through the linked players he plays
+        against, is his prior."""
+        if player not in self.mu and src == "faceit" and player < 0:
+            self.home.setdefault(player, comp)
+        home = self.home.get(player)
+        if home is not None:
             offset = self._class_state(home, day)[0]
             if player not in self.mu:
                 return 0.0, offset, self.p.faceit_sigma0 ** 2
@@ -126,6 +134,10 @@ class Filter:
         if player not in self.mu:
             pts = self.ranks(team, pd.Timestamp("2023-01-01") + pd.Timedelta(days=min(day, self.rank_cap))) if src == "hltv" else 0.0
             m = self.p.a + self.p.b * math.log1p(pts)
+            if player >= UNKNOWN_BASE:
+                anchor = self.anchor.get((player - UNKNOWN_BASE) // 5, m)
+                m = (1 - self.p.newcomer_anchor) * m + self.p.newcomer_anchor * anchor + self.p.newcomer_shift
+                return m, m, self.p.newcomer_sigma ** 2
             return m, m, self.p.sigma0 ** 2
         idle = max(day - self.seen[player], 0.0)
         return self.mu[player], self.mu[player], self.var[player] + self.p.tau ** 2 * idle
@@ -170,18 +182,15 @@ class Filter:
         s_dev = self.p.hltv_dev_sigma if src == "hltv" else self.p.faceit_dev_sigma
         xa, xb = np.asarray(sa, dtype=float), np.asarray(sb, dtype=float)
         va, vb = np.isfinite(xa), np.isfinite(xb)
-        if (g_team > 0 or self.calib is not None) and va.sum() >= 4 and vb.sum() >= 4:
+        if g_team > 0 and va.sum() >= 4 and vb.sum() >= 4:
             y = xa[va].mean() - xb[vb].mean()
             cw = cov @ w
             var_d = float(w @ cw)
-            if self.calib is not None:
-                self.calib.append((src, "team", float(w @ mus + kap), y, var_d))
-            if g_team > 0:
-                s = g_team ** 2 * var_d + s_team ** 2
-                innov = y - g_team * float(w @ mus + kap)
-                mus += g_team * cw * innov / s
-                cov -= np.outer(cw, cw) * g_team ** 2 / s
-        if g_dev > 0 or self.calib is not None:
+            s = g_team ** 2 * var_d + s_team ** 2
+            innov = y - g_team * float(w @ mus + kap)
+            mus += g_team * cw * innov / s
+            cov -= np.outer(cw, cw) * g_team ** 2 / s
+        if g_dev > 0:
             for off, x, v in ((0, xa, va), (len(xa), xb, vb)):
                 idx = np.flatnonzero(v)
                 if len(idx) < 3:
@@ -190,16 +199,12 @@ class Filter:
                 dev = x[idx] - x[idx].mean()
                 h = np.eye(n) - 1.0 / n
                 state = mus[off + idx]
-                if self.calib is not None:
-                    c = state - state.mean()
-                    self.calib.extend((src, "dev", float(ci), float(di), float(cov[off + idx[j], off + idx[j]])) for j, (ci, di) in enumerate(zip(c, dev)))
-                if g_dev > 0:
-                    sub = cov[np.ix_(off + idx, off + idx)]
-                    hh = g_dev * h
-                    s = hh @ sub @ hh.T + s_dev ** 2 * np.eye(n)
-                    gain = sub @ hh.T @ np.linalg.inv(s)
-                    mus[off + idx] += gain @ (dev - hh @ state)
-                    cov[np.ix_(off + idx, off + idx)] = sub - gain @ hh @ sub
+                sub = cov[np.ix_(off + idx, off + idx)]
+                hh = g_dev * h
+                s = hh @ sub @ hh.T + s_dev ** 2 * np.eye(n)
+                gain = sub @ hh.T @ np.linalg.inv(s)
+                mus[off + idx] += gain @ (dev - hh @ state)
+                cov[np.ix_(off + idx, off + idx)] = sub - gain @ hh @ sub
 
     def observe(self, day: float, team_a: int, team_b: int, pa: tuple[int, ...], pb: tuple[int, ...], ra: int, rb: int,
                 src: str, comp: str, sa=None, sb=None) -> None:
@@ -212,7 +217,7 @@ class Filter:
         jac: dict[str, float] = {}
         for lu, sign in ((a, 1.0), (b, -1.0)):
             for p, wi in zip(lu.players, lu.weights):
-                if p < 0:
+                if p in self.home:
                     jac[self.home[p]] = jac.get(self.home[p], 0.0) + sign * wi * scale
         classes = list(jac)
         nc = len(classes)
@@ -227,10 +232,6 @@ class Filter:
         n = ra + rb
         pi = 1 / (1 + math.exp(-d))
         inflation = 1 + (n - 1) * rho
-        if day >= self.track_from:
-            t = self.track[(src, comp)]
-            t[0] += 1
-            t[1] += -(ra * math.log(max(pi, 1e-9)) + rb * math.log(max(1 - pi, 1e-9))) / n
         grad, curv = (ra - n * pi) / inflation, n * pi * (1 - pi) / inflation
         cw = cov @ w
         denom = 1 + curv * float(w @ cw)

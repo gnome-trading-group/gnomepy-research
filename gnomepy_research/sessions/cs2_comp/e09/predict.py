@@ -26,8 +26,11 @@ def final_params(use_faceit: bool) -> Params:
 
 TUNED = dict(
     faceit_rho=0.2,
-    hltv_perf_gamma=1.15, hltv_perf_sigma=0.6,
-    faceit_perf_gamma=0.53, faceit_perf_sigma=0.43,
+    hltv_perf_gamma=1.15, hltv_perf_sigma=0.5,
+    faceit_perf_gamma=0.53, faceit_perf_sigma=0.35,
+    hltv_dev_gamma=0.6, hltv_dev_sigma=0.4,
+    newcomer_anchor=0.5, newcomer_sigma=0.4,
+    lam=0.2,
 )
 
 
