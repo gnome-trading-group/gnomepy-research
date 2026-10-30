@@ -11,7 +11,7 @@ import collections
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cs2_comp.e08.data import FACEIT, HLTV, Maps, RankPoints
+from gnomepy_research.sessions.cs2_comp.e08.data import FACEIT, HLTV, FaceitFives, Maps, RankPoints
 from gnomepy_research.sessions.cs2_comp.e08.filter import Params, SkillFilter, combine
 from gnomepy_research.sessions.cs2_comp.e08.series import (RECENT_MAPS, MapTable, Moves, SeriesParams, calibrate,
                                                              infer_lineup, price_series)
@@ -32,7 +32,7 @@ def prequential(f: SkillFilter, ff: SkillFilter, t: int, pa, pb, fa, fb, ra: int
 
 
 def walk(maps: Maps, targets: pd.DataFrame, moves: Moves, ranks: RankPoints, params: Params, sp: SeriesParams,
-         final_slope: float | None = None, track_from: int | None = None) -> tuple[pd.DataFrame, SkillFilter, SkillFilter | None]:
+         fives: FaceitFives | None = None, final_slope: float | None = None, track_from: int | None = None) -> tuple[pd.DataFrame, SkillFilter, SkillFilter | None]:
     f = SkillFilter(params)
     ff = (f if params.joint else SkillFilter(params, FACEIT)) if params.use_faceit else None
     linked = ff if not params.joint else None
@@ -77,7 +77,7 @@ def walk(maps: Maps, targets: pd.DataFrame, moves: Moves, ranks: RankPoints, par
         feats = {}
         for r in week.itertuples():
             team_a, team_b = int(r.team_a_id), int(r.team_b_id)
-            lineups = [infer_lineup(t, recent, moves, cutoff) for t in (team_a, team_b)]
+            lineups = [infer_lineup(t, recent, moves, cutoff, fives if params.use_faceit and params.fives else None) for t in (team_a, team_b)]
             fe = [float(ranks.lookup(np.array([t]), np.array([cutoff.to_datetime64()]))[0]) for t in (team_a, team_b)]
             t = int(r.match_time.to_datetime64().astype("datetime64[ns]").astype(np.int64))
             q, mean, var = price_series(f, linked, table, sp, t, lineups[0][0], lineups[0][1], fe[0], lineups[1][0], lineups[1][1], fe[1])

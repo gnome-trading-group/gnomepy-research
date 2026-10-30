@@ -95,6 +95,32 @@ class RankPoints:
         return out
 
 
+class FaceitFives:
+    """Latest five of an HLTV team in an organised FACEIT match, from the lineups the bundle labels with an HLTV team.
+
+    Only a full five of players linked to HLTV ids counts, so the five can be priced on the HLTV skill scale."""
+
+    def __init__(self, lineups: pd.DataFrame):
+        lu = lineups[lineups.team_id.notna() & lineups.player_id.notna()].copy()
+        lu["match_date"] = _naive(lu.match_date)
+        self.by_team: dict[int, list[tuple[pd.Timestamp, list[int]]]] = {}
+        for (team, _, date), g in lu.groupby(["team_id", "match_id", "match_date"], sort=False):
+            ids = sorted({int(p) for p in g.player_id})
+            if len(ids) == FIVE:
+                self.by_team.setdefault(int(team), []).append((date, ids))
+        for fives in self.by_team.values():
+            fives.sort(key=lambda x: x[0])
+
+    def latest(self, team: int, after: pd.Timestamp, before: pd.Timestamp, max_age_days: int) -> list[int] | None:
+        for date, ids in reversed(self.by_team.get(team, ())):
+            if date >= before:
+                continue
+            if date <= after or (before - date).days > max_age_days:
+                return None
+            return ids
+        return None
+
+
 def _five(ids) -> list[int] | None:
     if ids is None:
         return None

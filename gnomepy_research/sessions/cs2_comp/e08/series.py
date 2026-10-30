@@ -18,10 +18,12 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
-from gnomepy_research.sessions.cs2_comp.e08.data import FIVE
+from gnomepy_research.sessions.cs2_comp.e08.data import FIVE, FaceitFives
 from gnomepy_research.sessions.cs2_comp.e08.filter import SkillFilter, combine
 
 RECENT_MAPS = 10
+FACEIT_FIVE_DAYS = 45
+FACEIT_FIVE_PROB = 0.8
 PLACEHOLDER_BASE = -1
 LEAVING = {"leave", "transfer", "benched", "to_coach", "to_substitute", "loan"}
 JOINING = {"join", "transfer", "activated", "loan_return"}
@@ -70,10 +72,20 @@ class Moves:
         return [p for d, p in sorted(self.joining.get(team, ()), reverse=True) if after < d < before]
 
 
-def infer_lineup(team: int, recent: dict[int, collections.deque], moves: Moves, cutoff: pd.Timestamp
-                 ) -> tuple[list[int], list[float]]:
-    """The five and, per player, the probability that he plays (1.0 for a regular, lower for a guess)."""
+def infer_lineup(team: int, recent: dict[int, collections.deque], moves: Moves, cutoff: pd.Timestamp,
+                 fives: FaceitFives | None = None) -> tuple[list[int], list[float]]:
+    """The five and, per player, the probability that he plays (1.0 for a regular, lower for a guess).
+
+    A five the team fielded in FACEIT after its last HLTV map is newer than anything the HLTV history knows, so it
+    replaces the HLTV guess, minus players who have since left."""
     hist = recent.get(team)
+    last_day = hist[-1][0] if hist else pd.Timestamp.min
+    if fives is not None:
+        newer = fives.latest(team, last_day, cutoff, FACEIT_FIVE_DAYS)
+        if newer is not None and not moves.left(team, last_day, cutoff) & set(newer):
+            games = hist or ()
+            regulars = collections.Counter(p for _, five in games for p in five)
+            return newer, [1.0 if regulars[p] > len(games) / 2 else FACEIT_FIVE_PROB for p in newer]
     if not hist:
         return [PLACEHOLDER_BASE - i for i in range(FIVE)], [0.0] * FIVE
     last_day, last_five = hist[-1]

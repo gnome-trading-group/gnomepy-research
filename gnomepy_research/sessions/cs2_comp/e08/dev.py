@@ -19,7 +19,7 @@ import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.bundle import load
-from gnomepy_research.sessions.cs2_comp.e08.data import RankPoints, build_maps
+from gnomepy_research.sessions.cs2_comp.e08.data import FaceitFives, RankPoints, build_maps
 from gnomepy_research.sessions.cs2_comp.e08.filter import Params
 from gnomepy_research.sessions.cs2_comp.e08.series import Moves, SeriesParams
 from gnomepy_research.sessions.cs2_comp.e08.walk import walk
@@ -86,7 +86,7 @@ def apply_overrides(items: list[str]) -> tuple[Params, SeriesParams]:
         for obj_name, obj in (("p", params), ("s", sp)):
             if k in {f.name for f in dataclasses.fields(obj)}:
                 cur = getattr(obj, k)
-                val = tuple(float(x) for x in v.split(",")) if isinstance(cur, tuple) else type(cur)(float(v) if not isinstance(cur, bool) else v == "1")
+                val = tuple(float(x) for x in v.split("/")) if isinstance(cur, tuple) else type(cur)(float(v) if not isinstance(cur, bool) else v == "1")
                 obj = dataclasses.replace(obj, **{k: val})
                 params, sp = (obj, sp) if obj_name == "p" else (params, obj)
                 break
@@ -113,10 +113,11 @@ def main() -> None:
             pickle.dump(maps, open(args.cache, "wb"))
     ranks = RankPoints(load(args.data, "hltv/cs2_team_rankings", end))
     moves = Moves(load(args.data, "hltv/cs2_roster_moves", end))
+    fives = FaceitFives(load(args.data, "faceit/faceit_lineups", end, ["match_id", "match_date", "player_id", "team_id"]))
     for k, spec in enumerate(args.run):
         params, sp = apply_overrides([x for x in spec.split(",") if x])
         t0 = time.time()
-        out, f, ff = walk(maps, targets, moves, ranks, params, sp, track_from=TRACK_FROM)
+        out, f, ff = walk(maps, targets, moves, ranks, params, sp, fives, track_from=TRACK_FROM)
         out = out.merge(targets[["match_id", "y", "thin"]], on="match_id")
         face = f"{ff.nll[1] / max(ff.nmaps[1], 1):.5f}" if ff is not None else "-"
         print(f"[{spec or 'default'}] {len(out)} series {time.time() - t0:.0f}s prequential round LL hltv "

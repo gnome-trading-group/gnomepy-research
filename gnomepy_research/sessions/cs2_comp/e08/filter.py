@@ -49,6 +49,7 @@ class Params:
     style_shrink: float = 20.0
     use_faceit: bool = True
     joint: bool = False
+    fives: bool = True
     link_a: float = 0.0
     link_b: float = 0.5
     link_s: float = 0.7
@@ -56,6 +57,7 @@ class Params:
 
 MAX_LOGIT = 30.0
 MAX_STEP = 1.0
+MAX_SKILL = 3.0
 
 
 def _sigmoid(x: float) -> float:
@@ -173,7 +175,7 @@ class SkillFilter:
 
         for players, mu, cov in ((pa, mu_a, ca), (pb, mu_b, cb)):
             for i, pl in enumerate(players):
-                self.mu[pl] = float(mu[i])
+                self.mu[pl] = min(max(float(mu[i]), -MAX_SKILL), MAX_SKILL)
                 self.var[pl] = max(1e-6, float(cov[i, i]))
                 self.seen[pl] = t
                 self.maps[pl] = self.maps.get(pl, 0) + 1
