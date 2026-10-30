@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-DEPTH = 14
+DEPTH = 24
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,7 @@ class RosterParams:
     freq_decay: float = 0.85
     join_floor: float = 0.8
     leave_cap: float = 0.05
+    faceit_w: float = 0.0
 
 
 class Rosters:
@@ -30,9 +31,10 @@ class Rosters:
         self.joined: dict[int, dict[int, float]] = collections.defaultdict(dict)
         self.left: dict[int, dict[int, float]] = collections.defaultdict(dict)
 
-    def observe_map(self, team: int, day: float, five: tuple) -> None:
-        self.recent[team].append((day, five))
-        self.days[team].append(day)
+    def observe_map(self, team: int, day: float, five: tuple, weight: float = 1.0) -> None:
+        self.recent[team].append((day, five, weight))
+        if weight == 1.0:
+            self.days[team].append(day)
 
     def maps_within(self, team: int, day: float, window: float) -> int:
         d = self.days.get(team, [])
@@ -58,8 +60,8 @@ class Rosters:
         freq: dict[int, float] = {}
         total = 0.0
         if q:
-            for k, (_, five) in enumerate(reversed(q)):
-                w = self.p.freq_decay ** k
+            for k, (_, five, mult) in enumerate(reversed(q)):
+                w = self.p.freq_decay ** k * mult
                 total += w
                 for pl in five:
                     freq[pl] = freq.get(pl, 0.0) + w
@@ -74,7 +76,7 @@ class Rosters:
         return freq
 
     def _last_played(self, team: int, player: int) -> float:
-        for day, five in reversed(self.recent[team]):
+        for day, five, _ in reversed(self.recent[team]):
             if player in five:
                 return day
         return float("-inf")

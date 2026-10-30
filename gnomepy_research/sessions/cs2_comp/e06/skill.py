@@ -24,7 +24,6 @@ from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
 from gnomepy_research.sessions.cs2_comp.e06.events import FACEIT, FIVE, N_DIVISIONS, MapEvent
 
 TIE_TOLERANCE = 1e-9
-HLTV_DEPTH = 60
 _X, _W = np.polynomial.hermite_e.hermegauss(21)
 _W = _W / _W.sum()
 _GRID = np.linspace(-8.0, 8.0, 3201)
@@ -43,12 +42,12 @@ class Params:
     rho: float = 0.017231894894383412
     chem_days: int = 180
     new_player_maps: int = 20
-    gamma_f: float = 1.14
-    rho_f: float = 0.105
-    tau_f: float = 0.0076
-    sigma0_f: float = 0.32
-    a_f: float = -0.53
-    div_offsets: tuple = (0.0, 0.144, 0.288, 0.504, 0.144, 0.0)
+    gamma_f: float = 1.12
+    rho_f: float = 0.088
+    tau_f: float = 0.0067
+    sigma0_f: float = 0.325
+    a_f: float = -0.55
+    div_offsets: tuple = (0.0, 0.145, 0.29, 0.5075, 0.145, 0.0)
     sigma_m: float = 0.37
     sigma_s: float = 0.15
     min_games_h: int = 15
@@ -59,12 +58,15 @@ class Params:
     pi_max: float = 0.97
     sub_gap: float = 0.1
     sigma_sub: float = 0.25
-    k_h: float = 0.5
-    r_h: float = 0.285
-    k_f: float = 0.58
-    r_f: float = 0.36
-    omega: float = 0.085
-    eta_f: float = 0.0
+    k_h: float = 0.55
+    r_h: float = 0.29
+    k_f: float = 0.72
+    r_f: float = 0.37
+    omega: float = 0.052
+    roster_decay: float = 0.85
+    roster_join: float = 0.8
+    roster_leave: float = 0.05
+    roster_faceit_w: float = 0.5
     q_scale: float = 1.2
     w_thin: float = 0.8
     w_rest: float = 0.45
@@ -211,9 +213,6 @@ class SkillFilter:
         n = ev.rounds_a + ev.rounds_b
         pi = 1 / (1 + math.exp(-max(-8.0, min(8.0, d))))
         inflation = 1 + (n - 1) * rho
-        if faceit and p.eta_f > 0:
-            hltv_depth = np.mean([min(self.games[pl] - self.faceit_games[pl], HLTV_DEPTH) / HLTV_DEPTH for pl in players])
-            inflation *= 1 + p.eta_f * hltv_depth
         grad, curv = (ev.rounds_a - n * pi) / inflation, n * pi * (1 - pi) / inflation
         cw = cov @ w
         denom = 1 + curv * s2

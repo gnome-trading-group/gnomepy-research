@@ -188,7 +188,9 @@ def faceit_events(data_dir: Path, proxy: Proxy | None = None) -> list[MapEvent]:
             scaled = {f: proxy(k, d, a, rounds) for f, (k, d, a) in raw.items()}
             dev_a = deviations(r.team_a_faceit_ids, scaled)
             dev_b = deviations(r.team_b_faceit_ids, scaled)
-        out.append(MapEvent(t, t / 86400.0, FACEIT, r.match_id, int(r.map_position_in_series or 0), -1, -1, pa, pb,
+        ta = int(r.team_a_id) if r.team_a_id == r.team_a_id else -1
+        tb = int(r.team_b_id) if r.team_b_id == r.team_b_id else -1
+        out.append(MapEvent(t, t / 86400.0, FACEIT, r.match_id, int(r.map_position_in_series or 0), ta, tb, pa, pb,
                             int(r.team_a_score), int(r.team_b_score), div[r.match_id], dev_a, dev_b))
     return out
 

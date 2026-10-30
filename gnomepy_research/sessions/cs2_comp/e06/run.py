@@ -35,7 +35,8 @@ def run_pass(events: list[MapEvent], rankings, moves: list, params: Params, quer
     two announced fives and is for diagnostics only."""
     filt = Combined(params, rankings, use_faceit, joint)
     base = Combined(params, rankings, False) if use_faceit else None
-    rosters = Rosters(roster_params)
+    rosters = Rosters(roster_params or RosterParams(params.roster_decay, params.roster_join, params.roster_leave,
+                                                    params.roster_faceit_w))
     ei, mi = 0, 0
     out = []
     for cutoff, wk in queries.groupby("week_cutoff", sort=True):
@@ -49,6 +50,10 @@ def run_pass(events: list[MapEvent], rankings, moves: list, params: Params, quer
             if e.source == HLTV:
                 rosters.observe_map(e.team_a, e.day, e.players_a)
                 rosters.observe_map(e.team_b, e.day, e.players_b)
+            elif params.roster_faceit_w > 0:
+                for team, five in ((e.team_a, e.players_a), (e.team_b, e.players_b)):
+                    if team > 0:
+                        rosters.observe_map(team, e.day, five, params.roster_faceit_w)
             ei += 1
         filt.advance(cs)
         if base is not None:
