@@ -80,7 +80,7 @@ def walk(maps: Maps, targets: pd.DataFrame, moves: Moves, ranks: RankPoints, par
             i += 1
         for r in week.itertuples():
             team_a, team_b = int(r.team_a_id), int(r.team_b_id)
-            lineups = [infer_lineup(t, recent, moves, cutoff, sp.stale_days) for t in (team_a, team_b)]
+            lineups = [infer_lineup(t, recent, moves, cutoff) for t in (team_a, team_b)]
             fe = [float(ranks.lookup(np.array([t]), np.array([cutoff.to_datetime64()]))[0]) for t in (team_a, team_b)]
             t = int(r.match_time.to_datetime64().astype("datetime64[ns]").astype(np.int64))
             args = (table, sp, t, lineups[0][0], lineups[0][1], fe[0], lineups[1][0], lineups[1][1], fe[1])

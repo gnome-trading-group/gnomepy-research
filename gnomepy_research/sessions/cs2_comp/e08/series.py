@@ -12,7 +12,6 @@ independent, so P(series) = p^2 (3 - 2p) integrated over the shared part.
 from __future__ import annotations
 
 import collections
-import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -37,8 +36,6 @@ class SeriesParams:
     sigma_m: float = 0.30
     sigma_s: float = 0.10
     sigma_lu: float = 0.5
-    stale_days: float = 1e9
-    lineup_shift: float = 0.0
     slope: float = 1.0
 
 
@@ -73,8 +70,8 @@ class Moves:
         return [p for d, p in sorted(self.joining.get(team, ()), reverse=True) if after < d < before]
 
 
-def infer_lineup(team: int, recent: dict[int, collections.deque], moves: Moves, cutoff: pd.Timestamp,
-                 stale_days: float = 1e9) -> tuple[list[int], list[float]]:
+def infer_lineup(team: int, recent: dict[int, collections.deque], moves: Moves, cutoff: pd.Timestamp
+                 ) -> tuple[list[int], list[float]]:
     """The five and, per player, the probability that he plays (1.0 for a regular, lower for a guess)."""
     hist = recent.get(team)
     if not hist:
@@ -97,8 +94,7 @@ def infer_lineup(team: int, recent: dict[int, collections.deque], moves: Moves, 
         placeholder = PLACEHOLDER_BASE - len(five)
         five.append(placeholder)
         prob[placeholder] = 0.0
-    fresh = math.exp(-max((cutoff - last_day).days, 0) / stale_days)
-    return five, [prob[p] * fresh for p in five]
+    return five, [prob[p] for p in five]
 
 
 def price_series(f: SkillFilter, table: MapTable, sp: SeriesParams, t: int, five_a: list[int], prob_a: list[float],
@@ -106,8 +102,6 @@ def price_series(f: SkillFilter, table: MapTable, sp: SeriesParams, t: int, five
     """(q, mean gap, variance of the gap) for team A against team B, as of time t."""
     mu_a, ca = f.block(five_a, [feat_a] * FIVE, HLTV, 0, t)
     mu_b, cb = f.block(five_b, [feat_b] * FIVE, HLTV, 0, t)
-    mu_a = mu_a - sp.lineup_shift * (1.0 - np.array(prob_a))
-    mu_b = mu_b - sp.lineup_shift * (1.0 - np.array(prob_b))
     wa, wb = f.weights(mu_a), f.weights(mu_b)
     mean = float(wa @ mu_a - wb @ mu_b)
     var = float(wa @ ca @ wa + wb @ cb @ wb)
