@@ -63,7 +63,7 @@ def logit(p):
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", required=True)
+    ap.add_argument("--data", default="/work/in/comp")
     args = ap.parse_args()
     targets = dev_targets(args.data)
     base = Params()
