@@ -2,7 +2,7 @@
 Series prices for the competition targets from the credibility rating (model.py), one fit per week_cutoff.
 
     python -m gnomepy_research.sessions.cs2_comp.e15.predict --data <bundle> --targets <targets parquet> --out <parquet>
-        [--no-faceit] [--weeks 2026-04-06,2026-04-13]
+        [--no-faceit] [--weeks 2026-04-06,2026-04-13 | --cutoff 2026-04-06]
 
 Each week is fitted on the maps known before its Monday cutoff only, so a run on a bundle cut at that cutoff gives the
 same prices. --no-faceit drops every FACEIT map, which also removes the ESEA division classes and FACEIT lineups.
@@ -66,10 +66,12 @@ def main() -> None:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--no-faceit", dest="faceit", action="store_false")
     ap.add_argument("--weeks", help="comma-separated week cutoffs (YYYY-MM-DD) to price; default all")
+    ap.add_argument("--cutoff", help="one week cutoff (YYYY-MM-DD): price only that week's targets, from data before it")
     ap.add_argument("--config", help="JSON overrides of Config fields")
     a = ap.parse_args()
     cfg = dataclasses.replace(Config(), **json.loads(a.config)) if a.config else Config()
-    preds = run(a.data, a.targets, a.faceit, a.weeks.split(",") if a.weeks else None, cfg)
+    weeks = [a.cutoff] if a.cutoff else (a.weeks.split(",") if a.weeks else None)
+    preds = run(a.data, a.targets, a.faceit, weeks, cfg)
     out = output_path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     preds.to_parquet(out, index=False)
