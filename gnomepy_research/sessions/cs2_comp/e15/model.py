@@ -52,7 +52,7 @@ class Config:
     parameter_risk: bool = True
     # Second measurement per source: each player's map performance relative to his own five's mean, which splits a
     # five's strength among its players (rounds only see the five's mean). Weight is its credibility, like a map's.
-    rating_weight: float = 0.0
+    rating_weight: float = 0.5
     # FACEIT per-player stats in the rating channel: off because they make each fit ~10x slower.
     faceit_stats: bool = False
     # Home-region offsets (Europe fixed at zero): regional scenes meet rarely, so their levels are set by the few
