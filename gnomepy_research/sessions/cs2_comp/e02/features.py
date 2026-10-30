@@ -53,7 +53,7 @@ def series_table(history: pd.DataFrame) -> pd.DataFrame:
     h = history.loc[~showmatch_mask(history)]
     maps = h.groupby("match_id").size().rename("maps")
     a_maps = h.groupby("match_id").team_a_won.sum().rename("a_maps")
-    head = h.sort_values("map_position_in_series").drop_duplicates("match_id").set_index("match_id")
+    head = h.sort_values(["match_id", "map_position_in_series"], kind="stable").drop_duplicates("match_id").set_index("match_id")
     s = head[["match_time", "team_a_id", "team_b_id", "bo_type", "is_lan", "event_tier",
               "team_a_lineup_ids", "team_b_lineup_ids"]].join([maps, a_maps])
     s["b_maps"] = s.maps - s.a_maps
@@ -63,7 +63,7 @@ def series_table(history: pd.DataFrame) -> pd.DataFrame:
     s["week"] = monday(s.match_time)
     s["lineup_a"] = s.team_a_lineup_ids.map(_lineup)
     s["lineup_b"] = s.team_b_lineup_ids.map(_lineup)
-    return s.drop(columns=["team_a_lineup_ids", "team_b_lineup_ids"])
+    return s.drop(columns=["team_a_lineup_ids", "team_b_lineup_ids"]).sort_values(["match_time", "match_id"], kind="stable")
 
 
 class PlayerLog:
@@ -277,7 +277,7 @@ def build_queries(data_dir: str, cut: pd.Timestamp, targets: pd.DataFrame | None
     state = Ratings(ranks, hltv_rating, faceit_log, faceit_results, hltv_to_faceit)
 
     target_weeks = {} if targets is None else {w: g for w, g in targets.groupby("week_cutoff")}
-    series_weeks = {w: g.sort_values("match_time") for w, g in series.groupby("week")}
+    series_weeks = {w: g.sort_values(["match_time", "match_id"], kind="stable") for w, g in series.groupby("week")}
     meta_rows, ab_rows, ba_rows = [], [], []
 
     for week in sorted(set(series_weeks) | set(target_weeks)):
