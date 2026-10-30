@@ -43,6 +43,7 @@ class MapRows:
     team_a: np.ndarray      # (N,) HLTV team id or -1
     team_b: np.ndarray
     map_name: np.ndarray    # (N,) object
+    standin: np.ndarray     # (N,) (announced stand-ins in A - in B) / 5; FACEIT rows have no announcement, so 0
     # FACEIT id -> unified id, built once so the synthetic ids of unlinked players agree across tables.
     faceit_lookup: dict = None
 
@@ -119,9 +120,10 @@ def load_maps(data_dir, cutoff: pd.Timestamp, use_faceit: bool, rank_strength: R
     keep &= oka & okb
     day = pd.to_datetime(h.match_date).to_numpy()
     group = np.array([hltv_rank_group(rank_strength, int(t), d) for t, d in zip(h.team_a_id, h.match_date)])
+    standin = standin_counts(data_dir, cutoff, h)
     parts = [(la[keep], lb[keep], ra[keep], n[keep], np.full(keep.sum(), HLTV), day[keep], group[keep],
               h.match_id.to_numpy(object)[keep], h.team_a_id.to_numpy(int)[keep], h.team_b_id.to_numpy(int)[keep],
-              h.map_name.to_numpy(object)[keep])]
+              h.map_name.to_numpy(object)[keep], standin[keep])]
     if use_faceit:
         f = load(data_dir, "faceit/faceit_match_history", cutoff,
                  ["match_id", "match_date", "event_name", "team_a_id", "team_b_id", "team_a_faceit_ids", "team_b_faceit_ids",
@@ -142,10 +144,20 @@ def load_maps(data_dir, cutoff: pd.Timestamp, use_faceit: bool, rank_strength: R
         group = np.array([faceit_group(e) for e in f.event_name])
         parts.append((la[keep], lb[keep], ra[keep], n[keep], np.full(keep.sum(), FACEIT), day[keep], group[keep],
                       f.match_id.to_numpy(object)[keep], f.team_a_id.fillna(-1).to_numpy(int)[keep],
-                      f.team_b_id.fillna(-1).to_numpy(int)[keep], f.map_name.to_numpy(object)[keep]))
-    cols = [np.concatenate([p[i] for p in parts]) for i in range(11)]
+                      f.team_b_id.fillna(-1).to_numpy(int)[keep], f.map_name.to_numpy(object)[keep],
+                      np.zeros(keep.sum())))
+    cols = [np.concatenate([p[i] for p in parts]) for i in range(12)]
     order = np.lexsort((cols[7].astype(str), cols[5]))
     return MapRows(*[c[order] for c in cols], faceit_lookup=lookup)
+
+
+def standin_counts(data_dir, cutoff: pd.Timestamp, h: pd.DataFrame) -> np.ndarray:
+    """(stand-ins announced for team A - for team B) / 5 per HLTV map row, from the announced lineups."""
+    lu = load(data_dir, "hltv/cs2_match_lineups", cutoff, ["match_id", "match_date", "team_id", "is_standin"])
+    n = lu.groupby(["match_id", "team_id"]).is_standin.sum()
+    key_a = pd.MultiIndex.from_arrays([h.match_id, h.team_a_id])
+    key_b = pd.MultiIndex.from_arrays([h.match_id, h.team_b_id])
+    return (n.reindex(key_a).fillna(0).to_numpy(float) - n.reindex(key_b).fillna(0).to_numpy(float)) / LINEUP_SIZE
 
 
 def _rating_rows(stats: pd.DataFrame, maps: MapRows, source: int) -> RatingRows:

@@ -30,7 +30,8 @@ def week_series(data_dir: str, first: str, last: str) -> pd.DataFrame:
     end = pd.Timestamp(last) + pd.Timedelta(days=7)
     h = load(data_dir, "hltv/cs2_match_history", end,
              ["match_id", "match_date", "match_time", "event_name", "format", "team_a_id", "team_b_id", "team_a_won", "bo_type",
-              "team_a_rank", "team_b_rank", "is_lan", "team_a_player_ids", "team_b_player_ids"])
+              "team_a_rank", "team_b_rank", "is_lan", "team_a_player_ids", "team_b_player_ids", "team_a_lineup_ids",
+              "team_b_lineup_ids"])
     h = h[~showmatch_mask(h) & (h.bo_type == 3)]
     h["t"] = pd.to_datetime(h.match_time).dt.tz_convert(None).fillna(pd.to_datetime(h.match_date))
     h = h[h.t >= pd.Timestamp(first)]
@@ -39,10 +40,20 @@ def week_series(data_dir: str, first: str, last: str) -> pd.DataFrame:
     for side in ("a", "b"):
         h[f"linked_{side}"] = [sum(int(p) in linked for p in ids) if isinstance(ids, (list, np.ndarray)) else 0
                                for ids in h[f"team_{side}_player_ids"]]
+    # The announced fives and stand-ins, as the round-2 targets carry them (pre-match information).
+    lu = load(data_dir, "hltv/cs2_match_lineups", end, ["match_id", "match_date", "team_id", "player_id", "is_standin"])
+    standins = lu[lu.is_standin].groupby(["match_id", "team_id"]).player_id.agg(list)
+    for side in ("a", "b"):
+        key = pd.MultiIndex.from_arrays([h.match_id, h[f"team_{side}_id"]])
+        h[f"team_{side}_standin_ids"] = pd.Series([v if isinstance(v, list) else [] for v in standins.reindex(key)],
+                                                  index=h.index, dtype=object)
     s = h.groupby("match_id").agg(t=("t", "first"), team_a_id=("team_a_id", "first"), team_b_id=("team_b_id", "first"),
                                   wins=("team_a_won", "sum"), maps=("team_a_won", "size"), rank_a=("team_a_rank", "first"),
                                   rank_b=("team_b_rank", "first"), is_lan=("is_lan", "first"),
-                                  linked_a=("linked_a", "first"), linked_b=("linked_b", "first")).reset_index()
+                                  linked_a=("linked_a", "first"), linked_b=("linked_b", "first"),
+                                  team_a_lineup_ids=("team_a_lineup_ids", "first"), team_b_lineup_ids=("team_b_lineup_ids", "first"),
+                                  team_a_standin_ids=("team_a_standin_ids", "first"),
+                                  team_b_standin_ids=("team_b_standin_ids", "first")).reset_index()
     s["y"] = (s.wins * 2 > s.maps).astype(int)
     s["week_cutoff"] = s.t.dt.normalize() - pd.to_timedelta(s.t.dt.weekday, unit="D")
     best = s[["rank_a", "rank_b"]].min(axis=1).fillna(999)
@@ -71,12 +82,13 @@ def main() -> None:
     ap.add_argument("--first", default="2026-01-05")
     ap.add_argument("--last", default="2026-03-23")
     ap.add_argument("--no-faceit", dest="faceit", action="store_false")
+    ap.add_argument("--latest-fives", dest="announced", action="store_false")
     ap.add_argument("--out")
     ap.add_argument("--name", default="diag")
     add_config_args(ap)
     a = ap.parse_args()
     s = week_series(a.data, a.first, a.last)
-    pred = run(a.data, s, config_from(a), a.faceit)
+    pred = run(a.data, s, config_from(a), a.faceit, announced=a.announced)
     d = s.merge(pred, on="match_id")
     y = d.y.to_numpy(float)
     res = {"name": a.name, "faceit": a.faceit, "config": dataclasses.asdict(config_from(a)), "n": len(d),

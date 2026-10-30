@@ -1,10 +1,13 @@
 """
 One player-skill graph measured by two sources, fitted by MAP each week.
 
-    rounds_a[m] ~ Binomial(n[m], sigmoid(s[src] * (mean theta[A] - mean theta[B])))
+    rounds_a[m] ~ Binomial(n[m], sigmoid(s[src] * (mean theta[A] - mean theta[B]) + beta * standin[m]))
     dev[r] ~ N(gamma[src] * (theta[player] - mean theta[own five]) + style[player], sigma_r[src]^2)
     theta[p] ~ N(mu[group of p's first map], sigma0^2);  mu[g] ~ N(0, sigma_group^2);  log gamma[src] ~ N(0, 1)
-    style[p] ~ N(0, sigma_style^2)
+    style[p] ~ N(0, sigma_style^2);  beta ~ N(0, sigma_standin^2)
+
+standin[m] is the announced stand-in count difference over five: a five playing with a stand-in is less than the
+sum of its players' skills, and the announced lineups say in advance when that happens.
 
 Each map's log likelihood is weighted by 0.5^(age / halflife) (skill drifts, so old maps say less) and by a
 per-source weight (FACEIT rounds are noisier than their binomial count suggests). s[FACEIT] lets a round gap on
@@ -56,6 +59,8 @@ class Config:
     sigma_style: float = 0.2
     # Multiplies the logit of the raw bo3 price; the entry is calibrated by construction.
     calibration: float = 1.0
+    standin: bool = True
+    sigma_standin: float = 1.0
     max_iter: int = 1500
 
 
@@ -67,6 +72,7 @@ class Fit:
     var: np.ndarray          # (P,) Laplace diagonal
     group_mu: np.ndarray     # (G,)
     gamma: np.ndarray        # (2,) by source
+    beta_standin: float
     iterations: int
     n_maps: np.ndarray       # (P,) weighted map count per player
     cutoff: pd.Timestamp
@@ -88,11 +94,12 @@ class Fit:
                 var += self.var[i]
         return mean / len(players), var / len(players) ** 2
 
-    def price(self, lineup_a, group_a: int, lineup_b, group_b: int) -> float:
+    def price(self, lineup_a, group_a: int, lineup_b, group_b: int, standins_a: int = 0, standins_b: int = 0) -> float:
         """P(team A wins the bo3) with the lineup uncertainty and series noise integrated out."""
         ma, va = self.lineup(lineup_a, group_a)
         mb, vb = self.lineup(lineup_b, group_b)
-        d = (ma - mb) + np.sqrt(va + vb + self.cfg.sigma_s ** 2) * _OUTER_X
+        gap = (ma - mb) + self.beta_standin * (standins_a - standins_b) / LINEUP_SIZE
+        d = gap + np.sqrt(va + vb + self.cfg.sigma_s ** 2) * _OUTER_X
         p = np.interp(d, _GRID, self._map_table)
         q = float((p * p * (3 - 2 * p)) @ _OUTER_W)
         q = np.clip(q, 1e-4, 1 - 1e-4)
@@ -145,15 +152,16 @@ def fit(maps: MapRows, cutoff: pd.Timestamp, cfg: Config, ratings: RatingRows | 
     G = scipy.sparse.csr_matrix((np.ones(n_p), (player_group, np.arange(n_p))), shape=(n_g, n_p))
 
     s = np.where(is_f > 0, cfg.scale_faceit, 1.0)
+    st = m.standin if cfg.standin else np.zeros(n_maps)
 
     r_player = np.searchsorted(ids, rt.player)
 
     def unpack(x):
-        return x[:n_p], x[n_p:n_p + n_g], x[n_p + n_g:n_p + n_g + 2], x[n_p + n_g + 2:]
+        return x[:n_p], x[n_p:n_p + n_g], x[n_p + n_g:n_p + n_g + 2], x[n_p + n_g + 2:2 * n_p + n_g + 2], x[-1]
 
     def objective(x):
-        theta, mu, log_gamma, style = unpack(x)
-        d = s * (M @ theta)
+        theta, mu, log_gamma, style, beta = unpack(x)
+        d = s * (M @ theta) + beta * st
         pi = 1 / (1 + np.exp(-d))
         ll = w * (r * np.logaddexp(0, -d) + (n - r) * np.logaddexp(0, d))
         resid = theta - mu[player_group]
@@ -162,25 +170,26 @@ def fit(maps: MapRows, cutoff: pd.Timestamp, cfg: Config, ratings: RatingRows | 
         resid_r = rt.dev - gamma * own - style[r_player]
         f = ll.sum() + 0.5 * (resid ** 2).sum() / cfg.sigma0 ** 2 + 0.5 * (mu ** 2).sum() / cfg.sigma_group ** 2 \
             + 0.5 * (w_r * inv_var_r * resid_r ** 2).sum() + 0.5 * (log_gamma ** 2).sum() \
-            + 0.5 * (style ** 2).sum() / cfg.sigma_style ** 2
+            + 0.5 * (style ** 2).sum() / cfg.sigma_style ** 2 + 0.5 * beta ** 2 / cfg.sigma_standin ** 2
         g_d = -w * (r - n * pi)
         g_r = -w_r * inv_var_r * resid_r
         g_theta = Mt @ (s * g_d) + resid / cfg.sigma0 ** 2 + Rt @ (gamma * g_r)
         g_mu = -(G @ resid) / cfg.sigma0 ** 2 + mu / cfg.sigma_group ** 2
         g_lg = np.bincount(r_src, weights=g_r * own * gamma, minlength=2) + log_gamma
         g_style = np.bincount(r_player, weights=g_r, minlength=n_p) + style / cfg.sigma_style ** 2
-        return f, np.concatenate([g_theta, g_mu, g_lg, g_style])
+        g_beta = (g_d * st).sum() + beta / cfg.sigma_standin ** 2
+        return f, np.concatenate([g_theta, g_mu, g_lg, g_style, [g_beta]])
 
-    x0 = np.zeros(2 * n_p + n_g + 2)
+    x0 = np.zeros(2 * n_p + n_g + 3)
     # L-BFGS-B's level-1 BLAS calls on a 130k-vector spawn a thread per host core; inside a 1-vCPU Batch
     # container that oversubscription turned a 10 s fit into 20 minutes.
     with threadpool_limits(limits=1):
         res = scipy.optimize.minimize(objective, x0, jac=True, method="L-BFGS-B",
                                       options={"maxiter": cfg.max_iter, "maxcor": 20, "ftol": 1e-10, "gtol": 1e-5})
-    theta, mu, log_gamma, style = unpack(res.x)
-    pi = 1 / (1 + np.exp(-(s * (M @ theta))))
+    theta, mu, log_gamma, style, beta = unpack(res.x)
+    pi = 1 / (1 + np.exp(-(s * (M @ theta) + beta * st)))
     curv = w * n * pi * (1 - pi) * s ** 2
     gamma = np.exp(log_gamma)
     precision = M2t @ curv + R2t @ (w_r * inv_var_r * gamma[r_src] ** 2) + 1 / cfg.sigma0 ** 2
-    return Fit(cfg=cfg, player_ids=ids, theta=theta, var=1 / precision, group_mu=mu, gamma=gamma, iterations=int(res.nit),
-               n_maps=np.asarray((Mt != 0) @ w).ravel(), cutoff=cutoff)
+    return Fit(cfg=cfg, player_ids=ids, theta=theta, var=1 / precision, group_mu=mu, gamma=gamma, beta_standin=float(beta),
+               iterations=int(res.nit), n_maps=np.asarray((Mt != 0) @ w).ravel(), cutoff=cutoff)

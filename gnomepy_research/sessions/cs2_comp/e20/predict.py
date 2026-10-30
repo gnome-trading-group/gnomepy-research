@@ -4,7 +4,9 @@ Competition predict module for e20.
     python -m gnomepy_research.sessions.cs2_comp.e20.predict --data <bundle> --targets <parquet> --out <parquet> [--no-faceit] [--weeks ...]
 
 One MAP fit per distinct week_cutoff among the targets, on maps dated before it; every target gets a price from
-its teams' latest fives, or the rank-group prior when a team has no map at all.
+its announced fives (team_x_lineup_ids, with team_x_standin_ids feeding the stand-in effect), falling back to the
+team's latest five before the cutoff, or the rank-group prior when a team has no map at all. --latest-fives ignores
+the announcement and prices every target from the latest five, as round 1 had to.
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.bayes_series import RankStrength
 from gnomepy_research.sessions.cs2_comp.bundle import load
-from gnomepy_research.sessions.cs2_comp.e20.data import hltv_rank_group, latest_lineups, load_maps, load_ratings
+from gnomepy_research.sessions.cs2_comp.e20.data import LINEUP_SIZE, hltv_rank_group, latest_lineups, load_maps, load_ratings
 from gnomepy_research.sessions.cs2_comp.e20.model import Config, Fit, fit
 
 NO_LINEUP = [0] * 5
@@ -35,17 +37,34 @@ def fit_week(data_dir: str, cutoff: pd.Timestamp, cfg: Config, use_faceit: bool)
     return model, latest_lineups(maps), ranks
 
 
-def price_targets(model: Fit, lineups: dict, ranks: RankStrength, targets: pd.DataFrame) -> np.ndarray:
+def _announced(value) -> list[int] | None:
+    if value is None or isinstance(value, float) or len(value) != LINEUP_SIZE:
+        return None
+    ids = [int(x) for x in value]
+    return ids if len(set(ids)) == LINEUP_SIZE else None
+
+
+def _standins(value) -> int:
+    return 0 if value is None or isinstance(value, float) else len(value)
+
+
+def price_targets(model: Fit, lineups: dict, ranks: RankStrength, targets: pd.DataFrame, announced: bool = True) -> np.ndarray:
     out = np.empty(len(targets))
     for i, r in enumerate(targets.itertuples()):
         ga, gb = hltv_rank_group(ranks, int(r.team_a_id), model.cutoff), hltv_rank_group(ranks, int(r.team_b_id), model.cutoff)
         la = lineups[int(r.team_a_id)][0] if int(r.team_a_id) in lineups else NO_LINEUP
         lb = lineups[int(r.team_b_id)][0] if int(r.team_b_id) in lineups else NO_LINEUP
-        out[i] = model.price(la, ga, lb, gb)
+        sa = sb = 0
+        if announced:
+            la = _announced(getattr(r, "team_a_lineup_ids", None)) or la
+            lb = _announced(getattr(r, "team_b_lineup_ids", None)) or lb
+            sa, sb = _standins(getattr(r, "team_a_standin_ids", None)), _standins(getattr(r, "team_b_standin_ids", None))
+        out[i] = model.price(la, ga, lb, gb, sa, sb)
     return out
 
 
-def run(data_dir: str, targets: pd.DataFrame, cfg: Config, use_faceit: bool, weeks: list[str] | None = None) -> pd.DataFrame:
+def run(data_dir: str, targets: pd.DataFrame, cfg: Config, use_faceit: bool, weeks: list[str] | None = None,
+        announced: bool = True) -> pd.DataFrame:
     t = targets.assign(week_cutoff=pd.to_datetime(targets.week_cutoff))
     cutoffs = sorted(t.week_cutoff.unique())
     if weeks:
@@ -57,10 +76,11 @@ def run(data_dir: str, targets: pd.DataFrame, cfg: Config, use_faceit: bool, wee
         c = pd.Timestamp(c)
         model, lineups, ranks = fit_week(data_dir, c, cfg, use_faceit)
         wk = t[t.week_cutoff == c]
-        q = price_targets(model, lineups, ranks, wk)
+        q = price_targets(model, lineups, ranks, wk, announced)
         frames.append(pd.DataFrame({"match_id": wk.match_id.to_numpy(), "q": q, "fit_cutoff": c}))
         print(f"{c:%Y-%m-%d} {time.time() - t0:.0f}s players {len(model.player_ids)} series {len(wk)} "
-              f"iter {model.iterations} gamma {np.round(model.gamma, 3).tolist()} groups {np.round(model.group_mu, 3).tolist()}", flush=True)
+              f"iter {model.iterations} gamma {np.round(model.gamma, 3).tolist()} beta_standin {model.beta_standin:.3f} "
+              f"groups {np.round(model.group_mu, 3).tolist()}", flush=True)
     return pd.concat(frames, ignore_index=True)
 
 
@@ -84,11 +104,12 @@ def main() -> None:
     ap.add_argument("--targets", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--no-faceit", dest="faceit", action="store_false")
+    ap.add_argument("--latest-fives", dest="announced", action="store_false")
     ap.add_argument("--weeks", nargs="*")
     add_config_args(ap)
     a = ap.parse_args()
     targets = pd.read_parquet(a.targets)
-    pred = run(a.data, targets, config_from(a), a.faceit, a.weeks)
+    pred = run(a.data, targets, config_from(a), a.faceit, a.weeks, a.announced)
     # A relative --out lands in the Batch task's upload directory when there is one.
     out = Path(os.environ.get("OUTPUT_DIR", ""), a.out)
     pred.to_parquet(out, index=False)
