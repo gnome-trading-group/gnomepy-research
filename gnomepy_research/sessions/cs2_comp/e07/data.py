@@ -34,6 +34,8 @@ class Streams:
     dev_b: np.ndarray
     team_a: np.ndarray     # (M,) HLTV team id or -1
     team_b: np.ndarray
+    rat_a: np.ndarray      # (M, 5) the player's own rating on the map (HLTV scale); NaN where unknown
+    rat_b: np.ndarray
     level_a: np.ndarray    # (M, 5) FACEIT skill level of each player on the map; NaN where unknown
     level_b: np.ndarray
     n_players: int
@@ -95,15 +97,16 @@ def _lineup_rows(lineups: list, n: int) -> np.ndarray:
     return np.array(lineups, dtype=object).reshape(n, LINEUP)
 
 
-def _devs(rows: pd.DataFrame, n: int) -> np.ndarray:
-    """rows: one per (map, side, slot) in order with a 'rating' column; deviations from the team mean, NaN unless all five known."""
+def _devs(rows: pd.DataFrame, n: int) -> tuple[np.ndarray, np.ndarray]:
+    """rows: one per (map, side, slot) in order with a 'rating' column. Returns the deviations from the team mean (NaN
+    unless all five are known) and the raw ratings."""
     r = rows.rating.to_numpy(float).reshape(n * 2, LINEUP)
     mean = r.mean(axis=1, keepdims=True)
     dev = np.where(np.isfinite(r).all(axis=1, keepdims=True), r - mean, np.nan)
-    return dev.reshape(n, 2, LINEUP)
+    return dev.reshape(n, 2, LINEUP), r.reshape(n, 2, LINEUP)
 
 
-def _hltv_ratings(data_dir, before, maps: pd.DataFrame) -> np.ndarray:
+def _hltv_ratings(data_dir, before, maps: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     s = bundle.load(data_dir, "hltv/cs2_player_map_stats", before, ["match_id", "match_date", "map_name", "player_id", "side", "rating"])
     s = s[(s.side == "all") & s.rating.notna()][["match_id", "map_name", "player_id", "rating"]]
     s = s.drop_duplicates(["match_id", "map_name", "player_id"])
@@ -118,7 +121,7 @@ def _hltv_ratings(data_dir, before, maps: pd.DataFrame) -> np.ndarray:
     return _devs(rows, n)
 
 
-def _faceit_ratings(data_dir, before, maps: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+def _faceit_ratings(data_dir, before, maps: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     s = bundle.load(data_dir, "faceit/faceit_player_map_stats", before, profile.STAT_COLUMNS)
     rounds = (maps.team_a_score + maps.team_b_score).to_numpy(float)
     rmap = pd.DataFrame({"match_id": maps.match_id.to_numpy(), "map_name": maps.map_name.to_numpy(), "rounds": rounds})
@@ -133,7 +136,8 @@ def _faceit_ratings(data_dir, before, maps: pd.DataFrame) -> tuple[np.ndarray, n
                          "map_name": np.repeat(maps.map_name.to_numpy(), 2 * LINEUP), "faceit_id": ids})
     rows = rows.merge(s, on=["match_id", "map_name", "faceit_id"], how="left", sort=False)
     lv = rows[["match_id", "faceit_id"]].merge(level, on=["match_id", "faceit_id"], how="left", sort=False)
-    return _devs(rows, n), lv.skill_level.to_numpy(float).reshape(n, 2, LINEUP)
+    dev, raw = _devs(rows, n)
+    return dev, raw, lv.skill_level.to_numpy(float).reshape(n, 2, LINEUP)
 
 
 def load_levels(data_dir, before) -> pd.DataFrame:
@@ -150,8 +154,9 @@ def build(data_dir, before: pd.Timestamp, use_faceit: bool) -> Streams:
     pieces["ra"], pieces["rb"] = [ra], [rb]
     keys_a = [list(map(int, x)) for x in h.team_a_player_ids]
     keys_b = [list(map(int, x)) for x in h.team_b_player_ids]
-    dev = _hltv_ratings(data_dir, before, h)
+    dev, raw = _hltv_ratings(data_dir, before, h)
     devs = [(dev[:, 0], dev[:, 1])]
+    raws = [(raw[:, 0], raw[:, 1])]
     levels = [(np.full((nh, LINEUP), np.nan), np.full((nh, LINEUP), np.nan))]
     won = (h.team_a_score > h.team_b_score).astype(int)
     series = h.assign(won=won).groupby("match_id", sort=False).agg(
@@ -175,8 +180,9 @@ def build(data_dir, before: pd.Timestamp, use_faceit: bool) -> Streams:
         pieces["team_b"].append(f.team_b_id.fillna(-1).to_numpy(np.int64))
         pieces["ra"].append(fra)
         pieces["rb"].append(frb)
-        fdev, flevel = _faceit_ratings(data_dir, before, f)
+        fdev, fraw, flevel = _faceit_ratings(data_dir, before, f)
         devs.append((fdev[:, 0], fdev[:, 1]))
+        raws.append((fraw[:, 0], fraw[:, 1]))
         levels.append((flevel[:, 0], flevel[:, 1]))
     t = np.concatenate(pieces["t"])
     order = np.argsort(t, kind="stable")
@@ -189,6 +195,7 @@ def build(data_dir, before: pd.Timestamp, use_faceit: bool) -> Streams:
         t=t[order], src=np.concatenate(pieces["src"])[order], a=a, b=b,
         rounds_a=np.concatenate(pieces["ra"])[order], rounds_b=np.concatenate(pieces["rb"])[order],
         dev_a=np.concatenate([d[0] for d in devs])[order], dev_b=np.concatenate([d[1] for d in devs])[order],
+        rat_a=np.concatenate([x[0] for x in raws])[order], rat_b=np.concatenate([x[1] for x in raws])[order],
         team_a=np.concatenate(pieces["team_a"])[order], team_b=np.concatenate(pieces["team_b"])[order],
         level_a=np.concatenate([x[0] for x in levels])[order], level_b=np.concatenate([x[1] for x in levels])[order],
         n_players=len(index), index=index, series=series)

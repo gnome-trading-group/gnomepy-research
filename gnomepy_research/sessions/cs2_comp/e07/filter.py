@@ -53,6 +53,8 @@ class FilterConfig:
     use_hltv: bool = True
     selection_var: float = 1.0
     elo_k: float = 0.08
+    rating_decay: float = 0.95
+    rating_shrink: float = 5.0
     recency: float = 0.9
     rank_prior_faceit: bool = True
 
@@ -77,6 +79,8 @@ class Filter:
         self.team_times: dict[int, list[float]] = {}
         self.team_fives: dict[int, list[np.ndarray]] = {}
         self.elo: dict[int, float] = {}
+        self.rat_mean = np.zeros(n)
+        self.rat_weight = np.zeros(n)
         self.faceit_fives: dict[int, list[tuple[float, np.ndarray]]] = {}
         self.rank_points = rank_points
         self.last_five: dict[int, tuple[np.ndarray, float]] = {}
@@ -156,6 +160,12 @@ class Filter:
             ea, eb = self.elo.get(ta_id, 0.0), self.elo.get(tb_id, 0.0)
             step = c.elo_k * ((1.0 if ra > rb else 0.0) - 1.0 / (1.0 + math.exp(eb - ea)))
             self.elo[ta_id], self.elo[tb_id] = ea + step, eb - step
+        for ids, raw in ((ia, s.rat_a[m]), (ib, s.rat_b[m])):
+            ok = np.isfinite(raw)
+            if ok.any():
+                w_old = self.rat_weight[ids[ok]] * c.rating_decay
+                self.rat_mean[ids[ok]] = (self.rat_mean[ids[ok]] * w_old + raw[ok]) / (w_old + 1.0)
+                self.rat_weight[ids[ok]] = w_old + 1.0
         gamma = c.gamma_faceit if src == FACEIT else c.gamma_hltv
         if gamma > 0.0:
             sig = c.sigma_r_faceit if src == FACEIT else c.sigma_r_hltv
@@ -297,6 +307,13 @@ class Filter:
             if times:
                 total += len(times) - bisect.bisect_left(times, t - days)
         return total / LINEUP
+
+    def rating_level(self, ids: np.ndarray) -> float:
+        """Mean over the five of the recent rating above 1.0, shrunk toward zero for players with few maps."""
+        if not len(ids):
+            return 0.0
+        w = self.rat_weight[ids]
+        return float(((self.rat_mean[ids] - 1.0) * w / (w + self.cfg.rating_shrink)).sum() / LINEUP)
 
     def faceit_coverage(self, team: int) -> int:
         known = self.last_five.get(team)

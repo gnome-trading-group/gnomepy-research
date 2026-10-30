@@ -17,7 +17,7 @@ def ll(p: np.ndarray, y: np.ndarray) -> np.ndarray:
 def designs(d: pd.DataFrame, zcol: str = "q_soft") -> dict[str, np.ndarray]:
     """Candidate stackers by letter; the HLTV filter's price comes from `zcol`."""
     d = d.assign(q_soft=d[zcol])
-    sets = {"A": ["z_hltv"], "RK": ["z_hltv", "rank_points"], "E": ["z_hltv", "elo_team"]}
+    sets = {"A": ["z_hltv"], "RK": ["z_hltv", "rank_points"], "E": ["z_hltv", "elo_team"], "RH": ["z_hltv", "rating_hltv"]}
     if "f_s_a" in d:
         sets.update({"B": ["z_hltv", "faceit_skill"], "K": ["z_hltv", "faceit_skill", "faceit_skill_thin"],
                      "R": ["z_hltv", "faceit_skill_unsure"], "S": ["z_hltv", "faceit_skill", "faceit_skill_unsure"],
@@ -26,6 +26,8 @@ def designs(d: pd.DataFrame, zcol: str = "q_soft") -> dict[str, np.ndarray]:
                      "P": ["z_hltv", "faceit_skill", "five_maps"], "L": ["z_hltv", "faceit_skill", "faceit_skill_thin", "z_thin"],
                      "U": ["z_hltv", "faceit_skill", "faceit_skill_unsure", "rank_points"],
                      "V": ["z_hltv", "faceit_skill", "elo_team", "elo_team_faceit"], "W": ["z_hltv", "faceit_skill", "elo_team"],
+                     "RF": ["z_hltv", "faceit_skill", "rating_faceit"], "RR": ["z_hltv", "faceit_skill", "rating_hltv", "rating_faceit"],
+                     "RE": ["z_hltv", "faceit_skill", "elo_team", "rating_hltv", "rating_faceit"],
                      "X": ["z_hltv", "faceit_skill", "elo_team", "elo_team_faceit", "rank_points"]})
     return {k: design(d, names) for k, names in sets.items()}
 

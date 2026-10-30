@@ -31,6 +31,8 @@ FEATURES = {
     "rank_points": lambda d: (d.rank_a - d.rank_b).to_numpy(float),
     "elo_team": lambda d: (d.elo_h_a - d.elo_h_b).to_numpy(float),
     "elo_team_faceit": lambda d: (d.elo_f_a - d.elo_f_b).to_numpy(float),
+    "rating_hltv": lambda d: (d.rat_h_a - d.rat_h_b).to_numpy(float),
+    "rating_faceit": lambda d: (d.rat_f_a - d.rat_f_b).to_numpy(float),
     "five_maps": lambda d: (np.log1p(d.five_h_a) - np.log1p(d.five_h_b) + np.log1p(d.five_f_a) - np.log1p(d.five_f_b)).to_numpy(float),
     "z_thin": lambda d: logit(d.q_soft.to_numpy()) * (np.minimum(d.tm90_a, d.tm90_b) <= THIN_MAPS).to_numpy(float),
 }
