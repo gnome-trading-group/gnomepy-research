@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.e12.data import Inputs
-from gnomepy_research.sessions.cs2_comp.e12.predict import design, rows
+from gnomepy_research.sessions.cs2_comp.e12.predict import LAYER_FACEIT, LAYER_HLTV, design, rows
 
 
 def fit_logistic(X: np.ndarray, y: np.ndarray, l2: float = 1e-3) -> np.ndarray:
@@ -64,7 +64,7 @@ def main() -> None:
     inputs = Inputs(a.data, cutoffs[-1] + pd.Timedelta(days=7), faceit=True)
     s = inputs.series[inputs.series.bo_type == 3]
     targets = pd.concat([s[(s.time >= c) & (s.time < c + pd.Timedelta(days=7))].assign(week_cutoff=c) for c in cutoffs],
-                        ignore_index=True)[["match_id", "team_a", "team_b", "week_cutoff", "y"]]
+                        ignore_index=True)[["match_id", "team_a", "team_b", "week_cutoff", "y", "lineup_a", "lineup_b", "sub_a", "sub_b"]]
     h, f = rows(inputs, targets, True, verbose=True)
     h.to_parquet(out / "dev_hltv.parquet", index=False)
     f.to_parquet(out / "dev_faceit.parquet", index=False)
@@ -73,7 +73,7 @@ def main() -> None:
     y = h.y.to_numpy(float)
     months = pd.to_datetime(h.week_cutoff).dt.to_period("M").astype(str).to_numpy()
     result, losses = {}, {}
-    for name, frame in (("hltv", design(h, None)), ("faceit", design(h, f))):
+    for name, frame in (("hltv", design(h, None)[list(LAYER_HLTV)]), ("faceit", design(h, f)[list(LAYER_FACEIT)])):
         X = frame.to_numpy()
         losses[name] = log_loss(held_out(X, y, months), y)
         result[name] = {"weights": dict(zip(frame.columns, map(float, fit_logistic(X, y)))),

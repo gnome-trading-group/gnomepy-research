@@ -130,17 +130,22 @@ class Inputs:
         lu = load(self.data_dir, "hltv/cs2_match_lineups", self.until, ["match_id", "match_date", "team_id", "is_standin"])
         lu = lu.assign(known=_naive(lu.match_date)).dropna(subset=["team_id"])
         self.standins = lu.groupby(["match_id", "team_id"]).agg(known=("known", "max"), standins=("is_standin", "sum")).reset_index()
+        subs = dict(zip(zip(self.standins.match_id.astype(str), self.standins.team_id.astype(np.int64)), self.standins.standins))
+        mid = self.series.match_id.astype(str)
+        self.series["sub_a"] = [int(subs.get(k, 0)) for k in zip(mid, self.series.team_a)]
+        self.series["sub_b"] = [int(subs.get(k, 0)) for k in zip(mid, self.series.team_b)]
         rk = load(self.data_dir, "hltv/cs2_team_rankings", self.until, ["date", "team_id", "rank"])
         rk = rk.assign(date=_naive(rk["date"])).sort_values("date")
         self.rankings = {int(t): (g.date.to_numpy(), g["rank"].to_numpy(float)) for t, g in rk.groupby("team_id")}
 
     @staticmethod
     def _series(h: pd.DataFrame) -> pd.DataFrame:
-        """HLTV series with an outcome: the walk-forward targets for development."""
+        """HLTV series with an outcome and the fives announced for it: the walk-forward targets for development."""
         d = h[h.team_a_id.notna() & h.team_b_id.notna()]
         g = d.groupby("match_id")
         s = g.agg(time=("time", "min"), known=("known", "max"), team_a=("team_a_id", "first"), team_b=("team_b_id", "first"),
-                  bo_type=("bo_type", "first"), is_lan=("is_lan", "first"), wins=("team_a_won", "sum"), maps=("team_a_won", "size"))
+                  bo_type=("bo_type", "first"), is_lan=("is_lan", "first"), wins=("team_a_won", "sum"), maps=("team_a_won", "size"),
+                  lineup_a=("team_a_lineup_ids", "first"), lineup_b=("team_b_lineup_ids", "first"))
         s = s[(s.wins * 2 != s.maps)].reset_index()
         s["y"] = (s.wins * 2 > s.maps).astype(int)
         return s.astype({"team_a": np.int64, "team_b": np.int64})
