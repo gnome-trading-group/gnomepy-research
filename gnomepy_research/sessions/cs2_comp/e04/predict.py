@@ -35,6 +35,11 @@ def _sigmoid(x: float) -> float:
 
 
 def predict(data_dir: str, targets: pd.DataFrame, faceit: bool, params: Params) -> pd.DataFrame:
+    detail = predict_detail(data_dir, targets, faceit, params)
+    return detail[["match_id", "q", "fit_cutoff"]]
+
+
+def predict_detail(data_dir: str, targets: pd.DataFrame, faceit: bool, params: Params) -> pd.DataFrame:
     targets = targets.copy()
     targets["week_cutoff"] = pd.to_datetime(targets["week_cutoff"], utc=True).dt.tz_convert(None)
     stream = build_stream(data_dir, targets.week_cutoff.max(), faceit)
@@ -46,12 +51,16 @@ def predict(data_dir: str, targets: pd.DataFrame, faceit: bool, params: Params) 
     ev_lineup_a, ev_lineup_b = stream.lineup_a.to_numpy(), stream.lineup_b.to_numpy()
     ev_share_a, ev_faceit = stream.share_a.to_numpy(), stream.faceit.to_numpy()
     pos = 0
-    q_by_match: dict = {}
+    faceit_seen: set[str] = set()
+    detail_rows: dict = {}
     for cutoff, grp in targets.groupby("week_cutoff", sort=True):
         cut_day = day_index(cutoff)
         while pos < len(stream) and ev_day[pos] < cut_day:
             ladder.update_map(ev_key_a[pos], list(ev_lineup_a[pos]), ev_key_b[pos], list(ev_lineup_b[pos]),
                               float(ev_share_a[pos]), bool(ev_faceit[pos]))
+            if ev_faceit[pos]:
+                faceit_seen.update(ev_lineup_a[pos])
+                faceit_seen.update(ev_lineup_b[pos])
             pos += 1
         for row in grp.itertuples():
             lu = lineups.loc[row.match_id] if row.match_id in lineups.index else None
@@ -62,13 +71,18 @@ def predict(data_dir: str, targets: pd.DataFrame, faceit: bool, params: Params) 
             p_series = series_probability(p_map, int(row.bo_type) if pd.notna(row.bo_type) else 3)
             p_series = min(max(p_series, 1e-4), 1.0 - 1e-4)
             q = _sigmoid(params.calibration * _logit(p_series))
-            q_by_match[row.match_id] = (q, cutoff)
+            detail_rows[row.match_id] = {
+                "q": q,
+                "fit_cutoff": cutoff,
+                "faceit_players_a": sum(1 for k in lineup_a if k in faceit_seen),
+                "faceit_players_b": sum(1 for k in lineup_b if k in faceit_seen),
+                "lineup_a_size": len(lineup_a),
+                "lineup_b_size": len(lineup_b),
+            }
 
-    out = pd.DataFrame({
-        "match_id": targets.match_id.values,
-        "q": [q_by_match[m][0] for m in targets.match_id.values],
-        "fit_cutoff": [q_by_match[m][1] for m in targets.match_id.values],
-    })
+    rows = [detail_rows[m] for m in targets.match_id.values]
+    out = pd.DataFrame(rows, index=range(len(rows)))
+    out.insert(0, "match_id", targets.match_id.values)
     return out
 
 

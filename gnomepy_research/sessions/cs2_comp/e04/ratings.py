@@ -19,7 +19,6 @@ class Params:
     score_clip: float = 0.05
     overlap_power: float = 2.0
     shrink_games: float = 12.0
-    seed_player: float = 1500.0
     calibration: float = 1.0
 
 
@@ -37,6 +36,12 @@ class _TeamState:
 
 def _expected(ra: float, rb: float, scale: float) -> float:
     return 1.0 / (1.0 + 10.0 ** ((rb - ra) / scale))
+
+
+def _shrink(games: float, k: float) -> float:
+    if k <= 0:
+        return 1.0
+    return games / (games + k)
 
 
 def _k(entry: _Entry, base_k: float, p: Params) -> float:
@@ -69,10 +74,10 @@ class Ladder:
             self.teams[key] = st
         return st
 
-    def _player(self, key: str) -> _Entry:
+    def _player(self, key: str, seed: float) -> _Entry:
         e = self.players.get(key)
         if e is None:
-            e = _Entry(self.p.seed_player)
+            e = _Entry(seed)
             self.players[key] = e
         return e
 
@@ -122,8 +127,8 @@ class Ladder:
                   faceit_map: bool) -> tuple[float, float, float]:
         ra, na = self.effective(key_a, lineup_a)
         rb, nb = self.effective(key_b, lineup_b)
-        shrink_a = na / (na + self.p.shrink_games)
-        shrink_b = nb / (nb + self.p.shrink_games)
+        shrink_a = _shrink(na, self.p.shrink_games)
+        shrink_b = _shrink(nb, self.p.shrink_games)
         ra = self.p.base + shrink_a * (ra - self.p.base)
         rb = self.p.base + shrink_b * (rb - self.p.base)
         shift = self.p.faceit_level_shift if faceit_map else 0.0
@@ -155,7 +160,7 @@ class Ladder:
         ):
             if not lineup:
                 continue
-            players = [self._player(k) for k in lineup]
+            players = [self._player(k, team_r_before) for k in lineup]
             roster_r = float(np.mean([e.value for e in players]))
             self.offset_sum += team_r_before - roster_r
             self.offset_n += 1
