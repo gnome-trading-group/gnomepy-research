@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import scipy.optimize
 import scipy.sparse
+from threadpoolctl import threadpool_limits
 
 from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
 from gnomepy_research.sessions.cs2_comp.e20.data import FACEIT, GROUPS, LINEUP_SIZE, MapRows, RatingRows
@@ -166,8 +167,11 @@ def fit(maps: MapRows, cutoff: pd.Timestamp, cfg: Config, ratings: RatingRows | 
         return f, np.concatenate([g_theta, g_mu, g_lg, g_style])
 
     x0 = np.zeros(2 * n_p + n_g + 2)
-    res = scipy.optimize.minimize(objective, x0, jac=True, method="L-BFGS-B",
-                                  options={"maxiter": cfg.max_iter, "maxcor": 20, "ftol": 1e-10, "gtol": 1e-5})
+    # L-BFGS-B's level-1 BLAS calls on a 130k-vector spawn a thread per host core; inside a 1-vCPU Batch
+    # container that oversubscription turned a 10 s fit into 20 minutes.
+    with threadpool_limits(limits=1):
+        res = scipy.optimize.minimize(objective, x0, jac=True, method="L-BFGS-B",
+                                      options={"maxiter": cfg.max_iter, "maxcor": 20, "ftol": 1e-10, "gtol": 1e-5})
     theta, mu, log_gamma, style = unpack(res.x)
     pi = 1 / (1 + np.exp(-(s * (M @ theta))))
     curv = w * n * pi * (1 - pi) * s ** 2
