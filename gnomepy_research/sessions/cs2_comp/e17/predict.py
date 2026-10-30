@@ -7,8 +7,9 @@
 The map stream (HLTV, plus FACEIT unless --no-faceit) is consumed chronologically by an HLTV-only filter and a unified
 filter. At each Monday every series of the coming week is priced from the state at that Monday: a team's lineup is the
 five it last fielded, on HLTV or FACEIT, before the cutoff. Past weeks' prices of bo3 HLTV series and their outcomes
-train a logistic calibration on the two gaps (the HLTV-only gap alone without FACEIT), refit for each target week on
-the trailing year. Everything is deterministic, so a rerun on a bundle cut at one week's cutoff reproduces that week.
+train a logistic calibration on the HLTV-only price, the ranking-points gap and FACEIT's shift of the price by
+coverage bucket (the HLTV-only features alone without FACEIT), refit for each target week on the trailing year.
+Everything is deterministic, so a rerun on a bundle cut at one week's cutoff reproduces that week.
 """
 from __future__ import annotations
 
@@ -123,7 +124,7 @@ def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src:
 
 
 def run(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src: SourceConfig = SourceConfig(),
-        calibration_months: int = 12, calibration: str = "pooled", log=print) -> pd.DataFrame:
+        calibration_months: int = 12, calibration: str = "coverage", log=print) -> pd.DataFrame:
     return calibrate(snapshot(data_dir, targets, use_faceit, src, log), use_faceit, calibration_months, calibration, log)
 
 
@@ -132,16 +133,19 @@ def _design(g: pd.DataFrame, use_faceit: bool, calibration: str) -> np.ndarray:
     if use_faceit:
         shift = logit(g.q_u) - logit(g.q_h)
         if calibration == "coverage":
-            # Where a lineup has no FACEIT history, FACEIT's shift of the price is only opponents' spillover, so each
-            # coverage bucket earns its own coefficient on the shift and the calibration can discount it there.
-            cov = np.minimum(g.cov_a_u, g.cov_b_u).to_numpy()
-            cols += [shift * (cov == 0), shift * ((cov >= 1) & (cov <= 3)), shift * (cov >= 4)]
+            # FACEIT's shift of the price earns a coefficient per coverage bucket. Against a side that has never
+            # fielded a lineup in either source the shift only says how far FACEIT play moved the known side off the
+            # HLTV newcomer prior's scale, and where a lineup has no FACEIT history it is opponents' spillover, so
+            # the calibration can discount it there and keep it where both fives have FACEIT history.
+            unknown = ~(g.known_a_u & g.known_b_u).to_numpy(bool)
+            cov = np.where(unknown, -1, np.minimum(g.cov_a_u, g.cov_b_u).to_numpy())
+            cols += [shift * (cov == -1), shift * (cov == 0), shift * ((cov >= 1) & (cov <= 3)), shift * (cov >= 4)]
         else:
             cols.append(shift)
     return np.column_stack(cols + [np.ones(len(g))])
 
 
-def calibrate(snap: pd.DataFrame, use_faceit: bool, calibration_months: int, calibration: str = "pooled", log=print) -> pd.DataFrame:
+def calibrate(snap: pd.DataFrame, use_faceit: bool, calibration_months: int, calibration: str = "coverage", log=print) -> pd.DataFrame:
     train = snap[snap.kind == "train"]
     out = []
     for c, g in snap[snap.kind == "target"].groupby("cutoff"):
@@ -173,7 +177,7 @@ def main() -> None:
     ap.add_argument("--faceit-prior-offset", type=float, default=SourceConfig.faceit_prior_offset)
     ap.add_argument("--faceit-sigma0", type=float, default=SourceConfig.faceit_sigma0)
     ap.add_argument("--calibration-months", type=int, default=12)
-    ap.add_argument("--calibration", choices=("pooled", "coverage"), default="pooled")
+    ap.add_argument("--calibration", choices=("pooled", "coverage"), default="coverage")
     a = ap.parse_args()
     targets = pd.read_parquet(a.targets)
     src = SourceConfig(a.faceit_weight, a.faceit_prior_offset, a.faceit_sigma0)
