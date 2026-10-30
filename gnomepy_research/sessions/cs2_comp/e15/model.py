@@ -49,13 +49,15 @@ class Config:
     series_noise: float = 0.2
     # Price with each rating's own uncertainty (a diagonal Laplace approximation) on top of the series noise: a team
     # whose five has little credible evidence gets a price closer to a coin flip than its point rating implies.
-    parameter_risk: bool = False
+    parameter_risk: bool = True
     # Second measurement per source: each player's map performance relative to his own five's mean, which splits a
     # five's strength among its players (rounds only see the five's mean). Weight is its credibility, like a map's.
     rating_weight: float = 0.0
+    # FACEIT per-player stats in the rating channel: off because they make each fit ~10x slower.
+    faceit_stats: bool = False
     # Home-region offsets (Europe fixed at zero): regional scenes meet rarely, so their levels are set by the few
     # cross-region maps rather than by each team's class prior. 0 switches them off.
-    sigma_region: float = 0.0
+    sigma_region: float = 0.3
 
 
 @dataclass

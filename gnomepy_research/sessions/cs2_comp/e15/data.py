@@ -155,7 +155,7 @@ def _faceit_ratings(data_dir: Path, link: dict) -> pd.DataFrame:
     return out[np.isfinite(out.perf)]
 
 
-def load_raw(data_dir: str | Path, use_faceit: bool, ratings: bool = True) -> Raw:
+def load_raw(data_dir: str | Path, use_faceit: bool, ratings: bool = True, faceit_stats: bool = False) -> Raw:
     data_dir = Path(data_dir)
     parts = [_hltv_maps(data_dir)] + ([_faceit_maps(data_dir)] if use_faceit else [])
     maps = pd.concat(parts, ignore_index=True).sort_values(["known_at", "match_id", "pos"], kind="stable").reset_index(drop=True)
@@ -166,7 +166,7 @@ def load_raw(data_dir: str | Path, use_faceit: bool, ratings: bool = True) -> Ra
     rating_parts = []
     if ratings:
         rating_parts.append(_hltv_ratings(data_dir))
-        if use_faceit:
+        if use_faceit and faceit_stats:
             m = pd.read_parquet(data_dir / "faceit/hltv_faceit_map.parquet")
             rating_parts.append(_faceit_ratings(data_dir, dict(zip(m.faceit_id, m.hltv_id.astype(np.int64)))))
     rt = pd.concat(rating_parts, ignore_index=True) if rating_parts else \

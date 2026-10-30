@@ -44,7 +44,7 @@ def run(data: Path, targets_path: Path, use_faceit: bool, weeks: list[str] | Non
     cutoffs = sorted(targets.week_cutoff.unique())
     if weeks:
         cutoffs = [c for c in cutoffs if f"{pd.Timestamp(c):%Y-%m-%d}" in set(weeks)]
-    raw = load_raw(data, use_faceit, ratings=cfg.rating_weight > 0)
+    raw = load_raw(data, use_faceit, ratings=cfg.rating_weight > 0, faceit_stats=cfg.faceit_stats)
     first = career_first(raw)
     out = []
     for c in cutoffs:
