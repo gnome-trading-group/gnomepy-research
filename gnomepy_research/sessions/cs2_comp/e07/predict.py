@@ -11,6 +11,7 @@ are after the cutoff), so each team plays its last known five.
 from __future__ import annotations
 
 import argparse
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -58,7 +59,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--targets", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--out", type=Path, default=Path(os.environ.get("OUTPUT_DIR", "out")) / "predictions.parquet")
+    parser.add_argument("--both", action="store_true", help="also write predictions_no_faceit.parquet next to --out")
     parser.add_argument("--no-faceit", action="store_true")
     parser.add_argument("--features-out", type=Path)
     parser.add_argument("--cutoff")
@@ -71,7 +73,10 @@ def main() -> None:
         targets = targets[targets.week_cutoff.isin(pd.to_datetime(args.weeks))]
     cfg = replace(FINAL, use_faceit=not args.no_faceit)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    run(args.data, targets, cfg, args.features_out).to_parquet(args.out, index=False)
+    features_out = args.features_out or (args.out.parent / "features.parquet" if args.both else None)
+    run(args.data, targets, cfg, features_out).to_parquet(args.out, index=False)
+    if args.both:
+        run(args.data, targets, replace(FINAL, use_faceit=False)).to_parquet(args.out.parent / "predictions_no_faceit.parquet", index=False)
 
 
 if __name__ == "__main__":
