@@ -17,6 +17,7 @@ A fit takes seconds (L-BFGS on sparse design matrices), so every week is refitte
 """
 from __future__ import annotations
 
+import collections
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -56,8 +57,9 @@ class Config:
     # "hltv_first": a team's latest HLTV five where it has one, else its latest FACEIT five.
     lineup_source: str = "hltv_first"
     roster_moves: bool = True
-    # A team effect on top of its players (how the five plays together); 0 turns it off.
-    sigma_team: float = 0.0
+    # Team-map effects (a team's strength on one map beyond its players), averaged over the two teams' map pool
+    # before the veto; 0 turns them off.
+    sigma_map: float = 0.0
     # A team with no map under its HLTV id: "newcomer" prices five recent-debutant players; "blend" goes halfway
     # from there to its opponent's level, because organisers seed debut teams against teams near their own level.
     unknown_team: str = "blend"
@@ -89,7 +91,8 @@ class Fit:
     home: dict[int, int]
     lineups: dict[int, list[int]]
     newcomer: tuple[float, float] = (0.0, 1.0)
-    team_effect: dict[int, float] = field(default_factory=dict)
+    map_effect: dict[tuple[int, str], float] = field(default_factory=dict)
+    plays: dict[int, collections.Counter] = field(default_factory=dict)
     pidx: dict[int, int] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -114,6 +117,12 @@ class Fit:
                 var += self.var[i]
         return mean / LINEUP, var / LINEUP ** 2
 
+    def _map_term(self, team_a: int, team_b: int) -> float:
+        pool = self.plays.get(team_a, collections.Counter()) + self.plays.get(team_b, collections.Counter())
+        total = sum(pool.values())
+        return sum(c / total * (self.map_effect.get((team_a, m), 0.0) - self.map_effect.get((team_b, m), 0.0))
+                   for m, c in sorted(pool.items())) if total else 0.0
+
     def price(self, team_a: int, team_b: int, bo_type: int = 3) -> float:
         ma, va = self.team_skill(team_a)
         mb, vb = self.team_skill(team_b)
@@ -123,7 +132,7 @@ class Fit:
                 ma = 0.5 * (ma + mb)
             if not known_b and known_a:
                 mb = 0.5 * (ma + mb)
-        gap = ma - mb + self.team_effect.get(int(team_a), 0.0) - self.team_effect.get(int(team_b), 0.0) + self.rho[self.home.get(int(team_a), 0)] - self.rho[self.home.get(int(team_b), 0)]
+        gap = ma - mb + self._map_term(int(team_a), int(team_b)) + self.rho[self.home.get(int(team_a), 0)] - self.rho[self.home.get(int(team_b), 0)]
         sd = np.sqrt(va + vb + self.cfg.sigma_s ** 2)
         p = np.interp(gap + sd * _GH_X, _GRID, self._map_table)
         series = p if bo_type == 1 else p * p * (3 - 2 * p)
@@ -270,13 +279,15 @@ def fit(bundle: Bundle, cutoff: pd.Timestamp, cfg: Config = Config()) -> Fit:
     s0 = 1.0 / cfg.sigma0 ** 2
     has_f = bool(is_f.any())
 
-    teams = np.unique(np.concatenate([win.team_a.to_numpy(np.int64), win.team_b.to_numpy(np.int64)])) \
-        if cfg.sigma_team > 0 else np.zeros(0, np.int64)
-    T = len(teams)
-    TM = (sp.csr_matrix((np.ones(M), (np.arange(M), np.searchsorted(teams, win.team_a.to_numpy(np.int64)))), shape=(M, T))
-          - sp.csr_matrix((np.ones(M), (np.arange(M), np.searchsorted(teams, win.team_b.to_numpy(np.int64)))), shape=(M, T))).tocsr() \
+    map_key = win.map_name.str.lower().str.replace("de_", "", regex=False).to_numpy()
+    ka = pd.MultiIndex.from_arrays([win.team_a.to_numpy(np.int64), map_key])
+    kb = pd.MultiIndex.from_arrays([win.team_b.to_numpy(np.int64), map_key])
+    keys = ka.append(kb).unique().sort_values() if cfg.sigma_map > 0 else ka[:0]
+    T = len(keys)
+    TM = (sp.csr_matrix((np.ones(M), (np.arange(M), keys.get_indexer(ka))), shape=(M, T))
+          - sp.csr_matrix((np.ones(M), (np.arange(M), keys.get_indexer(kb))), shape=(M, T))).tocsr() \
         if T else sp.csr_matrix((M, 0))
-    st2 = 1.0 / cfg.sigma_team ** 2 if T else 0.0
+    st2 = 1.0 / cfg.sigma_map ** 2 if T else 0.0
     NR = N_REGIONS - 2
 
     def unpack(x):
@@ -343,6 +354,10 @@ def fit(bundle: Bundle, cutoff: pd.Timestamp, cfg: Config = Config()) -> Fit:
     ni = np.searchsorted(players, recent[np.isin(recent, players)])
     newcomer = (float(theta[ni].mean()), float(theta[ni].var() + np.mean(1.0 / h_diag[ni]))) if len(ni) >= 20 \
         else (float(np.median(theta)), cfg.sigma0 ** 2)
+    plays: dict[int, collections.Counter] = collections.defaultdict(collections.Counter)
+    if T:
+        for t, m in list(zip(ka.get_level_values(0), map_key)) + list(zip(kb.get_level_values(0), map_key)):
+            plays[int(t)][str(m)] += 1
     moves = bundle.moves[bundle.moves.event_date < cutoff] if cfg.roster_moves else None
     lineups = _latest_lineups(known, moves)
     if cfg.lineup_source != "any":
@@ -350,4 +365,4 @@ def fit(bundle: Bundle, cutoff: pd.Timestamp, cfg: Config = Config()) -> Fit:
         lineups = hltv_lineups if cfg.lineup_source == "hltv" else {**lineups, **hltv_lineups}
     return Fit(cutoff=cutoff, cfg=cfg, player_ids=players, theta=theta, var=1.0 / h_diag, coef=c, rho=rho,
                kappa_f=float(np.exp(logk)), home=_home_regions(known), lineups=lineups, newcomer=newcomer,
-               team_effect=dict(zip(teams.tolist(), u.tolist())))
+               map_effect={(int(t), str(m)): float(b) for (t, m), b in zip(keys, u)}, plays=plays)
