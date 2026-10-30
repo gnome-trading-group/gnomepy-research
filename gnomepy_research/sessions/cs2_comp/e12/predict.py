@@ -22,10 +22,10 @@ from gnomepy_research.sessions.cs2_comp.e12.data import Inputs
 from gnomepy_research.sessions.cs2_comp.e12.features import feature_rows
 from gnomepy_research.sessions.cs2_comp.e12.model import Config, series_price
 
-CONFIG_HLTV = Config(sigma=0.5, half_life_days=300.0)
-CONFIG_FACEIT = Config(sigma=0.5, half_life_days=300.0)
-LAYER_HLTV = {"zh": 0.572098, "zh_thin": -0.069003, "standin": -0.110552, "idle": -0.030159}
-LAYER_FACEIT = {"zh": 0.240466, "zh_thin": -0.031155, "standin": -0.124941, "idle": -0.007357, "zf": 0.360769, "zf_thin": -0.052988}
+CONFIG_HLTV = Config(sigma=0.5, half_life_days=300.0, rating_gamma=0.6, rating_sd=0.31)
+CONFIG_FACEIT = Config(sigma=0.5, half_life_days=300.0, rating_gamma=0.6, rating_sd=0.31)
+LAYER_HLTV = {"zh": 0.727237, "zh_thin": -0.093612, "standin": -0.082797, "idle": -0.037279}
+LAYER_FACEIT = {"zh": 0.319305, "zh_thin": -0.051195, "standin": -0.089154, "idle": -0.021486, "zf": 0.418045, "zf_thin": -0.055322}
 
 
 def _logit(p: np.ndarray) -> np.ndarray:

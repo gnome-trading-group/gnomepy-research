@@ -118,6 +118,14 @@ class Inputs:
             "team_a": h.team_a_id.astype(np.int64).to_numpy(), "team_b": h.team_b_id.astype(np.int64).to_numpy(),
             "rank_a": h.team_a_rank.fillna(UNRANKED).to_numpy(float), "rank_b": h.team_b_rank.fillna(UNRANKED).to_numpy(float),
             "rounds": n, "rounds_a": ra, "source": "hltv", "division": "hltv", "is_lan": h.is_lan.fillna(0).to_numpy(int)})
+        st = load(self.data_dir, "hltv/cs2_player_map_stats", self.until,
+                  ["match_id", "match_date", "map_name", "player_id", "side", "rating"])
+        st = st[(st.side == "all") & st.rating.notna() & st.player_id.notna()]
+        rating = dict(zip(zip(st.match_id.astype(str), st.map_name, st.player_id.astype(np.int64)), st.rating.astype(float)))
+        for side, five in (("a", five_a), ("b", five_b)):
+            for j in range(FIVE):
+                frame[f"rating_{side}{j}"] = [rating.get((m, n, int(p)), np.nan)
+                                              for m, n, p in zip(frame.match_id, h.map_name, five[:, j])]
         self.hltv = Maps.concat([Maps(frame, five_a, five_b)])
         lu = load(self.data_dir, "hltv/cs2_match_lineups", self.until, ["match_id", "match_date", "team_id", "is_standin"])
         lu = lu.assign(known=_naive(lu.match_date)).dropna(subset=["team_id"])

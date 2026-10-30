@@ -12,6 +12,13 @@ latest FACEIT skill level, and the share of the player's FACEIT maps in each ESE
 30). FACEIT maps carry a lower weight than HLTV maps: they are another measurement of the same skill with more noise
 per map.
 
+HLTV map ratings relative to teammates are a third measurement, as in the Bayes series model:
+
+    rating_p - mean(rating_five) ~ N(rating_gamma * (s_p - mean(s_five)), rating_sd^2)
+
+Round results only see a five's mean; ratings say who in it carries the five, which matters whenever the five a team
+fields next is not the five it was rated with.
+
 Lineups going into a series are not known before it (the target's own lineup rows are dated on the match day), so each
 team plays the five it fielded last. With FACEIT on, a team's most recent FACEIT five wins when it is newer than its
 last HLTV map: online teams play ESEA every week, and a roster change shows there first.
@@ -46,6 +53,10 @@ class Config:
     # Round-logit gap per unit of skill on FACEIT maps relative to HLTV maps: online rounds between weaker teams can
     # be more or less decisive than the same skill gap on HLTV.
     faceit_scale: float = 1.0
+    # HLTV ratings relative to teammates as a second measurement of who in a five carries it: rating_dev ~
+    # N(rating_gamma * (s_p - mean(s_five)), rating_sd^2). Zero rating_gamma turns it off.
+    rating_gamma: float = 0.0
+    rating_sd: float = 0.25
 
 
 def _prior_design(maps: Maps, players: np.ndarray, inputs: Inputs, cutoff: pd.Timestamp, faceit: bool) -> np.ndarray:
@@ -73,6 +84,30 @@ def _prior_design(maps: Maps, players: np.ndarray, inputs: Inputs, cutoff: pd.Ti
             m = div == d
             cols.append(np.bincount(pos[m], minlength=P) / np.maximum(fmaps, 1))
     return np.column_stack(cols)
+
+
+def _rating_rows(f: pd.DataFrame, ia: np.ndarray, ib: np.ndarray, w: np.ndarray, P: int,
+                 cfg: Config) -> tuple[sp.csr_matrix, np.ndarray, np.ndarray]:
+    """One row per rated player-map of a fully rated HLTV five: L @ s is the player's skill minus the five's mean,
+    and the target is the rating minus the five's mean rating, divided by rating_gamma."""
+    Ls, ys, ws = [], [], []
+    if cfg.rating_gamma and "rating_a0" in f:
+        for side, idx in (("a", ia), ("b", ib)):
+            rt = f[[f"rating_{side}{j}" for j in range(FIVE)]].to_numpy(float)
+            ok = ~np.isnan(rt).any(axis=1)
+            rt, ii, ww = rt[ok], idx[ok], w[ok]
+            R = len(rt)
+            row = np.arange(R * FIVE)
+            cols_self = ii.ravel()
+            rows_mean = np.repeat(row, FIVE)
+            cols_mean = np.repeat(ii, FIVE, axis=0).ravel()
+            Ls.append(sp.csr_matrix((np.ones(R * FIVE), (row, cols_self)), shape=(R * FIVE, P))
+                      - sp.csr_matrix((np.full(R * FIVE * FIVE, 1.0 / FIVE), (rows_mean, cols_mean)), shape=(R * FIVE, P)))
+            ys.append(((rt - rt.mean(axis=1, keepdims=True)) / cfg.rating_gamma).ravel())
+            ws.append(np.repeat(ww, FIVE))
+    if not Ls:
+        return sp.csr_matrix((0, P)), np.zeros(0), np.zeros(0)
+    return sp.vstack(Ls).tocsr(), np.concatenate(ys), np.concatenate(ws)
 
 
 @dataclass
@@ -104,6 +139,8 @@ class SkillFit:
         X = _prior_design(maps, players, inputs, cutoff, faceit)
         K = X.shape[1]
         inv_var = 1.0 / cfg.sigma ** 2
+        L, yr, wr = _rating_rows(f, ia, ib, w, P, cfg)
+        kappa = (cfg.rating_gamma / cfg.rating_sd) ** 2
 
         def objective(theta: np.ndarray) -> tuple[float, np.ndarray]:
             s, g = theta[:P], theta[P:]
@@ -113,6 +150,10 @@ class SkillFit:
             obj = nll + 0.5 * inv_var * (r @ r) + 0.5e-2 * (g @ g)
             resid = w * (ra - n * expit(d))
             grad_s = -(At @ resid) + inv_var * r
+            if kappa:
+                e = yr - L @ s
+                obj += 0.5 * kappa * (wr * e * e).sum()
+                grad_s -= kappa * (L.T @ (wr * e))
             grad_g = -inv_var * (X.T @ r) + 1e-2 * g
             return obj, np.concatenate([grad_s, grad_g])
 
@@ -121,6 +162,8 @@ class SkillFit:
             vs, vg = v[:P], v[P:]
             r = vs - X @ vg
             hs = At @ (w * n * pr * (1 - pr) * (A @ vs)) + inv_var * r
+            if kappa:
+                hs += kappa * (L.T @ (wr * (L @ vs)))
             hg = -inv_var * (X.T @ r) + 1e-2 * vg
             return np.concatenate([hs, hg])
 
