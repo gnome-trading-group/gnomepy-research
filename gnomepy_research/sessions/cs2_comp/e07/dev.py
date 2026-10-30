@@ -23,7 +23,6 @@ import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp import bundle
 from gnomepy_research.sessions.cs2_comp.e07 import analysis, data
-from gnomepy_research.sessions.cs2_comp.e07.filter import FilterConfig
 from gnomepy_research.sessions.cs2_comp.e07.final_config import FINAL
 from gnomepy_research.sessions.cs2_comp.e07.lineup import RosterMoves
 from gnomepy_research.sessions.cs2_comp.e07.model import Model, ModelConfig
