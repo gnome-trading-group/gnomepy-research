@@ -16,7 +16,7 @@ import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.bundle import load
-from gnomepy_research.sessions.cs2_comp.e03 import elo_path, faceit_form, model
+from gnomepy_research.sessions.cs2_comp.e03 import elo_path, faceit_form, hltv_form, model
 
 TRAIN_WINDOW_DAYS = 365
 LABEL_LAG_DAYS = 2
@@ -25,7 +25,7 @@ PROB_CLIP = 0.01
 BEST_OF_THREE = 3
 COVERAGE_PLAYERS = 5
 MIN_LINKED_PER_LINEUP = 1
-HLTV_FEATURES = ["elo_diff", "rank_diff"]
+HLTV_FEATURES = ["elo_diff", "rank_diff", "rating_d"]
 FACEIT_METRICS = ["vol30", "vol90", "rusty", "newish", "form", "kd", "adr", "skill"]
 FACEIT_DIFFS = [f"{m}_d" for m in FACEIT_METRICS]
 FACEIT_FEATURES = FACEIT_DIFFS + ["link_d", "faceit_missing"]
@@ -126,6 +126,7 @@ def _hltv_frame(data_dir: Path, targets: pd.DataFrame) -> pd.DataFrame:
     pts_a = _latest_points(rankings, x["match_time"], x["team_a_id"])
     pts_b = _latest_points(rankings, x["match_time"], x["team_b_id"])
     x["rank_diff"] = np.log1p(np.nan_to_num(pts_a)) - np.log1p(np.nan_to_num(pts_b))
+    x["rating_d"] = hltv_form.lineup_ratings(data_dir, max_cut, x).to_numpy()
     return x
 
 
