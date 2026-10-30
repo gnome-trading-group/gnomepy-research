@@ -30,6 +30,7 @@ WEEK = pd.Timedelta(days=7)
 DAY_NS = 86_400 * 10 ** 9
 TOGETHER_DAYS = 60
 _NEVER = 2 ** 62
+MOVES_FROM = pd.Timestamp("2023-12-01")
 
 
 @dataclass(frozen=True)
@@ -81,7 +82,7 @@ class Rankings:
 def roster_moves(data_dir: Path, before: pd.Timestamp) -> dict[int, list[tuple[np.datetime64, int, int]]]:
     """Per team, the dated joins (+1) and departures (-1) of players, from the transfer log."""
     m = load(data_dir, "hltv/cs2_roster_moves", before)
-    m = m[m.person_role == "player"]
+    m = m[(m.person_role == "player") & (pd.to_datetime(m.event_date) >= MOVES_FROM)]
     out: dict[int, list] = collections.defaultdict(list)
     leaving = {"leave", "transfer", "benched", "loan", "to_substitute", "to_coach", "loan_return"}
     joining = {"join", "transfer", "activated", "loan", "loan_return"}
@@ -166,25 +167,32 @@ class Shared:
     info: dict
     rank: Rankings
     level: dict
+    moves: dict
 
 
 def build_shared(data_dir: Path, last_cutoff: pd.Timestamp, cfg: RunConfig) -> Shared:
     index = new_index(data_dir)
     hm, events, info = build_events(data_dir, last_cutoff, index, cfg)
+    moves = roster_moves(data_dir, last_cutoff) if cfg.use_moves else {}
+    # Every player the transfer log names gets an id up front: whether a signing can be put in a lineup must not depend on
+    # whether he plays in maps after the snapshot, or a run over more data would differ from a run cut at the snapshot.
+    for entries in moves.values():
+        for _, pid, _ in entries:
+            index.from_hltv(pid)
     return Shared(index, hm, events, info, Rankings(load(data_dir, "hltv/cs2_team_rankings", last_cutoff)),
-                  first_skill_level(data_dir, last_cutoff) if cfg.use_faceit else {})
+                  first_skill_level(data_dir, last_cutoff) if cfg.use_faceit else {}, moves)
 
 
 class Pass:
     def __init__(self, data_dir: Path, last_cutoff: pd.Timestamp, cfg: RunConfig, shared: Shared | None = None):
         self.cfg = cfg
         sh = shared or build_shared(data_dir, last_cutoff, cfg)
-        self.index, self.hm, self.events, self.info, self.rank, self.level = sh.index, sh.hm, sh.events, sh.info, sh.rank, sh.level
+        self.index, self.hm, self.events, self.info, self.rank, self.level, self.moves = (
+            sh.index, sh.hm, sh.events, sh.info, sh.rank, sh.level, sh.moves)
         self.fh = SkillFilter(self.index.size, cfg.hltv)
         self.ff = SkillFilter(self.index.size, cfg.faceit_skill)
         self.recent: dict[int, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=cfg.k_series))
         self.pos = 0
-        self.moves = roster_moves(data_dir, last_cutoff) if cfg.use_moves else {}
         self.standins = self._standins(data_dir, last_cutoff)
         self.last_time: dict[int, int] = {}
         self.by_player: dict[int, list[int]] = collections.defaultdict(list)
