@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -72,7 +73,7 @@ def build_config(overrides: dict) -> ModelConfig:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--out", type=Path, default=Path(os.environ.get("OUTPUT_DIR", "dev_out")))
     parser.add_argument("--sets-file", type=Path)
     parser.add_argument("--sets-json")
     parser.add_argument("--first", default="2025-10-06")
