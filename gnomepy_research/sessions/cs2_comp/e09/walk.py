@@ -58,7 +58,10 @@ def priced_lineups(team: int, cutoff_day: float, history: TeamHistory, moves: Mo
         five = unknown_five(team)
         return [five] * n, five
     probs = play_probabilities(x)
-    top = tuple(cands[i] for i in np.argsort(-probs, kind="stable")[:5])
+    # Candidates with identical features tie exactly on one machine and differ in the last bit on another, so ties are
+    # broken by player id instead of by the order the floats happen to fall in.
+    order = np.lexsort((np.array(cands), -np.round(probs, 9)))
+    top = tuple(cands[i] for i in order[:5])
     top = top + unknown_five(team)[: 5 - len(top)]
     return sample_fives(team, cands, probs, rng, n), top
 
