@@ -10,6 +10,9 @@ and covariance mechanics) in the ways a bookmaker's ratings differ from a fixed 
   from HLTV ranking points their (usually unranked) team does not have.
 - Ratings drift per day idle (tau), so a player returning from a break is uncertain again and the next maps move him
   quickly.
+- A player's per-map score relative to his four teammates (HLTV rating; FACEIT kills minus deaths per round) is a
+  second, linear measurement of his skill relative to theirs, with a slope and noise per source. Rounds only rate a
+  five as a whole; this says who in it carries the team, which is what prices a stand-in or a transfer.
 """
 from __future__ import annotations
 
@@ -44,6 +47,10 @@ class RatingConfig:
     a_unk: float = -0.35
     s_lvl: float = 0.04
     sigma0_f: float = 0.3
+    g_h: float = 0.0
+    s_h: float = 0.5
+    g_f: float = 0.0
+    s_f: float = 0.5
 
 
 @dataclass
@@ -148,6 +155,27 @@ class RatingFilter:
         extra = sum(x * x * v for x, v in zip(a.weights[len(a.players):], a.variances[len(a.players):])) \
             + sum(x * x * v for x, v in zip(b.weights[len(b.players):], b.variances[len(b.players):]))
         return a.total - b.total, float(w @ cov @ w) + extra, cov, w
+
+    def observe_dev(self, players, devs, src: int) -> None:
+        """Kalman update of a five on its players' scores relative to the five's mean (call after observe)."""
+        c = self.cfg
+        g, s = (c.g_f, c.s_f) if src == FACEIT else (c.g_h, c.s_h)
+        if g <= 0:
+            return
+        players = list(players)
+        cov = self.block(players, [self.var[p] for p in players])
+        mu = np.array([self.mu[p] for p in players])
+        h = g * (np.eye(5) - 0.2)
+        ph = cov @ h.T
+        gain = ph @ np.linalg.inv(h @ ph + s * s * np.eye(5))
+        mu = mu + gain @ (np.asarray(devs, float) - h @ mu)
+        cov = cov - gain @ ph.T
+        for i, p in enumerate(players):
+            self.mu[p] = float(mu[i])
+            self.var[p] = max(1e-6, float(cov[i, i]))
+            for j in range(i + 1, 5):
+                q = players[j]
+                self.cov[(p, q) if p < q else (q, p)] = float(cov[i, j])
 
     def observe(self, t: pd.Timestamp, now: float, src: int, div: int, team_a: int, team_b: int, pa, pb,
                 rounds_a: int, rounds_b: int) -> float:

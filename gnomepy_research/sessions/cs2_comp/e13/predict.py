@@ -89,6 +89,19 @@ class Rosters:
         return players, 5 - len(players)
 
 
+def rosters_at(b: Bundle, cutoff: pd.Timestamp) -> Rosters:
+    r = Rosters(b.moves)
+    m = b.maps[b.maps.t < cutoff]
+    for side in ("a", "b"):
+        known = m[(m.src != FACEIT) | (m[f"team_{side}"] > 0)]
+        for team, t, five in zip(known[f"team_{side}"], known.t, known[f"players_{side}"]):
+            prev = r.last.get(int(team))
+            now = _days(t)
+            if prev is None or prev[0] <= now:
+                r.last[int(team)] = (now, five)
+    return r
+
+
 def _days(t) -> float:
     return (pd.Timestamp(t) - EPOCH).total_seconds() / 86400.0
 
@@ -156,6 +169,10 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
             now = _days(t_arr[i])
             day = pd.Timestamp(t_arr[i]).normalize()
             f.observe(day, now, int(src), int(div), int(ta), int(tb), pa, pb, int(ra), int(rb))
+            for side, five in ((0, pa), (1, pb)):
+                devs = [b.devs.get((i, side, int(p))) for p in five]
+                if None not in devs:
+                    f.observe_dev(five, devs, int(src))
             if src != FACEIT or ta > 0:
                 rosters.played(int(ta), now, pa)
             if src != FACEIT or tb > 0:

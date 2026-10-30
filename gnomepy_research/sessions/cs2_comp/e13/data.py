@@ -58,6 +58,7 @@ class Bundle:
     rankings: pd.DataFrame
     moves: pd.DataFrame
     faceit_level: dict[int, float]
+    devs: dict[tuple[int, int, int], float]   # (map row, 0 for side a / 1 for b, player) -> score relative to his five
 
 
 def hltv_maps(data: Path, before: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -71,7 +72,8 @@ def hltv_maps(data: Path, before: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFr
         & (h.team_a_score + h.team_b_score > 0) & (h.team_a_score != h.team_b_score)
     m = h[ok]
     maps = pd.DataFrame({
-        "t": m.t, "src": HLTV, "match_id": m.match_id.astype(str), "map_pos": m.map_position_in_series.fillna(0).astype(int),
+        "t": m.t, "src": HLTV, "match_id": m.match_id.astype(str), "map_name": m.map_name.astype(str),
+        "map_pos": m.map_position_in_series.fillna(0).astype(int),
         "team_a": m.team_a_id.astype(np.int64), "team_b": m.team_b_id.astype(np.int64),
         "players_a": m.players_a, "players_b": m.players_b,
         "rounds_a": m.team_a_score.astype(int), "rounds_b": m.team_b_score.astype(int), "division": UNKNOWN_DIVISION,
@@ -115,7 +117,8 @@ def faceit_maps(data: Path, before: pd.Timestamp) -> tuple[pd.DataFrame, dict[in
     finished = pd.to_datetime(fm.match_id.map(meta.finished_at), unit="s")
     team = lambda hl, uuid: np.where(hl.notna(), hl.fillna(0).astype(np.int64), [synthetic_id(u) for u in uuid])
     maps = pd.DataFrame({
-        "t": finished, "src": FACEIT, "match_id": fm.match_id.astype(str), "map_pos": fm.map_position_in_series.fillna(0).astype(int),
+        "t": finished, "src": FACEIT, "match_id": fm.match_id.astype(str), "map_name": fm.map_name.astype(str),
+        "map_pos": fm.map_position_in_series.fillna(0).astype(int),
         "team_a": team(fm.team_a_id, fm.team_a_faceit_id), "team_b": team(fm.team_b_id, fm.team_b_faceit_id),
         "players_a": fm.players_a, "players_b": fm.players_b,
         "rounds_a": fm.team_a_score.astype(int), "rounds_b": fm.team_b_score.astype(int),
@@ -129,6 +132,41 @@ def faceit_maps(data: Path, before: pd.Timestamp) -> tuple[pd.DataFrame, dict[in
     return maps, level
 
 
+def player_stats(data: Path, before: pd.Timestamp, maps: pd.DataFrame, use_faceit: bool) -> pd.DataFrame:
+    """One row per (map row, player) with a per-map performance score relative to his four teammates on that map:
+    HLTV rating on HLTV maps, (kills - deaths) per round on FACEIT maps."""
+    rows = []
+    for side in ("a", "b"):
+        e = maps[["match_id", "map_name", "map_pos", "src", f"players_{side}", "rounds_a", "rounds_b"]].rename(
+            columns={f"players_{side}": "player"}).explode("player")
+        e["player"] = e.player.astype(np.int64)
+        e["side"] = side
+        e["map_row"] = e.index.to_numpy()
+        rows.append(e)
+    e = pd.concat(rows, ignore_index=True)
+    h = load(data, "hltv/cs2_player_map_stats", before, ["match_id", "map_name", "player_id", "side", "rating", "match_date"])
+    h = h[(h.side == "all") & h.rating.notna()]
+    h = pd.DataFrame({"match_id": h.match_id.astype(str), "map_name": h.map_name.astype(str),
+                      "player": h.player_id.astype(np.int64), "value": h.rating.astype(float)}).drop_duplicates(["match_id", "map_name", "player"])
+    out = [e[e.src == HLTV].merge(h, on=["match_id", "map_name", "player"])]
+    if use_faceit:
+        f = load(data, "faceit/faceit_player_map_stats", before, ["match_id", "map_position_in_series", "faceit_id", "kills", "deaths"])
+        link = pd.read_parquet(Path(data) / "faceit/hltv_faceit_map.parquet")
+        to_hltv = dict(zip(link.faceit_id, link.hltv_id.astype(np.int64)))
+        f = f[f.kills.notna() & f.deaths.notna()]
+        f = pd.DataFrame({"match_id": f.match_id.astype(str), "map_pos": f.map_position_in_series.fillna(0).astype(int),
+                          "player": [int(to_hltv[u]) if u in to_hltv else synthetic_id(u) for u in f.faceit_id],
+                          "kd": (f.kills - f.deaths).astype(float)}).drop_duplicates(["match_id", "map_pos", "player"])
+        fe = e[e.src == FACEIT].merge(f, on=["match_id", "map_pos", "player"])
+        fe["value"] = fe.kd / (fe.rounds_a + fe.rounds_b)
+        out.append(fe.drop(columns="kd"))
+    s = pd.concat(out, ignore_index=True)
+    g = s.groupby(["map_row", "side"]).value
+    s["n"] = g.transform("size")
+    s["dev"] = s.value - g.transform("mean")
+    return s[s.n == 5][["map_row", "side", "player", "src", "dev"]].reset_index(drop=True)
+
+
 def build(data: Path, before: pd.Timestamp, use_faceit: bool) -> Bundle:
     hm, series = hltv_maps(data, before)
     parts, level = [hm], {}
@@ -139,4 +177,6 @@ def build(data: Path, before: pd.Timestamp, use_faceit: bool) -> Bundle:
     rankings = load(data, "hltv/cs2_team_rankings", before)
     moves = load(data, "hltv/cs2_roster_moves", before)
     moves = moves.assign(event_date=_naive(moves.event_date)).sort_values(["event_date", "person_id"], kind="mergesort")
-    return Bundle(maps=maps, series=series, rankings=rankings, moves=moves, faceit_level=level)
+    st = player_stats(data, before, maps, use_faceit)
+    devs = dict(zip(zip(st.map_row.tolist(), (st.side == "b").astype(int).tolist(), st.player.tolist()), st.dev.tolist()))
+    return Bundle(maps=maps, series=series, rankings=rankings, moves=moves, faceit_level=level, devs=devs)
