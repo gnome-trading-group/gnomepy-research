@@ -4,10 +4,11 @@ e12 predictions: P(team A wins the bo3) for every target series, from data befor
     python -m gnomepy_research.sessions.cs2_comp.e12.predict --data <bundle> --targets <targets parquet> --out <parquet>
         [--no-faceit] [--weeks 2026-04-06,2026-04-13]
 
-Per distinct week_cutoff: an HLTV-only skill fit, and with FACEIT on a second fit on HLTV + FACEIT maps whose fives
-come from the newest appearance in either source. The logistic layer below combines them; its weights were fitted by
-`dev.py` on the Apr 2025 - Mar 2026 weekly walk-forward (run as two half-year pieces), all of it before the first
-tune cutoff, so they are point-in-time for every target.
+Per distinct week_cutoff: an HLTV-only skill fit, and with FACEIT on a second fit on HLTV + FACEIT maps. Each side is
+priced with its announced five (`team_x_lineup_ids` of the targets). The logistic layer below combines the prices;
+its weights were fitted by `dev.py` on the Apr 2025 - Mar 2026 weekly walk-forward (run as two half-year pieces, each
+dev series priced with its own announced fives), all of it before the first tune cutoff, so they are point-in-time
+for every target.
 """
 from __future__ import annotations
 
@@ -24,8 +25,8 @@ from gnomepy_research.sessions.cs2_comp.e12.model import Config, series_price
 
 CONFIG_HLTV = Config(sigma=0.5, half_life_days=300.0, rating_gamma=0.6, rating_sd=0.31)
 CONFIG_FACEIT = Config(sigma=0.5, half_life_days=300.0, rating_gamma=0.6, rating_sd=0.31)
-LAYER_HLTV = {"zh": 0.727237, "zh_thin": -0.093612, "standin": -0.082797, "idle": -0.037279}
-LAYER_FACEIT = {"zh": 0.319305, "zh_thin": -0.051195, "standin": -0.089154, "idle": -0.021486, "zf": 0.418045, "zf_thin": -0.055322}
+LAYER_HLTV = {"zh": 0.776532, "zh_thin": -0.039507, "standin": -0.079754, "idle": -0.040348}
+LAYER_FACEIT = {"zh": 0.149912, "zh_thin": -0.043914, "standin": -0.099792, "idle": -0.026092, "zf": 0.646569, "zf_thin": 0.00154}
 
 
 def _logit(p: np.ndarray) -> np.ndarray:

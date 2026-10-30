@@ -19,9 +19,8 @@ HLTV map ratings relative to teammates are a third measurement, as in the Bayes 
 Round results only see a five's mean; ratings say who in it carries the five, which matters whenever the five a team
 fields next is not the five it was rated with.
 
-Lineups going into a series are not known before it (the target's own lineup rows are dated on the match day), so each
-team plays the five it fielded last. With FACEIT on, a team's most recent FACEIT five wins when it is newer than its
-last HLTV map: online teams play ESEA every week, and a roster change shows there first.
+A series is priced with the fives announced for it. The five each team fielded last (with FACEIT on, the newest
+across both sources) still sets how long the team has been idle, and stands in for a side without an announced five.
 
 The logistic layer (fitted on Apr 2025 - Mar 2026 weekly walk-forward predictions, before every tune cutoff) takes
 logit of the skill price and A-minus-B differences of availability features (recent stand-in use, days since the five
