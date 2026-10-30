@@ -8,7 +8,7 @@ contributes nothing instead of a level-shifted guess.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -31,6 +31,7 @@ class ModelConfig:
     faceit_lineup_days: float = 21.0
     newcomer_prob: float = 0.0
     hltv_variants: tuple = ()
+    faceit_fast_tau: float = 0.03
 
 
 class Model:
@@ -45,6 +46,7 @@ class Model:
         self.h = Filter(cfg.hltv, streams, rank_points)
         self.extra = [Filter(v, streams, rank_points) for v in cfg.hltv_variants]
         self.f = Filter(cfg.faceit, streams, rank_points) if cfg.use_faceit else None
+        self.f_fast = Filter(replace(cfg.faceit, tau=cfg.faceit_fast_tau), streams, rank_points) if cfg.use_faceit and cfg.faceit_fast_tau > 0 else None
 
     def advance(self, day: float) -> None:
         self.h.advance(day)
@@ -52,6 +54,8 @@ class Model:
             h.advance(day)
         if self.f is not None:
             self.f.advance(day)
+        if self.f_fast is not None:
+            self.f_fast.advance(day)
 
     def _uncertainty_weighted(self, ids: np.ndarray, t: float) -> float:
         """FACEIT skill of each covered player, weighted by how unsure the HLTV filter still is about him."""
@@ -175,6 +179,8 @@ class Model:
                 continue
             s, v, n = (0.0, 0.0, 0) if not len(ids) else self.f.profile(ids, t)
             row[f"f_s_{side}"], row[f"f_v_{side}"], row[f"f_n_{side}"] = s, v, n
+            if self.f_fast is not None:
+                row[f"ff_s_{side}"] = 0.0 if not len(ids) else self.f_fast.profile(ids, t)[0]
             row[f"f_su_{side}"] = 0.0 if not len(ids) else self._uncertainty_weighted(ids, t)
             row[f"prac14_{side}"] = self.practice_level(ids, cutoff_day, 14.0)
             row[f"prac90_{side}"] = self.practice_level(ids, cutoff_day, 90.0)

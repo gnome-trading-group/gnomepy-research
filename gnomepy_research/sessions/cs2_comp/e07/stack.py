@@ -27,6 +27,7 @@ FEATURES = {
     "z_ens": lambda d: logit(d.q_ens.to_numpy()),
     "z_avg": lambda d: 0.5 * (logit(d.q_soft.to_numpy()) + logit(d.q_last.to_numpy())),
     "faceit_skill": lambda d: (d.f_s_a - d.f_s_b).to_numpy(float),
+    "faceit_form": lambda d: ((d.ff_s_a - d.f_s_a) - (d.ff_s_b - d.f_s_b)).to_numpy(float),
     "faceit_skill_unsure": lambda d: (d.f_su_a - d.f_su_b).to_numpy(float),
     "faceit_skill_thin": lambda d: (d.f_s_a * _thin_weight(d.tm90_a) - d.f_s_b * _thin_weight(d.tm90_b)).to_numpy(float),
     "faceit_coverage": lambda d: ((d.f_n_a - d.f_n_b) / 5.0).to_numpy(float),
