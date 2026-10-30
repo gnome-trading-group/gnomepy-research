@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from gnomepy_research.sessions.cs2_comp.e10.run import TRAIN_START, Pass, build_
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True, type=Path)
-    ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--out", type=Path, default=Path(os.environ.get("OUTPUT_DIR", "out")))
     ap.add_argument("--configs", required=True)
     a = ap.parse_args()
     configs = json.loads(a.configs) if a.configs.startswith("[") else json.loads(Path(a.configs).read_text())
