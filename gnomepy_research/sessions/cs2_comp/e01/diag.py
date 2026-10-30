@@ -35,6 +35,8 @@ CONFIGS = {
     "j_hltv_long_p01": Config(faceit=False, perf_weight=0.01, **LONG),
     "j_w03_long_lin60": Config(faceit_weight=0.3, lineup_days=60, **LONG),
     "j_w03_long_lin240": Config(faceit_weight=0.3, lineup_days=240, **LONG),
+    "j_final": Config(),
+    "j_final_hltv": Config(faceit=False),
     "j_w03_long_r_C10": Config(faceit_weight=0.3, round_weighted=True, C=10.0, **LONG),
     "j_w03_hl500": Config(faceit_weight=0.3, half_life_days=500.0, window_days=1000),
 }

@@ -28,11 +28,11 @@ HLTV, FACEIT = 0, 1
 class Config:
     faceit: bool = True
     faceit_weight: float = 0.3
-    half_life_days: float = 365.0
-    window_days: int = 730
+    half_life_days: float = 1000.0
+    window_days: int = 1000
     lineup_days: int = 120
-    C: float = 1.0
-    perf_weight: float = 0.0
+    C: float = 0.7
+    perf_weight: float = 0.01
     round_weighted: bool = False
 
 
