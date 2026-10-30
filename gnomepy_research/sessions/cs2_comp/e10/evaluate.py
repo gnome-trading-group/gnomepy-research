@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cs2_comp.e10.predict import build_config, calibrate, logit
+from gnomepy_research.sessions.cs2_comp.e10.predict import build_config, calibrate
 from gnomepy_research.sessions.cs2_comp.e10.run import TRAIN_START, Pass, monday_range
 
 DEV_FIRST, DEV_LAST = pd.Timestamp("2025-10-06"), pd.Timestamp("2026-03-23")

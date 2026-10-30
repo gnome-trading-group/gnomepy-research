@@ -65,7 +65,7 @@ def new_index(data_dir: Path) -> PlayerIndex:
     return PlayerIndex({}, {}, dict(zip(m.faceit_id, m.hltv_id.astype(int))))
 
 
-def hltv_maps(data_dir: Path, before: pd.Timestamp, ranks_cols: bool = False) -> pd.DataFrame:
+def hltv_maps(data_dir: Path, before: pd.Timestamp) -> pd.DataFrame:
     h = load(data_dir, "hltv/cs2_match_history", before)
     h = h[~showmatch_mask(h) & (h.team_a_score != h.team_b_score)].copy()
     ok = h.team_a_player_ids.map(lambda x: x is not None and len(x) == LINEUP) \
