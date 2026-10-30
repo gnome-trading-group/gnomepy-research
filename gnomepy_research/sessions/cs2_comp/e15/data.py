@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from gnomepy_research.models.cs2.hltv.bayes_series import event_region
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.bundle import load
 
@@ -27,6 +28,8 @@ HLTV, FACEIT = 0, 1
 # ESEA league ladder, lowest to highest: the division a FACEIT-only player competes in is his prior class.
 DIVISIONS = (("open", 1), ("entry", 2), ("intermediate", 3), ("main", 4), ("advanced", 5), ("challenger", 5), ("premier", 6))
 N_DIVISIONS = 7
+# FACEIT server regions on the region codes of bayes_series.event_region (1 Europe .. 6 CIS, 0 unknown).
+FACEIT_REGION = {"EU": 1, "NA": 2, "SA": 3, "SEA": 4, "OCE": 5}
 
 
 def hashed_id(faceit_id: str) -> int:
@@ -86,11 +89,12 @@ def _hltv_maps(data_dir: Path) -> pd.DataFrame:
         "five_a": h.five_a.to_numpy(), "five_b": h.five_b.to_numpy(), "rounds_a": ka, "rounds": n,
         "bo_type": h.bo_type.fillna(0).to_numpy(int), "tier": h.event_tier.fillna(0).to_numpy(int),
         "is_lan": h.is_lan.fillna(0).to_numpy(int), "division": 0,
+        "region": np.array([event_region(e) for e in h.event_name]),
     })
 
 
 def _faceit_maps(data_dir: Path) -> pd.DataFrame:
-    fm = load(data_dir, "faceit/faceit_matches", columns=["match_id", "finished_at", "competition_name", "has_stats"])
+    fm = load(data_dir, "faceit/faceit_matches", columns=["match_id", "finished_at", "competition_name", "has_stats", "region"])
     fm = fm[fm.has_stats.fillna(False)]
     ex = load(data_dir, "faceit/faceit_exclusions")
     dead_series = set(ex.loc[ex.map_name.isna(), "match_id"])
@@ -113,6 +117,7 @@ def _faceit_maps(data_dir: Path) -> pd.DataFrame:
     meta = fm.set_index("match_id")
     finished = pd.to_datetime(meta.finished_at.reindex(fh.match_id).to_numpy(), unit="s")
     comp = meta.competition_name.reindex(fh.match_id).to_numpy()
+    region = meta.region.reindex(fh.match_id).map(FACEIT_REGION).fillna(0).astype(int).to_numpy()
 
     def team(hltv_team, faceit_team):
         return np.array([int(h) if pd.notna(h) else hashed_id(f) for h, f in zip(hltv_team, faceit_team)], dtype=np.int64)
@@ -125,7 +130,7 @@ def _faceit_maps(data_dir: Path) -> pd.DataFrame:
         "team_a": team(fh.team_a_id, fh.team_a_faceit_id), "team_b": team(fh.team_b_id, fh.team_b_faceit_id),
         "five_a": fh.five_a.to_numpy(), "five_b": fh.five_b.to_numpy(), "rounds_a": ka, "rounds": n,
         "bo_type": fh.bo_type.fillna(0).to_numpy(int), "tier": -1, "is_lan": fh.is_lan.fillna(0).to_numpy(int),
-        "division": np.array([division(c) for c in comp]),
+        "division": np.array([division(c) for c in comp]), "region": region,
     })
 
 

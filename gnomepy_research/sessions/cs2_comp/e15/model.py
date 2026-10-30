@@ -29,6 +29,8 @@ from gnomepy_research.models.cs2.hltv.bayes_series import UNRANKED
 from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
 from gnomepy_research.sessions.cs2_comp.e15.data import FACEIT, HLTV, LINEUP_SIZE, N_DIVISIONS
 
+N_REGIONS = 7
+
 _GH_X, _GH_W = np.polynomial.hermite_e.hermegauss(21)
 _GH_W = _GH_W / _GH_W.sum()
 _GRID = np.linspace(-8.0, 8.0, 3201)
@@ -51,6 +53,9 @@ class Config:
     # Second measurement per source: each player's map performance relative to his own five's mean, which splits a
     # five's strength among its players (rounds only see the five's mean). Weight is its credibility, like a map's.
     rating_weight: float = 0.0
+    # Home-region offsets (Europe fixed at zero): regional scenes meet rarely, so their levels are set by the few
+    # cross-region maps rather than by each team's class prior. 0 switches them off.
+    sigma_region: float = 0.0
 
 
 @dataclass
@@ -68,6 +73,8 @@ class Fit:
     hltv_seen: set = field(default_factory=set)
     theta_var: np.ndarray = None
     gamma_var: np.ndarray = None
+    home: dict = field(default_factory=dict)
+    rho: np.ndarray = None
     map_table: np.ndarray = None
 
     def __post_init__(self):
@@ -154,6 +161,17 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
     n_f = F.shape[1]
     inv0, invt = 1.0 / cfg.sigma0 ** 2, 1.0 / cfg.sigma_team ** 2
 
+    home = _home_regions(maps)
+    n_reg = N_REGIONS if cfg.sigma_region > 0 else 0
+    R = sp.csr_matrix((n_m, 0))
+    if n_reg:
+        ra = np.array([home.get(int(t), 0) for t in maps.team_a.to_numpy()])
+        rb = np.array([home.get(int(t), 0) for t in maps.team_b.to_numpy()])
+        R = (sp.csr_matrix((np.ones(n_m), (np.arange(n_m), ra)), shape=(n_m, n_reg))
+             - sp.csr_matrix((np.ones(n_m), (np.arange(n_m), rb)), shape=(n_m, n_reg)))[:, 2:].tocsr()
+    RT = R.T.tocsr()
+    n_rho = R.shape[1]
+
     rr = _rating_rows(maps, ratings, ia, ib, {int(p): i for i, p in enumerate(players)}) \
         if cfg.rating_weight > 0 and ratings is not None else pd.DataFrame()
     n_r = len(rr)
@@ -173,35 +191,39 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
     # Optimised in prior-whitened coordinates, theta = F beta + sigma0 u and gamma = sigma_team z: the same optimum,
     # but a team effect and its five's mean are nearly collinear, which leaves L-BFGS crawling along a narrow valley
     # in the raw coordinates once FACEIT's tens of thousands of thinly observed players are in.
+    n_x = n_p + n_t + n_f + n_rho
+
     def unpack(x):
-        u, z, beta = x[:n_p], x[n_p:n_p + n_t], x[n_p + n_t:n_p + n_t + n_f]
-        return F @ beta + cfg.sigma0 * u, cfg.sigma_team * z, u, z, beta
+        u, z, beta, v = x[:n_p], x[n_p:n_p + n_t], x[n_p + n_t:n_p + n_t + n_f], x[n_p + n_t + n_f:n_x]
+        return F @ beta + cfg.sigma0 * u, cfg.sigma_team * z, u, z, beta, v
 
     def objective(x):
-        theta, gamma, u, z, beta = unpack(x)
-        d = A @ theta + T @ gamma
+        theta, gamma, u, z, beta, v = unpack(x)
+        d = A @ theta + T @ gamma + cfg.sigma_region * (R @ v)
         log_p = -np.logaddexp(0.0, -d)
         log_q = -np.logaddexp(0.0, d)
-        f = -np.sum(w * (k * log_p + (n - k) * log_q)) + 0.5 * (u @ u + z @ z + beta @ beta)
+        f = -np.sum(w * (k * log_p + (n - k) * log_q)) + 0.5 * (u @ u + z @ z + beta @ beta + v @ v)
         r = w * (k - n / (1.0 + np.exp(-d)))
         g_theta = -(AT @ r)
         extra = []
         if n_r:
-            slope = x[n_p + n_t + n_f:]
+            slope = x[n_x:]
             bt = B @ theta
             e = dev - slope[r_src] * bt
             f += 0.5 * np.sum(omega * e * e) + 0.5 * np.sum((slope - 1.0) ** 2)
             g_theta = g_theta - BT @ (omega * e * slope[r_src])
             extra = [np.array([-np.sum((omega * e * bt)[r_src == s]) for s in (HLTV, FACEIT)]) + (slope - 1.0)]
-        g = np.concatenate([cfg.sigma0 * g_theta + u, -cfg.sigma_team * (TT @ r) + z, F.T @ g_theta + beta] + extra)
+        g = np.concatenate([cfg.sigma0 * g_theta + u, -cfg.sigma_team * (TT @ r) + z, F.T @ g_theta + beta,
+                            -cfg.sigma_region * (RT @ r) + v] + extra)
         return f, g
 
-    x0 = np.concatenate([np.zeros(n_p + n_t + n_f), np.ones(n_g)])
+    x0 = np.concatenate([np.zeros(n_x), np.ones(n_g)])
     res = opt.minimize(objective, x0, jac=True, method="L-BFGS-B",
                        options={"maxiter": 5000, "maxcor": 20, "ftol": 1e-12, "gtol": 1e-6})
-    theta, gamma, _, _, beta = unpack(res.x)
-    x = np.concatenate([theta, gamma, beta, res.x[n_p + n_t + n_f:]])
-    d = A @ x[:n_p] + T @ x[n_p:n_p + n_t]
+    theta, gamma, _, _, beta, v = unpack(res.x)
+    rho = np.concatenate([np.zeros(2), cfg.sigma_region * v]) if n_rho else np.zeros(N_REGIONS)
+    x = np.concatenate([theta, gamma, beta, res.x[n_x:]])
+    d = A @ x[:n_p] + T @ x[n_p:n_p + n_t] + R @ rho[2:n_reg]
     s_ = 1.0 / (1.0 + np.exp(-d))
     h = w * n * s_ * (1.0 - s_)
     info = A.multiply(A).T @ h + inv0
@@ -218,7 +240,19 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
                tidx={int(t): i for i, t in enumerate(teams)}, gamma=x[n_p:n_p + n_t], beta=x[n_p + n_t:n_p + n_t + n_f],
                rank_strength=strength_of, strength_mu=mu, strength_sd=sd, latest_five=latest,
                hltv_seen={int(p) for p, s in zip(players, seen) if s > 0},
-               theta_var=np.asarray(theta_var).ravel(), gamma_var=np.asarray(gamma_var).ravel())
+               theta_var=np.asarray(theta_var).ravel(), gamma_var=np.asarray(gamma_var).ravel(), home=home, rho=rho)
+
+
+def _home_regions(maps: pd.DataFrame) -> dict:
+    """Each team's most frequent known region among its window maps (ties to the lower code)."""
+    rows = pd.DataFrame({"team": np.concatenate([maps.team_a.to_numpy(), maps.team_b.to_numpy()]),
+                         "region": np.concatenate([maps.region.to_numpy(), maps.region.to_numpy()])})
+    rows = rows[rows.region > 0]
+    if rows.empty:
+        return {}
+    c = rows.groupby(["team", "region"]).size().reset_index(name="n").sort_values(["team", "n", "region"],
+                                                                                  ascending=[True, False, True])
+    return {int(t): int(r) for t, r in zip(*c.drop_duplicates("team")[["team", "region"]].to_numpy().T)}
 
 
 def team_rating(f: Fit, team: int) -> tuple[float, float]:
@@ -231,6 +265,7 @@ def team_rating(f: Fit, team: int) -> tuple[float, float]:
     known = [f.pidx.get(p) for p in five]
     mean = np.mean([f.theta[i] if i is not None else newcomer for i in known])
     var = sum(f.theta_var[i] if i is not None else f.cfg.sigma0 ** 2 for i in known) / LINEUP_SIZE ** 2
+    mean += f.rho[f.home.get(int(team), 0)]
     t = f.tidx.get(int(team))
     if t is None:
         return float(mean), float(var + f.cfg.sigma_team ** 2)
