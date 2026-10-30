@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from gnomepy_research.sessions.cs2_comp.e07.data import RankPoints, Streams
+from gnomepy_research.sessions.cs2_comp.e07.data import LINEUP, RankPoints, Streams
 from gnomepy_research.sessions.cs2_comp.e07.filter import Filter, FilterConfig
 from gnomepy_research.sessions.cs2_comp.e07.lineup import RosterMoves
 
@@ -43,6 +43,17 @@ class Model:
         if self.f is not None:
             self.f.advance(day)
 
+    def _uncertainty_weighted(self, ids: np.ndarray, t: float) -> float:
+        """FACEIT skill of each covered player, weighted by how unsure the HLTV filter still is about him."""
+        covered = self.f.faceit_games[ids] > 0
+        if not covered.any():
+            return 0.0
+        c = self.cfg.hltv
+        seen = self.h.seen[ids]
+        var = np.where(np.isnan(seen), c.sigma0 ** 2, self.h.var[ids] + c.tau ** 2 * np.maximum(t - np.nan_to_num(seen), 0.0))
+        weight = np.minimum(var / c.sigma0 ** 2, 1.0)
+        return float(((self.f.mu[ids] - self.cfg.faceit.faceit_prior) * weight)[covered].sum() / LINEUP)
+
     def lineup(self, team: int, cutoff_day: float) -> tuple[list, float | None]:
         """Slots of the team's expected five (player index, or None when unknown) and the day of its last HLTV map."""
         known = self.h.last_five.get(team)
@@ -57,10 +68,10 @@ class Model:
     def features(self, team_a: int, team_b: int, t: float, cutoff_day: float) -> dict:
         slots = {side: self.lineup(team, cutoff_day) for side, team in (("a", team_a), ("b", team_b))}
         q_last, mean_last, var_last = self.h.price(team_a, team_b, t, cutoff_day)
-        q, mean, var = self.h.price(team_a, team_b, t, cutoff_day,
-                                    lineups=(slots["a"][0] if slots["a"][1] is not None else None,
-                                             slots["b"][0] if slots["b"][1] is not None else None)) \
-            if self.moves is not None and (slots["a"][1] is not None or slots["b"][1] is not None) else (q_last, mean_last, var_last)
+        if self.moves is None:
+            q, mean, var = q_last, mean_last, var_last
+        else:
+            q, mean, var = self.h.price(team_a, team_b, t, cutoff_day, lineups=(slots["a"][0], slots["b"][0]))
         row = {"q_h": q, "mean_h": mean, "var_h": var, "q_last": q_last}
         for side, team in (("a", team_a), ("b", team_b)):
             slot, last_t = slots[side]
@@ -74,6 +85,7 @@ class Model:
                 continue
             s, v, n = (0.0, 0.0, 0) if not len(ids) else self.f.profile(ids, t)
             row[f"f_s_{side}"], row[f"f_v_{side}"], row[f"f_n_{side}"] = s, v, n
+            row[f"f_su_{side}"] = 0.0 if not len(ids) else self._uncertainty_weighted(ids, t)
             row[f"five_f_{side}"] = 0 if len(ids) < 5 else self.f.five_maps(ids, t, FIVE_DAYS)
             row[f"act_f_{side}"] = 0.0 if not len(ids) else self.f.activity(ids, t, ACTIVITY_DAYS)
         return row

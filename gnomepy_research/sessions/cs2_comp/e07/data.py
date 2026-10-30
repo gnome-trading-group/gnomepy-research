@@ -80,7 +80,9 @@ def _faceit_maps(data_dir, before) -> pd.DataFrame:
     f = f[f["drop"].isna()].drop(columns="drop")
     five = f.team_a_faceit_ids.map(lambda x: len(x) == LINEUP) & f.team_b_faceit_ids.map(lambda x: len(x) == LINEUP)
     f = f[five & (f.team_a_score != f.team_b_score)].copy()
-    f["t"] = _days(f.match_time.fillna(f.match_date))
+    done = bundle.load(data_dir, "faceit/faceit_matches", before, ["match_id", "finished_at"])
+    f = f.merge(done, on="match_id")
+    f["t"] = f.finished_at.to_numpy(float) / 86_400
     return f.sort_values(["t", "match_id", "map_position_in_series"], kind="stable").reset_index(drop=True)
 
 

@@ -28,6 +28,8 @@ def designs(d: pd.DataFrame, zcol: str = "q_h") -> dict[str, np.ndarray]:
         thin_any = (np.minimum(d.tm90_a, d.tm90_b) <= THIN_MAPS).to_numpy(float)
         dn = ((d.f_n_a - d.f_n_b) / 5).to_numpy()
         d5 = (np.log1p(d.five_h_a) - np.log1p(d.five_h_b) + np.log1p(d.five_f_a) - np.log1p(d.five_f_b)).to_numpy()
+        dsu = (d.f_su_a - d.f_su_b).to_numpy()
+        out.update({"R": np.c_[z, dsu], "S": np.c_[z, dfs, dsu], "T": np.c_[z, dsu, thin]})
         out.update({"B": np.c_[z, dfs], "K": np.c_[z, dfs, thin], "L": np.c_[z, dfs, thin, z * thin_any],
                     "O": np.c_[z, dfs, thin, dn], "P": np.c_[z, dfs, d5], "Q": np.c_[z, thin]})
     return out
