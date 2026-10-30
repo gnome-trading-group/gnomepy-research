@@ -55,6 +55,37 @@ class FilterConfig:
     sigma_series: float = 0.0
     # Adjust a team's last five with HLTV roster moves announced after that map and before the cutoff.
     roster_moves: bool = True
+    # When a team's last five held a stand-in (HLTV lineups flag), expect the most recent absent regular back.
+    standin_fix: bool = False
+    # Team effect on top of the five: what a lineup is worth beyond its players (roles, preparation, form), a
+    # random walk per team with faster drift than a player's skill. 0 switches it off.
+    team_sigma0: float = 0.0
+    team_tau: float = 0.02
+    # Ridge channel (ridge.py): a trailing-window refit of player and team strengths every Monday. A lineup there
+    # is a sum of five, so the filter's per-player prior sd of sigma0 on the lineup-mean scale is sigma0 / 5 per
+    # player: a penalty of 25 / sigma0^2, about 400; the team effect is held to a fraction of that.
+    ridge: bool = False
+    ridge_window_weeks: int = 52
+    ridge_half_life_weeks: float = 26.0
+    ridge_lam_player: float = 400.0
+    ridge_lam_team: float = 2000.0
+    ridge_team: bool = True
+    ridge_players: bool = True
+    ridge_faceit_weight: float = 0.5
+    # Team-only channel: the same trailing-window fit with no players, a decayed Bradley-Terry over map rounds
+    # on team ids, for what a lineup is worth beyond its five; sd about 0.2 on the lineup scale.
+    team_ridge: bool = False
+    team_ridge_lam: float = 25.0
+    # Ranking channel: the logit is the gap in log(1 + HLTV ranking points) at the latest ranking before the cutoff.
+    rank_channel: bool = False
+    # Rating channel: a player's map rating (HLTV 2.0; FACEIT maps through the kills, deaths and ADR terms of the
+    # same formula) minus 1 + rating_slope times the filter's pre-map round-logit gap from his side, tracked per
+    # player as an exponentially weighted mean with weight rating_alpha; a lineup is the mean of its five and the
+    # channel's logit is rating_kappa times the gap. Rounds say how a five did; this says who did it.
+    rating_channel: bool = False
+    rating_alpha: float = 0.1
+    rating_slope: float = 0.25
+    rating_kappa: float = 4.0
 
 
 def division(competition_name: str | None) -> str:
@@ -89,6 +120,10 @@ class SkillFilter:
         self._five_days: dict[frozenset, collections.deque] = collections.defaultdict(collections.deque)
         self.last_five: dict[int, tuple[int, ...]] = {}
         self.last_five_day: dict[int, pd.Timestamp] = {}
+        self.last_standins: dict[int, tuple[int, ...]] = {}
+        self.earlier_fives: dict[int, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=12))
+        # The pre-update round-logit gap of the last map observed, None when that map was skipped.
+        self.last_gap: float | None = None
         self._rank_dates: list[pd.Timestamp] = []
         self._rank_points: list[dict[int, float]] = []
         if rankings is not None and len(rankings):
@@ -97,20 +132,21 @@ class SkillFilter:
                 self._rank_dates.append(pd.Timestamp(day))
                 self._rank_points.append(dict(zip(g["team_id"].astype(int), g["points"].astype(float))))
 
-    def _points(self, team_id: int, day: pd.Timestamp) -> float:
+    def points(self, team_id: int, day: pd.Timestamp) -> float:
         i = bisect.bisect_left(self._rank_dates, day) - 1
         return self._rank_points[i].get(team_id, 0.0) if i >= 0 else 0.0
 
     def prior(self, hltv_team: int | None, day: pd.Timestamp, div: str) -> tuple[float, float]:
         if hltv_team is not None:
-            return self.cfg.a + self.cfg.b * math.log1p(self._points(hltv_team, day)), self.cfg.sigma0 ** 2
+            return self.cfg.a + self.cfg.b * math.log1p(self.points(hltv_team, day)), self.cfg.sigma0 ** 2
         return DIVISION_PRIOR[div] + self.cfg.faceit_prior_shift, self.cfg.faceit_sigma0 ** 2
 
     def _state(self, player: int, hltv_team: int | None, day: pd.Timestamp, div: str) -> tuple[float, float]:
+        team = player <= TEAM_ID_BASE
         if player not in self._mu:
-            return self.prior(hltv_team, day, div)
+            return (0.0, self.cfg.team_sigma0 ** 2) if team else self.prior(hltv_team, day, div)
         idle = max((day - self._seen[player]).days, 0)
-        return self._mu[player], self._var[player] + self.cfg.tau ** 2 * idle
+        return self._mu[player], self._var[player] + (self.cfg.team_tau if team else self.cfg.tau) ** 2 * idle
 
     def _five_maps(self, five: tuple[int, ...], day: pd.Timestamp) -> float:
         q = self._five_days.get(frozenset(five))
@@ -133,14 +169,20 @@ class SkillFilter:
                 cov[i, j] = cov[j, i] = self._cov.get((p, q), 0.0)
         return cov
 
-    def lineup(self, players: tuple[int, ...], hltv_team: int | None, day: pd.Timestamp, div: str = "other") -> Lineup:
+    def lineup(self, players: tuple[int, ...], key: int, hltv_team: int | None, day: pd.Timestamp, div: str = "other") -> Lineup:
         states = [self._state(p, hltv_team, day, div) for p in players]
         mus = [s[0] for s in states]
         weights = self._weights(mus)
         five_maps = self._five_maps(players, day) if len(players) == 5 else 0.0
         kappa = self.cfg.kappa_max * (1 - math.exp(-five_maps / self.cfg.c0))
+        ids = list(players)
+        if self.cfg.team_sigma0 > 0:
+            ids.append(team_state_id(key))
+            states.append(self._state(ids[-1], None, day, div))
+            mus.append(states[-1][0])
+            weights.append(1.0)
         strength = sum(w * m for w, m in zip(weights, mus))
-        return Lineup(list(players), mus, [s[1] for s in states], weights, strength, kappa, strength + kappa)
+        return Lineup(ids, mus, [s[1] for s in states], weights, strength, kappa, strength + kappa)
 
     def gap(self, a: Lineup, b: Lineup) -> tuple[float, float, np.ndarray, np.ndarray]:
         w = np.array(a.weights + [-x for x in b.weights])
@@ -149,18 +191,22 @@ class SkillFilter:
 
     def observe_map(self, day: pd.Timestamp, key_a: int, key_b: int, hltv_a: int | None, hltv_b: int | None,
                     players_a: tuple[int, ...], players_b: tuple[int, ...], rounds_a: int, rounds_b: int,
-                    source: str, div: str) -> None:
+                    source: str, div: str, standins_a: tuple[int, ...] = (), standins_b: tuple[int, ...] = ()) -> None:
+        self.last_gap = None
         if not players_a or not players_b:
             return
-        for key, five in ((key_a, players_a), (key_b, players_b)):
+        for key, five, standins in ((key_a, players_a, standins_a), (key_b, players_b, standins_b)):
             if len(five) == 5:
-                self.last_five[key], self.last_five_day[key] = five, day
-        a = self.lineup(players_a, hltv_a, day, div)
-        b = self.lineup(players_b, hltv_b, day, div)
+                if key in self.last_five and self.last_five[key] != five:
+                    self.earlier_fives[key].appendleft(self.last_five[key])
+                self.last_five[key], self.last_five_day[key], self.last_standins[key] = five, day, standins
+        a = self.lineup(players_a, key_a, hltv_a, day, div)
+        b = self.lineup(players_b, key_b, hltv_b, day, div)
         players = a.players + b.players
         if len(set(players)) != len(players):
             return
         d, s2, cov, w = self.gap(a, b)
+        self.last_gap = d
         n = rounds_a + rounds_b
         pi = 1 / (1 + math.exp(-d))
         rho, weight = (self.cfg.faceit_rho, self.cfg.faceit_weight) if source == FACEIT else (self.cfg.rho, 1.0)
@@ -188,6 +234,20 @@ class SkillFilter:
                     q.popleft()
 
 
+def regulars_back(f: SkillFilter, key: int, five: tuple[int, ...]) -> tuple[int, ...]:
+    """The last five with each flagged stand-in replaced by the most recently seen regular who is absent."""
+    standins = [p for p in f.last_standins.get(key, ()) if p in five]
+    if not standins:
+        return five
+    players = list(five)
+    absent = [p for earlier in f.earlier_fives.get(key, ()) for p in earlier if p not in players]
+    for s in standins:
+        if not absent:
+            break
+        players[players.index(s)] = absent.pop(0)
+    return tuple(players)
+
+
 class SeriesPricer:
     """Round-logit gap ~ N(d, s2) to P(bo3): series-shared uncertainty integrated outside the bo3 polynomial,
     map noise inside it, on a grid so pricing is a lookup."""
@@ -206,6 +266,14 @@ class SeriesPricer:
 def placeholder_five(team_key: int, n: int = 5) -> tuple[int, ...]:
     """Ids no player ever has, so a team with no map in the data prices from its prior alone."""
     return tuple(-(10 ** 15) - abs(int(team_key)) * 10 - k for k in range(n))
+
+
+# FACEIT-derived player ids come from 15 hex digits, so they stay above -2^60; team states live below -2^61.
+TEAM_ID_BASE = -(2 ** 61)
+
+
+def team_state_id(team_key: int) -> int:
+    return TEAM_ID_BASE - abs(int(team_key))
 
 
 ADD_KINDS = {"join", "transfer", "activated", "loan_return", "loan"}

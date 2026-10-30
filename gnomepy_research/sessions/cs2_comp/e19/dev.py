@@ -15,7 +15,7 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cs2_comp.e19.predict import CHANNELS, apply_stack, calibrate, features
+from gnomepy_research.sessions.cs2_comp.e19.predict import CALIBRATION_WEEKS, CHANNELS, apply_stack, calibrate, features
 
 
 def log_loss(p, y):
@@ -23,10 +23,10 @@ def log_loss(p, y):
     return -(y * np.log(p) + (1 - y) * np.log(1 - p))
 
 
-def stacked(w: pd.DataFrame, channels: tuple[str, ...]) -> pd.Series:
+def stacked(w: pd.DataFrame, channels: tuple[str, ...], weeks: int) -> pd.Series:
     out = pd.Series(np.nan, index=w.index)
     for m, g in w.groupby("week"):
-        out[g.index] = apply_stack(features(g, channels), calibrate(w, m, channels))
+        out[g.index] = apply_stack(features(g, channels), calibrate(w, m, channels, weeks))
     return out
 
 
@@ -36,6 +36,7 @@ def main() -> None:
     ap.add_argument("--from", dest="start", default="2026-01-05")
     ap.add_argument("--to", dest="end", default="2026-03-30")
     ap.add_argument("--channels", action="append")
+    ap.add_argument("--cal-weeks", type=int, action="append")
     a = ap.parse_args()
     base = None
     rng = np.random.default_rng(0)
@@ -43,14 +44,14 @@ def main() -> None:
         w = pd.read_parquet(path)
         present = tuple(c for c in CHANNELS if f"q_{c}" in w)
         subsets = [tuple(s.split(",")) for s in a.channels] if a.channels else [present[:1], present]
-        for channels in dict.fromkeys(subsets):
+        for channels, weeks in [(c, k) for c in dict.fromkeys(subsets) for k in (a.cal_weeks or [CALIBRATION_WEEKS])]:
             if any(c not in present for c in channels):
                 continue
-            q = stacked(w, channels)
+            q = stacked(w, channels, weeks)
             s = (w.week >= pd.Timestamp(a.start)) & (w.week < pd.Timestamp(a.end))
             l = pd.Series(log_loss(q[s], w.y[s].to_numpy(float)), index=w.match_id[s].to_numpy())
             raw = log_loss(w[f"q_{channels[0]}"][s], w.y[s].to_numpy(float)).mean()
-            line = f"{path.split('/')[-1]:28s} {'+'.join(channels):18s} n={int(s.sum())} raw({channels[0]}) {raw:.4f} stacked {l.mean():.4f}"
+            line = f"{path.split('/')[-1]:22s} {'+'.join(channels):18s} cal={weeks:3d} n={int(s.sum())} raw({channels[0]}) {raw:.4f} stacked {l.mean():.4f}"
             if base is None:
                 base = l
             else:
