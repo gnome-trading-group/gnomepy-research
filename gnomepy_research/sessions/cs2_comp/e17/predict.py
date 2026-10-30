@@ -2,13 +2,14 @@
 
     python -m gnomepy_research.sessions.cs2_comp.e17.predict --data <bundle dir> --targets <targets parquet> --out <parquet>
         [--no-faceit] [--faceit-weight W] [--faceit-prior-offset A] [--faceit-sigma0 S] [--calibration-months M]
-        [--calibration pooled|coverage]
+        [--calibration pooled|coverage] [--no-extra-features]
 
 The map stream (HLTV, plus FACEIT unless --no-faceit) is consumed chronologically by an HLTV-only filter and a unified
 filter. At each Monday every series of the coming week is priced from the state at that Monday: a team's lineup is the
 five it last fielded, on HLTV or FACEIT, before the cutoff. Past weeks' prices of bo3 HLTV series and their outcomes
-train a logistic calibration on the HLTV-only price, the ranking-points gap and FACEIT's shift of the price by
-coverage bucket (the HLTV-only features alone without FACEIT), refit for each target week on the trailing year.
+train a logistic calibration on the HLTV-only price, the ranking-points gap, a team Elo gap, the lineups' recent HLTV
+rating gap and FACEIT's shift of the price by coverage bucket (the HLTV-only features alone without FACEIT), refit for
+each target week on the trailing year.
 Everything is deterministic, so a rerun on a bundle cut at one week's cutoff reproduces that week.
 """
 from __future__ import annotations
@@ -23,12 +24,47 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.player_skill import PlayerSkillConfig
-from gnomepy_research.sessions.cs2_comp.e17.data import FACEIT, HLTV, hltv_maps, hltv_series, logit, map_stream, monday, rankings
+from gnomepy_research.sessions.cs2_comp.e17.data import FACEIT, HLTV, hltv_maps, hltv_series, logit, map_stream, monday, player_ratings, rankings
 from gnomepy_research.sessions.cs2_comp.e17.skill import SkillFilter, SourceConfig
 
 UNKNOWN_FIVE = tuple(-(1 << 62) - k for k in range(1, 6))
 MIN_CALIBRATION_ROWS = 200
 RIDGE = 1e-3
+RATING_MAPS = 10
+RATING_SHRINK_MAPS = 5
+ELO_K = 20.0
+
+
+class TeamElo:
+    """A plain per-team Elo over HLTV maps: team-level strength beyond the five players, for the calibration."""
+
+    def __init__(self):
+        self._r: dict[int, float] = {}
+
+    def gap(self, a: int, b: int) -> float:
+        return (self._r.get(a, 1500.0) - self._r.get(b, 1500.0)) / 400.0
+
+    def observe(self, a: int | None, b: int | None, rounds_a: int, rounds_b: int) -> None:
+        if a is None or b is None or a == b:
+            return
+        ra, rb = self._r.get(a, 1500.0), self._r.get(b, 1500.0)
+        won = 1.0 if rounds_a > rounds_b else 0.0 if rounds_a < rounds_b else 0.5
+        step = ELO_K * (won - 1 / (1 + 10 ** ((rb - ra) / 400)))
+        self._r[a], self._r[b] = ra + step, rb - step
+
+
+def lineup_rating(ratings: dict, five: tuple[int, ...], cutoff: np.datetime64) -> float:
+    """Mean of the five's recent HLTV ratings before the cutoff, each shrunk toward 1.0 over the first few maps."""
+    total = 0.0
+    for p in five:
+        r = ratings.get(p)
+        if r is None:
+            total += 1.0
+            continue
+        i = int(np.searchsorted(r[0], cutoff, side="left"))
+        last = r[1][max(0, i - RATING_MAPS):i]
+        total += (last.sum() + RATING_SHRINK_MAPS) / (len(last) + RATING_SHRINK_MAPS)
+    return total / len(five)
 
 
 class LastLineups:
@@ -57,7 +93,7 @@ def fit_logistic(X: np.ndarray, y: np.ndarray) -> np.ndarray:
     return w
 
 
-def _features(f: SkillFilter, lineups: LastLineups, sources: tuple[int, ...], team_a: int, team_b: int,
+def _features(f: SkillFilter, lineups: LastLineups, sources: tuple[int, ...], ratings: dict, team_a: int, team_b: int,
               day: pd.Timestamp, cutoff: pd.Timestamp) -> dict:
     five_a, src_a = lineups.get(team_a, sources)
     five_b, src_b = lineups.get(team_b, sources)
@@ -65,8 +101,10 @@ def _features(f: SkillFilter, lineups: LastLineups, sources: tuple[int, ...], te
     b = f.lineup(five_b, team_b, day, cutoff)
     d, s2, q = f.series_price(a, b)
     rank = math.log1p(f.points(team_a, cutoff)) - math.log1p(f.points(team_b, cutoff))
+    c64 = cutoff.to_datetime64()
     return {"d": d, "s2": s2, "q": q, "rank": rank, "known_a": src_a is not None, "known_b": src_b is not None,
-            "cov_a": sum(1 for p in five_a if f.faceit_games[p] > 0), "cov_b": sum(1 for p in five_b if f.faceit_games[p] > 0)}
+            "cov_a": sum(1 for p in five_a if f.faceit_games[p] > 0), "cov_b": sum(1 for p in five_b if f.faceit_games[p] > 0),
+            "rating": lineup_rating(ratings, five_a, c64) - lineup_rating(ratings, five_b, c64)}
 
 
 def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src: SourceConfig = SourceConfig(), log=print) -> pd.DataFrame:
@@ -78,6 +116,7 @@ def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src:
     t0 = time.time()
     stream = map_stream(data_dir, before, use_faceit)
     ranks = rankings(data_dir, before)
+    ratings = player_ratings(data_dir, before)
     train = hltv_series(hltv_maps(data_dir, before))
     train = train[train.bo_type == 3].copy()
     train["cutoff"] = monday(train.time)
@@ -89,6 +128,7 @@ def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src:
     if use_faceit:
         filters["u"] = (SkillFilter(cfg, src, ranks, use_faceit=True), (HLTV, FACEIT))
     lineups = LastLineups()
+    elo = TeamElo()
     weeks = sorted(set(monday(stream.time)) | set(train.cutoff) | set(targets.week_cutoff))
     train_by_week = {c: g for c, g in train.groupby("cutoff")}
     targets_by_week = {c: g for c, g in targets.groupby("week_cutoff")}
@@ -108,6 +148,8 @@ def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src:
                 f.observe_map(r.time.normalize(), r.source, r.team_a, r.team_b, r.players_a, r.players_b, r.rounds_a, r.rounds_b)
             lineups.update(r.source, r.team_a, r.players_a, r.time)
             lineups.update(r.source, r.team_b, r.players_b, r.time)
+            if r.source == HLTV:
+                elo.observe(r.team_a, r.team_b, r.rounds_a, r.rounds_b)
             if pos >= end:
                 break
         for kind, frame in (("train", train_by_week.get(c)), ("target", targets_by_week.get(c))):
@@ -115,9 +157,9 @@ def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src:
                 continue
             for s in frame.itertuples(index=False):
                 team_a, team_b = (int(s.team_a), int(s.team_b)) if kind == "train" else (int(s.team_a_id), int(s.team_b_id))
-                row = {"kind": kind, "match_id": s.match_id, "cutoff": c, "y": s.y if kind == "train" else np.nan}
+                row = {"kind": kind, "match_id": s.match_id, "cutoff": c, "y": s.y if kind == "train" else np.nan, "elo": elo.gap(team_a, team_b)}
                 for name, (f, sources) in filters.items():
-                    row.update({f"{k}_{name}": v for k, v in _features(f, lineups, sources, team_a, team_b, s.day, c).items()})
+                    row.update({f"{k}_{name}": v for k, v in _features(f, lineups, sources, ratings, team_a, team_b, s.day, c).items()})
                 snapshots.append(row)
     snap = pd.DataFrame(snapshots)
     log(f"filtered {pos} maps and priced {len(snap)} series in {time.time() - t0:.0f}s")
@@ -125,12 +167,14 @@ def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src:
 
 
 def run(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src: SourceConfig = SourceConfig(),
-        calibration_months: int = 12, calibration: str = "coverage", log=print) -> pd.DataFrame:
-    return calibrate(snapshot(data_dir, targets, use_faceit, src, log), use_faceit, calibration_months, calibration, log)
+        calibration_months: int = 12, calibration: str = "coverage", extra: bool = True, log=print) -> pd.DataFrame:
+    return calibrate(snapshot(data_dir, targets, use_faceit, src, log), use_faceit, calibration_months, calibration, extra, log)
 
 
-def _design(g: pd.DataFrame, use_faceit: bool, calibration: str) -> np.ndarray:
+def _design(g: pd.DataFrame, use_faceit: bool, calibration: str, extra: bool) -> np.ndarray:
     cols = [logit(g.q_h), g.rank_h.to_numpy(float)]
+    if extra:
+        cols += [g.elo.to_numpy(float), g.rating_h.to_numpy(float)]
     if use_faceit:
         shift = logit(g.q_u) - logit(g.q_h)
         if calibration == "coverage":
@@ -146,14 +190,15 @@ def _design(g: pd.DataFrame, use_faceit: bool, calibration: str) -> np.ndarray:
     return np.column_stack(cols + [np.ones(len(g))])
 
 
-def calibrate(snap: pd.DataFrame, use_faceit: bool, calibration_months: int, calibration: str = "coverage", log=print) -> pd.DataFrame:
+def calibrate(snap: pd.DataFrame, use_faceit: bool, calibration_months: int, calibration: str = "coverage", extra: bool = True,
+              log=print) -> pd.DataFrame:
     train = snap[snap.kind == "train"]
     out = []
     for c, g in snap[snap.kind == "target"].groupby("cutoff"):
         tr = train[(train.cutoff < c) & (train.cutoff >= c - pd.DateOffset(months=calibration_months))]
         if len(tr) >= MIN_CALIBRATION_ROWS:
-            w = fit_logistic(_design(tr, use_faceit, calibration), tr.y.to_numpy(float))
-            q = 1 / (1 + np.exp(-_design(g, use_faceit, calibration) @ w))
+            w = fit_logistic(_design(tr, use_faceit, calibration, extra), tr.y.to_numpy(float))
+            q = 1 / (1 + np.exp(-_design(g, use_faceit, calibration, extra) @ w))
         else:
             w = None
             q = (g.q_u if use_faceit else g.q_h).to_numpy(float)
@@ -161,7 +206,7 @@ def calibrate(snap: pd.DataFrame, use_faceit: bool, calibration_months: int, cal
         res = g[["match_id"]].copy()
         res["q"] = np.clip(q, 1e-3, 1 - 1e-3)
         res["fit_cutoff"] = c
-        for k in ("q_h", "cov_a_u", "cov_b_u", "known_a_u", "known_b_u", "q_u", "known_a_h", "known_b_h"):
+        for k in ("q_h", "cov_a_u", "cov_b_u", "known_a_u", "known_b_u", "q_u", "known_a_h", "known_b_h", "elo", "rating_h"):
             if k in g:
                 res[k] = g[k].to_numpy()
         out.append(res)
@@ -179,10 +224,11 @@ def main() -> None:
     ap.add_argument("--faceit-sigma0", type=float, default=SourceConfig.faceit_sigma0)
     ap.add_argument("--calibration-months", type=int, default=12)
     ap.add_argument("--calibration", choices=("pooled", "coverage"), default="coverage")
+    ap.add_argument("--no-extra-features", dest="extra", action="store_false", help="drop the team Elo and HLTV rating channel from the calibration")
     a = ap.parse_args()
     targets = pd.read_parquet(a.targets)
     src = SourceConfig(a.faceit_weight, a.faceit_prior_offset, a.faceit_sigma0)
-    pred = run(a.data, targets, a.faceit, src, a.calibration_months, a.calibration)
+    pred = run(a.data, targets, a.faceit, src, a.calibration_months, a.calibration, a.extra)
     pred = targets[["match_id"]].merge(pred, on="match_id", how="left")
     pred["fit_cutoff"] = pd.to_datetime(pred.fit_cutoff)
     out = Path(os.path.expandvars(a.out))

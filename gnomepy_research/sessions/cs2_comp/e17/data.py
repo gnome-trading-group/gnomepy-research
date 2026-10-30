@@ -119,3 +119,11 @@ def monday(t: pd.Series | pd.Timestamp):
 def logit(p) -> np.ndarray:
     p = np.clip(np.asarray(p, float), 1e-4, 1 - 1e-4)
     return np.log(p / (1 - p))
+
+
+def player_ratings(data_dir, before: pd.Timestamp) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+    """Each HLTV player's per-map HLTV ratings in date order, for the rating channel."""
+    s = load(data_dir, "hltv/cs2_player_map_stats", before, ["match_date", "player_id", "side", "rating"])
+    s = s[(s.side == "all") & s.rating.notna() & s.player_id.notna()]
+    s = s.assign(t=_naive(s.match_date).to_numpy(), player_id=s.player_id.astype(int)).sort_values(["t", "player_id"], kind="mergesort")
+    return {int(p): (g.t.to_numpy(), g.rating.to_numpy(float)) for p, g in s.groupby("player_id", sort=False)}

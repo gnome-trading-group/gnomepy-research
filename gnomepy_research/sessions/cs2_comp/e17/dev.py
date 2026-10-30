@@ -5,7 +5,7 @@
 
 Every bo3 HLTV series in [start, end) is priced at its week's Monday, exactly as the predict module prices a target,
 and scored by log loss against its outcome, overall and by how many of each five have FACEIT history. Both
-calibration designs are scored from the same filter snapshot. With --out-dir (default: $OUTPUT_DIR on Batch) the
+calibration designs, with and without the extra base features, are scored from the same filter snapshot. With --out-dir (default: $OUTPUT_DIR on Batch) the
 report, the snapshot and the coverage-calibrated predictions are written there under NAME; an existing snapshot is
 reused, so calibration variants cost seconds.
 """
@@ -77,12 +77,13 @@ def main() -> None:
     lines = []
     for months in a.calibration_months:
         label = f"faceit={a.faceit} w={a.faceit_weight} a={a.faceit_prior_offset} s0={a.faceit_sigma0} months={months}"
-        for calibration in ("pooled", "coverage") if a.faceit else ("pooled",):
-            pred = calibrate(snap, a.faceit, months, calibration, log=lambda *_: None)
-            pred = targets[["match_id", "y"]].merge(pred, on="match_id", how="left")
-            lines += report(pred, pred.y.to_numpy(float), f"{label} calibration={calibration}")
-            if out_dir and months == a.calibration_months[0] and calibration == ("coverage" if a.faceit else "pooled"):
-                pred.to_parquet(out_dir / f"{a.name}.parquet", index=False)
+        for extra in (False, True):
+            for calibration in ("pooled", "coverage") if a.faceit else ("pooled",):
+                pred = calibrate(snap, a.faceit, months, calibration, extra, log=lambda *_: None)
+                pred = targets[["match_id", "y"]].merge(pred, on="match_id", how="left")
+                lines += report(pred, pred.y.to_numpy(float), f"{label} calibration={calibration} extra={extra}")
+                if out_dir and extra and months == a.calibration_months[0] and calibration == ("coverage" if a.faceit else "pooled"):
+                    pred.to_parquet(out_dir / f"{a.name}.parquet", index=False)
     print("\n".join(lines))
     if out_dir:
         (out_dir / f"{a.name}.txt").write_text("\n".join(lines) + "\n")
