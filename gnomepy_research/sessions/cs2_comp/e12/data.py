@@ -18,9 +18,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.parquet as pq
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.bundle import load
@@ -45,11 +42,6 @@ def division(competition_name: str | None) -> str:
     if d in ("premier", "challenger", "pro league"):
         return "pro"
     return d
-
-
-def map_key(names: pd.Series) -> np.ndarray:
-    """HLTV says "Mirage", FACEIT says "de_mirage"."""
-    return names.fillna("").str.lower().str.replace(r"^de_", "", regex=True).str.strip().to_numpy()
 
 
 def _naive(s: pd.Series) -> pd.Series:
@@ -80,7 +72,7 @@ def _fives(col: pd.Series, mapper=None) -> np.ndarray:
 class Maps:
     """Decisive maps, one row each, sorted by time: who played, regulation rounds, and when the row became known."""
 
-    frame: pd.DataFrame     # match_id, time, known, team_a, team_b, rank_a, rank_b, rounds, rounds_a, source, division, map
+    frame: pd.DataFrame     # match_id, time, known, team_a, team_b, rank_a, rank_b, rounds, rounds_a, source, division
     five_a: np.ndarray      # (N, 5) unified player ids
     five_b: np.ndarray
 
@@ -125,8 +117,7 @@ class Inputs:
             "match_id": h.match_id.astype(str).to_numpy(), "time": h.time.to_numpy(), "known": h.known.to_numpy(),
             "team_a": h.team_a_id.astype(np.int64).to_numpy(), "team_b": h.team_b_id.astype(np.int64).to_numpy(),
             "rank_a": h.team_a_rank.fillna(UNRANKED).to_numpy(float), "rank_b": h.team_b_rank.fillna(UNRANKED).to_numpy(float),
-            "rounds": n, "rounds_a": ra, "source": "hltv", "division": "hltv", "is_lan": h.is_lan.fillna(0).to_numpy(int),
-            "map": map_key(h.map_name)})
+            "rounds": n, "rounds_a": ra, "source": "hltv", "division": "hltv", "is_lan": h.is_lan.fillna(0).to_numpy(int)})
         self.hltv = Maps.concat([Maps(frame, five_a, five_b)])
         lu = load(self.data_dir, "hltv/cs2_match_lineups", self.until, ["match_id", "match_date", "team_id", "is_standin"])
         lu = lu.assign(known=_naive(lu.match_date)).dropna(subset=["team_id"])
@@ -181,7 +172,7 @@ class Inputs:
             "team_a": fh.faction1_hltv_team.fillna(-1).astype(np.int64).to_numpy(),
             "team_b": fh.faction2_hltv_team.fillna(-1).astype(np.int64).to_numpy(),
             "rank_a": UNRANKED, "rank_b": UNRANKED, "rounds": n, "rounds_a": ra, "source": "faceit",
-            "division": [division(c) for c in fh.competition_name], "is_lan": 0, "map": map_key(fh.map_name)})
+            "division": [division(c) for c in fh.competition_name], "is_lan": 0})
         self.faceit_maps = Maps.concat([Maps(frame, five_a, five_b)])
         ro = load(d, "faceit/faceit_rosters", self.until, ["match_id", "faceit_id", "played", "skill_level"])
         ro = ro[ro.played & ro.skill_level.notna()]
@@ -220,24 +211,3 @@ class Inputs:
         if i < 0 or (np.datetime64(day) - h[0][i]) > np.timedelta64(max_age_days, "D"):
             return UNRANKED
         return float(h[1][i])
-
-
-def history_practice(data_dir: str | Path, until: pd.Timestamp, faceit_ids: set[str]) -> pd.DataFrame:
-    """Every FACEIT match (matchmaking, hubs, leagues) finished before `until` that one of `faceit_ids` played:
-    faceit_id, match_id, faction, finished (naive UTC). Streamed by row group so memory stays small."""
-    data_dir = Path(data_dir)
-    secs = int(pd.Timestamp(until).tz_localize("UTC").timestamp())
-    hm = pq.read_table(data_dir / "faceit/history_matches.parquet", columns=["match_id", "finished_at", "teams_size"],
-                       filters=[("finished_at", "<", secs)])
-    hm = hm.filter(pc.equal(hm["teams_size"], 5))
-    value_set = pa.array(sorted(faceit_ids), type=pa.string())
-    f = pq.ParquetFile(data_dir / "faceit/history_players.parquet")
-    parts = []
-    for i in range(f.metadata.num_row_groups):
-        t = f.read_row_group(i, columns=["match_id", "faction", "faceit_id"])
-        parts.append(t.filter(pc.is_in(t["faceit_id"], value_set=value_set)))
-    hp = pa.concat_tables(parts).to_pandas()
-    fin = hm.select(["match_id", "finished_at"]).to_pandas()
-    hp = hp.merge(fin, on="match_id")
-    hp["finished"] = pd.to_datetime(hp.finished_at, unit="s")
-    return hp.drop(columns="finished_at").sort_values(["finished", "match_id", "faceit_id"]).reset_index(drop=True)

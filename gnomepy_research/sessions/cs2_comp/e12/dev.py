@@ -61,7 +61,7 @@ def main() -> None:
     s = inputs.series[inputs.series.bo_type == 3]
     targets = pd.concat([s[(s.time >= c) & (s.time < c + pd.Timedelta(days=7))].assign(week_cutoff=c) for c in cutoffs],
                         ignore_index=True)[["match_id", "team_a", "team_b", "week_cutoff", "y"]]
-    h, f = rows(inputs, targets, True, a.data, verbose=True)
+    h, f = rows(inputs, targets, True, verbose=True)
     h.to_parquet(out / "dev_hltv.parquet", index=False)
     f.to_parquet(out / "dev_faceit.parquet", index=False)
     y = h.y.to_numpy(float)

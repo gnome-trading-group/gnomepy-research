@@ -6,8 +6,8 @@ e12 predictions: P(team A wins the bo3) for every target series, from data befor
 
 Per distinct week_cutoff: an HLTV-only skill fit, and with FACEIT on a second fit on HLTV + FACEIT maps whose fives
 come from the newest appearance in either source. The logistic layer below combines them; its weights were fitted by
-`layer.py` on the Oct 2025 - Mar 2026 weekly walk-forward (`dev.py`), all of it before the first tune cutoff, so they
-are point-in-time for every target.
+`dev.py` on the Oct 2025 - Mar 2026 weekly walk-forward, all of it before the first tune cutoff, so they are
+point-in-time for every target.
 """
 from __future__ import annotations
 
@@ -45,17 +45,16 @@ def design(h: pd.DataFrame, f: pd.DataFrame | None) -> pd.DataFrame:
     return pd.DataFrame(cols)
 
 
-def rows(inputs: Inputs, targets: pd.DataFrame, faceit: bool, data_dir: str | Path,
-         verbose: bool = False) -> tuple[pd.DataFrame, pd.DataFrame | None]:
-    h = feature_rows(inputs, targets, CONFIG_HLTV, False, data_dir, verbose=verbose)
-    f = feature_rows(inputs, targets, CONFIG_FACEIT, True, data_dir, verbose=verbose) if faceit else None
+def rows(inputs: Inputs, targets: pd.DataFrame, faceit: bool, verbose: bool = False) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    h = feature_rows(inputs, targets, CONFIG_HLTV, False, verbose=verbose)
+    f = feature_rows(inputs, targets, CONFIG_FACEIT, True, verbose=verbose) if faceit else None
     return h, f
 
 
 def predict(data_dir: str | Path, targets: pd.DataFrame, faceit: bool, verbose: bool = False) -> pd.DataFrame:
     t = targets.rename(columns={"team_a_id": "team_a", "team_b_id": "team_b"})[["match_id", "team_a", "team_b", "week_cutoff"]]
     inputs = Inputs(data_dir, t.week_cutoff.max(), faceit)
-    h, f = rows(inputs, t, faceit, data_dir, verbose)
+    h, f = rows(inputs, t, faceit, verbose)
     X = design(h, f)
     layer = LAYER_FACEIT if faceit else LAYER_HLTV
     q = expit(X.to_numpy() @ np.array([layer[c] for c in X.columns]))

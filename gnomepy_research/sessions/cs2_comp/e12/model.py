@@ -16,8 +16,8 @@ team plays the five it fielded last. With FACEIT on, a team's most recent FACEIT
 last HLTV map: online teams play ESEA every week, and a roster change shows there first.
 
 The logistic layer (fitted on Oct 2025 - Mar 2026 weekly walk-forward predictions, before every tune cutoff) takes
-logit of the skill price and A-minus-B differences of availability features, and lets the skill gap's weight shrink for
-fives that rarely played together or carry players the fit barely knows.
+logit of the skill price and A-minus-B differences of availability features (recent stand-in use, days since the five
+last played), and lets the skill gap's weight shrink for fives carrying players the fit barely knows.
 """
 from __future__ import annotations
 
@@ -45,16 +45,11 @@ class Config:
     # Round-logit gap per unit of skill on FACEIT maps relative to HLTV maps: online rounds between weaker teams can
     # be more or less decisive than the same skill gap on HLTV.
     faceit_scale: float = 1.0
-    known_maps: int = 5
-    together_days: int = 90
-    practice_days: int = 30
-    activity_days: int = 14
 
 
 def _prior_design(maps: Maps, players: np.ndarray, inputs: Inputs, cutoff: pd.Timestamp, faceit: bool) -> np.ndarray:
     """Per player: [1, played on HLTV, mean HLTV rank strength, has FACEIT level, level - 8, division shares...]."""
     f = maps.frame
-    n = len(f)
     pl = np.concatenate([maps.five_a.ravel(), maps.five_b.ravel()])
     pos = np.searchsorted(players, pl)
     strength = np.concatenate([np.repeat(LOG_UNRANKED - np.log(f.rank_a.to_numpy(float)), FIVE),
@@ -86,8 +81,6 @@ class SkillFit:
     skill: np.ndarray
     maps_played: np.ndarray
     gamma: np.ndarray
-    var: np.ndarray
-    sigma: float
     info: dict = field(default_factory=dict)
 
     @classmethod
@@ -133,40 +126,33 @@ class SkillFit:
         res = minimize(objective, np.zeros(P + K), jac=True, hessp=hessp, method="trust-krylov",
                        options={"maxiter": 200, "gtol": 1e-6})
         played = np.bincount(np.concatenate([ia.ravel(), ib.ravel()]), minlength=P)
-        pr = expit(A @ res.x[:P])
-        # The diagonal of the Hessian is a cheap stand-in for each skill's posterior precision: it separates a player
-        # seen on twenty maps from one seen on five hundred, which the thin count cannot.
-        precision = A.multiply(A).T @ (w * n * pr * (1 - pr)) + inv_var
-        return cls(cutoff, players, res.x[:P], played, res.x[P:], 1.0 / precision, cfg.sigma,
+        return cls(cutoff, players, res.x[:P], played, res.x[P:],
                    {"maps": M, "players": P, "iters": int(res.nit), "converged": bool(res.success)})
 
-    def player(self, uid: int) -> tuple[float, int, float] | None:
+    def player(self, uid: int) -> tuple[float, int] | None:
         i = np.searchsorted(self.players, uid)
         if i < len(self.players) and self.players[i] == uid:
-            return float(self.skill[i]), int(self.maps_played[i]), float(self.var[i])
+            return float(self.skill[i]), int(self.maps_played[i])
         return None
 
     def unknown_prior(self, team_rank: float) -> float:
         """A player the window never saw, on a team with this HLTV rank."""
         return float(self.gamma[0] + self.gamma[1] + self.gamma[2] * (LOG_UNRANKED - np.log(team_rank)))
 
-    def lineup(self, five: tuple[int, ...] | None, team_rank: float) -> tuple[float, int, float]:
-        """Mean skill of a five, how many of its players the window barely knows, and the variance of the mean."""
-        prior_var = self.sigma ** 2
+    def lineup(self, five: tuple[int, ...] | None, team_rank: float) -> tuple[float, int]:
+        """Mean skill of a five, and how many of its players the window barely knows."""
         if not five:
-            return self.unknown_prior(team_rank), FIVE, prior_var / FIVE
-        vals, thin, var = [], 0, 0.0
+            return self.unknown_prior(team_rank), FIVE
+        vals, thin = [], 0
         for p in five:
             known = self.player(p)
             if known is None:
                 vals.append(self.unknown_prior(team_rank))
                 thin += 1
-                var += prior_var
             else:
                 vals.append(known[0])
                 thin += int(known[1] < 5)
-                var += known[2]
-        return float(np.mean(vals)), thin, var / FIVE ** 2
+        return float(np.mean(vals)), thin
 
 
 def series_price(gap: np.ndarray) -> np.ndarray:
@@ -187,10 +173,10 @@ class Lineups:
     def _long(maps: Maps) -> pd.DataFrame:
         f = maps.frame
         a = pd.DataFrame({"team": f.team_a.to_numpy(), "time": f.time.to_numpy(), "known": f.known.to_numpy(),
-                          "match_id": f.match_id.to_numpy(), "source": f.source.to_numpy(), "map": f["map"].to_numpy(),
+                          "match_id": f.match_id.to_numpy(), "source": f.source.to_numpy(),
                           "five": [tuple(sorted(x)) for x in maps.five_a.tolist()]})
         b = pd.DataFrame({"team": f.team_b.to_numpy(), "time": f.time.to_numpy(), "known": f.known.to_numpy(),
-                          "match_id": f.match_id.to_numpy(), "source": f.source.to_numpy(), "map": f["map"].to_numpy(),
+                          "match_id": f.match_id.to_numpy(), "source": f.source.to_numpy(),
                           "five": [tuple(sorted(x)) for x in maps.five_b.tolist()]})
         out = pd.concat([a, b], ignore_index=True)
         return out[out.team >= 0]
@@ -200,45 +186,17 @@ class Lineups:
         return self.long[self.long.known < cutoff]
 
 
-def team_state(rows: pd.DataFrame, team: int, cutoff: pd.Timestamp, cfg: Config) -> dict:
-    """The five a team last fielded and how settled it is."""
+def team_state(rows: pd.DataFrame, team: int, cutoff: pd.Timestamp) -> dict:
+    """The five a team last fielded and how long ago."""
     r = rows[rows.team == team]
     if r.empty:
-        return {"five": None, "together": 0.0, "days_idle": 365.0, "maps90": 0.0, "five_source": "none", "pool": 0.0}
+        return {"five": None, "days_idle": 365.0, "five_source": "none"}
     last = r.iloc[-1]
-    five = last.five
-    recent = r[r.time >= cutoff - pd.Timedelta(days=cfg.together_days)]
-    together = sum(len(set(five) & set(x)) >= 4 for x in recent.five)
-    return {"five": five, "together": float(together), "maps90": float(len(recent)),
-            "days_idle": float((cutoff - last.time).total_seconds() / 86400.0), "five_source": last.source,
-            "pool": map_pool(recent["map"])}
-
-
-def map_pool(maps: pd.Series) -> float:
-    """Effective number of maps a team plays (exp of the entropy of its recent map shares): a shallow pool can be
-    vetoed onto its weak maps in a bo3."""
-    share = maps[maps != ""].value_counts(normalize=True).to_numpy()
-    return float(np.exp(-(share * np.log(share)).sum())) if len(share) else 0.0
+    return {"five": last.five, "days_idle": float((cutoff - last.time).total_seconds() / 86400.0), "five_source": last.source}
 
 
 def standin_share(inputs: Inputs, team: int, cutoff: pd.Timestamp, last_n: int = 5) -> float:
+    """Share of the team's last HLTV series that it played with a stand-in."""
     s = inputs.standins
     s = s[(s.team_id == team) & (s.known < cutoff)].tail(last_n)
     return float((s.standins > 0).mean()) if len(s) else 0.0
-
-
-def practice(hist: pd.DataFrame, fids: list[str], cutoff: pd.Timestamp, cfg: Config) -> dict:
-    """FACEIT practice of a five: shared matches per linked pair in the last practice_days, and matches per linked
-    player in the last activity_days. NaN when fewer than two (one) of the five are linked."""
-    out = {"pair_practice": np.nan, "activity": np.nan, "linked": float(len(fids))}
-    if not fids:
-        return out
-    h = hist[(hist.finished < cutoff) & (hist.finished >= cutoff - pd.Timedelta(days=cfg.practice_days))
-             & hist.faceit_id.isin(fids)]
-    act = h[h.finished >= cutoff - pd.Timedelta(days=cfg.activity_days)]
-    out["activity"] = float(len(act)) / len(fids)
-    if len(fids) >= 2:
-        per = h.groupby(["match_id", "faction"]).size()
-        pairs = (per * (per - 1) / 2).sum()
-        out["pair_practice"] = float(pairs) / (len(fids) * (len(fids) - 1) / 2)
-    return out
