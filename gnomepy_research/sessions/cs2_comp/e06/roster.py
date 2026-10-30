@@ -8,32 +8,25 @@ from __future__ import annotations
 
 import bisect
 import collections
-from dataclasses import dataclass
 
 import pandas as pd
+
+from gnomepy_research.sessions.cs2_comp.e06.skill import Params
 
 DEPTH = 24
 
 
-@dataclass(frozen=True)
-class RosterParams:
-    freq_decay: float = 0.85
-    join_floor: float = 0.8
-    leave_cap: float = 0.05
-    faceit_w: float = 0.0
-
-
 class Rosters:
-    def __init__(self, params: RosterParams | None = None):
-        self.p = params or RosterParams()
+    def __init__(self, params: Params):
+        self.p = params
         self.recent: dict[int, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=DEPTH))
         self.days: dict[int, list[float]] = collections.defaultdict(list)
         self.joined: dict[int, dict[int, float]] = collections.defaultdict(dict)
         self.left: dict[int, dict[int, float]] = collections.defaultdict(dict)
 
-    def observe_map(self, team: int, day: float, five: tuple, weight: float = 1.0) -> None:
+    def observe_map(self, team: int, day: float, five: tuple, weight: float = 1.0, hltv: bool = True) -> None:
         self.recent[team].append((day, five, weight))
-        if weight == 1.0:
+        if hltv:
             self.days[team].append(day)
 
     def maps_within(self, team: int, day: float, window: float) -> int:
@@ -61,7 +54,7 @@ class Rosters:
         total = 0.0
         if q:
             for k, (_, five, mult) in enumerate(reversed(q)):
-                w = self.p.freq_decay ** k * mult
+                w = self.p.roster_decay ** k * mult
                 total += w
                 for pl in five:
                     freq[pl] = freq.get(pl, 0.0) + w
@@ -69,10 +62,10 @@ class Rosters:
         last = self.last_map_day(team)
         for pl, day in self.joined.get(team, {}).items():
             if last is None or day > last:
-                freq[pl] = max(freq.get(pl, 0.0), self.p.join_floor)
+                freq[pl] = max(freq.get(pl, 0.0), self.p.roster_join)
         for pl, day in self.left.get(team, {}).items():
             if pl in freq and (last is None or day > self._last_played(team, pl)):
-                freq[pl] = min(freq[pl], self.p.leave_cap)
+                freq[pl] = min(freq[pl], self.p.roster_leave)
         return freq
 
     def _last_played(self, team: int, player: int) -> float:
@@ -85,4 +78,4 @@ class Rosters:
         """The five most likely players with their frequencies, and the other recent players as replacements."""
         freq = self.frequencies(team)
         order = sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))
-        return order[:5], [pl for pl, _ in order[5:] if freq[pl] > self.p.leave_cap]
+        return order[:5], [pl for pl, _ in order[5:] if freq[pl] > self.p.roster_leave]

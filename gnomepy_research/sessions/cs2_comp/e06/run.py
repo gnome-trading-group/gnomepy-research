@@ -9,9 +9,9 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.e06.events import FACEIT, HLTV, MapEvent, build_events
-from gnomepy_research.sessions.cs2_comp.e06.roster import RosterParams, Rosters
+from gnomepy_research.sessions.cs2_comp.e06.roster import Rosters
 from gnomepy_research.sessions.cs2_comp.e06.fusion import Combined
-from gnomepy_research.sessions.cs2_comp.e06.skill import Params, stacked
+from gnomepy_research.sessions.cs2_comp.e06.skill import Params, rescaled, stacked
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +29,13 @@ def load_inputs(data_dir: Path, use_faceit: bool):
 
 
 def run_pass(events: list[MapEvent], rankings, moves: list, params: Params, queries: pd.DataFrame,
-             roster_params: RosterParams | None = None, known_lineups: dict | None = None,
-             use_faceit: bool = True, joint: bool = True) -> pd.DataFrame:
+             known_lineups: dict | None = None,
+             use_faceit: bool = True) -> pd.DataFrame:
     """queries: match_id, week_cutoff, kickoff (UTC seconds), team_a_id, team_b_id. known_lineups maps match_id to the
     two announced fives and is for diagnostics only."""
-    filt = Combined(params, rankings, use_faceit, joint)
-    base = Combined(params, rankings, False) if use_faceit else None
-    rosters = Rosters(roster_params or RosterParams(params.roster_decay, params.roster_join, params.roster_leave,
-                                                    params.roster_faceit_w))
+    filt = Combined(params, rankings)
+    base = Combined(params, rankings) if use_faceit else None
+    rosters = Rosters(params)
     ei, mi = 0, 0
     out = []
     for cutoff, wk in queries.groupby("week_cutoff", sort=True):
@@ -53,11 +52,9 @@ def run_pass(events: list[MapEvent], rankings, moves: list, params: Params, quer
             elif params.roster_faceit_w > 0:
                 for team, five in ((e.team_a, e.players_a), (e.team_b, e.players_b)):
                     if team > 0:
-                        rosters.observe_map(team, e.day, five, params.roster_faceit_w)
+                        rosters.observe_map(team, e.day, five, params.roster_faceit_w, hltv=False)
             ei += 1
-        filt.advance(cs)
         if base is not None:
-            base.advance(cs)
             base.h.rank_limit = cs / 86400.0
         while mi < len(moves) and to_seconds(moves[mi].event_date) < cs:
             rosters.observe_move(moves[mi])
@@ -81,7 +78,7 @@ def run_pass(events: list[MapEvent], rankings, moves: list, params: Params, quer
                 q_final = stacked(res["q"], bres["q"], thin, params)
                 extra = {"q_faceit": res["q"], "q_base": bres["q"]}
             else:
-                q_final = stacked(res["q"], res["q"], thin, params)
+                q_final = rescaled(res["q"], params)
                 extra = {"q_faceit": res["q"], "q_base": res["q"]}
             out.append({"match_id": r.match_id, "fit_cutoff": cutoff, **res, "q": q_final, **extra, "thin_hat": bool(thin),
                         "faceit_depth": depth})

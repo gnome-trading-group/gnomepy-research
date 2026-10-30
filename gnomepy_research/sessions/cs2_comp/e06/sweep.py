@@ -38,8 +38,7 @@ def main() -> None:
     for c in configs:
         faceit = c.get("faceit", True)
         summary, _ = evaluate(args.data, as_params(c.get("set", {})), c.get("start", "2025-10-01"), c.get("end", "2026-04-01"),
-                              faceit, c.get("oracle", False), preloaded=(events if faceit else hltv_only, rankings, moves),
-                              joint=c.get("joint", True))
+                              faceit, c.get("oracle", False), preloaded=(events if faceit else hltv_only, rankings, moves))
         results.append({"name": c["name"], **summary})
         print(json.dumps(results[-1]), flush=True)
     out = args.out or (Path(os.environ["OUTPUT_DIR"]) / f"sweep_{i}_{n}.json" if "OUTPUT_DIR" in os.environ else None)

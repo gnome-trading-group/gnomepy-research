@@ -44,12 +44,15 @@ def main() -> None:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--no-faceit", action="store_true")
     ap.add_argument("--weeks", default=None, help="comma-separated week_cutoff dates to keep")
+    ap.add_argument("--set", nargs="*", default=[], help="parameter overrides as name=value")
     args = ap.parse_args()
     targets = pd.read_parquet(args.targets)
     if args.weeks:
         keep = pd.to_datetime(args.weeks.split(","))
         targets = targets[pd.to_datetime(targets.week_cutoff).isin(keep)]
-    out = predict(args.data, targets, not args.no_faceit)
+    overrides = dict(item.split("=") for item in args.set)
+    params = Params().with_values(**{k: float(v) for k, v in overrides.items()})
+    out = predict(args.data, targets, not args.no_faceit, params)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     out.to_parquet(args.out, index=False)
     logger.info("wrote %d predictions to %s", len(out), args.out)

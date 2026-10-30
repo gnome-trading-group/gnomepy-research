@@ -55,21 +55,26 @@ class Params:
     bridge_floor: float = 0.004
     f_precision: float = 1.0
     pi_scale: float = 1.1
-    pi_max: float = 0.97
-    sub_gap: float = 0.1
+    pi_max: float = 0.975
+    sub_gap: float = 0.06
     sigma_sub: float = 0.25
     k_h: float = 0.55
     r_h: float = 0.29
     k_f: float = 0.72
     r_f: float = 0.37
     omega: float = 0.052
-    roster_decay: float = 0.85
+    gamma_k: float = 1.0
+    rho_k: float = 0.03
+    gamma_kf: float = 1.0
+    rho_kf: float = 0.05
+    roster_decay: float = 0.78
     roster_join: float = 0.8
     roster_leave: float = 0.05
     roster_faceit_w: float = 0.5
-    q_scale: float = 1.2
-    w_thin: float = 0.8
-    w_rest: float = 0.45
+    q_scale: float = 1.3
+    q_scale_base: float = 1.13
+    w_thin: float = 0.9
+    w_rest: float = 0.52
     thin_maps: int = 15
     thin_rank: int = 100
 
@@ -93,6 +98,10 @@ def stacked(q_faceit: float, q_base: float, thin: bool, p: Params) -> float:
     w = p.w_thin if thin else p.w_rest
     z = p.q_scale * (logit(q_base) + w * (logit(q_faceit) - logit(q_base)))
     return 1 / (1 + math.exp(-z))
+
+
+def rescaled(q_base: float, p: Params) -> float:
+    return 1 / (1 + math.exp(-p.q_scale_base * logit(q_base)))
 
 
 def bo3(p):
@@ -218,6 +227,18 @@ class SkillFilter:
         denom = 1 + curv * s2
         mus = np.concatenate([a.mus, b.mus]) + cw * grad / denom
         cov = cov - np.outer(cw, cw) * curv / denom
+        gk, rk = (p.gamma_kf, p.rho_kf) if faceit else (p.gamma_k, p.rho_k)
+        if gk > 0 and ev.kills_a is not None and ev.kills_b is not None:
+            nk = ev.kills_a + ev.kills_b
+            wk = np.concatenate([a.weights, -b.weights]) * gk
+            gap = float(wk @ mus) + gk * (a.kappa - b.kappa)
+            pk = 1 / (1 + math.exp(-max(-8.0, min(8.0, gap))))
+            infl = 1 + (nk - 1) * rk
+            cwk = cov @ wk
+            curv_k = nk * pk * (1 - pk) / infl
+            den = 1 + curv_k * float(wk @ cwk)
+            mus = mus + cwk * ((ev.kills_a - nk * pk) / infl) / den
+            cov = cov - np.outer(cwk, cwk) * curv_k / den
         k, r = (p.k_f, p.r_f) if faceit else (p.k_h, p.r_h)
         if k > 0:
             for base, dev in ((0, ev.dev_a), (FIVE, ev.dev_b)):

@@ -59,6 +59,8 @@ class MapEvent:
     division: int
     dev_a: tuple | None = None
     dev_b: tuple | None = None
+    kills_a: int | None = None
+    kills_b: int | None = None
 
 
 def _seconds(ts: pd.Series) -> np.ndarray:
@@ -86,14 +88,24 @@ def deviations(players: tuple, perf: dict | None) -> tuple | None:
     return tuple(v - m for v in vals)
 
 
-def hltv_ratings(data_dir: Path) -> dict:
+def team_total(players: tuple, per_player: dict | None) -> int | None:
+    if not per_player:
+        return None
+    vals = [per_player.get(p) for p in players]
+    return None if any(v is None for v in vals) else int(sum(vals))
+
+
+def hltv_stats(data_dir: Path) -> tuple[dict, dict]:
+    """Per map, each player's rating and kills."""
     s = pd.read_parquet(Path(data_dir) / "hltv/cs2_player_map_stats.parquet",
-                        columns=["mapstatsid", "player_id", "side", "rating"])
-    s = s[(s.side == "all") & s.rating.notna() & s.mapstatsid.notna()]
-    out: dict = {}
-    for m, p, r in zip(s.mapstatsid.astype(np.int64), s.player_id.astype(np.int64), s.rating.astype(float)):
-        out.setdefault(m, {})[p] = r
-    return out
+                        columns=["mapstatsid", "player_id", "side", "rating", "kills"])
+    s = s[(s.side == "all") & s.rating.notna() & s.kills.notna() & s.mapstatsid.notna()]
+    ratings: dict = {}
+    kills: dict = {}
+    for m, p, r, k in zip(s.mapstatsid.astype(np.int64), s.player_id.astype(np.int64), s.rating.astype(float), s.kills.astype(float)):
+        ratings.setdefault(m, {})[p] = r
+        kills.setdefault(m, {})[p] = k
+    return ratings, kills
 
 
 @dataclass(frozen=True)
@@ -126,7 +138,7 @@ def fit_proxy(data_dir: Path, history: pd.DataFrame) -> Proxy:
     return Proxy(tuple(float(x) for x in full), tuple(float(x) for x in slim))
 
 
-def hltv_events(history: pd.DataFrame, ratings: dict | None = None) -> list[MapEvent]:
+def hltv_events(history: pd.DataFrame, stats: tuple[dict, dict] | None = None) -> list[MapEvent]:
     h = history[~showmatch_mask(history) & (history.team_a_score != history.team_b_score)].copy()
     h = h[h.team_a_score.notna() & h.team_b_score.notna()]
     when = h.match_time.fillna(h.match_date)
@@ -137,10 +149,12 @@ def hltv_events(history: pd.DataFrame, ratings: dict | None = None) -> list[MapE
         pa, pb = fa[i], fb[i]
         if pa is None or pb is None or len(pa) != FIVE or len(pb) != FIVE:
             continue
-        perf = ratings.get(int(r.mapstatsid)) if ratings is not None and r.mapstatsid == r.mapstatsid else None
+        known = stats is not None and r.mapstatsid == r.mapstatsid
+        perf = stats[0].get(int(r.mapstatsid)) if known else None
+        kills = stats[1].get(int(r.mapstatsid)) if known else None
         out.append(MapEvent(t[i], t[i] / 86400.0, HLTV, str(r.match_id), int(r.map_position_in_series or 0),
                             int(r.team_a_id), int(r.team_b_id), pa, pb, int(r.team_a_score), int(r.team_b_score),
-                            OTHER_DIVISION, deviations(pa, perf), deviations(pb, perf)))
+                            OTHER_DIVISION, deviations(pa, perf), deviations(pb, perf), team_total(pa, kills), team_total(pb, kills)))
     return out
 
 
@@ -182,22 +196,24 @@ def faceit_events(data_dir: Path, proxy: Proxy | None = None) -> list[MapEvent]:
         pb = tuple(to_hltv.get(f) or faceit_key(f) for f in r.team_b_faceit_ids)
         t = finished[r.match_id]
         rounds = int(r.team_a_score) + int(r.team_b_score)
-        dev_a = dev_b = None
+        dev_a = dev_b = kills_a = kills_b = None
         raw = perf_of.get((r.match_id, r.map_name))
         if raw is not None and rounds > 0:
             scaled = {f: proxy(k, d, a, rounds) for f, (k, d, a) in raw.items()}
             dev_a = deviations(r.team_a_faceit_ids, scaled)
             dev_b = deviations(r.team_b_faceit_ids, scaled)
+            killed = {f: k for f, (k, _, _) in raw.items()}
+            kills_a, kills_b = team_total(r.team_a_faceit_ids, killed), team_total(r.team_b_faceit_ids, killed)
         ta = int(r.team_a_id) if r.team_a_id == r.team_a_id else -1
         tb = int(r.team_b_id) if r.team_b_id == r.team_b_id else -1
         out.append(MapEvent(t, t / 86400.0, FACEIT, r.match_id, int(r.map_position_in_series or 0), ta, tb, pa, pb,
-                            int(r.team_a_score), int(r.team_b_score), div[r.match_id], dev_a, dev_b))
+                            int(r.team_a_score), int(r.team_b_score), div[r.match_id], dev_a, dev_b, kills_a, kills_b))
     return out
 
 
 def build_events(data_dir: Path, use_faceit: bool, use_stats: bool = True) -> list[MapEvent]:
     history = pd.read_parquet(Path(data_dir) / "hltv/cs2_match_history.parquet")
-    events = hltv_events(history, hltv_ratings(data_dir) if use_stats else None)
+    events = hltv_events(history, hltv_stats(data_dir) if use_stats else None)
     if use_faceit:
         events += faceit_events(data_dir, fit_proxy(data_dir, history) if use_stats else None)
     events.sort(key=lambda e: (e.t, e.match_id, e.position))
