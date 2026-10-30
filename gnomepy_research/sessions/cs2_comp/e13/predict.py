@@ -36,6 +36,7 @@ STANDIN_LOOKBACK = 12
 MOVED_ON = False
 REBUILD_ARRIVALS = 3
 RICH_RECAL = False
+LAN_RECAL = False
 SIGMA_MAP = 0.15
 SIGMA_SERIES = 0.10
 EPOCH = pd.Timestamp("2020-01-01")
@@ -184,21 +185,19 @@ def _fit_logistic(X: np.ndarray, y: np.ndarray, ridge: float = 1.0) -> np.ndarra
     return w
 
 
-def recal_features(d: pd.DataFrame, rich: bool) -> np.ndarray:
+def recal_features(d: pd.DataFrame, rich: bool, lan: bool = False) -> np.ndarray:
     """The recalibration design: logit of the raw price, and with rich, its interactions with how little is known
-    about the two fives (a new or incomplete five, thin history), so uncertain matchups are shrunk harder."""
+    about the two fives (a new or incomplete five, thin history), so uncertain matchups are shrunk harder; with lan,
+    its interaction with the series being played on LAN, where online form travels least."""
     x = _logit(d.p_raw.to_numpy(float))
     cols = [x]
     if rich:
         new_five = ((np.minimum(d.five_a, d.five_b) < 3) | (d.unk_a + d.unk_b > 0)).to_numpy(float)
         thin = (d.games_min < 40).to_numpy(float)
         cols += [x * new_five, x * thin]
+    if lan:
+        cols.append(x * d.is_lan.fillna(False).astype(float).to_numpy())
     return np.column_stack(cols + [np.ones(len(x))])
-
-
-def _logit(p):
-    p = np.clip(np.asarray(p, float), 1e-4, 1 - 1e-4)
-    return np.log(p / (1 - p))
 
 
 def data_cutoff(targets: pd.DataFrame) -> pd.Timestamp:
@@ -207,7 +206,7 @@ def data_cutoff(targets: pd.DataFrame) -> pd.Timestamp:
 
 def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = True,
         sigma_map: float = SIGMA_MAP, sigma_series: float = SIGMA_SERIES, history_from: pd.Timestamp | None = None,
-        actual_fives: bool = False, core_maps: int = CORE_MAPS, rich_recal: bool = RICH_RECAL,
+        actual_fives: bool = False, core_maps: int = CORE_MAPS, rich_recal: bool = RICH_RECAL, lan_recal: bool = LAN_RECAL,
         standin_swap: bool = STANDIN_SWAP, moved_on: bool = MOVED_ON) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Returns (target prices, HLTV bo3 series priced at each cutoff from history_from on); b is built at
     data_cutoff(targets). actual_fives prices the history series with the fives that went on to play them, which
@@ -274,7 +273,7 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
             hist_rows.append({"match_id": r.match_id, "week": w, "y": r.y, "is_lan": r.is_lan,
                               **price(int(r.team_a), int(r.team_b), w, now, r.match_id)})
         for r in t_by_week.get(w, pd.DataFrame()).itertuples():
-            out_rows.append({"match_id": r.match_id, "fit_cutoff": w, **price(int(r.team_a_id), int(r.team_b_id), w, now)})
+            out_rows.append({"match_id": r.match_id, "fit_cutoff": w, "is_lan": r.is_lan, **price(int(r.team_a_id), int(r.team_b_id), w, now)})
     hist = pd.DataFrame(hist_rows)
     out = pd.DataFrame(out_rows)
     hist["q"] = np.nan
@@ -282,12 +281,12 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
         cal = hist[(hist.week < w) & (hist.week >= w - pd.Timedelta(weeks=CAL_WEEKS))]
         if len(cal) < 50:
             continue
-        coef = _fit_logistic(recal_features(cal, rich_recal), cal.y.to_numpy(float))
+        coef = _fit_logistic(recal_features(cal, rich_recal, lan_recal), cal.y.to_numpy(float))
         sel = hist.week == w
-        hist.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(hist[sel], rich_recal) @ coef))
+        hist.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(hist[sel], rich_recal, lan_recal) @ coef))
         if len(out):
             sel = out.fit_cutoff == w
-            out.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(out[sel], rich_recal) @ coef))
+            out.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(out[sel], rich_recal, lan_recal) @ coef))
     return out, hist
 
 
