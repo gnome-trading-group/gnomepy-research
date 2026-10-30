@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import time
 from pathlib import Path
 
@@ -171,7 +172,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", required=True)
     ap.add_argument("--targets", required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", required=True, help="output parquet; $OUTPUT_DIR is expanded so a Batch task can write there")
     ap.add_argument("--no-faceit", dest="faceit", action="store_false")
     ap.add_argument("--faceit-weight", type=float, default=SourceConfig.faceit_weight)
     ap.add_argument("--faceit-prior-offset", type=float, default=SourceConfig.faceit_prior_offset)
@@ -184,9 +185,10 @@ def main() -> None:
     pred = run(a.data, targets, a.faceit, src, a.calibration_months, a.calibration)
     pred = targets[["match_id"]].merge(pred, on="match_id", how="left")
     pred["fit_cutoff"] = pd.to_datetime(pred.fit_cutoff)
-    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    pred.to_parquet(a.out, index=False)
-    print(f"wrote {len(pred)} predictions ({int(pred.q.isna().sum())} missing) to {a.out}")
+    out = Path(os.path.expandvars(a.out))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pred.to_parquet(out, index=False)
+    print(f"wrote {len(pred)} predictions ({int(pred.q.isna().sum())} missing) to {out}")
 
 
 if __name__ == "__main__":
