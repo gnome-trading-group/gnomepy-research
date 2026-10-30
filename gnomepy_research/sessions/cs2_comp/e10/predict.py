@@ -43,6 +43,8 @@ def design(f: pd.DataFrame, spec: str) -> np.ndarray:
         cols.append(np.log1p(f.coh_a.to_numpy()) - np.log1p(f.coh_b.to_numpy()))
     if "a" in tokens:
         cols.append(np.log1p(f.act_a.to_numpy()) - np.log1p(f.act_b.to_numpy()))
+    if "elo" in tokens:
+        cols.append(f.elo.to_numpy())
     if "lan" in tokens:
         cols.append(z * f.lan.fillna(0).to_numpy())
     if "tier" in tokens:

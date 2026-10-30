@@ -43,6 +43,7 @@ class RunConfig:
     shift_min_games: int = 20
     thin_games: int = 20
     use_moves: bool = True
+    elo_step: float = 0.15
     decay: float = 0.4
     faceit_offset_var: float = 0.04
     standin_weight: float = 0.3
@@ -187,6 +188,7 @@ class Pass:
         self.moves = roster_moves(data_dir, last_cutoff) if cfg.use_moves else {}
         self.standins = self._standins(data_dir, last_cutoff)
         self.last_time: dict[int, int] = {}
+        self.team_elo: dict[int, float] = collections.defaultdict(float)
         self.by_player: dict[int, list[int]] = collections.defaultdict(list)
         self.faceit_recent: dict[int, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=cfg.k_series))
         self.series = self._series_table()
@@ -242,6 +244,10 @@ class Pass:
                     else:
                         q.append([ev.match_id, tuple(players.tolist())])
         if ev.source == HLTV:
+            gap = self.team_elo[ev.team_a] - self.team_elo[ev.team_b]
+            step = self.cfg.elo_step * ((ev.ra > ev.rb) - 1 / (1 + math.exp(-gap)))
+            self.team_elo[ev.team_a] += step
+            self.team_elo[ev.team_b] -= step
             for team, players in ((ev.team_a, ev.a), (ev.team_b, ev.b)):
                 self.last_time[team] = ev.time
                 q = self.recent[team]
@@ -387,6 +393,7 @@ class Pass:
             lo_a = hi_a = lo_b = hi_b = wa = wb = 0.0
             na = nb = 0
             row.update({"coh_a": 0, "act_a": 0.0, "coh_b": 0, "act_b": 0.0})
+        row["elo"] = self.team_elo.get(team_a, 0.0) - self.team_elo.get(team_b, 0.0)
         row.update({"d": d, "sd": math.sqrt(max(s2, 0.0)), "p_series": min(max(p_series, 1e-4), 1 - 1e-4),
                     "fres_lo": lo_a - lo_b, "fres_hi": hi_a - hi_b, "fw_a": wa, "fw_b": wb, "nf_a": na, "nf_b": nb})
         for side, lu in (("a", a), ("b", b)):
