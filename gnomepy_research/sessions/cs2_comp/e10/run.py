@@ -29,6 +29,7 @@ TRAIN_START = pd.Timestamp("2024-07-01")
 WEEK = pd.Timedelta(days=7)
 DAY_NS = 86_400 * 10 ** 9
 TOGETHER_DAYS = 60
+_NEVER = 2 ** 62
 
 
 @dataclass(frozen=True)
@@ -207,9 +208,11 @@ class Pass:
     def _series_table(self) -> pd.DataFrame:
         h = self.hm[self.hm.bo_type == 3]
         g = h.groupby("match_id", sort=False)
-        t = g.agg(time=("time", "min"), team_a_id=("team_a_id", "first"), team_b_id=("team_b_id", "first"),
+        t = g.agg(time=("time", "min"), last=("time", "max"), team_a_id=("team_a_id", "first"), team_b_id=("team_b_id", "first"),
                   wins=("team_a_won", "sum"), n=("team_a_won", "size"))
         t["y"] = (t.wins * 2 > t.n).astype(int)
+        t["decided"] = np.maximum(t.wins, t.n - t.wins) >= 2
+        t["last"] = t["last"].map(lambda x: int(x.value))
         return t.reset_index()
 
     def _introduce(self, ev: Event) -> None:
@@ -395,10 +398,14 @@ class Pass:
             shift = self._shift() if self.cfg.use_faceit else 0.0
             week = self.series[(self.series.time >= c) & (self.series.time < c + WEEK)]
             seen = set()
+            info = week.set_index("match_id")
             if targets is not None:
                 for r in targets[targets.week_cutoff == c].itertuples(index=False):
+                    known = r.match_id in info.index
                     rows.append({"match_id": r.match_id, "week_cutoff": c, "is_target": True,
-                                 "y": float(week.set_index("match_id").y.get(r.match_id, np.nan)),
+                                 "y": float(info.y[r.match_id]) if known else np.nan,
+                                 "t_last": int(info["last"][r.match_id]) if known else _NEVER,
+                                 "decided": bool(info.decided[r.match_id]) if known else False,
                                  **self.price(c, int(r.team_a_id), int(r.team_b_id), shift)})
                     seen.add(r.match_id)
             for r in week.itertuples(index=False):
@@ -411,7 +418,7 @@ class Pass:
                     row["ovl_a"] = -1 if la is None else len(act[0] & set(la.tolist()))
                     row["ovl_b"] = -1 if lb is None else len(act[1] & set(lb.tolist()))
                 rows.append({"match_id": r.match_id, "week_cutoff": c, "is_target": False, "y": float(r.y),
-                             **row})
+                             "t_last": int(r.last), "decided": bool(r.decided), **row})
         return pd.DataFrame(rows)
 
 

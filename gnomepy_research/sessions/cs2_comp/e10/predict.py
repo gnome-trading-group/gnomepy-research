@@ -68,7 +68,10 @@ def calibrate(feats: pd.DataFrame, weeks: list[pd.Timestamp], spec: str = "") ->
     prior[0] = 1.0
     labelled = feats.y.notna().to_numpy()
     for w in weeks:
-        train = labelled & (feats.week_cutoff < w).to_numpy() & (feats.week_cutoff >= CALIBRATION_START).to_numpy()
+        # A series still in progress at w shows only some of its maps in a bundle cut at w, so only series that are
+        # decided and over by w train the week: the same rows whatever lies beyond w.
+        finished = (feats.decided & (feats.t_last < w.value)).to_numpy()
+        train = labelled & finished & (feats.week_cutoff < w).to_numpy() & (feats.week_cutoff >= CALIBRATION_START).to_numpy()
         coef = fit_logistic(x_all[train], feats.y.to_numpy()[train], prior) if train.sum() >= 200 else prior
         sel = (feats.week_cutoff == w).to_numpy()
         z = x_all[sel] @ coef
