@@ -66,6 +66,12 @@ class Config:
     # A team effect belongs to the players who earned it: scale it by the share of the announced five that played for
     # the team in the window, so a rebuilt roster under an old name does not inherit the old roster's effect.
     team_effect_overlap: bool = False
+    # Cohesion: a five that has rarely played together loses rounds beyond its players' ratings. Its novelty is
+    # exp(-maps / novelty_maps), maps being the team's earlier maps in the last novelty_days with at least four of the
+    # same five; the loss per unit of novelty is fitted with this prior scale. 0 switches it off.
+    sigma_novelty: float = 0.0
+    novelty_days: int = 90
+    novelty_maps: float = 10.0
 
 
 @dataclass
@@ -86,7 +92,9 @@ class Fit:
     home: dict = field(default_factory=dict)
     rho: np.ndarray = None
     standin: float = 0.0
+    novelty: float = 0.0
     team_players: dict = field(default_factory=dict)
+    recent_fives: dict = field(default_factory=dict)   # team -> fives (n x 5) of its maps in the last novelty_days
     map_table: np.ndarray = None
 
     def __post_init__(self):
@@ -183,8 +191,17 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
              - sp.csr_matrix((np.ones(n_m), (np.arange(n_m), rb)), shape=(n_m, n_reg)))[:, 2:].tocsr()
     RT = R.T.tocsr()
     n_rho = R.shape[1]
-    S = (maps.standins_a.to_numpy(float) - maps.standins_b.to_numpy(float)) if cfg.sigma_standin > 0 else np.zeros(n_m)
-    n_s = 1 if cfg.sigma_standin > 0 else 0
+    cols, scales = [], []
+    if cfg.sigma_standin > 0:
+        cols.append(maps.standins_a.to_numpy(float) - maps.standins_b.to_numpy(float))
+        scales.append(cfg.sigma_standin)
+    if cfg.sigma_novelty > 0:
+        nov_a, nov_b = _novelty(maps, fa, fb, cfg)
+        cols.append(nov_a - nov_b)
+        scales.append(cfg.sigma_novelty)
+    C = np.column_stack(cols) if cols else np.zeros((n_m, 0))
+    c_scale = np.array(scales)
+    n_s = C.shape[1]
 
     rr = _rating_rows(maps, ratings, ia, ib, {int(p): i for i, p in enumerate(players)}) \
         if cfg.rating_weight > 0 and ratings is not None else pd.DataFrame()
@@ -214,7 +231,7 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
 
     def objective(x):
         theta, gamma, u, z, beta, v, sv = unpack(x)
-        d = A @ theta + T @ gamma + cfg.sigma_region * (R @ v) + cfg.sigma_standin * S * sv.sum()
+        d = A @ theta + T @ gamma + cfg.sigma_region * (R @ v) + C @ (c_scale * sv)
         log_p = -np.logaddexp(0.0, -d)
         log_q = -np.logaddexp(0.0, d)
         f = -np.sum(w * (k * log_p + (n - k) * log_q)) + 0.5 * (u @ u + z @ z + beta @ beta + v @ v + sv @ sv)
@@ -229,7 +246,7 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
             g_theta = g_theta - BT @ (omega * e * slope[r_src])
             extra = [np.array([-np.sum((omega * e * bt)[r_src == s]) for s in (HLTV, FACEIT)]) + (slope - 1.0)]
         g = np.concatenate([cfg.sigma0 * g_theta + u, -cfg.sigma_team * (TT @ r) + z, F.T @ g_theta + beta,
-                            -cfg.sigma_region * (RT @ r) + v, -cfg.sigma_standin * (S @ r) + sv] + extra)
+                            -cfg.sigma_region * (RT @ r) + v, -c_scale * (C.T @ r) + sv] + extra)
         return f, g
 
     x0 = np.concatenate([np.zeros(n_x), np.ones(n_g)])
@@ -237,9 +254,11 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
                        options={"maxiter": 5000, "maxcor": 20, "ftol": 1e-12, "gtol": 1e-6})
     theta, gamma, _, _, beta, v, sv = unpack(res.x)
     rho = np.concatenate([np.zeros(2), cfg.sigma_region * v]) if n_rho else np.zeros(N_REGIONS)
-    standin = float(cfg.sigma_standin * sv.sum())
+    coef = c_scale * sv
+    standin = float(coef[0]) if cfg.sigma_standin > 0 else 0.0
+    novelty = float(coef[-1]) if cfg.sigma_novelty > 0 else 0.0
     x = np.concatenate([theta, gamma, beta, res.x[n_x:]])
-    d = A @ x[:n_p] + T @ x[n_p:n_p + n_t] + R @ rho[2:n_reg] + standin * S
+    d = A @ x[:n_p] + T @ x[n_p:n_p + n_t] + R @ rho[2:n_reg] + C @ coef
     s_ = 1.0 / (1.0 + np.exp(-d))
     h = w * n * s_ * (1.0 - s_)
     info = A.multiply(A).T @ h + inv0
@@ -260,7 +279,42 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
                rank_strength=strength_of, strength_mu=mu, strength_sd=sd, latest_five=latest,
                hltv_seen={int(p) for p, s in zip(players, seen) if s > 0},
                theta_var=np.asarray(theta_var).ravel(), gamma_var=np.asarray(gamma_var).ravel(), home=home, rho=rho,
-               standin=standin, team_players=team_players)
+               standin=standin, novelty=novelty, team_players=team_players,
+               recent_fives=_recent_fives(maps, fa, fb, cutoff, cfg) if cfg.sigma_novelty > 0 else {})
+
+
+def _novelty(maps: pd.DataFrame, fa: np.ndarray, fb: np.ndarray, cfg: Config) -> tuple[np.ndarray, np.ndarray]:
+    """Each side's novelty from the same team's earlier maps (row order is known order) in the last novelty_days."""
+    n_m = len(maps)
+    team = np.concatenate([maps.team_a.to_numpy(), maps.team_b.to_numpy()])
+    fives = np.concatenate([fa, fb])
+    day = np.tile(maps.day.to_numpy().astype("datetime64[D]").astype(np.int64), 2)
+    row = np.tile(np.arange(n_m), 2)
+    count = np.zeros(2 * n_m)
+    order = np.lexsort((row, team))
+    bounds = np.flatnonzero(np.diff(team[order])) + 1
+    for g in np.split(order, bounds):
+        g = g[np.argsort(row[g], kind="stable")]
+        gd, gf, gr = day[g], fives[g], row[g]
+        lo = 0
+        for i in range(1, len(g)):
+            while gd[i] - gd[lo] > cfg.novelty_days:
+                lo += 1
+            prev = slice(lo, int(np.searchsorted(gr, gr[i], side="left")))
+            if prev.stop > prev.start:
+                same = (gf[prev][:, :, None] == gf[i][None, None, :]).any(axis=2).sum(axis=1)
+                count[g[i]] = np.count_nonzero(same >= LINEUP_SIZE - 1)
+    nov = np.exp(-count / cfg.novelty_maps)
+    return nov[:n_m], nov[n_m:]
+
+
+def _recent_fives(maps: pd.DataFrame, fa: np.ndarray, fb: np.ndarray, cutoff: pd.Timestamp, cfg: Config) -> dict:
+    recent = maps.day.to_numpy() >= np.datetime64(cutoff - pd.Timedelta(days=cfg.novelty_days))
+    team = np.concatenate([maps.team_a.to_numpy()[recent], maps.team_b.to_numpy()[recent]])
+    fives = np.concatenate([fa[recent], fb[recent]])
+    order = np.argsort(team, kind="stable")
+    bounds = np.flatnonzero(np.diff(team[order])) + 1
+    return {int(team[g[0]]): fives[g] for g in np.split(order, bounds) if len(g)}
 
 
 def _home_regions(maps: pd.DataFrame) -> dict:
@@ -288,6 +342,11 @@ def team_rating(f: Fit, team: int, five: tuple | None = None, standins: int = 0)
         share = len(f.team_players.get(int(team), set()).intersection(five)) / LINEUP_SIZE
     known = [f.pidx.get(p) for p in five]
     mean = np.mean([f.theta[i] if i is not None else newcomer for i in known]) + f.standin * standins
+    if f.cfg.sigma_novelty > 0:
+        past = f.recent_fives.get(int(team), np.zeros((0, LINEUP_SIZE), dtype=np.int64))
+        together = np.count_nonzero(np.isin(past, np.array(five, dtype=np.int64)).sum(axis=1) >= LINEUP_SIZE - 1) \
+            if None not in five else 0
+        mean += f.novelty * np.exp(-together / f.cfg.novelty_maps)
     var = sum(f.theta_var[i] if i is not None else f.cfg.sigma0 ** 2 for i in known) / LINEUP_SIZE ** 2
     mean += f.rho[f.home.get(int(team), 0)]
     t = f.tidx.get(int(team))
