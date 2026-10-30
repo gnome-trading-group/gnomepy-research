@@ -11,7 +11,7 @@ import pandas as pd
 from gnomepy_research.sessions.cs2_comp.e06.events import FACEIT, HLTV, MapEvent, build_events
 from gnomepy_research.sessions.cs2_comp.e06.roster import RosterParams, Rosters
 from gnomepy_research.sessions.cs2_comp.e06.fusion import Combined
-from gnomepy_research.sessions.cs2_comp.e06.skill import Params
+from gnomepy_research.sessions.cs2_comp.e06.skill import Params, stacked
 
 logger = logging.getLogger(__name__)
 
