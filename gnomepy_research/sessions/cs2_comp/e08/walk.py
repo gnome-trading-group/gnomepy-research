@@ -99,9 +99,8 @@ def walk(maps: Maps, targets: pd.DataFrame, moves: Moves, ranks: RankPoints, par
             })
     out = pd.DataFrame(rows)
     covered = np.minimum(out.n_face_a, out.n_face_b) >= params.hybrid_min
-    weight = np.where(out.thin_pit, params.blend_thin, params.blend_rest) * covered
+    weight = np.where(out.thin_pit, params.blend_thin, params.blend_rest) * covered * params.use_faceit
     shift = out.q_joint.map(logit) - out.q_hltv.map(logit)
-    out["q"] = [calibrate(1 / (1 + np.exp(-(logit(h) + wt * s))), sp.slope) for h, wt, s in zip(out.q_hltv, weight, shift)]
-    if not params.use_faceit:
-        out["q"] = [calibrate(q, sp.slope) for q in out.q_joint]
+    out["q"] = [calibrate(1 / (1 + np.exp(-(params.hltv_scale * logit(h) + wt * s))), sp.slope)
+                for h, wt, s in zip(out.q_hltv, weight, shift)]
     return out, f

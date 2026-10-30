@@ -18,19 +18,20 @@ import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.bundle import load
 from gnomepy_research.sessions.cs2_comp.e08.data import RankPoints, build_maps
-from gnomepy_research.sessions.cs2_comp.e08.filter import Params
-from gnomepy_research.sessions.cs2_comp.e08.series import Moves, SeriesParams
+from gnomepy_research.sessions.cs2_comp.e08.dev import apply_overrides
+from gnomepy_research.sessions.cs2_comp.e08.series import Moves
 from gnomepy_research.sessions.cs2_comp.e08.walk import walk
 
 
-def predict(data_dir: Path, targets: pd.DataFrame, use_faceit: bool) -> pd.DataFrame:
+def predict(data_dir: Path, targets: pd.DataFrame, use_faceit: bool, overrides: list[str]) -> pd.DataFrame:
     targets = targets.assign(week_cutoff=pd.to_datetime(targets.week_cutoff))
     before = targets.week_cutoff.max()
-    params = dataclasses.replace(Params(), use_faceit=use_faceit)
+    params, sp = apply_overrides(overrides)
+    params = dataclasses.replace(params, use_faceit=use_faceit)
     maps = build_maps(data_dir, before, use_faceit=use_faceit)
     ranks = RankPoints(load(data_dir, "hltv/cs2_team_rankings", before))
     moves = Moves(load(data_dir, "hltv/cs2_roster_moves", before))
-    out, _ = walk(maps, targets, moves, ranks, params, SeriesParams())
+    out, _ = walk(maps, targets, moves, ranks, params, sp)
     return out[["match_id", "q", "fit_cutoff"]]
 
 
@@ -40,13 +41,14 @@ def main() -> None:
     ap.add_argument("--targets", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--no-faceit", action="store_true")
+    ap.add_argument("--set", default="", help="comma-separated key=value overrides of the model settings")
     ap.add_argument("--weeks", default=None, help="comma-separated week cutoffs to price, for splitting across tasks")
     args = ap.parse_args()
     targets = pd.read_parquet(args.targets)
     if args.weeks:
         keep = {pd.Timestamp(w) for w in args.weeks.split(",")}
         targets = targets[pd.to_datetime(targets.week_cutoff).isin(keep)]
-    out = predict(args.data, targets, use_faceit=not args.no_faceit)
+    out = predict(args.data, targets, use_faceit=not args.no_faceit, overrides=[x for x in args.set.split(",") if x])
     dest = args.out if args.out.is_absolute() or "OUTPUT_DIR" not in os.environ else Path(os.environ["OUTPUT_DIR"]) / args.out
     dest.parent.mkdir(parents=True, exist_ok=True)
     out.to_parquet(dest, index=False)
