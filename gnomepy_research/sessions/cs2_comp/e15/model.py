@@ -170,16 +170,21 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
         omega = cfg.rating_weight * 0.5 ** (r_age / cfg.half_life_days) / r_sd[r_src] ** 2
     n_g = 2 if n_r else 0
 
+    # Optimised in prior-whitened coordinates, theta = F beta + sigma0 u and gamma = sigma_team z: the same optimum,
+    # but a team effect and its five's mean are nearly collinear, which leaves L-BFGS crawling along a narrow valley
+    # in the raw coordinates once FACEIT's tens of thousands of thinly observed players are in.
+    def unpack(x):
+        u, z, beta = x[:n_p], x[n_p:n_p + n_t], x[n_p + n_t:n_p + n_t + n_f]
+        return F @ beta + cfg.sigma0 * u, cfg.sigma_team * z, u, z, beta
+
     def objective(x):
-        theta, gamma, beta = x[:n_p], x[n_p:n_p + n_t], x[n_p + n_t:n_p + n_t + n_f]
+        theta, gamma, u, z, beta = unpack(x)
         d = A @ theta + T @ gamma
         log_p = -np.logaddexp(0.0, -d)
         log_q = -np.logaddexp(0.0, d)
-        resid = theta - F @ beta
-        f = -np.sum(w * (k * log_p + (n - k) * log_q)) + 0.5 * inv0 * resid @ resid + 0.5 * invt * gamma @ gamma \
-            + 0.5 * beta @ beta
+        f = -np.sum(w * (k * log_p + (n - k) * log_q)) + 0.5 * (u @ u + z @ z + beta @ beta)
         r = w * (k - n / (1.0 + np.exp(-d)))
-        g_theta = -(AT @ r) + inv0 * resid
+        g_theta = -(AT @ r)
         extra = []
         if n_r:
             slope = x[n_p + n_t + n_f:]
@@ -188,13 +193,14 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
             f += 0.5 * np.sum(omega * e * e) + 0.5 * np.sum((slope - 1.0) ** 2)
             g_theta = g_theta - BT @ (omega * e * slope[r_src])
             extra = [np.array([-np.sum((omega * e * bt)[r_src == s]) for s in (HLTV, FACEIT)]) + (slope - 1.0)]
-        g = np.concatenate([g_theta, -(TT @ r) + invt * gamma, -inv0 * (F.T @ resid) + beta] + extra)
+        g = np.concatenate([cfg.sigma0 * g_theta + u, -cfg.sigma_team * (TT @ r) + z, F.T @ g_theta + beta] + extra)
         return f, g
 
     x0 = np.concatenate([np.zeros(n_p + n_t + n_f), np.ones(n_g)])
     res = opt.minimize(objective, x0, jac=True, method="L-BFGS-B",
                        options={"maxiter": 5000, "maxcor": 20, "ftol": 1e-12, "gtol": 1e-6})
-    x = res.x
+    theta, gamma, _, _, beta = unpack(res.x)
+    x = np.concatenate([theta, gamma, beta, res.x[n_p + n_t + n_f:]])
     d = A @ x[:n_p] + T @ x[n_p:n_p + n_t]
     s_ = 1.0 / (1.0 + np.exp(-d))
     h = w * n * s_ * (1.0 - s_)
