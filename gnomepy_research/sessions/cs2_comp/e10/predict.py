@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -107,7 +108,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True, type=Path)
     ap.add_argument("--targets", required=True, type=Path)
-    ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--out", type=Path, default=Path(os.environ.get("OUTPUT_DIR", ".")) / "predictions.parquet")
     ap.add_argument("--no-faceit", action="store_true")
     ap.add_argument("--config", default="{}", help="JSON overrides of RunConfig / SkillConfig fields")
     ap.add_argument("--spec", default=DEFAULT_SPEC)
