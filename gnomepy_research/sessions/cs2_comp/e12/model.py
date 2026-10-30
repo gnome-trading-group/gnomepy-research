@@ -7,9 +7,10 @@ Skill fit (penalised maximum likelihood, one fit per weekly cutoff on a trailing
     rounds_A ~ Binomial(n, sigmoid(mean(s_A) - mean(s_B))),   each map weighted by 0.5^(age / half_life) * w_source
     s_p ~ N(x_p . gamma, sigma^2)
 
-The prior mean x_p . gamma is learned with the skills: HLTV ranking of the teams a player played for, his latest
-FACEIT skill level, and the share of his FACEIT maps in each ESEA division (Open is not the HLTV top 30). FACEIT maps
-carry a lower weight than HLTV maps: they are another measurement of the same skill with more noise per map.
+The prior mean x_p . gamma is learned with the skills: HLTV ranking of the teams a player played for, the player's
+latest FACEIT skill level, and the share of the player's FACEIT maps in each ESEA division (Open is not the HLTV top
+30). FACEIT maps carry a lower weight than HLTV maps: they are another measurement of the same skill with more noise
+per map.
 
 Lineups going into a series are not known before it (the target's own lineup rows are dated on the match day), so each
 team plays the five it fielded last. With FACEIT on, a team's most recent FACEIT five wins when it is newer than its

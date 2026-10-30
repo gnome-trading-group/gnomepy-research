@@ -6,7 +6,7 @@ Everything is read once through `bundle.load` at the latest cutoff of a run, and
 were known before its own cutoff by the same rules (HLTV by match date and time, FACEIT by the series' finish time),
 so a fit never depends on which other weeks are in the run.
 
-A FACEIT player linked to HLTV (`hltv_faceit_map`) takes his HLTV id; an unlinked one keeps his own id (a negative
+A FACEIT player linked to HLTV (`hltv_faceit_map`) takes the HLTV id; an unlinked one keeps its own id (a negative
 hash of the FACEIT id), so FACEIT-only opponents still connect the rating graph.
 """
 from __future__ import annotations
