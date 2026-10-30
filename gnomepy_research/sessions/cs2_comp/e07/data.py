@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp import bundle
@@ -219,3 +220,21 @@ class RankPoints:
         if i < 0 or day - h[0][i] > self.MAX_AGE_DAYS:
             return 0.0
         return float(h[1][i])
+
+
+def practice_times(data_dir, before: pd.Timestamp, index: dict) -> dict[int, np.ndarray]:
+    """For each linked player in `index`, the sorted finish days of every FACEIT match he played (matchmaking and
+    community games included) before `before`. Results are not used, only how often he played."""
+    link = bundle.load(data_dir, "faceit/hltv_faceit_map")
+    to_hltv = dict(zip(link.faceit_id, link.hltv_id.astype(int)))
+    matches = bundle.load(data_dir, "faceit/history_matches", before, ["match_id", "finished_at"])
+    players = pq.read_table(f"{data_dir}/faceit/history_players.parquet", columns=["match_id", "faceit_id"],
+                            filters=[("faceit_id", "in", list(to_hltv))]).to_pandas()
+    played = players.merge(matches, on="match_id")
+    played["key"] = played.faceit_id.map(to_hltv)
+    out = {}
+    for key, g in played.groupby("key"):
+        idx = index.get(int(key))
+        if idx is not None:
+            out[idx] = np.sort(g.finished_at.to_numpy(float) / 86_400)
+    return out

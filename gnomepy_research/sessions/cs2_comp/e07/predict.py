@@ -32,7 +32,8 @@ def run(data_dir: Path, targets: pd.DataFrame, cfg: ModelConfig, features_out: P
     last = pd.Timestamp(cutoffs[-1])
     streams = data.build(data_dir, last, cfg.use_faceit)
     model = Model(cfg, streams, data.RankPoints(bundle.load(data_dir, "hltv/cs2_team_rankings", last)),
-                  RosterMoves(bundle.load(data_dir, "hltv/cs2_roster_moves", last)))
+                  RosterMoves(bundle.load(data_dir, "hltv/cs2_roster_moves", last)),
+                  data.practice_times(data_dir, last, streams.index) if cfg.use_faceit else None)
     weights = STACK_FACEIT if cfg.use_faceit else STACK_HLTV
     out, tables = [], []
     for cutoff in cutoffs:

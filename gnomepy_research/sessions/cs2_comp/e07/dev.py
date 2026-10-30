@@ -36,8 +36,8 @@ def _ll(q: np.ndarray, y: np.ndarray) -> np.ndarray:
     return -(y * np.log(q) + (1 - y) * np.log(1 - q))
 
 
-def walk(streams: data.Streams, rankings: pd.DataFrame, moves: RosterMoves, cfg: ModelConfig, first: str, before: str) -> pd.DataFrame:
-    model = Model(cfg, streams, data.RankPoints(rankings), moves)
+def walk(streams: data.Streams, rankings: pd.DataFrame, moves: RosterMoves, practice: dict, cfg: ModelConfig, first: str, before: str) -> pd.DataFrame:
+    model = Model(cfg, streams, data.RankPoints(rankings), moves, practice)
     series = streams.series[streams.series.bo_type == 3]
     rows = []
     for cutoff in pd.date_range(first, before, freq="7D", inclusive="left"):
@@ -92,7 +92,8 @@ def main() -> None:
         if cfg.use_faceit not in built:
             built[cfg.use_faceit] = data.build(args.data, before, cfg.use_faceit)
         t1 = time.time()
-        p = walk(built[cfg.use_faceit], rankings, moves, cfg, args.first, args.before)
+        practice = data.practice_times(args.data, before, built[cfg.use_faceit].index) if cfg.use_faceit else {}
+        p = walk(built[cfg.use_faceit], rankings, moves, practice, cfg, args.first, args.before)
         p.to_parquet(args.out / f"{item['name']}.parquet", index=False)
         res = {"name": item["name"], "set": item["set"], **summarize(p), "report": analysis.report(p), "build_s": round(t1 - t0), "walk_s": round(time.time() - t1)}
         (args.out / f"{item['name']}.json").write_text(json.dumps(res))

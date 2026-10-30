@@ -31,6 +31,8 @@ def designs(d: pd.DataFrame, zcol: str = "q_soft") -> dict[str, np.ndarray]:
                      "FL": ["z_hltv", "faceit_skill_online", "faceit_skill_lan"],
                      "FZ": ["z_hltv", "z_lan", "faceit_skill_online", "faceit_skill_lan"],
                      "FR": ["z_hltv", "faceit_skill_online", "faceit_skill_lan", "rank_points", "rating_hltv", "rating_faceit"],
+                     "PR": ["z_hltv", "faceit_skill", "rank_points", "faceit_coverage", "practice_14", "practice_90"],
+                     "PR1": ["z_hltv", "faceit_skill", "rank_points", "faceit_coverage", "practice_90"],
                      "X": ["z_hltv", "faceit_skill", "elo_team", "elo_team_faceit", "rank_points"]})
     return {k: design(d, names) for k, names in sets.items()}
 

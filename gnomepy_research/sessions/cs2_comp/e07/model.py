@@ -33,8 +33,10 @@ class ModelConfig:
 
 
 class Model:
-    def __init__(self, cfg: ModelConfig, streams: Streams, rank_points: RankPoints, moves: RosterMoves | None = None):
+    def __init__(self, cfg: ModelConfig, streams: Streams, rank_points: RankPoints, moves: RosterMoves | None = None,
+                 practice: dict[int, np.ndarray] | None = None):
         self.cfg = cfg
+        self.practice = practice or {}
         self.keys = list(streams.index)
         self.rank_points = rank_points
         self.index = streams.index
@@ -57,6 +59,15 @@ class Model:
         var = np.where(np.isnan(seen), c.sigma0 ** 2, self.h.var[ids] + c.tau ** 2 * np.maximum(t - np.nan_to_num(seen), 0.0))
         weight = np.minimum(var / c.sigma0 ** 2, 1.0)
         return float(((self.f.mu[ids] - self.cfg.faceit.faceit_prior) * weight)[covered].sum() / LINEUP)
+
+    def practice_level(self, ids: np.ndarray, cutoff_day: float, days: float) -> float:
+        """Mean over the five of log(1 + FACEIT matches played in the last `days` days before the cutoff)."""
+        total = 0.0
+        for i in ids.tolist():
+            times = self.practice.get(i)
+            if times is not None:
+                total += np.log1p(np.searchsorted(times, cutoff_day) - np.searchsorted(times, cutoff_day - days))
+        return total / LINEUP
 
     def lineup(self, team: int, cutoff_day: float) -> tuple[list, float | None]:
         """Slots of the team's expected five (player index, or None when unknown) and the day of its last HLTV map."""
@@ -155,6 +166,8 @@ class Model:
             s, v, n = (0.0, 0.0, 0) if not len(ids) else self.f.profile(ids, t)
             row[f"f_s_{side}"], row[f"f_v_{side}"], row[f"f_n_{side}"] = s, v, n
             row[f"f_su_{side}"] = 0.0 if not len(ids) else self._uncertainty_weighted(ids, t)
+            row[f"prac14_{side}"] = self.practice_level(ids, cutoff_day, 14.0)
+            row[f"prac90_{side}"] = self.practice_level(ids, cutoff_day, 90.0)
             row[f"five_f_{side}"] = 0 if len(ids) < 5 else self.f.five_maps(ids, t, FIVE_DAYS)
             row[f"act_f_{side}"] = 0.0 if not len(ids) else self.f.activity(ids, t, ACTIVITY_DAYS)
         return row
