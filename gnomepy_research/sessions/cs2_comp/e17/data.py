@@ -127,3 +127,18 @@ def player_ratings(data_dir, before: pd.Timestamp) -> dict[int, tuple[np.ndarray
     s = s[(s.side == "all") & s.rating.notna() & s.player_id.notna()]
     s = s.assign(t=_naive(s.match_date).to_numpy(), player_id=s.player_id.astype(int)).sort_values(["t", "player_id"], kind="mergesort")
     return {int(p): (g.t.to_numpy(), g.rating.to_numpy(float)) for p, g in s.groupby("player_id", sort=False)}
+
+
+def faceit_performance(data_dir, before: pd.Timestamp) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+    """Each FACEIT player's kills per round relative to the ten players on the map, in time order, keyed like the
+    stream's player ids. Centring on the map removes the level of the opposition, which the skill filter already has."""
+    st = load(data_dir, "faceit/faceit_player_map_stats", before, ["match_id", "map_position_in_series", "faceit_id", "k_r_ratio"])
+    fm = load(data_dir, "faceit/faceit_matches", before, ["match_id", "finished_at"])
+    st = st[st.k_r_ratio.notna()].merge(fm, on="match_id")
+    st["perf"] = st.k_r_ratio - st.groupby(["match_id", "map_position_in_series"]).k_r_ratio.transform("mean")
+    ids = load(data_dir, "faceit/hltv_faceit_map", None, ["hltv_id", "faceit_id"])
+    to_hltv = dict(zip(ids.faceit_id, ids.hltv_id.astype(int)))
+    st["pid"] = [to_hltv.get(f, synthetic_id(f)) for f in st.faceit_id]
+    st["t"] = pd.to_datetime(st.finished_at, unit="s").to_numpy()
+    st = st.sort_values(["t", "pid"], kind="mergesort")
+    return {int(p): (g.t.to_numpy(), g.perf.to_numpy(float)) for p, g in st.groupby("pid", sort=False)}
