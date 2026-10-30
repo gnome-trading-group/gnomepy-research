@@ -44,7 +44,7 @@ _GRID = np.linspace(-8.0, 8.0, 3201)
 class Config:
     window_days: int = 365
     half_life_days: float = 120.0
-    phi: tuple[float, float] = (1.0, 0.6)
+    phi: tuple[float, float] = (1.0, 0.3)
     sigma0: float = 1.5
     sigma_r: tuple[float, float] = (0.2, 0.25)
     sigma_m: float = 0.37
