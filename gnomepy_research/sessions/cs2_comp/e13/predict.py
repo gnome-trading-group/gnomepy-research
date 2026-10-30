@@ -35,9 +35,9 @@ from gnomepy_research.sessions.cs2_comp.e13.data import FACEIT, Bundle, build
 from gnomepy_research.sessions.cs2_comp.e13.rating import RatingConfig, RatingFilter
 
 CAL_WEEKS = 26
-MOVED_ON = False
+MOVED_ON = True
 REBUILD_ARRIVALS = 3
-RICH_RECAL = False
+RICH_RECAL = True
 SIGMA_MAP = 0.15
 SIGMA_SERIES = 0.10
 EPOCH = pd.Timestamp("2020-01-01")
@@ -205,36 +205,24 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
         la = f.lineup(tuple(fa), team_a, w, now, 0, -1, ua)
         lb = f.lineup(tuple(fb), team_b, w, now, 0, -1, ub)
         d, s2, _, _ = f.gap(la, lb)
-        rd, rv = f.region_gap(home(team_a), home(team_b), now)
-        d, s2 = d + rd, s2 + rv
         return {"p_raw": series_price(d, s2, curve, sigma_series), "d": d, "gap_sd": math.sqrt(max(s2, 0)),
                 "unk_a": ua, "unk_b": ub, "fonly_a": la.faceit_only, "fonly_b": lb.faceit_only,
                 "five_a": la.five_maps, "five_b": lb.five_maps,
                 "games_min": min(la.games + lb.games) if la.games and lb.games else 0, **same}
 
-    region_counts: dict[int, collections.Counter] = collections.defaultdict(collections.Counter)
-
-    def home(team: int) -> int:
-        counts = region_counts.get(team)
-        return counts.most_common(1)[0][0] if counts else 0
-
     hist_rows, out_rows = [], []
     maps = b.maps
     t_arr = maps.t.to_numpy()
     i, n = 0, len(maps)
-    cols = [maps[c].to_numpy() for c in ("src", "division", "team_a", "team_b", "players_a", "players_b", "rounds_a", "rounds_b",
-                                         "region")]
+    cols = [maps[c].to_numpy() for c in ("src", "division", "team_a", "team_b", "players_a", "players_b", "rounds_a", "rounds_b")]
     mids = maps.match_id.to_numpy()
     for w in weeks:
         wn = np.datetime64(w)
         while i < n and t_arr[i] < wn:
-            src, div, ta, tb, pa, pb, ra, rb, region = (c[i] for c in cols)
+            src, div, ta, tb, pa, pb, ra, rb = (c[i] for c in cols)
             now = _days(t_arr[i])
             day = pd.Timestamp(t_arr[i]).normalize()
-            f.observe(day, now, int(src), int(div), int(ta), int(tb), pa, pb, int(ra), int(rb), home(int(ta)), home(int(tb)))
-            if region > 0:
-                region_counts[int(ta)][int(region)] += 1
-                region_counts[int(tb)][int(region)] += 1
+            f.observe(day, now, int(src), int(div), int(ta), int(tb), pa, pb, int(ra), int(rb))
             for side, five in ((0, pa), (1, pb)):
                 devs = [b.devs.get((i, side, int(p))) for p in five]
                 if None not in devs:

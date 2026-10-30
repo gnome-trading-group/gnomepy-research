@@ -18,14 +18,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.models.cs2.hltv.bayes_series import event_region
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.bundle import load
 
 HLTV, FACEIT = 0, 1
 DIVISIONS = (("entry", 0), ("open", 1), ("intermediate", 2), ("main", 3), ("advanced", 4), ("premier", 5), ("pro league", 5))
 UNKNOWN_DIVISION = -1
-FACEIT_REGION = {"EU": 1, "NA": 2, "SA": 3, "SEA": 4, "OCE": 5}
 
 
 def synthetic_id(uuid: str) -> int:
@@ -55,8 +53,7 @@ def _ids(value) -> tuple[int, ...]:
 
 @dataclass
 class Bundle:
-    maps: pd.DataFrame          # t, src, match_id, map_pos, team_a, team_b, players_a, players_b, rounds_a, rounds_b, division,
-                                # region (of the event: 0 unknown or international, then bayes_series.REGIONS order)
+    maps: pd.DataFrame          # t, src, match_id, map_pos, team_a, team_b, players_a, players_b, rounds_a, rounds_b, division
     series: pd.DataFrame        # HLTV series: match_id, t, team_a, team_b, bo_type, is_lan, event_name, y
     rankings: pd.DataFrame
     moves: pd.DataFrame
@@ -81,7 +78,6 @@ def hltv_maps(data: Path, before: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFr
         "team_a": m.team_a_id.astype(np.int64), "team_b": m.team_b_id.astype(np.int64),
         "players_a": m.players_a, "players_b": m.players_b,
         "rounds_a": m.team_a_score.astype(int), "rounds_b": m.team_b_score.astype(int), "division": UNKNOWN_DIVISION,
-        "region": m.event_name.map(event_region).astype(int),
     })
     s = h.groupby("match_id").agg(t=("t", "min"), team_a=("team_a_id", "first"), team_b=("team_b_id", "first"),
                                   bo_type=("bo_type", "first"), is_lan=("is_lan", "first"), event_name=("event_name", "first"),
@@ -93,7 +89,7 @@ def hltv_maps(data: Path, before: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFr
 
 def faceit_maps(data: Path, before: pd.Timestamp) -> tuple[pd.DataFrame, dict[int, float]]:
     matches = load(data, "faceit/faceit_matches", before,
-                   ["match_id", "competition_name", "finished_at", "has_stats", "faction1_id", "faction2_id", "region"])
+                   ["match_id", "competition_name", "finished_at", "has_stats", "faction1_id", "faction2_id"])
     matches = matches[matches.has_stats]
     fm = load(data, "faceit/faceit_match_history", before)
     fm = fm[fm.match_id.isin(matches.match_id)]
@@ -128,7 +124,6 @@ def faceit_maps(data: Path, before: pd.Timestamp) -> tuple[pd.DataFrame, dict[in
         "players_a": fm.players_a, "players_b": fm.players_b,
         "rounds_a": fm.team_a_score.astype(int), "rounds_b": fm.team_b_score.astype(int),
         "division": fm.match_id.map(meta.competition_name).map(division).astype(int),
-        "region": fm.match_id.map(meta.region).map(FACEIT_REGION).fillna(0).astype(int),
     })
     ro = load(data, "faceit/faceit_rosters", before, ["faceit_id", "match_id", "skill_level", "played"])
     ro = ro[ro.played & ro.skill_level.notna()]
