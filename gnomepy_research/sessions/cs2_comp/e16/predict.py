@@ -4,9 +4,16 @@ Pre-match bo3 series prices for the competition targets, one fit per distinct we
     python -m gnomepy_research.sessions.cs2_comp.e16.predict --data <bundle> --targets <targets parquet> --out <parquet>
         [--no-faceit] [--weeks 2026-04-06,2026-04-13] [--set name=value ...]
 
-A target's lineups are not known before its cutoff, so each team is priced with its five from its latest map in the
-window: HLTV maps only without FACEIT, HLTV and FACEIT maps with it (a FACEIT qualifier is often the most recent
-sighting of an online team). --set overrides a Config field, for tuning on the dev period only.
+Each week fits the HLTV-only model. Without FACEIT that fit prices every target. With FACEIT a second, joint fit
+over HLTV and FACEIT maps (FACEIT impact rows, FACEIT skill level and ESEA division priors) runs as well, and:
+  - each team is priced with its latest five across HLTV and FACEIT maps (a FACEIT qualifier is often the freshest
+    sighting of an online team), with HLTV roster moves dated after that sighting applied;
+  - a player of that five whom the HLTV-only fit never saw takes his skill from the joint fit (shifted onto the
+    HLTV-only scale) instead of the newcomer prior;
+  - cfg.faceit_weight > 0 also mixes in the joint fit's own gaps (0 by default: pooling FACEIT results moved
+    established HLTV players too far and scored worse on the tune period).
+A target's lineups are not known before its cutoff, hence the latest five. --set overrides a Config field, for
+tuning on the dev period only.
 """
 from __future__ import annotations
 
@@ -36,12 +43,14 @@ def _five(fives: dict, team: str, moves: pd.DataFrame, cfg: Config) -> list[str]
 
 
 def _gaps(maps: pd.DataFrame, ratings: pd.DataFrame, levels: pd.DataFrame | None, b: Bundle, targets: pd.DataFrame,
-          cutoff: pd.Timestamp, cfg: Config) -> tuple[np.ndarray, np.ndarray, Fit]:
-    """Fit on the given maps and return each target's pre-veto gap and its variance."""
+          cutoff: pd.Timestamp, cfg: Config, lineup_maps: pd.DataFrame,
+          prefit: Fit | None = None) -> tuple[np.ndarray, np.ndarray, Fit]:
+    """Fit on the given maps and return each target's pre-veto gap and its variance, each team priced with its
+    latest five in lineup_maps."""
     rank_of = rank_feature(b.rankings, cutoff)
-    f = fit(maps, ratings, levels, rank_of, cutoff, cfg)
+    f = fit(maps, ratings, levels, rank_of, cutoff, cfg) if prefit is None else prefit
     teams = {f"h{int(t)}" for t in pd.concat([targets.team_a_id, targets.team_b_id])}
-    fives = team_lineups(maps, teams, bool(cfg.revert_standins))
+    fives = team_lineups(lineup_maps, teams, bool(cfg.revert_standins))
     moves = b.moves[b.moves.event_date < cutoff]
     gaps = []
     for r in targets.itertuples():
@@ -53,12 +62,11 @@ def _gaps(maps: pd.DataFrame, ratings: pd.DataFrame, levels: pd.DataFrame | None
 
 
 def predict_week(b: Bundle, targets: pd.DataFrame, cutoff: pd.Timestamp, cfg: Config) -> tuple[pd.DataFrame, dict]:
-    """HLTV-only gaps; with FACEIT, mixed with the joint HLTV + FACEIT fit's gaps by cfg.faceit_weight. Pooling the
-    sources moves well-measured HLTV players too far on online results, while the HLTV-only fit is blind where
-    HLTV is thin; the mix keeps most of the FACEIT gain on thin teams without the loss on established ones."""
+    """HLTV-only gaps; with FACEIT, unseen players from the joint fit, and the joint fit's gaps mixed in by
+    cfg.faceit_weight."""
     maps = window(b.hltv_maps, cutoff, cfg.window_days)
     ratings = window(b.hltv_ratings, cutoff, cfg.window_days).assign(source="hltv")
-    gap, var, f = _gaps(maps, ratings, None, b, targets, cutoff, cfg)
+    gap, var, f = _gaps(maps, ratings, None, b, targets, cutoff, cfg, maps)
     info = {"hltv": f.info}
     if b.faceit_maps is not None:
         fmaps = window(b.faceit_maps, cutoff, cfg.faceit_window_days)
@@ -68,7 +76,10 @@ def predict_week(b: Bundle, targets: pd.DataFrame, cutoff: pd.Timestamp, cfg: Co
         jmaps = pd.concat([maps, fmaps.drop(columns=["n_linked", "mkey"])], ignore_index=True)
         jratings = pd.concat([ratings, frat.drop(columns=["mkey"]).assign(source="faceit")], ignore_index=True)
         levels = b.faceit_levels[b.faceit_levels.cut < cutoff]
-        gap_j, var_j, fj = _gaps(jmaps, jratings, levels, b, targets, cutoff, cfg)
+        gap_j, var_j, fj = _gaps(jmaps, jratings, levels, b, targets, cutoff, cfg, jmaps if cfg.faceit_lineups else maps)
+        if cfg.faceit_fallback:
+            gap, var, _ = _gaps(maps, ratings, None, b, targets, cutoff, cfg, jmaps if cfg.faceit_lineups else maps,
+                                f.with_fallback(fj))
         w = cfg.faceit_weight
         gap, var = (1 - w) * gap + w * gap_j, (1 - w) * var + w * var_j
         info["joint"] = fj.info

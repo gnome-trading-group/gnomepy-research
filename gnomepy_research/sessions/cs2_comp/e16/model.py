@@ -19,6 +19,7 @@ approximation) added to the noise shared by all its maps.
 """
 from __future__ import annotations
 
+import dataclasses
 import functools
 from dataclasses import dataclass, field
 
@@ -56,7 +57,10 @@ class Config:
     # players' skills only through long chains, and they are most of the fitting time.
     faceit_min_linked: int = 1
     sigma_offset: float = 0.0
-    faceit_weight: float = 0.5
+    faceit_weight: float = 0.0
+    faceit_lineups: int = 1
+    # Players the HLTV-only fit never saw take their skill from the joint fit instead of the prior.
+    faceit_fallback: int = 1
     roster_moves: int = 1
     revert_standins: int = 0
 
@@ -73,11 +77,25 @@ class Fit:
     gamma: np.ndarray
     rank_of: dict = field(default_factory=dict)
     info: dict = field(default_factory=dict)
+    fallback: tuple[Fit, float] | None = None
+
+    def with_fallback(self, other: Fit) -> Fit:
+        """This fit, pricing players it never saw from `other` (shifted onto this fit's scale by the mean difference
+        over the players both fits know) instead of from the prior."""
+        common = self.players.intersection(other.players)
+        shift = float(np.mean(self.theta[self.players.get_indexer(common)] - other.theta[other.players.get_indexer(common)])) \
+            if len(common) else 0.0
+        return dataclasses.replace(self, fallback=(other, shift))
 
     def player(self, key: str, team_rank: float) -> tuple[float, float]:
         i = self.players.get_indexer([key])[0]
         if i >= 0:
             return float(self.theta[i]), float(self.var[i])
+        if self.fallback is not None:
+            other, shift = self.fallback
+            j = other.players.get_indexer([key])[0]
+            if j >= 0:
+                return float(other.theta[j] + shift), float(other.var[j])
         x = np.zeros(len(FEATURES))
         x[0], x[1], x[4] = 1.0, team_rank, 1.0
         return float(x @ self.beta), self.cfg.sigma0 ** 2
