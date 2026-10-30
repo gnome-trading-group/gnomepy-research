@@ -34,8 +34,8 @@ TOGETHER_DAYS, ACTIVE_DAYS = 60, 30
 
 @dataclass(frozen=True)
 class RunConfig:
-    hltv: SkillConfig = field(default_factory=SkillConfig)
-    faceit_skill: SkillConfig = field(default_factory=lambda: SkillConfig(tau=0.012, sigma0=0.30, a=-0.25, level_slope=0.06, gamma=0.5))
+    hltv: SkillConfig = field(default_factory=lambda: SkillConfig(tau=0.014, gamma=0.5, sigma_r=0.8))
+    faceit_skill: SkillConfig = field(default_factory=lambda: SkillConfig(tau=0.02, sigma0=0.30, a=-0.25, level_slope=0.06, gamma=0.5, sigma_r=0.8))
     use_faceit: bool = True
     faceit_rating: bool = True
     k_series: int = 5
@@ -208,7 +208,7 @@ class Pass:
         h = self.hm[self.hm.bo_type == 3]
         g = h.groupby("match_id", sort=False)
         t = g.agg(time=("time", "min"), team_a_id=("team_a_id", "first"), team_b_id=("team_b_id", "first"),
-                  wins=("team_a_won", "sum"), n=("team_a_won", "size"))
+                  wins=("team_a_won", "sum"), n=("team_a_won", "size"), lan=("is_lan", "first"), tier=("event_tier", "first"))
         t["y"] = (t.wins * 2 > t.n).astype(int)
         return t.reset_index()
 
@@ -261,11 +261,17 @@ class Pass:
             self.pos += 1
 
     def lineup(self, team: int, cutoff: pd.Timestamp) -> np.ndarray | None:
-        """The team's five at the cutoff: its most frequent players over its last series, then the transfer log's
-        departures since its last series removed and arrivals put first."""
+        """The team's five at the cutoff."""
+        ordered = self._ranked(team, cutoff)
+        return _arr(ordered[:LINEUP]) if ordered else None
+
+    def _ranked(self, team: int, cutoff: pd.Timestamp) -> list[int]:
+        """Candidate players, most likely first: recency-weighted appearances over the team's last series (stand-ins
+        count less), then the transfer log's departures since its last series removed and arrivals put first."""
         q = self.recent.get(int(team))
         if not q:
-            return self._faceit_lineup(int(team))
+            fallback = self._faceit_lineup(int(team))
+            return [] if fallback is None else fallback.tolist()
         score: dict[int, tuple[float, int]] = {}
         for age, (match_id, players) in enumerate(reversed(q)):
             standin = self.standins.get((match_id, int(team)), ())
@@ -291,7 +297,7 @@ class Pass:
                         gone.discard(idx)
                         arrived.append(idx)
             ordered = arrived[::-1] + [p for p in ordered if p not in gone and p not in arrived]
-        return _arr(ordered[:LINEUP]) if ordered else None
+        return ordered
 
     def _faceit_lineup(self, team: int) -> np.ndarray | None:
         """A team with no HLTV map yet is known, where FACEIT matched it, by the players of its latest FACEIT matches."""
@@ -355,13 +361,19 @@ class Pass:
                 active += t >= now - ACTIVE_DAYS * DAY_NS
         return sum(1 for c in together.values() if c >= 4), active / len(lineup)
 
+    def _series_price(self, a: np.ndarray, b: np.ndarray, team_a: int, team_b: int, day: int, cutoff: pd.Timestamp,
+                      shift: float) -> tuple[float, float, float, np.ndarray, np.ndarray]:
+        (mu_a, var_a), (mu_b, var_b) = self._state(a, team_a, day, cutoff, shift), self._state(b, team_b, day, cutoff, shift)
+        d, s2 = self.fh.gap(a, b, day, (mu_a, mu_b), (var_a, var_b))
+        p_map = map_win_prob(d, s2)
+        return p_map * p_map * (3 - 2 * p_map), d, s2, mu_a, mu_b
+
     def price(self, cutoff: pd.Timestamp, team_a: int, team_b: int, shift: float = 0.0) -> dict:
         f, day = self.fh, day_number(cutoff)
         a, b = self.lineup(team_a, cutoff), self.lineup(team_b, cutoff)
         row = {"known_a": 0 if a is None else len(a), "known_b": 0 if b is None else len(b)}
         if a is not None and b is not None and len(a) == LINEUP and len(b) == LINEUP and not set(a.tolist()) & set(b.tolist()):
-            (mu_a, var_a), (mu_b, var_b) = self._state(a, team_a, day, cutoff, shift), self._state(b, team_b, day, cutoff, shift)
-            d, s2 = f.gap(a, b, day, (mu_a, mu_b), (var_a, var_b))
+            p_series, d, s2, mu_a, mu_b = self._series_price(a, b, team_a, team_b, day, cutoff, shift)
             lo_a, hi_a, wa, na = self._faceit_residual(a, mu_a, shift)
             lo_b, hi_b, wb, nb = self._faceit_residual(b, mu_b, shift)
             row.update(zip(("coh_a", "act_a"), self._practice(a, cutoff)))
@@ -370,11 +382,11 @@ class Pass:
             ma, va = self._virtual(team_a, cutoff) if a is None else (float(f.current(a, day)[0].mean()), float(f.current(a, day)[1].sum()) / len(a) ** 2)
             mb, vb = self._virtual(team_b, cutoff) if b is None else (float(f.current(b, day)[0].mean()), float(f.current(b, day)[1].sum()) / len(b) ** 2)
             d, s2 = ma - mb, va + vb
+            p_map = map_win_prob(d, s2)
+            p_series = p_map * p_map * (3 - 2 * p_map)
             lo_a = hi_a = lo_b = hi_b = wa = wb = 0.0
             na = nb = 0
             row.update({"coh_a": 0, "act_a": 0.0, "coh_b": 0, "act_b": 0.0})
-        p_map = map_win_prob(d, s2)
-        p_series = p_map * p_map * (3 - 2 * p_map)
         row.update({"d": d, "sd": math.sqrt(max(s2, 0.0)), "p_series": min(max(p_series, 1e-4), 1 - 1e-4),
                     "fres_lo": lo_a - lo_b, "fres_hi": hi_a - hi_b, "fw_a": wa, "fw_b": wb, "nf_a": na, "nf_b": nb})
         for side, lu in (("a", a), ("b", b)):
@@ -390,7 +402,7 @@ class Pass:
             seen = set()
             if targets is not None:
                 for r in targets[targets.week_cutoff == c].itertuples(index=False):
-                    rows.append({"match_id": r.match_id, "week_cutoff": c, "is_target": True,
+                    rows.append({"match_id": r.match_id, "week_cutoff": c, "is_target": True, "lan": float(r.is_lan), "tier": float(pd.to_numeric(r.event_tier, errors="coerce")),
                                  "y": float(week.set_index("match_id").y.get(r.match_id, np.nan)),
                                  **self.price(c, int(r.team_a_id), int(r.team_b_id), shift)})
                     seen.add(r.match_id)
@@ -403,7 +415,8 @@ class Pass:
                     la, lb = self.lineup(r.team_a_id, c), self.lineup(r.team_b_id, c)
                     row["ovl_a"] = -1 if la is None else len(act[0] & set(la.tolist()))
                     row["ovl_b"] = -1 if lb is None else len(act[1] & set(lb.tolist()))
-                rows.append({"match_id": r.match_id, "week_cutoff": c, "is_target": False, "y": float(r.y), **row})
+                rows.append({"match_id": r.match_id, "week_cutoff": c, "is_target": False, "y": float(r.y),
+                             "lan": float(r.lan), "tier": float(r.tier), **row})
         return pd.DataFrame(rows)
 
 

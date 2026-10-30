@@ -18,9 +18,9 @@ import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.e10.run import TRAIN_START, Pass, RunConfig, monday_range
 
-CALIBRATION_START = pd.Timestamp("2024-10-07")
+CALIBRATION_START = pd.Timestamp("2024-07-01")
 L2 = 5.0
-DEFAULT_SPEC = "s+new"
+DEFAULT_SPEC = "s+new+c"
 
 
 def logit(p) -> np.ndarray:
@@ -42,6 +42,10 @@ def design(f: pd.DataFrame, spec: str) -> np.ndarray:
         cols.append(np.log1p(f.coh_a.to_numpy()) - np.log1p(f.coh_b.to_numpy()))
     if "a" in tokens:
         cols.append(np.log1p(f.act_a.to_numpy()) - np.log1p(f.act_b.to_numpy()))
+    if "lan" in tokens:
+        cols.append(z * f.lan.fillna(0).to_numpy())
+    if "tier" in tokens:
+        cols.append(z * f.tier.fillna(0).to_numpy())
     if "sd" in tokens:
         cols.append(f.d.to_numpy() * f.sd.to_numpy())
     if "new" in tokens:
