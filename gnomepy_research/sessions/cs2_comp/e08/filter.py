@@ -50,6 +50,8 @@ class Params:
     f_floor: float = 0.0
     use_faceit: bool = True
     hybrid_min: int = 1
+    blend_rest: float = 0.44
+    blend_thin: float = 1.10
 
 
 MAX_LOGIT = 30.0

@@ -57,9 +57,10 @@ def dev_targets(data_dir: Path, start: pd.Timestamp, end: pd.Timestamp) -> pd.Da
                                         first.team_a_rank.fillna(999), first.team_b_rank.fillna(999))
     ]
     first["thin"] = thin
+    first["is_lan"] = first.is_lan.astype(bool)
     first["match_time"] = first.time
     first["week_cutoff"] = first.time.dt.normalize() - pd.to_timedelta(first.time.dt.weekday, unit="D")
-    return first[["match_id", "match_time", "team_a_id", "team_b_id", "week_cutoff", "y", "thin"]]
+    return first[["match_id", "match_time", "team_a_id", "team_b_id", "week_cutoff", "y", "thin", "is_lan"]]
 
 
 def ll(p, y) -> np.ndarray:

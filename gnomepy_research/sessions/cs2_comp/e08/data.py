@@ -77,21 +77,30 @@ def regulation(score_a: np.ndarray, score_b: np.ndarray) -> tuple[np.ndarray, np
 
 
 class RankPoints:
-    """log1p of a team's HLTV ranking points at the latest ranking strictly before a day."""
+    """A team's HLTV ranking at the latest ranking strictly before a day: log1p of its points, and its rank."""
 
     def __init__(self, rankings: pd.DataFrame):
-        r = rankings[["date", "team_id", "points"]].dropna().copy()
+        r = rankings[["date", "team_id", "points", "rank"]].dropna(subset=["date", "team_id", "points"]).copy()
         r["date"] = _naive(r["date"]).astype("datetime64[ns]")
         self.r = r.sort_values("date")
 
-    def lookup(self, team_ids: np.ndarray, days: np.ndarray) -> np.ndarray:
+    def _asof(self, team_ids: np.ndarray, days: np.ndarray) -> pd.DataFrame:
         q = pd.DataFrame({"team_id": np.asarray(team_ids, dtype=float), "date": pd.to_datetime(days).astype("datetime64[ns]")})
         q["i"] = np.arange(len(q))
         q = q.dropna(subset=["team_id"]).sort_values("date")
-        m = pd.merge_asof(q, self.r.assign(team_id=self.r.team_id.astype(float)), on="date", by="team_id",
-                          allow_exact_matches=False)
+        return pd.merge_asof(q, self.r.assign(team_id=self.r.team_id.astype(float)), on="date", by="team_id",
+                             allow_exact_matches=False)
+
+    def lookup(self, team_ids: np.ndarray, days: np.ndarray) -> np.ndarray:
+        m = self._asof(team_ids, days)
         out = np.zeros(len(team_ids))
         out[m.i.to_numpy()] = np.log1p(m.points.fillna(0.0).to_numpy())
+        return out
+
+    def rank(self, team_ids: np.ndarray, days: np.ndarray) -> np.ndarray:
+        m = self._asof(team_ids, days)
+        out = np.full(len(team_ids), np.inf)
+        out[m.i.to_numpy()] = m["rank"].fillna(np.inf).to_numpy()
         return out
 
 

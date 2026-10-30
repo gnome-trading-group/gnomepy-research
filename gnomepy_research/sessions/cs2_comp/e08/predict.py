@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -46,9 +47,10 @@ def main() -> None:
         keep = {pd.Timestamp(w) for w in args.weeks.split(",")}
         targets = targets[pd.to_datetime(targets.week_cutoff).isin(keep)]
     out = predict(args.data, targets, use_faceit=not args.no_faceit)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(args.out, index=False)
-    print(f"wrote {len(out)} predictions to {args.out}", flush=True)
+    dest = args.out if args.out.is_absolute() or "OUTPUT_DIR" not in os.environ else Path(os.environ["OUTPUT_DIR"]) / args.out
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(dest, index=False)
+    print(f"wrote {len(out)} predictions to {dest}", flush=True)
 
 
 if __name__ == "__main__":

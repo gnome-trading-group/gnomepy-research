@@ -6,17 +6,20 @@ reproduces the same prices.
 
 With FACEIT on, two filters run side by side: the joint one sees HLTV and FACEIT maps, the other only HLTV maps. A
 series where a team has no FACEIT history has nothing for the joint filter to add, and the two populations' skills sit
-on slightly different scales there, so it takes the HLTV-only price.
+on slightly different scales there, so it takes the HLTV-only price. Elsewhere the HLTV-only log-odds are shifted by
+the joint filter's difference from them, at a weight that is higher in thin online series (the FACEIT players' own
+history is richest there, and the HLTV history is sparse) and was fitted by logistic regression on development series.
 """
 from __future__ import annotations
 
+import bisect
 import collections
 
 import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.e08.data import FACEIT, HLTV, Maps, RankPoints
-from gnomepy_research.sessions.cs2_comp.e08.filter import Params, SkillFilter
+from gnomepy_research.sessions.cs2_comp.e08.filter import NS_PER_DAY, Params, SkillFilter
 from gnomepy_research.sessions.cs2_comp.e08.series import (RECENT_MAPS, MapTable, Moves, SeriesParams, calibrate,
                                                              infer_lineup, price_series)
 
@@ -24,6 +27,14 @@ from gnomepy_research.sessions.cs2_comp.e08.series import (RECENT_MAPS, MapTable
 def naive_utc(s: pd.Series) -> pd.Series:
     s = pd.to_datetime(s)
     return s.dt.tz_convert(None) if s.dt.tz is not None else s
+
+
+THIN_MAPS, TOP_RANK, WINDOW_DAYS = 15, 100, 90
+
+
+def logit(p: float) -> float:
+    p = min(max(p, 1e-4), 1 - 1e-4)
+    return float(np.log(p / (1 - p)))
 
 
 def walk(maps: Maps, targets: pd.DataFrame, moves: Moves, ranks: RankPoints, params: Params, sp: SeriesParams,
@@ -35,6 +46,7 @@ def walk(maps: Maps, targets: pd.DataFrame, moves: Moves, ranks: RankPoints, par
     table = MapTable(sp.sigma_m)
     recent: dict[int, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=RECENT_MAPS))
     faceit_seen: set[int] = set()
+    played: dict[int, list[int]] = collections.defaultdict(list)
     times = maps.time.astype("datetime64[ns]").astype(np.int64)
     ts = times.tolist()
     src, comp = maps.src.tolist(), maps.comp.tolist()
@@ -63,6 +75,8 @@ def walk(maps: Maps, targets: pd.DataFrame, moves: Moves, ranks: RankPoints, par
                 day = pd.Timestamp(days[i])
                 recent[ta[i]].append((day, pa[i]))
                 recent[tb[i]].append((day, pb[i]))
+                played[ta[i]].append(ts[i])
+                played[tb[i]].append(ts[i])
             i += 1
         for r in week.itertuples():
             team_a, team_b = int(r.team_a_id), int(r.team_b_id)
@@ -73,12 +87,20 @@ def walk(maps: Maps, targets: pd.DataFrame, moves: Moves, ranks: RankPoints, par
             q_joint, mean, var = price_series(f, *args)
             q_hltv = price_series(g, *args)[0] if g is not None else q_joint
             n_face = [sum(p in faceit_seen for p in lineups[k][0]) for k in (0, 1)]
+            first = cutoff.to_datetime64().astype("datetime64[ns]").astype(np.int64)
+            recent_maps = [len(played[x]) - bisect.bisect_left(played[x], first - WINDOW_DAYS * NS_PER_DAY) for x in (team_a, team_b)]
+            rank = ranks.rank(np.array([team_a, team_b]), np.array([cutoff.to_datetime64()] * 2))
+            thin = (not r.is_lan) and (min(recent_maps) <= THIN_MAPS or not (rank.min() <= TOP_RANK))
             rows.append({
                 "match_id": r.match_id, "q_joint": q_joint, "q_hltv": q_hltv, "gap": mean, "gap_var": var,
                 "fit_cutoff": cutoff, "n_face_a": n_face[0], "n_face_b": n_face[1],
-                "guess": sum(1 - p for p in lineups[0][1]) + sum(1 - p for p in lineups[1][1]),
+                "guess": sum(1 - p for p in lineups[0][1]) + sum(1 - p for p in lineups[1][1]), "thin_pit": thin,
             })
     out = pd.DataFrame(rows)
     covered = np.minimum(out.n_face_a, out.n_face_b) >= params.hybrid_min
-    out["q"] = [calibrate(j if c else h, sp.slope) for j, h, c in zip(out.q_joint, out.q_hltv, covered)]
+    weight = np.where(out.thin_pit, params.blend_thin, params.blend_rest) * covered
+    shift = out.q_joint.map(logit) - out.q_hltv.map(logit)
+    out["q"] = [calibrate(1 / (1 + np.exp(-(logit(h) + wt * s))), sp.slope) for h, wt, s in zip(out.q_hltv, weight, shift)]
+    if not params.use_faceit:
+        out["q"] = [calibrate(q, sp.slope) for q in out.q_joint]
     return out, f
