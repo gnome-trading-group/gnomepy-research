@@ -78,12 +78,12 @@ class PlayerLog:
         v = frame[values].to_numpy(dtype=float)
         order = np.lexsort((t, codes))
         codes, t, v = codes[order], t[order], v[order]
-        cs = np.vstack([np.zeros((1, v.shape[1])), np.cumsum(v, axis=0)])
         bounds = np.flatnonzero(np.diff(codes)) + 1
         starts = np.concatenate([[0], bounds])
         ends = np.concatenate([bounds, [len(codes)]])
         for c, s, e in zip(codes[starts], starts, ends):
-            self._logs[uniques[c]] = (t[s:e], cs[s:e + 1] - cs[s])
+            segment = np.vstack([np.zeros((1, v.shape[1])), np.cumsum(v[s:e], axis=0)])
+            self._logs[uniques[c]] = (t[s:e], segment)
 
     def last_mean(self, key, cut, window: int):
         log = self._logs.get(key)
