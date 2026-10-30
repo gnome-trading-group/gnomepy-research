@@ -26,6 +26,7 @@ HLTV, FACEIT = "hltv", "faceit"
 # their debut; the HLTV prior for an unranked team is `a` (about -0.11), ESEA Open sits well below that.
 DIVISION_PRIOR = {"entry": -0.55, "open": -0.50, "intermediate": -0.35, "main": -0.20, "advanced": -0.05,
                   "ecl": 0.0, "qualifier": -0.10, "other": -0.20}
+LOW_DIVISIONS = {"entry", "open", "intermediate"}
 
 _GH_X, _GH_W = np.polynomial.hermite_e.hermegauss(21)
 _GH_W = _GH_W / _GH_W.sum()
@@ -44,12 +45,16 @@ class FilterConfig:
     rho: float = 0.017231894894383412
     chem_days: int = 180
     faceit_weight: float = 1.0
+    # Multiplies faceit_weight for Open, Entry and Intermediate maps, the furthest from HLTV level.
+    faceit_low_div_mult: float = 1.0
     faceit_rho: float = 0.017231894894383412
     faceit_sigma0: float = 0.2536091079975324
     faceit_prior_shift: float = 0.0
     # Pricing: map-level and series-level noise added to the filter's own gap variance.
     sigma_map: float = 0.0
     sigma_series: float = 0.0
+    # Adjust a team's last five with HLTV roster moves announced after that map and before the cutoff.
+    roster_moves: bool = True
 
 
 def division(competition_name: str | None) -> str:
@@ -83,6 +88,7 @@ class SkillFilter:
         self.games: collections.Counter = collections.Counter()
         self._five_days: dict[frozenset, collections.deque] = collections.defaultdict(collections.deque)
         self.last_five: dict[int, tuple[int, ...]] = {}
+        self.last_five_day: dict[int, pd.Timestamp] = {}
         self._rank_dates: list[pd.Timestamp] = []
         self._rank_points: list[dict[int, float]] = []
         if rankings is not None and len(rankings):
@@ -146,10 +152,9 @@ class SkillFilter:
                     source: str, div: str) -> None:
         if not players_a or not players_b:
             return
-        if len(players_a) == 5:
-            self.last_five[key_a] = players_a
-        if len(players_b) == 5:
-            self.last_five[key_b] = players_b
+        for key, five in ((key_a, players_a), (key_b, players_b)):
+            if len(five) == 5:
+                self.last_five[key], self.last_five_day[key] = five, day
         a = self.lineup(players_a, hltv_a, day, div)
         b = self.lineup(players_b, hltv_b, day, div)
         players = a.players + b.players
@@ -159,6 +164,8 @@ class SkillFilter:
         n = rounds_a + rounds_b
         pi = 1 / (1 + math.exp(-d))
         rho, weight = (self.cfg.faceit_rho, self.cfg.faceit_weight) if source == FACEIT else (self.cfg.rho, 1.0)
+        if source == FACEIT and div in LOW_DIVISIONS:
+            weight *= self.cfg.faceit_low_div_mult
         inflation = (1 + (n - 1) * rho) / weight
         grad, curv = (rounds_a - n * pi) / inflation, n * pi * (1 - pi) / inflation
         cw = cov @ w
@@ -196,6 +203,41 @@ class SeriesPricer:
         return float((p * p * (3 - 2 * p)) @ _GH_W)
 
 
-def placeholder_five(team_key: int) -> tuple[int, ...]:
-    """Five ids no player ever has, so a team with no map in the data prices from its prior alone."""
-    return tuple(-(10 ** 15) - abs(int(team_key)) * 10 - k for k in range(5))
+def placeholder_five(team_key: int, n: int = 5) -> tuple[int, ...]:
+    """Ids no player ever has, so a team with no map in the data prices from its prior alone."""
+    return tuple(-(10 ** 15) - abs(int(team_key)) * 10 - k for k in range(n))
+
+
+ADD_KINDS = {"join", "transfer", "activated", "loan_return", "loan"}
+REMOVE_KINDS = {"leave", "transfer", "benched", "to_coach", "to_substitute", "loan"}
+MAX_LINEUP = 6
+
+
+class RosterMoves:
+    """HLTV roster moves as per-team dated add/remove events, applied to a last-known five up to a cutoff. A team
+    with a join and no leave yet is priced as the mean of six: which player sits is not known pre-match."""
+
+    def __init__(self, moves: pd.DataFrame):
+        self._events: dict[int, list[tuple[pd.Timestamp, str, int]]] = collections.defaultdict(list)
+        m = moves[moves.person_role == "player"].copy()
+        m["event_date"] = pd.to_datetime(m.event_date)
+        m = m.sort_values(["event_date", "person_id"], kind="mergesort")
+        for r in m.itertuples():
+            if r.kind in REMOVE_KINDS and pd.notna(r.from_team_id) and int(r.from_team_id) > 0:
+                self._events[int(r.from_team_id)].append((r.event_date, "remove", int(r.person_id)))
+            if r.kind in ADD_KINDS and r.to_status == "active" and pd.notna(r.to_team_id) and int(r.to_team_id) > 0:
+                self._events[int(r.to_team_id)].append((r.event_date, "add", int(r.person_id)))
+
+    def adjust(self, team: int, five: tuple[int, ...], since: pd.Timestamp, before: pd.Timestamp) -> tuple[int, ...]:
+        players = list(five)
+        for day, op, p in self._events.get(team, ()):
+            if day < since or day >= before:
+                continue
+            if op == "remove" and p in players:
+                players.remove(p)
+            elif op == "add" and p not in players:
+                players.append(p)
+        players = players[-MAX_LINEUP:]
+        if len(players) < 5:
+            players += list(placeholder_five(team, 5 - len(players)))
+        return tuple(players)

@@ -35,8 +35,8 @@ import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.bundle import load
-from gnomepy_research.sessions.cs2_comp.e19.filter import FACEIT, HLTV, FilterConfig, SeriesPricer, SkillFilter, \
-    division, placeholder_five
+from gnomepy_research.sessions.cs2_comp.e19.filter import FACEIT, HLTV, FilterConfig, RosterMoves, SeriesPricer, \
+    SkillFilter, division, placeholder_five
 
 CALIBRATION_WEEKS = 26
 CALIBRATION_MIN = 300
@@ -131,9 +131,19 @@ def monday(t: pd.Timestamp) -> pd.Timestamp:
     return t - pd.Timedelta(days=t.weekday())
 
 
-def price_matchup(f: SkillFilter, pricer: SeriesPricer, key_a: int, key_b: int, at: pd.Timestamp) -> tuple[float, bool]:
+def expected_five(f: SkillFilter, key: int, at: pd.Timestamp, moves: RosterMoves | None) -> tuple[int, ...] | None:
+    five = f.last_five.get(key)
+    if five is None:
+        return None
+    if moves is not None and key > 0:
+        five = moves.adjust(key, five, f.last_five_day[key], at)
+    return five
+
+
+def price_matchup(f: SkillFilter, pricer: SeriesPricer, key_a: int, key_b: int, at: pd.Timestamp,
+                  moves: RosterMoves | None = None) -> tuple[float, bool]:
     """The channel's series price and whether both teams had a five in its stream."""
-    five_a, five_b = f.last_five.get(key_a), f.last_five.get(key_b)
+    five_a, five_b = expected_five(f, key_a, at, moves), expected_five(f, key_b, at, moves)
     covered = five_a is not None and five_b is not None
     a = f.lineup(five_a or placeholder_five(key_a), key_a if key_a > 0 else None, at)
     b = f.lineup(five_b or placeholder_five(key_b), key_b if key_b > 0 else None, at)
@@ -197,6 +207,7 @@ def run(data_dir: Path, targets: pd.DataFrame, cfg: FilterConfig, faceit: bool, 
     takes = {"hltv": (HLTV,), "both": (HLTV, FACEIT), "faceit": (FACEIT,)}
     filters = {c: SkillFilter(cfg, rankings) for c in channels}
     pricer = SeriesPricer(cfg)
+    moves = RosterMoves(load(data_dir, "hltv/cs2_roster_moves", last)) if cfg.roster_moves else None
 
     first_week = monday(cutoffs[0] - CALIBRATION_WEEKS * WEEK)
     if dev_from is not None:
@@ -210,7 +221,7 @@ def run(data_dir: Path, targets: pd.DataFrame, cfg: FilterConfig, faceit: bool, 
     def priced(key_a: int, key_b: int, at: pd.Timestamp) -> dict:
         row = {}
         for c in channels:
-            row[f"q_{c}"], row[f"cov_{c}"] = price_matchup(filters[c], pricer, key_a, key_b, at)
+            row[f"q_{c}"], row[f"cov_{c}"] = price_matchup(filters[c], pricer, key_a, key_b, at, moves)
         return row
 
     def snapshot(m: pd.Timestamp) -> None:
@@ -243,7 +254,8 @@ def run(data_dir: Path, targets: pd.DataFrame, cfg: FilterConfig, faceit: bool, 
     return pd.concat(out, ignore_index=True), pd.DataFrame(weekly_rows)
 
 
-KNOBS = ("faceit_weight", "faceit_rho", "faceit_sigma0", "faceit_prior_shift", "sigma_map", "sigma_series", "tau", "rho")
+KNOBS = ("faceit_weight", "faceit_low_div_mult", "faceit_rho", "faceit_sigma0", "faceit_prior_shift", "sigma_map",
+         "sigma_series", "tau", "rho")
 
 
 def config_from_args(a: argparse.Namespace) -> FilterConfig:
