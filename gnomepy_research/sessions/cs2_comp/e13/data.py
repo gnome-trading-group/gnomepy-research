@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.bundle import load
@@ -60,6 +61,7 @@ class Bundle:
     faceit_level: dict[int, float]
     devs: dict[tuple[int, int, int], float]   # (map row, 0 for side a / 1 for b, player) -> score relative to his five
     standins: set[tuple[str, int]]            # (HLTV match id, player) where the player was a stand-in
+    activity: dict[int, np.ndarray]           # HLTV player -> sorted finish times (unix s) of his FACEIT 5v5 games
 
 
 def hltv_maps(data: Path, before: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -168,6 +170,22 @@ def player_stats(data: Path, before: pd.Timestamp, maps: pd.DataFrame, use_facei
     return s[s.n == 5][["map_row", "side", "player", "src", "dev"]].reset_index(drop=True)
 
 
+def activity(data: Path, before: pd.Timestamp) -> dict[int, np.ndarray]:
+    """Every FACEIT 5v5 game (matchmaking, hubs, competitions) of each linked player that finished before `before`.
+
+    history_players is read by FACEIT id rather than through bundle.load, which would materialise all 23M rows; joining
+    it to the point-in-time history_matches keeps it to games finished before the cutoff all the same."""
+    games = load(data, "faceit/history_matches", before, ["match_id", "finished_at", "teams_size"])
+    games = games[games.teams_size == 5].set_index("match_id").finished_at
+    link = pd.read_parquet(Path(data) / "faceit/hltv_faceit_map.parquet")
+    players = pq.read_table(Path(data) / "faceit/history_players.parquet", columns=["match_id", "faceit_id"],
+                            filters=[("faceit_id", "in", link.faceit_id.tolist())]).to_pandas()
+    players = players[players.match_id.isin(games.index)].drop_duplicates()
+    players["t"] = players.match_id.map(games).to_numpy(np.int64)
+    players["hltv"] = players.faceit_id.map(dict(zip(link.faceit_id, link.hltv_id.astype(np.int64))))
+    return {int(h): np.sort(g.t.to_numpy()) for h, g in players.groupby("hltv")}
+
+
 def build(data: Path, before: pd.Timestamp, use_faceit: bool) -> Bundle:
     hm, series = hltv_maps(data, before)
     parts, level = [hm], {}
@@ -184,4 +202,4 @@ def build(data: Path, before: pd.Timestamp, use_faceit: bool) -> Bundle:
     lu = lu[lu.is_standin.fillna(False).astype(bool)]
     standins = set(zip(lu.match_id.astype(str), lu.player_id.astype(np.int64).tolist()))
     return Bundle(maps=maps, series=series, rankings=rankings, moves=moves, faceit_level=level, devs=devs,
-                  standins=standins)
+                  standins=standins, activity=activity(data, before) if use_faceit else {})
