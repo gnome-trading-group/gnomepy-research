@@ -38,7 +38,6 @@ CAL_WEEKS = 26
 MOVED_ON = True
 REBUILD_ARRIVALS = 3
 RICH_RECAL = True
-ACTIVITY_DAYS = 0
 SIGMA_MAP = 0.15
 SIGMA_SERIES = 0.10
 EPOCH = pd.Timestamp("2020-01-01")
@@ -150,7 +149,7 @@ def _fit_logistic(X: np.ndarray, y: np.ndarray, ridge: float = 1.0) -> np.ndarra
     return w
 
 
-def recal_features(d: pd.DataFrame, rich: bool, act: bool = False) -> np.ndarray:
+def recal_features(d: pd.DataFrame, rich: bool) -> np.ndarray:
     """The recalibration design: logit of the raw price, and with rich, its interactions with how little is known
     about the two fives (a new or incomplete five, thin history), so uncertain matchups are shrunk harder."""
     x = _logit(d.p_raw.to_numpy(float))
@@ -159,9 +158,6 @@ def recal_features(d: pd.DataFrame, rich: bool, act: bool = False) -> np.ndarray
         new_five = ((np.minimum(d.five_a, d.five_b) < 3) | (d.unk_a + d.unk_b > 0)).to_numpy(float)
         thin = (d.games_min < 40).to_numpy(float)
         cols += [x * new_five, x * thin]
-    if act:
-        # The practice gap is zero, its own missingness indicator, when either five has no linked FACEIT player.
-        cols.append(d.act.to_numpy(float))
     return np.column_stack(cols + [np.ones(len(x))])
 
 
@@ -176,8 +172,7 @@ def data_cutoff(targets: pd.DataFrame) -> pd.Timestamp:
 
 def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = True,
         sigma_map: float = SIGMA_MAP, sigma_series: float = SIGMA_SERIES, history_from: pd.Timestamp | None = None,
-        actual_fives: bool = False, rich_recal: bool = RICH_RECAL, moved_on: bool = MOVED_ON,
-        activity_days: int = ACTIVITY_DAYS) -> tuple[pd.DataFrame, pd.DataFrame]:
+        actual_fives: bool = False, rich_recal: bool = RICH_RECAL, moved_on: bool = MOVED_ON) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Returns (target prices, HLTV bo3 series priced at each cutoff from history_from on); b is built at
     data_cutoff(targets). actual_fives prices the history series with the fives that went on to play them, which
     only a diagnostic may do: it measures what predicting the fives costs."""
@@ -210,22 +205,10 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
         la = f.lineup(tuple(fa), team_a, w, now, 0, -1, ua)
         lb = f.lineup(tuple(fb), team_b, w, now, 0, -1, ub)
         d, s2, _, _ = f.gap(la, lb)
-        act_a, act_b = practice(fa, w), practice(fb, w)
         return {"p_raw": series_price(d, s2, curve, sigma_series), "d": d, "gap_sd": math.sqrt(max(s2, 0)),
-                "act": act_a - act_b if act_a is not None and act_b is not None else 0.0,
                 "unk_a": ua, "unk_b": ub, "fonly_a": la.faceit_only, "fonly_b": lb.faceit_only,
                 "five_a": la.five_maps, "five_b": lb.five_maps,
                 "games_min": min(la.games + lb.games) if la.games and lb.games else 0, **same}
-
-    def practice(five, w: pd.Timestamp) -> float | None:
-        """Mean log FACEIT games per linked player over the activity_days before w; None when none is linked."""
-        if activity_days <= 0:
-            return None
-        end = int(w.tz_localize("UTC").timestamp())
-        start = end - activity_days * 86400
-        counts = [np.searchsorted(g, end) - np.searchsorted(g, start) for g in (b.activity.get(int(p)) for p in five)
-                  if g is not None]
-        return float(np.mean(np.log1p(counts))) if counts else None
 
     hist_rows, out_rows = [], []
     maps = b.maps
@@ -263,12 +246,12 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
         cal = hist[(hist.week < w) & (hist.week >= w - pd.Timedelta(weeks=CAL_WEEKS))]
         if len(cal) < 50:
             continue
-        coef = _fit_logistic(recal_features(cal, rich_recal, activity_days > 0), cal.y.to_numpy(float))
+        coef = _fit_logistic(recal_features(cal, rich_recal), cal.y.to_numpy(float))
         sel = hist.week == w
-        hist.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(hist[sel], rich_recal, activity_days > 0) @ coef))
+        hist.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(hist[sel], rich_recal) @ coef))
         if len(out):
             sel = out.fit_cutoff == w
-            out.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(out[sel], rich_recal, activity_days > 0) @ coef))
+            out.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(out[sel], rich_recal) @ coef))
     return out, hist
 
 
