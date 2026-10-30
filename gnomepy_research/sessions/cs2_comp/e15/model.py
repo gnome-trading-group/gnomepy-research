@@ -140,7 +140,7 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
         return f, g
 
     res = opt.minimize(objective, np.zeros(n_p + n_t + n_f), jac=True, method="L-BFGS-B",
-                       options={"maxiter": 5000, "maxcor": 20, "ftol": 1e-14, "gtol": 1e-8})
+                       options={"maxiter": 5000, "maxcor": 20, "ftol": 1e-12, "gtol": 1e-6})
     x = res.x
     latest: dict = {}
     for i in order:

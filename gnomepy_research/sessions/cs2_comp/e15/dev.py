@@ -22,7 +22,7 @@ from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.bundle import load
 from gnomepy_research.sessions.cs2_comp.e15.data import load_raw
 from gnomepy_research.sessions.cs2_comp.e15.model import Config
-from gnomepy_research.sessions.cs2_comp.e15.predict import career_first, predict_week
+from gnomepy_research.sessions.cs2_comp.e15.predict import career_first, output_path, predict_week
 
 
 def dev_targets(data: Path, start: str, end: str) -> pd.DataFrame:
@@ -84,7 +84,10 @@ def main() -> None:
             print(json.dumps({k: round(v, 4) if isinstance(v, float) else v for k, v in rows[-1].items()}), flush=True)
             preds.append(d.assign(source=source, config=ci))
     if a.out:
-        pd.concat(preds).to_parquet(a.out, index=False)
+        out = output_path(a.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        pd.concat(preds).to_parquet(out, index=False)
+        out.with_suffix(".json").write_text(json.dumps(rows, indent=1, default=float))
 
 
 if __name__ == "__main__":

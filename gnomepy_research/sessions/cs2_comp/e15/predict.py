@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import time
 from pathlib import Path
 
@@ -53,6 +54,11 @@ def run(data: Path, targets_path: Path, use_faceit: bool, weeks: list[str] | Non
     return pd.concat(out, ignore_index=True)
 
 
+def output_path(path: Path) -> Path:
+    """A relative output path lands in $OUTPUT_DIR on Batch, where the task's outputs are collected."""
+    return path if path.is_absolute() else Path(os.environ.get("OUTPUT_DIR", ".")) / path
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", type=Path, required=True)
@@ -64,8 +70,9 @@ def main() -> None:
     a = ap.parse_args()
     cfg = dataclasses.replace(Config(), **json.loads(a.config)) if a.config else Config()
     preds = run(a.data, a.targets, a.faceit, a.weeks.split(",") if a.weeks else None, cfg)
-    a.out.parent.mkdir(parents=True, exist_ok=True)
-    preds.to_parquet(a.out, index=False)
+    out = output_path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    preds.to_parquet(out, index=False)
 
 
 if __name__ == "__main__":
