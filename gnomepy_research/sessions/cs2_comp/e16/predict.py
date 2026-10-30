@@ -40,9 +40,12 @@ def predict_week(b: Bundle, targets: pd.DataFrame, cutoff: pd.Timestamp, cfg: Co
     ratings = window(b.hltv_ratings, cutoff, cfg.window_days).assign(source="hltv")
     levels = None
     if b.faceit_maps is not None:
-        maps = pd.concat([maps, window(b.faceit_maps, cutoff, cfg.faceit_window_days)], ignore_index=True)
-        ratings = pd.concat([ratings, window(b.faceit_ratings, cutoff, cfg.faceit_window_days).assign(source="faceit")],
-                            ignore_index=True)
+        fmaps = window(b.faceit_maps, cutoff, cfg.faceit_window_days)
+        fmaps = fmaps[fmaps.n_linked >= cfg.faceit_min_linked]
+        frat = window(b.faceit_ratings, cutoff, cfg.faceit_window_days)
+        frat = frat[frat.mkey.isin(set(fmaps.mkey))]
+        maps = pd.concat([maps, fmaps.drop(columns=["n_linked", "mkey"])], ignore_index=True)
+        ratings = pd.concat([ratings, frat.drop(columns=["mkey"]).assign(source="faceit")], ignore_index=True)
         levels = b.faceit_levels[b.faceit_levels.cut < cutoff]
     rank_of = rank_feature(b.rankings, cutoff)
     f = fit(maps, ratings, levels, rank_of, cutoff, cfg)
@@ -60,7 +63,8 @@ def predict_week(b: Bundle, targets: pd.DataFrame, cutoff: pd.Timestamp, cfg: Co
 
 def run(data: Path, targets: pd.DataFrame, faceit: bool, cfg: Config, verbose: bool = True) -> pd.DataFrame:
     cutoffs = sorted(pd.to_datetime(targets.week_cutoff).unique())
-    b = read_bundle(data, max(cutoffs), faceit)
+    since = pd.Timestamp(min(cutoffs)) - pd.Timedelta(days=max(cfg.window_days, cfg.faceit_window_days))
+    b = read_bundle(data, max(cutoffs), faceit, since)
     parts = []
     for c in cutoffs:
         t0 = time.time()

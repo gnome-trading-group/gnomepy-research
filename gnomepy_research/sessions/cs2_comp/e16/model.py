@@ -52,6 +52,9 @@ class Config:
     map_noise: float = 0.37
     series_noise: float = 0.17
     faceit_window_days: int = 365
+    # FACEIT maps with fewer HLTV-linked players than this are left out: maps between FACEIT-only players move HLTV
+    # players' skills only through long chains, and they are most of the fitting time.
+    faceit_min_linked: int = 0
     roster_moves: int = 1
 
 

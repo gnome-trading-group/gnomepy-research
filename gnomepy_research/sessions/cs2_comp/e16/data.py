@@ -16,6 +16,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.bundle import load
@@ -23,6 +26,14 @@ from gnomepy_research.sessions.cs2_comp.bundle import load
 LINEUP = 5
 DIVISIONS = ("entry", "open", "intermediate", "main", "advanced")
 _DIVISION_RE = re.compile(r"\b(entry|open|intermediate|main|advanced)\b", re.I)
+
+
+HLTV_COLUMNS = ["match_id", "match_date", "match_time", "event_name", "format", "bo_type", "map_name", "team_a_id",
+                "team_b_id", "team_a_score", "team_b_score", "team_a_won", "team_a_player_ids", "team_b_player_ids",
+                "team_a_lineup_ids", "team_b_lineup_ids"]
+FACEIT_COLUMNS = ["match_id", "match_date", "match_time", "bo_type", "map_name", "team_a_id", "team_b_id",
+                  "team_a_faceit_id", "team_b_faceit_id", "team_a_faceit_ids", "team_b_faceit_ids", "team_a_player_ids",
+                  "team_b_player_ids", "team_a_players", "team_b_players", "team_a_score", "team_b_score", "team_a_won"]
 
 
 def _naive(s: pd.Series) -> pd.Series:
@@ -49,8 +60,11 @@ class Bundle:
     moves: pd.DataFrame
 
 
-def read_bundle(data_dir: str | Path, before: pd.Timestamp, faceit: bool) -> Bundle:
-    hist = load(data_dir, "hltv/cs2_match_history", before)
+def read_bundle(data_dir: str | Path, before: pd.Timestamp, faceit: bool, since: pd.Timestamp | None = None) -> Bundle:
+    """Rows up to `before`; maps and impact rows older than `since` (no fit window reaches them) are not kept."""
+    since = pd.Timestamp("1970-01-01") if since is None else since
+    hist = load(data_dir, "hltv/cs2_match_history", before, HLTV_COLUMNS)
+    hist = hist[_naive(hist.match_date) >= since.normalize() - pd.Timedelta(days=1)]
     stats = load(data_dir, "hltv/cs2_player_map_stats", before,
                  ["match_id", "match_date", "map_name", "player_id", "team_id", "side", "rating"])
     rankings = load(data_dir, "hltv/cs2_team_rankings", before, ["date", "team_id", "rank"])
@@ -62,7 +76,7 @@ def read_bundle(data_dir: str | Path, before: pd.Timestamp, faceit: bool) -> Bun
     hrat = _hltv_ratings(stats, hmaps)
     if not faceit:
         return Bundle(hmaps, hrat, rankings, None, None, None, moves)
-    fmaps, frat, levels = _faceit(data_dir, before)
+    fmaps, frat, levels = _faceit(data_dir, before, since)
     return Bundle(hmaps, hrat, rankings, fmaps, frat, levels, moves)
 
 
@@ -109,16 +123,28 @@ def _hltv_ratings(stats: pd.DataFrame, maps: pd.DataFrame) -> pd.DataFrame:
     return s[["time", "cut", "player", "own", "dev"]].reset_index(drop=True)
 
 
-def _faceit(data_dir: str | Path, before: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def _by_match(data_dir: str | Path, table: str, match_ids: set, columns: list[str]) -> pd.DataFrame:
+    """bundle.load's rule for tables cut through their FACEIT match (`match_ids` from faceit_matches loaded at the
+    same cutoff), reading the id strings dictionary-encoded: these tables have millions of rows."""
+    t = pq.read_table(Path(data_dir) / f"{table}.parquet", columns=columns, read_dictionary=["match_id", "faceit_id"])
+    keep = pa.array(sorted(match_ids), type=pa.string())
+    mask = pa.chunked_array([pc.take(pc.is_in(c.dictionary, value_set=keep), c.indices) for c in t["match_id"].chunks],
+                            type=pa.bool_())
+    return t.filter(mask).to_pandas()
+
+
+def _faceit(data_dir: str | Path, before: pd.Timestamp, since: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     matches = load(data_dir, "faceit/faceit_matches", before,
                    ["match_id", "competition_name", "finished_at", "has_stats"])
     excl = load(data_dir, "faceit/faceit_exclusions", before)
     link = load(data_dir, "faceit/faceit_hltv_series_link", before)
-    hist = load(data_dir, "faceit/faceit_match_history", before)
+    hist = load(data_dir, "faceit/faceit_match_history", before, FACEIT_COLUMNS)
     drop_series = set(excl[excl.map_name.isna()].match_id) | set(link.faceit_match_id) \
         | set(matches[~matches.has_stats.astype(bool)].match_id)
     drop_maps = set(zip(excl[excl.map_name.notna()].match_id, excl[excl.map_name.notna()].map_name))
-    h = hist[hist.match_id.isin(set(matches.match_id)) & ~hist.match_id.isin(drop_series)].copy()
+    recent = hist.match_id.isin(set(matches.match_id)) & (_naive(hist.match_date) >= since.normalize() - pd.Timedelta(days=1))
+    h = hist[recent & ~hist.match_id.isin(drop_series)].copy()
+    del hist
     h = h[[k not in drop_maps for k in zip(h.match_id, h.map_name)]]
     h = h[(h.team_a_players == LINEUP) & (h.team_b_players == LINEUP) & (h.team_a_score != h.team_b_score)]
     h["time"] = _naive(h.match_time.fillna(h.match_date))
@@ -142,12 +168,14 @@ def _faceit(data_dir: str | Path, before: pd.Timestamp) -> tuple[pd.DataFrame, p
     comp = matches.set_index("match_id").competition_name
     h["division"] = h.match_id.map(comp).map(division).astype(int)
     h["total_rounds"] = h.team_a_score + h.team_b_score
+    h["n_linked"] = [sum(k.startswith("h") for k in a + b) for a, b in zip(h.lineup_a, h.lineup_b)]
+    h["mkey"] = h.match_id + "|" + h.map_name
     fmaps = h[["match_id", "map_name", "time", "cut", "source", "team_a", "team_b", "lineup_a", "lineup_b", "rounds_a",
-               "rounds", "division", "bo_type", "team_a_won", "total_rounds", "team_a_faceit_id"]].reset_index(drop=True)
+               "rounds", "division", "bo_type", "team_a_won", "n_linked", "mkey", "total_rounds", "team_a_faceit_id"]].reset_index(drop=True)
 
     cols = ["match_id", "map_name", "faceit_id", "hltv_id", "faction", "kills", "deaths", "assists", "adr"]
-    ps = load(data_dir, "faceit/faceit_player_map_stats", before, cols)
-    ps = ps.merge(fmaps[["match_id", "map_name", "time", "cut", "total_rounds", "lineup_a", "lineup_b", "team_a_faceit_id"]],
+    ps = _by_match(data_dir, "faceit/faceit_player_map_stats", set(fmaps.match_id), cols)
+    ps = ps.merge(fmaps[["match_id", "map_name", "mkey", "time", "cut", "total_rounds", "lineup_a", "lineup_b", "team_a_faceit_id"]],
                   on=["match_id", "map_name"])
     ps = ps[ps.kills.notna() & ps.deaths.notna() & (ps.total_rounds > 0)].copy()
     ps["player"] = np.where(ps.hltv_id.notna(), "h" + ps.hltv_id.fillna(0).astype(int).astype(str), "f" + ps.faceit_id.astype(str))
@@ -162,12 +190,12 @@ def _faceit(data_dir: str | Path, before: pd.Timestamp) -> tuple[pd.DataFrame, p
     in_b = np.array([p in b for p, b in zip(ps.player, ps.lineup_b)])
     ps["own"] = np.where(in_a, ps.lineup_a, np.where(in_b, ps.lineup_b, None))
     ps = ps[in_a | in_b]
-    frat = ps[["time", "cut", "player", "own", "dev"]].reset_index(drop=True)
+    frat = ps[["time", "cut", "mkey", "player", "own", "dev"]].reset_index(drop=True)
+    del ps
 
-    ros = load(data_dir, "faceit/faceit_rosters", before, ["match_id", "faceit_id", "hltv_id", "skill_level", "played"])
-    ros = ros[ros.skill_level.notna() & (ros.skill_level > 0)]
-    ros = ros.merge(matches[["match_id", "finished_at"]], on="match_id")
-    ros["time"] = pd.to_datetime(ros.finished_at, unit="s")
+    ros = _by_match(data_dir, "faceit/faceit_rosters", set(matches.match_id), ["match_id", "faceit_id", "hltv_id", "skill_level"])
+    ros = ros[ros.skill_level.notna() & (ros.skill_level > 0)].copy()
+    ros["time"] = pd.to_datetime(ros.match_id.map(matches.set_index("match_id").finished_at), unit="s")
     ros["cut"] = ros.time
     ros["player"] = np.where(ros.hltv_id.notna(), "h" + ros.hltv_id.fillna(0).astype(int).astype(str), "f" + ros.faceit_id.astype(str))
     ros = ros.sort_values(["player", "cut"], kind="stable")
