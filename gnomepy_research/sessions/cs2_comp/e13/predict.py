@@ -33,6 +33,8 @@ CAL_WEEKS = 26
 CORE_MAPS = 1
 STANDIN_SWAP = False
 STANDIN_LOOKBACK = 12
+MOVED_ON = False
+REBUILD_ARRIVALS = 3
 RICH_RECAL = False
 SIGMA_MAP = 0.15
 SIGMA_SERIES = 0.10
@@ -58,9 +60,11 @@ class Rosters:
     With core_maps > 1 the five is the team's regulars over its last core_maps maps (most appearances, then the most
     recent), not just its last five: a stand-in who filled one series does not displace the player he stood in for."""
 
-    def __init__(self, moves: pd.DataFrame, core_maps: int = 1, standin_swap: bool = False):
+    def __init__(self, moves: pd.DataFrame, core_maps: int = 1, standin_swap: bool = False, moved_on: bool = False):
         self.core_maps = max(1, core_maps)
         self.standin_swap = standin_swap
+        self.moved_on = moved_on
+        self.player_last: dict[int, tuple[int, float]] = {}
         self.hist: dict[int, collections.deque] = {}
         self.moves: dict[int, list[tuple[float, int, bool]]] = collections.defaultdict(list)
         for r in moves.itertuples():
@@ -75,6 +79,9 @@ class Rosters:
         if h is None:
             h = self.hist[team] = collections.deque(maxlen=max(self.core_maps, STANDIN_LOOKBACK if self.standin_swap else 1))
         h.append((now, five, standins))
+        for p in five:
+            if p not in standins:
+                self.player_last[p] = (team, now)
 
     def _swap_standins(self, team: int, h, ranked: list[int], last_seen: dict[int, float], now: float,
                        use_moves: bool) -> list[int]:
@@ -98,10 +105,22 @@ class Rosters:
                 break
         return out
 
+    def _signed(self, team: int, now: float) -> tuple[list[int], int]:
+        """A team with no map yet fields the players its roster moves say it signed and still has, latest first."""
+        signed: list[int] = []
+        for when, person, arrives in self.moves.get(team, ()):
+            if when >= now:
+                continue
+            if person in signed:
+                signed.remove(person)
+            if arrives:
+                signed.insert(0, person)
+        return signed[:5], 5 - len(signed[:5])
+
     def five(self, team: int, now: float, use_moves: bool) -> tuple[list[int], int]:
         h = self.hist.get(team)
         if not h:
-            return [], 5
+            return self._signed(team, now) if use_moves else ([], 5)
         since = h[-1][0]
         last_seen: dict[int, float] = {}
         count: collections.Counter = collections.Counter()
@@ -114,11 +133,13 @@ class Rosters:
             ranked = self._swap_standins(team, h, ranked, last_seen, now, use_moves)
         departed: set[int] = set()
         joined: list[int] = []
+        arrived: dict[int, float] = {}
         if use_moves:
             for when, person, arrives in self.moves.get(team, ()):
                 if when >= now:
                     continue
                 if arrives:
+                    arrived[person] = when
                     if when >= since and person not in ranked[:5] and person not in joined:
                         joined.insert(0, person)
                     departed.discard(person)
@@ -126,7 +147,18 @@ class Rosters:
                     departed.add(person)
                     if person in joined:
                         joined.remove(person)
-        players = [p for p in ranked[:5] if p not in departed]
+        if self.moved_on:
+            # A regular whose latest appearance (not as a stand-in) is for another team, after his last map here,
+            # has most likely left even when no roster move says so.
+            for p in ranked[:5]:
+                elsewhere = self.player_last.get(p)
+                if elsewhere is not None and elsewhere[0] != team and elsewhere[1] > last_seen[p] \
+                        and arrived.get(p, -math.inf) < elsewhere[1]:
+                    departed.add(p)
+        if len(joined) >= REBUILD_ARRIVALS:
+            players = joined[:5] + [p for p in ranked if p not in departed and p not in joined][:5 - len(joined[:5])]
+        else:
+            players = [p for p in ranked[:5] if p not in departed]
         for p in joined + ranked[5:]:
             if len(players) >= 5:
                 break
@@ -176,7 +208,7 @@ def data_cutoff(targets: pd.DataFrame) -> pd.Timestamp:
 def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = True,
         sigma_map: float = SIGMA_MAP, sigma_series: float = SIGMA_SERIES, history_from: pd.Timestamp | None = None,
         actual_fives: bool = False, core_maps: int = CORE_MAPS, rich_recal: bool = RICH_RECAL,
-        standin_swap: bool = STANDIN_SWAP) -> tuple[pd.DataFrame, pd.DataFrame]:
+        standin_swap: bool = STANDIN_SWAP, moved_on: bool = MOVED_ON) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Returns (target prices, HLTV bo3 series priced at each cutoff from history_from on); b is built at
     data_cutoff(targets). actual_fives prices the history series with the fives that went on to play them, which
     only a diagnostic may do: it measures what predicting the fives costs."""
@@ -187,7 +219,7 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
         first = min(first, pd.Timestamp(history_from))
     weeks = list(pd.date_range(first, last, freq="7D"))
     f = RatingFilter(cfg, b.rankings, b.faceit_level)
-    rosters = Rosters(b.moves, core_maps, standin_swap)
+    rosters = Rosters(b.moves, core_maps, standin_swap, moved_on)
     curve = _series_curve(sigma_map)
     series = b.series[(b.series.bo_type == 3) & b.series.y.notna()].copy()
     series["week"] = series.t.dt.normalize() - pd.to_timedelta(series.t.dt.dayofweek, unit="D")
