@@ -53,5 +53,6 @@ def final_config(faceit: bool) -> Config:
 
 
 def final_price(faceit: bool) -> PriceConfig:
-    return PriceConfig(sigma_series=0.154, scale=1.03, var_mult=1.12, coh_sigma=0.163, coh_n0=11.8, link_inflate=0.04 if faceit else 0.0)
-
+    if faceit:
+        return PriceConfig(sigma_series=0.0778, scale=0.999, var_mult=0.270, coh_sigma=0.0, coh_n0=1.0, faceit_lineups=True, link_inflate=0.04)
+    return PriceConfig(sigma_series=0.1209, scale=0.997, var_mult=0.2884, coh_sigma=0.191, coh_n0=8.18, faceit_lineups=False, link_inflate=0.0)

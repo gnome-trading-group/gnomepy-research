@@ -168,10 +168,11 @@ def concat_maps(parts: list[Maps]) -> Maps:
 
 
 def faceit_first_levels(data_dir, cutoff: pd.Timestamp, keys: dict[str, int]) -> pd.Series:
-    """FACEIT skill level (1-10) of each player key at the first match it appears in; unrated rows are ignored."""
+    """FACEIT skill level (1-10) of each player key at the first roster record it appears in; unrated is NaN. Taking the
+    first record, not the first rated one, keeps a level from ever coming from after the player's first match."""
     r = load(data_dir, "faceit/faceit_rosters", cutoff, ["match_id", "faceit_id", "skill_level"])
-    r = r[r.skill_level > 0]
     finished = load(data_dir, "faceit/faceit_matches", cutoff, ["match_id", "finished_at"])
     r = r.merge(finished, on="match_id").sort_values(["finished_at", "match_id"], kind="stable").drop_duplicates("faceit_id")
     r = r.assign(key=r.faceit_id.map(keys)).dropna(subset=["key"])
-    return pd.Series(r.skill_level.to_numpy(float), index=r.key.astype(np.int64).to_numpy())
+    level = r.skill_level.to_numpy(float)
+    return pd.Series(np.where(level > 0, level, np.nan), index=r.key.astype(np.int64).to_numpy())

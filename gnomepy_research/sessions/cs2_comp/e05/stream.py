@@ -56,6 +56,7 @@ class Stream:
     perf_a: np.ndarray
     perf_b: np.ndarray
     link: np.ndarray           # (P,) compact index of the FACEIT record of an HLTV player, -1 when there is none
+    links: dict                # HLTV id -> FACEIT key, including players with no HLTV map yet
     first: pd.DataFrame        # per player: first_day, first_source, first_team, level
     hltv_points: pd.Series | None = None
 
@@ -77,7 +78,7 @@ def build_stream(maps: D.Maps, faceit: bool, links: dict[int, int]) -> Stream:
                           "level": np.nan}, index=keys)
     return Stream(keys=keys, day=day, source=take(maps.source), rounds_a=take(maps.rounds_a).astype(np.float64),
                   rounds=take(maps.rounds).astype(np.float64), win_a=take(maps.win_a).astype(np.int64), side_a=side_a.astype(np.int64), side_b=side_b.astype(np.int64),
-                  perf_a=take(maps.perf_a), perf_b=take(maps.perf_b), link=_link_index(keys, links if faceit else {}), first=first)
+                  perf_a=take(maps.perf_a), perf_b=take(maps.perf_b), link=_link_index(keys, links if faceit else {}), links=links if faceit else {}, first=first)
 
 
 def _link_index(keys: np.ndarray, links: dict[int, int]) -> np.ndarray:

@@ -37,7 +37,6 @@ class PriceConfig:
     lineup_decay: float = 0.5
     use_moves: bool = True
     faceit_lineups: bool = False
-    standin_weight: float = 1.0
     coh_window: int = 60
     coh_sigma: float = 0.0
     coh_n0: float = 3.0
@@ -73,8 +72,7 @@ def apply_roster_changes(lineup: list[tuple[int, float]], changes: pd.DataFrame,
 
 def infer_lineups(history: pd.DataFrame, teams: set[int] | None = None, series: int = LINEUP_SERIES,
                   decay: float = LINEUP_DECAY, changes: pd.DataFrame | None = None,
-                  extra: pd.DataFrame | None = None, standins: frozenset | None = None,
-                  standin_weight: float = 1.0) -> dict[int, list[tuple[int, float]]]:
+                  extra: pd.DataFrame | None = None) -> dict[int, list[tuple[int, float]]]:
     """team id -> (player, probability of playing): the share of the team's maps in its last series each player took part in,
     recent series counting more. The probabilities of a team sum to five."""
     h = history[~showmatch_mask(history)]
@@ -101,13 +99,17 @@ def infer_lineups(history: pd.DataFrame, teams: set[int] | None = None, series: 
             if order[m] >= series:
                 continue
             for p in players:
-                share = standin_weight if standins is not None and (m, int(p)) in standins else 1.0
-                weight[int(p)] = weight.get(int(p), 0.0) + share * decay ** order[m] / counts[m]
+                weight[int(p)] = weight.get(int(p), 0.0) + decay ** order[m] / counts[m]
         total = sum(decay ** i for i in range(min(series, len(order))))
         lineup = sorted(((p, w / total) for p, w in weight.items()), key=lambda pw: (-pw[1], pw[0]))
         if changes is not None:
             lineup = apply_roster_changes(lineup, changes[changes.team == team], g.time.max().tz_convert(None))
         out[int(team)] = lineup
+    if changes is not None and teams is not None:
+        for team in teams - set(out):
+            joined = changes[changes.team == team]
+            if len(joined):
+                out[int(team)] = apply_roster_changes([], joined, pd.Timestamp.min)
     return out
 
 
@@ -143,11 +145,15 @@ class SeriesPricer:
         lo, hi = np.searchsorted(day, [self.now - HORIZON_DAYS - cfg.coh_window, self.now - HORIZON_DAYS])
         self.window_a, self.window_b = flt.stream.side_a[lo:hi], flt.stream.side_b[lo:hi]
 
-    def _with_faceit(self, i: int, mean: float, var: float) -> tuple[float, float]:
+    def _with_faceit(self, player: int, mean: float, var: float) -> tuple[float, float]:
         """Condition one HLTV skill on the same person's FACEIT skill, read as a noisy measurement of it."""
         f = self.flt
-        q = int(f.stream.link[i])
-        if self.beta <= 0.0 or q < 0 or f.seen[q] < 0:
+        keys = f.stream.keys
+        key = f.stream.links.get(int(player))
+        if self.beta <= 0.0 or key is None:
+            return mean, var
+        q = int(np.searchsorted(keys, key))
+        if q >= len(keys) or keys[q] != key or f.seen[q] < 0:
             return mean, var
         m2 = self.alpha + self.beta * f.mu[q]
         v2 = self.cfg.link_inflate * self.residual + self.beta ** 2 * (f.var[q] + f.cfg.tau ** 2 * max(0.0, self.now - float(f.seen[q])))
@@ -166,12 +172,11 @@ class SeriesPricer:
             if found and f.seen[i] >= 0:
                 mean[k] = f.mu[i]
                 var[k] = f.var[i] + c.tau ** 2 * max(0.0, self.now - float(f.seen[i]))
-                mean[k], var[k] = self._with_faceit(i, mean[k], var[k])
+                mean[k], var[k] = self._with_faceit(p, mean[k], var[k])
                 compact.append(i)
                 continue
             mean[k], var[k] = c.hltv_a + c.hltv_b * np.log1p(points), c.hltv_sigma0 ** 2
-            if found:
-                mean[k], var[k] = self._with_faceit(i, mean[k], var[k])
+            mean[k], var[k] = self._with_faceit(p, mean[k], var[k])
             compact.append(-1)
         block = np.diag(var)
         for j in range(len(players)):
@@ -196,13 +201,14 @@ class SeriesPricer:
         return float(w @ mean), float(w @ block @ w)
 
     def maps_together(self, candidates: list[tuple[int, float]]) -> int:
-        """Maps of the last coh_window days (either source) in which at least four of the expected five were on one side."""
+        """Maps of the last coh_window days, HLTV or FACEIT, in which at least four of the expected five were on one side."""
         keys = self.flt.stream.keys
         top = [p for p, _ in sorted(candidates, key=lambda c: -c[1])[:TEAM_SIZE]]
         index = np.searchsorted(keys, top)
         known = index[(index < len(keys)) & (keys[np.minimum(index, len(keys) - 1)] == top)]
         if len(known) < 4 or not len(self.window_a):
             return 0
+        known = np.concatenate([known, self.flt.stream.link[known][self.flt.stream.link[known] >= 0]])
         a = np.isin(self.window_a, known).sum(axis=1) >= 4
         b = np.isin(self.window_b, known).sum(axis=1) >= 4
         return int((a | b).sum())
