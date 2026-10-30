@@ -37,7 +37,8 @@ def week_series(data_dir: str, first: str, last: str) -> pd.DataFrame:
     # Reporting only: how many of the five that played have a FACEIT link (never a model input).
     linked = set(load(data_dir, "faceit/hltv_faceit_map").hltv_id.astype(int))
     for side in ("a", "b"):
-        h[f"linked_{side}"] = [sum(int(p) in linked for p in (ids or [])) for ids in h[f"team_{side}_player_ids"]]
+        h[f"linked_{side}"] = [sum(int(p) in linked for p in ids) if isinstance(ids, (list, np.ndarray)) else 0
+                               for ids in h[f"team_{side}_player_ids"]]
     s = h.groupby("match_id").agg(t=("t", "first"), team_a_id=("team_a_id", "first"), team_b_id=("team_b_id", "first"),
                                   wins=("team_a_won", "sum"), maps=("team_a_won", "size"), rank_a=("team_a_rank", "first"),
                                   rank_b=("team_b_rank", "first"), is_lan=("is_lan", "first"),
