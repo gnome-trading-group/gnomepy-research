@@ -4,7 +4,8 @@
 
 One chronological pass prices every target from the filter's state at its week cutoff, which holds exactly the maps a
 bundle cut at that cutoff holds, so a run on a truncated bundle with only that week's targets gives the same prices.
-`--no-faceit` runs the same model on HLTV maps alone."""
+A second pass on HLTV maps alone prices the targets whose lineups have too little FACEIT history. `--no-faceit` runs the
+same model on HLTV maps alone."""
 from __future__ import annotations
 
 import argparse
@@ -14,10 +15,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cs2_comp.e09.skill import Params
+from gnomepy_research.sessions.cs2_comp.bundle import load
+from gnomepy_research.sessions.cs2_comp.e09.maps import build_maps
+from gnomepy_research.sessions.cs2_comp.e09.skill import Params, RankPoints
 from gnomepy_research.sessions.cs2_comp.e09.walk import walk
 
 Q_BOUNDS = (0.01, 0.99)
+MIN_COVERED = 3
 
 
 def final_params(use_faceit: bool) -> Params:
@@ -36,7 +40,16 @@ TUNED = dict(
 
 
 def predict(data_dir: Path, targets: pd.DataFrame, use_faceit: bool) -> pd.DataFrame:
-    prices, _ = walk(data_dir, targets, final_params(use_faceit))
+    last = pd.to_datetime(targets.week_cutoff).max()
+    maps = build_maps(data_dir, last, use_faceit)
+    ranks = RankPoints(load(data_dir, "hltv/cs2_team_rankings", last))
+    prices, _ = walk(data_dir, targets, final_params(use_faceit), maps, ranks)
+    if use_faceit:
+        hltv_only, _ = walk(data_dir, targets, final_params(False), maps, ranks)
+        # Where either side has fewer than MIN_COVERED players with FACEIT history, the FACEIT games on record are mostly played
+        # in other fives, and the HLTV-only price scored better than the joint one on outcomes before the tune period.
+        thin = np.minimum(prices.cov_a, prices.cov_b).to_numpy() < MIN_COVERED
+        prices["q"] = np.where(thin, prices.match_id.map(hltv_only.set_index("match_id").q), prices.q)
     prices["q"] = np.clip(prices.q, *Q_BOUNDS)
     return prices[["match_id", "q", "fit_cutoff"]]
 
