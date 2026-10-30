@@ -54,8 +54,12 @@ class Params:
     link_s: float = 0.25
 
 
+MAX_LOGIT = 30.0
+MAX_STEP = 1.0
+
+
 def _sigmoid(x: float) -> float:
-    return 1.0 / (1.0 + math.exp(-x))
+    return 1.0 / (1.0 + math.exp(-min(max(x, -MAX_LOGIT), MAX_LOGIT)))
 
 
 class SkillFilter:
@@ -142,8 +146,10 @@ class SkillFilter:
         infl = 1.0 + (n - 1) * rho
         grad, curv = (ra - n * pi) / infl, n * pi * (1 - pi) / infl
         den = 1.0 + kappa * kappa * curv * s2
-        mu_a = mu_a + kappa * cwa * grad / den
-        mu_b = mu_b - kappa * cwb * grad / den
+        step_a, step_b = kappa * cwa * grad / den, kappa * cwb * grad / den
+        shrink = min(1.0, MAX_STEP / max(float(np.abs(step_a).max()), float(np.abs(step_b).max()), 1e-12))
+        mu_a = mu_a + shrink * step_a
+        mu_b = mu_b - shrink * step_b
         scale = kappa * kappa * curv / den
         ca = ca - scale * np.outer(cwa, cwa)
         cb = cb - scale * np.outer(cwb, cwb)

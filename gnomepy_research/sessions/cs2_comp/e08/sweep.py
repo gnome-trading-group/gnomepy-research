@@ -38,7 +38,10 @@ def score(out: pd.DataFrame) -> dict:
 def run(spec: str) -> dict:
     s = STATE
     params, sp = apply_overrides([x for x in spec.split(",") if x])
-    out, f, ff = walk(s["maps"], s["targets"], s["moves"], s["ranks"], params, sp, track_from=TRACK_FROM)
+    try:
+        out, f, ff = walk(s["maps"], s["targets"], s["moves"], s["ranks"], params, sp, track_from=TRACK_FROM)
+    except (OverflowError, FloatingPointError, np.linalg.LinAlgError) as e:
+        return {"spec": spec, "error": repr(e)}
     out = out.merge(s["targets"][["match_id", "y", "thin"]], on="match_id")
     res = {"spec": spec, **score(out), "round_ll_hltv": float(f.nll[0] / max(f.nmaps[0], 1)),
            "round_ll_faceit": float(f.nll[1] / max(f.nmaps[1], 1))}
