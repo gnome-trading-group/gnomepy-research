@@ -11,7 +11,12 @@ other weeks' targets or on data at or after W, so a run on a bundle truncated at
 
 The five a team will field is the last five it played with before W (on HLTV, or on FACEIT when the FACEIT match is
 linked to that HLTV team and is more recent), adjusted by HLTV roster moves dated after that map: departures are
-removed and arrivals fill the gaps; a slot still empty is an unknown newcomer at the team's prior.
+removed and arrivals fill the gaps, and three or more arrivals mean a rebuilt roster that the arrivals lead. A player
+whose latest appearance (not as a stand-in) is for another team has left even without a roster move. A team with no
+map yet fields the players it signed. A slot still empty is an unknown newcomer at the team's prior.
+
+The recalibration also shrinks prices harder where little is known about the fives (a new or incomplete five, few
+maps behind its players).
 """
 from __future__ import annotations
 
@@ -30,13 +35,9 @@ from gnomepy_research.sessions.cs2_comp.e13.data import FACEIT, Bundle, build
 from gnomepy_research.sessions.cs2_comp.e13.rating import RatingConfig, RatingFilter
 
 CAL_WEEKS = 26
-CORE_MAPS = 1
-STANDIN_SWAP = False
-STANDIN_LOOKBACK = 12
 MOVED_ON = False
 REBUILD_ARRIVALS = 3
 RICH_RECAL = False
-LAN_RECAL = False
 SIGMA_MAP = 0.15
 SIGMA_SERIES = 0.10
 EPOCH = pd.Timestamp("2020-01-01")
@@ -56,17 +57,12 @@ def series_price(d: float, s2: float, curve: np.ndarray, sigma_series: float) ->
 
 
 class Rosters:
-    """The five each team is expected to field at a cutoff.
+    """The five each team is expected to field at a cutoff (see the module docstring)."""
 
-    With core_maps > 1 the five is the team's regulars over its last core_maps maps (most appearances, then the most
-    recent), not just its last five: a stand-in who filled one series does not displace the player he stood in for."""
-
-    def __init__(self, moves: pd.DataFrame, core_maps: int = 1, standin_swap: bool = False, moved_on: bool = False):
-        self.core_maps = max(1, core_maps)
-        self.standin_swap = standin_swap
+    def __init__(self, moves: pd.DataFrame, moved_on: bool = False):
         self.moved_on = moved_on
         self.player_last: dict[int, tuple[int, float]] = {}
-        self.hist: dict[int, collections.deque] = {}
+        self.last: dict[int, tuple[float, tuple[int, ...]]] = {}
         self.moves: dict[int, list[tuple[float, int, bool]]] = collections.defaultdict(list)
         for r in moves.itertuples():
             now = _days(r.event_date)
@@ -76,35 +72,10 @@ class Rosters:
                 self.moves[int(r.to_team_id)].append((now, int(r.person_id), True))
 
     def played(self, team: int, now: float, five: tuple[int, ...], standins: frozenset = frozenset()) -> None:
-        h = self.hist.get(team)
-        if h is None:
-            h = self.hist[team] = collections.deque(maxlen=max(self.core_maps, STANDIN_LOOKBACK if self.standin_swap else 1))
-        h.append((now, five, standins))
+        self.last[team] = (now, five)
         for p in five:
             if p not in standins:
                 self.player_last[p] = (team, now)
-
-    def _swap_standins(self, team: int, h, ranked: list[int], last_seen: dict[int, float], now: float,
-                       use_moves: bool) -> list[int]:
-        """Puts back the regular a stand-in of the last map replaced: the latest earlier non-stand-in of the team
-        who is not in the five and has not left it since."""
-        out = list(ranked)
-        for sub in h[-1][2]:
-            if sub not in out[:5]:
-                continue
-            for t, five, standins in reversed(list(h)[:-1]):
-                back = next((p for p in five if p not in out[:5] and p not in standins and p != sub), None)
-                if back is None:
-                    continue
-                if use_moves and any(not arrives and person == back and t <= when < now
-                                     for when, person, arrives in self.moves.get(team, ())):
-                    continue
-                if back in out:
-                    out.remove(back)
-                out[out.index(sub)] = back
-                last_seen.setdefault(back, t)
-                break
-        return out
 
     def _signed(self, team: int, now: float) -> tuple[list[int], int]:
         """A team with no map yet fields the players its roster moves say it signed and still has, latest first."""
@@ -119,19 +90,12 @@ class Rosters:
         return signed[:5], 5 - len(signed[:5])
 
     def five(self, team: int, now: float, use_moves: bool) -> tuple[list[int], int]:
-        h = self.hist.get(team)
-        if not h:
+        last = self.last.get(team)
+        if last is None:
             return self._signed(team, now) if use_moves else ([], 5)
-        since = h[-1][0]
-        last_seen: dict[int, float] = {}
-        count: collections.Counter = collections.Counter()
-        for t, five, _ in list(h)[-self.core_maps:]:
-            for p in five:
-                count[p] += 1
-                last_seen[p] = t
-        ranked = sorted(count, key=lambda p: (-count[p], -last_seen[p], p))
-        if self.standin_swap:
-            ranked = self._swap_standins(team, h, ranked, last_seen, now, use_moves)
+        since, five = last
+        ranked = sorted(five)
+        last_seen = {p: since for p in five}
         departed: set[int] = set()
         joined: list[int] = []
         arrived: dict[int, float] = {}
@@ -185,18 +149,15 @@ def _fit_logistic(X: np.ndarray, y: np.ndarray, ridge: float = 1.0) -> np.ndarra
     return w
 
 
-def recal_features(d: pd.DataFrame, rich: bool, lan: bool = False) -> np.ndarray:
+def recal_features(d: pd.DataFrame, rich: bool) -> np.ndarray:
     """The recalibration design: logit of the raw price, and with rich, its interactions with how little is known
-    about the two fives (a new or incomplete five, thin history), so uncertain matchups are shrunk harder; with lan,
-    its interaction with the series being played on LAN, where online form travels least."""
+    about the two fives (a new or incomplete five, thin history), so uncertain matchups are shrunk harder."""
     x = _logit(d.p_raw.to_numpy(float))
     cols = [x]
     if rich:
         new_five = ((np.minimum(d.five_a, d.five_b) < 3) | (d.unk_a + d.unk_b > 0)).to_numpy(float)
         thin = (d.games_min < 40).to_numpy(float)
         cols += [x * new_five, x * thin]
-    if lan:
-        cols.append(x * d.is_lan.fillna(False).astype(float).to_numpy())
     return np.column_stack(cols + [np.ones(len(x))])
 
 
@@ -211,8 +172,7 @@ def data_cutoff(targets: pd.DataFrame) -> pd.Timestamp:
 
 def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = True,
         sigma_map: float = SIGMA_MAP, sigma_series: float = SIGMA_SERIES, history_from: pd.Timestamp | None = None,
-        actual_fives: bool = False, core_maps: int = CORE_MAPS, rich_recal: bool = RICH_RECAL, lan_recal: bool = LAN_RECAL,
-        standin_swap: bool = STANDIN_SWAP, moved_on: bool = MOVED_ON) -> tuple[pd.DataFrame, pd.DataFrame]:
+        actual_fives: bool = False, rich_recal: bool = RICH_RECAL, moved_on: bool = MOVED_ON) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Returns (target prices, HLTV bo3 series priced at each cutoff from history_from on); b is built at
     data_cutoff(targets). actual_fives prices the history series with the fives that went on to play them, which
     only a diagnostic may do: it measures what predicting the fives costs."""
@@ -223,7 +183,7 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
         first = min(first, pd.Timestamp(history_from))
     weeks = list(pd.date_range(first, last, freq="7D"))
     f = RatingFilter(cfg, b.rankings, b.faceit_level)
-    rosters = Rosters(b.moves, core_maps, standin_swap, moved_on)
+    rosters = Rosters(b.moves, moved_on)
     curve = _series_curve(sigma_map)
     series = b.series[(b.series.bo_type == 3) & b.series.y.notna()].copy()
     series["week"] = series.t.dt.normalize() - pd.to_timedelta(series.t.dt.dayofweek, unit="D")
@@ -278,7 +238,7 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
             hist_rows.append({"match_id": r.match_id, "week": w, "y": r.y, "is_lan": r.is_lan,
                               **price(int(r.team_a), int(r.team_b), w, now, r.match_id)})
         for r in t_by_week.get(w, pd.DataFrame()).itertuples():
-            out_rows.append({"match_id": r.match_id, "fit_cutoff": w, "is_lan": r.is_lan, **price(int(r.team_a_id), int(r.team_b_id), w, now)})
+            out_rows.append({"match_id": r.match_id, "fit_cutoff": w, **price(int(r.team_a_id), int(r.team_b_id), w, now)})
     hist = pd.DataFrame(hist_rows)
     out = pd.DataFrame(out_rows)
     hist["q"] = np.nan
@@ -286,12 +246,12 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
         cal = hist[(hist.week < w) & (hist.week >= w - pd.Timedelta(weeks=CAL_WEEKS))]
         if len(cal) < 50:
             continue
-        coef = _fit_logistic(recal_features(cal, rich_recal, lan_recal), cal.y.to_numpy(float))
+        coef = _fit_logistic(recal_features(cal, rich_recal), cal.y.to_numpy(float))
         sel = hist.week == w
-        hist.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(hist[sel], rich_recal, lan_recal) @ coef))
+        hist.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(hist[sel], rich_recal) @ coef))
         if len(out):
             sel = out.fit_cutoff == w
-            out.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(out[sel], rich_recal, lan_recal) @ coef))
+            out.loc[sel, "q"] = 1 / (1 + np.exp(-recal_features(out[sel], rich_recal) @ coef))
     return out, hist
 
 
