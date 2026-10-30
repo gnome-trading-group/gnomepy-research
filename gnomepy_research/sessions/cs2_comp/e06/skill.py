@@ -1,10 +1,14 @@
-"""Player-skill Kalman filter with an HLTV and a FACEIT measurement channel.
+"""Player-skill Kalman filter fed by HLTV maps and cleaned FACEIT organised maps.
 
 Skill is in round-logit units: a lineup gap D gives each round to team A with probability sigmoid(D). Each player is
-Gaussian with variance growing per idle day. A map between two fives updates the ten players jointly (extended Kalman
-step on the binomial round count, divided by a beta-binomial inflation). Covariance is kept between teammates only, which
-is what lets a fixed five reveal more than its sum once members move, and keeps memory bounded for the tens of
-thousands of FACEIT players.
+Gaussian with variance growing per idle day. A map between two fives updates the ten players jointly with three
+measurements, each an extended Kalman step divided by an overdispersion factor:
+  1. the round count (binomial in the gap),
+  2. the team kill count (binomial in the gap scaled by gamma_k, which has far more events per map than rounds),
+  3. each player's performance relative to his teammates (HLTV rating, or a rating proxy from FACEIT kills, deaths and
+     ADR), with a per-player offset so repeated measurements cannot say more than the role spread allows.
+Covariance is kept between teammates only, which lets a fixed five reveal more than its sum once members move and keeps
+memory bounded for the tens of thousands of FACEIT players.
 
 FACEIT maps are a separate measurement of the same skill: their gap is scaled by gamma_f, their rounds carry their own
 overdispersion rho_f, idle drift uses tau_f, and a FACEIT-only newcomer starts from a prior set by the competition
@@ -15,13 +19,13 @@ from __future__ import annotations
 import bisect
 import collections
 import math
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, fields, replace
 
 import numpy as np
 import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
-from gnomepy_research.sessions.cs2_comp.e06.events import FACEIT, FIVE, N_DIVISIONS, MapEvent
+from gnomepy_research.sessions.cs2_comp.e06.events import FACEIT, FIVE, MapEvent
 
 TIE_TOLERANCE = 1e-9
 _X, _W = np.polynomial.hermite_e.hermegauss(21)
@@ -43,8 +47,8 @@ class Params:
     chem_days: int = 180
     new_player_maps: int = 20
     gamma_f: float = 1.12
-    rho_f: float = 0.088
-    tau_f: float = 0.0067
+    rho_f: float = 0.07
+    tau_f: float = 0.0075
     sigma0_f: float = 0.325
     a_f: float = -0.55
     div_offsets: tuple = (0.0, 0.145, 0.29, 0.5075, 0.145, 0.0)
@@ -58,23 +62,23 @@ class Params:
     pi_max: float = 0.975
     sub_gap: float = 0.06
     sigma_sub: float = 0.25
-    k_h: float = 0.55
+    k_h: float = 0.7
     r_h: float = 0.29
     k_f: float = 0.72
     r_f: float = 0.37
-    omega: float = 0.052
+    omega: float = 0.042
     gamma_k: float = 1.0
-    rho_k: float = 0.03
-    gamma_kf: float = 1.0
-    rho_kf: float = 0.05
+    rho_k: float = 0.1
+    gamma_kf: float = 0.9
+    rho_kf: float = 0.08
     roster_decay: float = 0.78
     roster_join: float = 0.8
     roster_leave: float = 0.05
     roster_faceit_w: float = 0.5
-    q_scale: float = 1.3
-    q_scale_base: float = 1.13
-    w_thin: float = 0.9
-    w_rest: float = 0.52
+    q_scale: float = 1.46
+    q_scale_base: float = 1.27
+    w_thin: float = 0.86
+    w_rest: float = 0.47
     thin_maps: int = 15
     thin_rank: int = 100
 

@@ -28,7 +28,6 @@ DIVISIONS = (
     ("qualifier", 4),
 )
 OTHER_DIVISION = 5
-N_DIVISIONS = 6
 
 
 def division(competition_name: str) -> int:

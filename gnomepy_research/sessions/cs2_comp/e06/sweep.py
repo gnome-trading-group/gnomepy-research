@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
 
 from gnomepy_research.sessions.cs2_comp.e06.events import HLTV

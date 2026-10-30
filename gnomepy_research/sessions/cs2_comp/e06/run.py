@@ -1,19 +1,14 @@
 """One chronological pass: fold events into the filter, and at each cutoff price the series of the following week."""
 from __future__ import annotations
 
-import logging
-import time
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cs2_comp.e06.events import FACEIT, HLTV, MapEvent, build_events
+from gnomepy_research.sessions.cs2_comp.e06.events import HLTV, MapEvent, build_events
 from gnomepy_research.sessions.cs2_comp.e06.roster import Rosters
 from gnomepy_research.sessions.cs2_comp.e06.fusion import Combined
 from gnomepy_research.sessions.cs2_comp.e06.skill import Params, rescaled, stacked
-
-logger = logging.getLogger(__name__)
 
 
 def to_seconds(ts) -> float:
@@ -40,7 +35,9 @@ def run_pass(events: list[MapEvent], rankings, moves: list, params: Params, quer
     out = []
     for cutoff, wk in queries.groupby("week_cutoff", sort=True):
         cs = to_seconds(cutoff)
-        filt.h.rank_limit = cs / 86400.0
+        for f in (filt, base):
+            if f is not None:
+                f.h.rank_limit = cs / 86400.0
         while ei < len(events) and events[ei].t < cs:
             e = events[ei]
             filt.observe(e)
@@ -54,8 +51,6 @@ def run_pass(events: list[MapEvent], rankings, moves: list, params: Params, quer
                     if team > 0:
                         rosters.observe_map(team, e.day, five, params.roster_faceit_w, hltv=False)
             ei += 1
-        if base is not None:
-            base.h.rank_limit = cs / 86400.0
         while mi < len(moves) and to_seconds(moves[mi].event_date) < cs:
             rosters.observe_move(moves[mi])
             mi += 1
