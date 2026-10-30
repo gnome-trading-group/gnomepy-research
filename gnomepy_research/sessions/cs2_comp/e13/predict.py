@@ -31,6 +31,8 @@ from gnomepy_research.sessions.cs2_comp.e13.rating import RatingConfig, RatingFi
 
 CAL_WEEKS = 26
 CORE_MAPS = 1
+STANDIN_SWAP = False
+STANDIN_LOOKBACK = 12
 RICH_RECAL = False
 SIGMA_MAP = 0.15
 SIGMA_SERIES = 0.10
@@ -56,8 +58,9 @@ class Rosters:
     With core_maps > 1 the five is the team's regulars over its last core_maps maps (most appearances, then the most
     recent), not just its last five: a stand-in who filled one series does not displace the player he stood in for."""
 
-    def __init__(self, moves: pd.DataFrame, core_maps: int = 1):
+    def __init__(self, moves: pd.DataFrame, core_maps: int = 1, standin_swap: bool = False):
         self.core_maps = max(1, core_maps)
+        self.standin_swap = standin_swap
         self.hist: dict[int, collections.deque] = {}
         self.moves: dict[int, list[tuple[float, int, bool]]] = collections.defaultdict(list)
         for r in moves.itertuples():
@@ -67,11 +70,33 @@ class Rosters:
             if r.to_team_id and r.to_team_id == r.to_team_id and r.to_status == "active":
                 self.moves[int(r.to_team_id)].append((now, int(r.person_id), True))
 
-    def played(self, team: int, now: float, five: tuple[int, ...]) -> None:
+    def played(self, team: int, now: float, five: tuple[int, ...], standins: frozenset = frozenset()) -> None:
         h = self.hist.get(team)
         if h is None:
-            h = self.hist[team] = collections.deque(maxlen=self.core_maps)
-        h.append((now, five))
+            h = self.hist[team] = collections.deque(maxlen=max(self.core_maps, STANDIN_LOOKBACK if self.standin_swap else 1))
+        h.append((now, five, standins))
+
+    def _swap_standins(self, team: int, h, ranked: list[int], last_seen: dict[int, float], now: float,
+                       use_moves: bool) -> list[int]:
+        """Puts back the regular a stand-in of the last map replaced: the latest earlier non-stand-in of the team
+        who is not in the five and has not left it since."""
+        out = list(ranked)
+        for sub in h[-1][2]:
+            if sub not in out[:5]:
+                continue
+            for t, five, standins in reversed(list(h)[:-1]):
+                back = next((p for p in five if p not in out[:5] and p not in standins and p != sub), None)
+                if back is None:
+                    continue
+                if use_moves and any(not arrives and person == back and t <= when < now
+                                     for when, person, arrives in self.moves.get(team, ())):
+                    continue
+                if back in out:
+                    out.remove(back)
+                out[out.index(sub)] = back
+                last_seen.setdefault(back, t)
+                break
+        return out
 
     def five(self, team: int, now: float, use_moves: bool) -> tuple[list[int], int]:
         h = self.hist.get(team)
@@ -80,11 +105,13 @@ class Rosters:
         since = h[-1][0]
         last_seen: dict[int, float] = {}
         count: collections.Counter = collections.Counter()
-        for t, five in h:
+        for t, five, _ in list(h)[-self.core_maps:]:
             for p in five:
                 count[p] += 1
                 last_seen[p] = t
         ranked = sorted(count, key=lambda p: (-count[p], -last_seen[p], p))
+        if self.standin_swap:
+            ranked = self._swap_standins(team, h, ranked, last_seen, now, use_moves)
         departed: set[int] = set()
         joined: list[int] = []
         if use_moves:
@@ -148,7 +175,8 @@ def data_cutoff(targets: pd.DataFrame) -> pd.Timestamp:
 
 def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = True,
         sigma_map: float = SIGMA_MAP, sigma_series: float = SIGMA_SERIES, history_from: pd.Timestamp | None = None,
-        actual_fives: bool = False, core_maps: int = CORE_MAPS, rich_recal: bool = RICH_RECAL) -> tuple[pd.DataFrame, pd.DataFrame]:
+        actual_fives: bool = False, core_maps: int = CORE_MAPS, rich_recal: bool = RICH_RECAL,
+        standin_swap: bool = STANDIN_SWAP) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Returns (target prices, HLTV bo3 series priced at each cutoff from history_from on); b is built at
     data_cutoff(targets). actual_fives prices the history series with the fives that went on to play them, which
     only a diagnostic may do: it measures what predicting the fives costs."""
@@ -159,7 +187,7 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
         first = min(first, pd.Timestamp(history_from))
     weeks = list(pd.date_range(first, last, freq="7D"))
     f = RatingFilter(cfg, b.rankings, b.faceit_level)
-    rosters = Rosters(b.moves, core_maps)
+    rosters = Rosters(b.moves, core_maps, standin_swap)
     curve = _series_curve(sigma_map)
     series = b.series[(b.series.bo_type == 3) & b.series.y.notna()].copy()
     series["week"] = series.t.dt.normalize() - pd.to_timedelta(series.t.dt.dayofweek, unit="D")
@@ -191,6 +219,7 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
     t_arr = maps.t.to_numpy()
     i, n = 0, len(maps)
     cols = [maps[c].to_numpy() for c in ("src", "division", "team_a", "team_b", "players_a", "players_b", "rounds_a", "rounds_b")]
+    mids = maps.match_id.to_numpy()
     for w in weeks:
         wn = np.datetime64(w)
         while i < n and t_arr[i] < wn:
@@ -202,10 +231,11 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
                 devs = [b.devs.get((i, side, int(p))) for p in five]
                 if None not in devs:
                     f.observe_dev(five, devs, int(src))
+            mid = mids[i]
             if src != FACEIT or ta > 0:
-                rosters.played(int(ta), now, pa)
+                rosters.played(int(ta), now, pa, frozenset(p for p in pa if (mid, p) in b.standins))
             if src != FACEIT or tb > 0:
-                rosters.played(int(tb), now, pb)
+                rosters.played(int(tb), now, pb, frozenset(p for p in pb if (mid, p) in b.standins))
             i += 1
         now = _days(w)
         for r in by_week.get(w, pd.DataFrame()).itertuples():

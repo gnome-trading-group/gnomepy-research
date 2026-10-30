@@ -59,6 +59,7 @@ class Bundle:
     moves: pd.DataFrame
     faceit_level: dict[int, float]
     devs: dict[tuple[int, int, int], float]   # (map row, 0 for side a / 1 for b, player) -> score relative to his five
+    standins: set[tuple[str, int]]            # (HLTV match id, player) where the player was a stand-in
 
 
 def hltv_maps(data: Path, before: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -179,4 +180,8 @@ def build(data: Path, before: pd.Timestamp, use_faceit: bool) -> Bundle:
     moves = moves.assign(event_date=_naive(moves.event_date)).sort_values(["event_date", "person_id"], kind="mergesort")
     st = player_stats(data, before, maps, use_faceit)
     devs = dict(zip(zip(st.map_row.tolist(), (st.side == "b").astype(int).tolist(), st.player.tolist()), st.dev.tolist()))
-    return Bundle(maps=maps, series=series, rankings=rankings, moves=moves, faceit_level=level, devs=devs)
+    lu = load(data, "hltv/cs2_match_lineups", before, ["match_id", "player_id", "is_standin", "match_date"])
+    lu = lu[lu.is_standin.fillna(False).astype(bool)]
+    standins = set(zip(lu.match_id.astype(str), lu.player_id.astype(np.int64).tolist()))
+    return Bundle(maps=maps, series=series, rankings=rankings, moves=moves, faceit_level=level, devs=devs,
+                  standins=standins)
