@@ -42,12 +42,12 @@ class Params:
     rho: float = 0.017231894894383412
     chem_days: int = 180
     new_player_maps: int = 20
-    gamma_f: float = 1.0
+    gamma_f: float = 1.1
     rho_f: float = 0.1
-    tau_f: float = 0.012
+    tau_f: float = 0.006
     sigma0_f: float = 0.3
-    a_f: float = -0.35
-    div_offsets: tuple = (0.0, 0.1, 0.2, 0.35, 0.1, 0.0)
+    a_f: float = -0.6
+    div_offsets: tuple = (0.0, 0.17, 0.34, 0.595, 0.17, 0.0)
     sigma_m: float = 0.37
     sigma_s: float = 0.15
     min_games_h: int = 15
@@ -58,6 +58,11 @@ class Params:
     pi_max: float = 0.97
     sub_gap: float = 0.1
     sigma_sub: float = 0.25
+    k_h: float = 0.5
+    r_h: float = 0.29
+    k_f: float = 0.5
+    r_f: float = 0.3
+    omega: float = 0.05
 
     def with_values(self, **kv) -> Params:
         return replace(self, **kv)
@@ -93,6 +98,8 @@ class SkillFilter:
         self.cov: dict[tuple[int, int], float] = {}
         self.games: collections.Counter = collections.Counter()
         self.faceit_games: collections.Counter = collections.Counter()
+        self.perf_n: collections.Counter = collections.Counter()
+        self.diag: list | None = None
         self.five_days: dict[frozenset, collections.deque] = collections.defaultdict(collections.deque)
         self.rank_limit = math.inf
         self._rank_days: list[float] = []
@@ -181,6 +188,11 @@ class SkillFilter:
         denom = 1 + curv * s2
         mus = np.concatenate([a.mus, b.mus]) + cw * grad / denom
         cov = cov - np.outer(cw, cw) * curv / denom
+        k, r = (p.k_f, p.r_f) if faceit else (p.k_h, p.r_h)
+        if k > 0:
+            for base, dev in ((0, ev.dev_a), (FIVE, ev.dev_b)):
+                if dev is not None:
+                    self._perf_update(players[base:base + FIVE], mus, cov, base, np.asarray(dev), k, r, ev.source)
         mu_l, var_l = mus.tolist(), np.maximum(np.diag(cov), 1e-6).tolist()
         for i, pl in enumerate(players):
             self.mu[pl] = mu_l[i]
@@ -201,6 +213,27 @@ class SkillFilter:
             while q and q[0] < cutoff:
                 q.popleft()
         return d, s2
+
+
+    def _perf_update(self, team: tuple, mus: np.ndarray, cov: np.ndarray, base: int, dev: np.ndarray, k: float, r: float,
+                     source: int) -> None:
+        """Within-team performance deviations measure each player's skill relative to his teammates. A persistent per-player
+        offset (role) caps how much repeated measurements can say, so a player's n-th observation is discounted."""
+        n = np.array([self.perf_n[pl] for pl in team], dtype=float)
+        sl = slice(base, base + FIVE)
+        m, pc = mus[sl], cov[sl, sl]
+        h = k * (np.eye(FIVE) - 1.0 / FIVE)
+        resid = dev - h @ m
+        if self.diag is not None:
+            self.diag.append((source, resid, h @ m, n))
+        om2 = self.p.omega ** 2
+        noise = np.diag((r * r + n * om2) ** 2 / (r * r))
+        ph = pc @ h.T
+        gain = np.linalg.solve(h @ ph + noise, ph.T).T
+        mus[sl] = m + gain @ resid
+        cov[sl, sl] = pc - gain @ ph.T
+        for pl in team:
+            self.perf_n[pl] += 1
 
 
 _TABLES: dict[float, np.ndarray] = {}
