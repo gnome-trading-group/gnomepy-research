@@ -45,9 +45,8 @@ class ContractGroup:
         self.pairings = enumerate_pairings(self.outcomes)
 
 
-def discover_group(event_ids: list[int], registry: RegistryClient) -> ContractGroup:
-    rels = registry.get_contract_relationships(relationship_type="EQUIVALENT")
-    graph = RelationshipGraph(rels)
+def discover_group(event_ids: list[int], registry: RegistryClient, allow_flagged: bool = False) -> ContractGroup:
+    graph = RelationshipGraph.load(registry, event_ids, allow_flagged=allow_flagged)
 
     groups: list[ContractGroup] = []
     seen_listing_sets: set[frozenset] = set()

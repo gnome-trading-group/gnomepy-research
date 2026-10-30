@@ -75,6 +75,7 @@ class EquivalentEventArb(TargetPortfolioStrategy):
         optimal_ev_lambda: float = 30.0,
         maker_reprice_cooldown_ns: int = 0,
         cancel_grace_ns: int = 0,
+        allow_flagged: bool = False,
         debug: bool = False,
     ):
         self.max_position = max_position * Scales.SIZE
@@ -86,7 +87,7 @@ class EquivalentEventArb(TargetPortfolioStrategy):
         self._allow_early_exit = allow_early_exit
 
         registry = RegistryClient()
-        self._group = discover_group(event_ids, registry)
+        self._group = discover_group(event_ids, registry, allow_flagged=allow_flagged)
 
         # The rates each listing's fills are charged, from the registry at the strategy's time.
         self._fee_rates = registry_fee_rates(self)

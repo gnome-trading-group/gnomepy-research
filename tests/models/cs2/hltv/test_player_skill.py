@@ -70,6 +70,29 @@ def test_variance_grows_with_idle_days():
     assert later - soon == pytest.approx(100 * cfg.tau ** 2)
 
 
+def test_near_tied_leaders_go_to_the_first_listed_player():
+    f = PlayerSkillFilter(PlayerSkillConfig(), RANKINGS)
+    lam, n = f.cfg.lam, 5
+    weights = f._weights([0.1, 0.1 + 1e-15, 0.1, 0.05, 0.0])
+    assert weights[0] == pytest.approx(1 / n + lam * (1 - 1 / n))
+    assert weights[1] == pytest.approx(1 / n - lam / n)
+
+
+def test_rounding_noise_between_teammates_does_not_change_the_update():
+    """Two level teammates a last bit apart either way, as another machine's rounding leaves them, update alike."""
+    filters = []
+    for nudge in (1e-16, -1e-16):
+        f = PlayerSkillFilter(PlayerSkillConfig(), RANKINGS)
+        # a loss drops the first-listed leader furthest, leaving the other four level at the top
+        f.observe_map(DAY, 1, 2, FIVES[1], FIVES[2], 5, 13)
+        second = FIVES[1][1]
+        f._mu[second] = f._mu[FIVES[1][2]] + nudge
+        f.observe_map(DAY, 1, 2, FIVES[1], FIVES[2], 5, 13)
+        filters.append(f)
+    for p in FIVES[1] + FIVES[2]:
+        assert filters[0]._mu[p] == pytest.approx(filters[1]._mu[p], abs=1e-12)
+
+
 def test_winners_rise_and_losers_fall():
     f = PlayerSkillFilter(PlayerSkillConfig(), RANKINGS)
     before = {p: f._state(p, t, DAY)[0] for t in (1, 2) for p in FIVES[t]}

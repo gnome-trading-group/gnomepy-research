@@ -18,6 +18,7 @@ import datetime as dt
 import json
 import re
 import time
+import unicodedata
 
 import pandas as pd
 import requests
@@ -31,7 +32,9 @@ MARKET_OF_GAME = {"0": "series", "1": "game1", "2": "game2"}
 
 
 def norm(name: str | None) -> str:
-    n = (name or "").lower().strip()
+    # Venues spell the same team with and without accents ("Los Niños" / "LOS NINOS"); dropping them outright would
+    # leave "nios" on one side and "ninos" on the other.
+    n = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower().strip()
     n = re.sub(r"\b(esports|esport|team|gaming|club|academy|nxt|fe)\b", "", n)
     return re.sub(r"[^a-z0-9]", "", n)
 

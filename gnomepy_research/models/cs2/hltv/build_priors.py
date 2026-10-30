@@ -27,6 +27,7 @@ import logging
 import numpy as np
 import pandas as pd
 
+from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.models.cs2.hltv.context_features import (
     EVENT_FEATURES,
     PAGE_H2H_FEATURES,
@@ -308,7 +309,7 @@ def build_priors(
     Compute point-in-time priors for every row in match_history.
     Returns a DataFrame with one row per map, keyed by match_id + map_name.
     """
-    history_sorted = match_history.sort_values("match_date").reset_index(drop=True)
+    history_sorted = match_history[~showmatch_mask(match_history)].sort_values("match_date").reset_index(drop=True)
     rankings = team_rankings.sort_values("date").reset_index(drop=True)
 
     logger.info("Computing priors for %d map rows...", len(history_sorted))
@@ -355,6 +356,7 @@ def build_priors_for(
     the scans score a whole day against the state at its start.
     """
     rankings = team_rankings.sort_values("date").reset_index(drop=True)
+    match_history = match_history[~showmatch_mask(match_history)]
     targets = targets.assign(match_date=pd.to_datetime(targets["match_date"]))
     days = [
         _priors_for_day(match_history, rankings, day_targets, lineups, roster_moves, veto, h2h)
