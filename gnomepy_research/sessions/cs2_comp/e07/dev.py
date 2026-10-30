@@ -67,8 +67,9 @@ def build_config(overrides: dict) -> ModelConfig:
     h = {k[2:]: v for k, v in overrides.items() if k.startswith("h_")}
     f = {k[2:]: v for k, v in overrides.items() if k.startswith("f_")}
     base = FINAL
+    variants = tuple(replace(base.hltv, **v) for v in overrides.get("variants", ()))
     model = {k: v for k, v in overrides.items() if k in ("use_faceit", "roster_moves", "faceit_lineup_weight", "faceit_lineup_days", "newcomer_prob")}
-    return replace(base, hltv=replace(base.hltv, **h), faceit=replace(base.faceit, **f), **model)
+    return replace(base, hltv=replace(base.hltv, **h), faceit=replace(base.faceit, **f), hltv_variants=variants, **model)
 
 
 def main() -> None:

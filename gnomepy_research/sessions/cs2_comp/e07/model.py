@@ -30,6 +30,7 @@ class ModelConfig:
     faceit_lineup_weight: float = 0.5
     faceit_lineup_days: float = 21.0
     newcomer_prob: float = 0.0
+    hltv_variants: tuple = ()
 
 
 class Model:
@@ -42,10 +43,13 @@ class Model:
         self.index = streams.index
         self.moves = moves if cfg.roster_moves else None
         self.h = Filter(cfg.hltv, streams, rank_points)
+        self.extra = [Filter(v, streams, rank_points) for v in cfg.hltv_variants]
         self.f = Filter(cfg.faceit, streams, rank_points) if cfg.use_faceit else None
 
     def advance(self, day: float) -> None:
         self.h.advance(day)
+        for h in self.extra:
+            h.advance(day)
         if self.f is not None:
             self.f.advance(day)
 
@@ -80,13 +84,14 @@ class Model:
         roster = self.moves.roster(team, [self.keys[i] for i in ids], last_t, cutoff_day)
         return [self.index.get(k) if isinstance(k, int) else None for k in roster], last_t
 
-    def soft_lineup(self, team: int, cutoff_day: float) -> list[tuple[int | None, float]]:
+    def soft_lineup(self, team: int, cutoff_day: float, h: Filter | None = None) -> list[tuple[int | None, float]]:
         """Probability that each recent player of the team plays: recency-weighted appearances over its last maps,
         edited by the roster moves since the last map."""
-        recent = self.h.recent_fives(team)
+        h = h or self.h
+        recent = h.recent_fives(team)
         if not recent:
             return [(None, float(LINEUP))]
-        decay = self.cfg.hltv.recency
+        decay = h.cfg.recency
         probs: dict[int, float] = {}
         total = 0.0
         for r, ids in enumerate(recent):
@@ -102,7 +107,7 @@ class Model:
         probs = {i: v / total for i, v in probs.items()}
         unknown_joiners: set[int] = set()
         if self.moves is not None:
-            last_t = self.h.last_five[team][1]
+            last_t = h.last_five[team][1]
             for person, sign in self.moves.changes(team, last_t, cutoff_day):
                 idx = self.index.get(person)
                 if sign < 0:
@@ -144,8 +149,13 @@ class Model:
             q, mean, var = self.h.price(team_a, team_b, t, cutoff_day, lineups=(slots["a"][0], slots["b"][0]))
         soft_a, soft_b = self.soft_lineup(team_a, cutoff_day), self.soft_lineup(team_b, cutoff_day)
         q_soft, mean_soft, var_soft = self.h.price(team_a, team_b, t, cutoff_day, weighted=(soft_a, soft_b))
+        q_members = [q_soft]
+        for h in self.extra:
+            q_members.append(h.price(team_a, team_b, t, cutoff_day,
+                                     weighted=(self.soft_lineup(team_a, cutoff_day, h), self.soft_lineup(team_b, cutoff_day, h)))[0])
+        q_ens = float(1 / (1 + np.exp(-np.mean([np.log(x / (1 - x)) for x in q_members]))))
         row = {"q_h": q, "mean_h": mean, "var_h": var, "q_last": q_last, "q_soft": q_soft, "mean_soft": mean_soft,
-               "var_soft": var_soft,
+               "var_soft": var_soft, "q_ens": q_ens,
                "inst_a": sum(w * (1.0 - w) for _, w in soft_a if w < 1.0), "inst_b": sum(w * (1.0 - w) for _, w in soft_b if w < 1.0)}
         for side, team in (("a", team_a), ("b", team_b)):
             slot, last_t = slots[side]

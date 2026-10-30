@@ -50,7 +50,7 @@ def report(p: pd.DataFrame) -> dict:
     months = pd.to_datetime(p.cutoff).dt.to_period("M").astype(str).to_numpy()
     thin = ((p.is_lan == 0) & (np.minimum(p.tm90_a, p.tm90_b) <= THIN_MAPS)).to_numpy()
     out = {"n": len(p), "n_thin": int(thin.sum())}
-    for col in ("q_last", "q_h", "q_soft"):
+    for col in ("q_last", "q_h", "q_soft", "q_ens"):
         if col in p:
             out[f"ll_{col}"] = float(ll(p[col].to_numpy(), y).mean())
     if "q_oracle" in p:
@@ -65,7 +65,7 @@ def report(p: pd.DataFrame) -> dict:
         out["ll_last_changed"] = float(ll(p.q_last.to_numpy()[changed], y[changed]).mean())
         out["ll_h_changed"] = float(ll(p.q_h.to_numpy()[changed], y[changed]).mean())
         out["ll_oracle_changed"] = float(ll(p.q_oracle.to_numpy()[changed], y[changed]).mean())
-    for zcol in ("q_last", "q_h", "q_soft"):
+    for zcol in ("q_last", "q_h", "q_soft", "q_ens"):
         base = None
         for name, x in designs(p, zcol).items():
             pred = cv(x, y, months)
@@ -77,6 +77,6 @@ def report(p: pd.DataFrame) -> dict:
             out[key] = {"ll": float(loss.mean()), "d_vs_A": float(d.mean()), "se": float(d.std() / np.sqrt(len(y))),
                         "d_thin": float(d[thin].mean()) if thin.any() else None, "d_rest": float(d[~thin].mean()),
                         "w": [round(float(v), 3) for v in fit(x, y)]}
-            if zcol != "q_soft" and name != "A":
+            if zcol not in ("q_soft", "q_ens") and name != "A":
                 del out[key]
     return out
