@@ -27,7 +27,7 @@ def main() -> None:
     ap.add_argument("--set", action="append", default=[])
     args = ap.parse_args()
     out = Path(os.environ.get("OUTPUT_DIR", "."))
-    targets = out / "dev_targets.parquet"
+    targets = out / f"dev_targets_{args.name}.parquet"
     dev.build(args.data, targets)
     cfg = dataclasses.replace(Config(), **parse_overrides(args.set))
     pred = run(args.data, pd.read_parquet(targets), args.faceit, cfg)

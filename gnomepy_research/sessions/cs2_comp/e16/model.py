@@ -19,6 +19,7 @@ approximation) added to the noise shared by all its maps.
 """
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -41,16 +42,17 @@ FEATURES = ["one", "rank", "has_hltv", "level", "no_level"] + [f"div_{d}" for d 
 class Config:
     window_days: int = 365
     half_life_days: float = 180.0
-    kappa_hltv: float = 0.5
+    kappa_hltv: float = 1.0
     kappa_faceit: float = 0.25
-    sigma0: float = 0.3
-    sigma_team: float = 0.15
+    sigma0: float = 1.2
+    sigma_team: float = 0.05
     sigma_beta: float = 1.0
     impact_hltv: float = 1.0
     impact_faceit: float = 1.0
     map_noise: float = 0.37
     series_noise: float = 0.17
     faceit_window_days: int = 365
+    roster_moves: int = 1
 
 
 @dataclass
@@ -92,10 +94,15 @@ class Fit:
         return mean, var
 
     def price(self, mean: float, var: float) -> float:
-        table = regulation_map_win(_GRID[:, None] + self.cfg.map_noise * _X[None, :]) @ _W
         d = mean + np.sqrt(var + self.cfg.series_noise ** 2) * _X
-        p = np.interp(d, _GRID, table)
+        p = np.interp(d, _GRID, _map_table(self.cfg.map_noise))
         return float((p * p * (3 - 2 * p)) @ _W)
+
+
+@functools.lru_cache(maxsize=4)
+def _map_table(noise: float) -> np.ndarray:
+    """P(win a map) on a grid of round-logit gaps, with the per-map noise integrated out."""
+    return regulation_map_win(_GRID[:, None] + noise * _X[None, :]) @ _W
 
 
 def rank_feature(rankings: pd.DataFrame, cutoff: pd.Timestamp) -> dict[str, float]:

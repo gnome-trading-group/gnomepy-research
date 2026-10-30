@@ -46,6 +46,7 @@ class Bundle:
     faceit_maps: pd.DataFrame | None
     faceit_ratings: pd.DataFrame | None
     faceit_levels: pd.DataFrame | None
+    moves: pd.DataFrame
 
 
 def read_bundle(data_dir: str | Path, before: pd.Timestamp, faceit: bool) -> Bundle:
@@ -54,12 +55,15 @@ def read_bundle(data_dir: str | Path, before: pd.Timestamp, faceit: bool) -> Bun
                  ["match_id", "match_date", "map_name", "player_id", "team_id", "side", "rating"])
     rankings = load(data_dir, "hltv/cs2_team_rankings", before, ["date", "team_id", "rank"])
     rankings = rankings.assign(date=_naive(rankings.date))
+    moves = load(data_dir, "hltv/cs2_roster_moves", before,
+                 ["event_date", "person_id", "from_team_id", "from_status", "to_team_id", "to_status"])
+    moves = moves.assign(event_date=_naive(moves.event_date)).sort_values("event_date", kind="stable")
     hmaps = _hltv_maps(hist)
     hrat = _hltv_ratings(stats, hmaps)
     if not faceit:
-        return Bundle(hmaps, hrat, rankings, None, None, None)
+        return Bundle(hmaps, hrat, rankings, None, None, None, moves)
     fmaps, frat, levels = _faceit(data_dir, before)
-    return Bundle(hmaps, hrat, rankings, fmaps, frat, levels)
+    return Bundle(hmaps, hrat, rankings, fmaps, frat, levels, moves)
 
 
 def _regulation(score_a: np.ndarray, score_b: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -178,3 +182,20 @@ def team_lineups(maps: pd.DataFrame) -> dict[str, tuple[tuple[str, ...], pd.Time
                       maps[["time", "team_b", "lineup_b"]].set_axis(["time", "team", "five"], axis=1)])
     last = rows.sort_values("time", kind="stable").groupby("team").tail(1)
     return {t: (f, d) for t, f, d in zip(last.team, last.five, last.time)}
+
+
+def apply_moves(five: tuple[str, ...] | None, seen: pd.Timestamp | None, team: str, moves: pd.DataFrame) -> list[str]:
+    """The team's five at the cutoff: its last-seen five with the HLTV roster moves dated after that day applied.
+    Players who left are dropped, active joiners added (latest first), and empty slots ("") take the prior."""
+    players = list(five) if five is not None else []
+    if team.startswith("h") and len(moves):
+        tid = int(team[1:])
+        after = moves if seen is None else moves[moves.event_date > seen.normalize()]
+        for r in after[(after.from_team_id == tid) | (after.to_team_id == tid)].itertuples():
+            key = f"h{int(r.person_id)}"
+            if r.from_team_id == tid and key in players:
+                players.remove(key)
+            if r.to_team_id == tid and r.to_status == "active" and key not in players:
+                players.append(key)
+    players = players[-LINEUP:] if len(players) > LINEUP else players
+    return players + [""] * (LINEUP - len(players))

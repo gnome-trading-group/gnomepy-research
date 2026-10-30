@@ -13,18 +13,26 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import time
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cs2_comp.e16.data import Bundle, read_bundle, team_lineups
+from gnomepy_research.sessions.cs2_comp.e16.data import Bundle, apply_moves, read_bundle, team_lineups
 from gnomepy_research.sessions.cs2_comp.e16.model import Config, fit, rank_feature
 
 
 def window(df: pd.DataFrame, cutoff: pd.Timestamp, days: int) -> pd.DataFrame:
     return df[(df.cut < cutoff) & (df.time >= cutoff - pd.Timedelta(days=days))]
+
+
+def _five(fives: dict, team: str, moves: pd.DataFrame, cfg: Config) -> list[str] | None:
+    five, seen = fives.get(team, (None, None))
+    if not cfg.roster_moves:
+        return list(five) if five is not None else None
+    return apply_moves(five, seen, team, moves)
 
 
 def predict_week(b: Bundle, targets: pd.DataFrame, cutoff: pd.Timestamp, cfg: Config) -> tuple[pd.DataFrame, dict]:
@@ -39,11 +47,12 @@ def predict_week(b: Bundle, targets: pd.DataFrame, cutoff: pd.Timestamp, cfg: Co
     rank_of = rank_feature(b.rankings, cutoff)
     f = fit(maps, ratings, levels, rank_of, cutoff, cfg)
     fives = team_lineups(maps)
+    moves = b.moves[b.moves.event_date < cutoff]
     out = []
     for r in targets.itertuples():
         ka, kb = f"h{int(r.team_a_id)}", f"h{int(r.team_b_id)}"
-        mean, var = f.gap(ka, fives.get(ka, (None,))[0], rank_of.get(ka, 0.0),
-                          kb, fives.get(kb, (None,))[0], rank_of.get(kb, 0.0))
+        five_a, five_b = (_five(fives, k, moves, cfg) for k in (ka, kb))
+        mean, var = f.gap(ka, five_a, rank_of.get(ka, 0.0), kb, five_b, rank_of.get(kb, 0.0))
         out.append({"match_id": r.match_id, "q": f.price(mean, var), "gap": mean, "gap_var": var,
                     "fit_cutoff": cutoff})
     return pd.DataFrame(out), f.info
@@ -77,7 +86,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", type=Path, required=True)
     ap.add_argument("--targets", type=Path, required=True)
-    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--out", type=Path, required=True, help="a relative path lands under $OUTPUT_DIR when set (Batch)")
     ap.add_argument("--no-faceit", dest="faceit", action="store_false")
     ap.add_argument("--weeks", help="comma-separated week_cutoff dates to predict (default: all)")
     ap.add_argument("--set", action="append", default=[], help="Config override name=value (dev tuning)")
@@ -89,6 +98,8 @@ def main() -> None:
         targets = targets[pd.to_datetime(targets.week_cutoff).isin(keep)]
     pred = run(args.data, targets, args.faceit, cfg)
     pred["q"] = np.clip(pred.q, 1e-4, 1 - 1e-4)
+    if not args.out.is_absolute() and "OUTPUT_DIR" in os.environ:
+        args.out = Path(os.environ["OUTPUT_DIR"]) / args.out
     args.out.parent.mkdir(parents=True, exist_ok=True)
     pred.to_parquet(args.out, index=False)
     print(f"wrote {len(pred)} predictions to {args.out}")
