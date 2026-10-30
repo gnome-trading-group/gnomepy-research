@@ -17,7 +17,7 @@ def ll(p: np.ndarray, y: np.ndarray) -> np.ndarray:
 def designs(d: pd.DataFrame, zcol: str = "q_soft") -> dict[str, np.ndarray]:
     """Candidate stackers by letter; the HLTV filter's price comes from `zcol`."""
     d = d.assign(q_soft=d[zcol])
-    sets = {"A": ["z_hltv"], "RK": ["z_hltv", "rank_points"], "E": ["z_hltv", "elo_team"], "RH": ["z_hltv", "rating_hltv"]}
+    sets = {"A": ["z_hltv"], "RK": ["z_hltv", "rank_points"], "E": ["z_hltv", "elo_team"], "RH": ["z_hltv", "rating_hltv"], "ZU": ["z_hltv", "z_unstable"], "ZM": ["z_hltv", "z_moved"]}
     if "f_s_a" in d:
         sets.update({"B": ["z_hltv", "faceit_skill"], "K": ["z_hltv", "faceit_skill", "faceit_skill_thin"],
                      "R": ["z_hltv", "faceit_skill_unsure"], "S": ["z_hltv", "faceit_skill", "faceit_skill_unsure"],

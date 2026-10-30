@@ -27,14 +27,14 @@ from gnomepy_research.sessions.cs2_comp.e07.model import Model, ModelConfig
 Q_FLOOR = 0.02
 
 
-def run(data_dir: Path, targets: pd.DataFrame, cfg: ModelConfig) -> pd.DataFrame:
+def run(data_dir: Path, targets: pd.DataFrame, cfg: ModelConfig, features_out: Path | None = None) -> pd.DataFrame:
     cutoffs = sorted(targets.week_cutoff.unique())
     last = pd.Timestamp(cutoffs[-1])
     streams = data.build(data_dir, last, cfg.use_faceit)
     model = Model(cfg, streams, data.RankPoints(bundle.load(data_dir, "hltv/cs2_team_rankings", last)),
                   RosterMoves(bundle.load(data_dir, "hltv/cs2_roster_moves", last)))
     weights = STACK_FACEIT if cfg.use_faceit else STACK_HLTV
-    out = []
+    out, tables = [], []
     for cutoff in cutoffs:
         cutoff_day = pd.Timestamp(cutoff).to_datetime64().astype("datetime64[ns]").astype(np.int64) / data.NS_PER_DAY
         model.advance(cutoff_day)
@@ -47,6 +47,9 @@ def run(data_dir: Path, targets: pd.DataFrame, cfg: ModelConfig) -> pd.DataFrame
         feats["is_lan"] = wk.is_lan.to_numpy(float)
         q = np.clip(stack.apply(feats, weights), Q_FLOOR, 1 - Q_FLOOR)
         out.append(pd.DataFrame({"match_id": wk.match_id.to_numpy(), "q": q, "fit_cutoff": pd.Timestamp(cutoff)}))
+        tables.append(feats.assign(match_id=wk.match_id.to_numpy(), fit_cutoff=pd.Timestamp(cutoff)))
+    if features_out is not None:
+        pd.concat(tables, ignore_index=True).to_parquet(features_out, index=False)
     return pd.concat(out, ignore_index=True)
 
 
@@ -56,6 +59,7 @@ def main() -> None:
     parser.add_argument("--targets", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--no-faceit", action="store_true")
+    parser.add_argument("--features-out", type=Path)
     parser.add_argument("--cutoff")
     parser.add_argument("--weeks", nargs="*")
     args = parser.parse_args()
@@ -66,7 +70,7 @@ def main() -> None:
         targets = targets[targets.week_cutoff.isin(pd.to_datetime(args.weeks))]
     cfg = replace(FINAL, use_faceit=not args.no_faceit)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    run(args.data, targets, cfg).to_parquet(args.out, index=False)
+    run(args.data, targets, cfg, args.features_out).to_parquet(args.out, index=False)
 
 
 if __name__ == "__main__":

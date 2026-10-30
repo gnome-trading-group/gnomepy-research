@@ -32,6 +32,8 @@ FEATURES = {
     "faceit_skill_online": lambda d: (d.f_s_a - d.f_s_b).to_numpy(float) * (1.0 - d.is_lan.to_numpy(float)),
     "faceit_skill_lan": lambda d: (d.f_s_a - d.f_s_b).to_numpy(float) * d.is_lan.to_numpy(float),
     "z_lan": lambda d: logit(d.q_soft.to_numpy()) * d.is_lan.to_numpy(float),
+    "z_unstable": lambda d: logit(d.q_soft.to_numpy()) * ((d.inst_a + d.inst_b) / 2.0).to_numpy(float),
+    "z_moved": lambda d: logit(d.q_soft.to_numpy()) * ((d.swap_a + d.swap_b) > 0).to_numpy(float),
     "elo_team": lambda d: (d.elo_h_a - d.elo_h_b).to_numpy(float),
     "elo_team_faceit": lambda d: (d.elo_f_a - d.elo_f_b).to_numpy(float),
     "rating_hltv": lambda d: (d.rat_h_a - d.rat_h_b).to_numpy(float),

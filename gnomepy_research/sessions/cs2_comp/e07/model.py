@@ -29,6 +29,7 @@ class ModelConfig:
     roster_moves: bool = True
     faceit_lineup_weight: float = 0.5
     faceit_lineup_days: float = 21.0
+    newcomer_prob: float = 0.0
 
 
 class Model:
@@ -101,7 +102,11 @@ class Model:
                 else:
                     probs[idx] = 1.0
         joiners = len(unknown_joiners)
-        return self._normalise(probs, joiners)
+        slots = self._normalise(probs, joiners)
+        pi = self.cfg.newcomer_prob
+        if pi > 0:
+            slots = [(i, w * (1.0 - pi)) for i, w in slots] + [(None, LINEUP * pi)]
+        return slots
 
     @staticmethod
     def _normalise(probs: dict, joiners: int) -> list[tuple[int | None, float]]:
@@ -129,7 +134,8 @@ class Model:
         soft_a, soft_b = self.soft_lineup(team_a, cutoff_day), self.soft_lineup(team_b, cutoff_day)
         q_soft, mean_soft, var_soft = self.h.price(team_a, team_b, t, cutoff_day, weighted=(soft_a, soft_b))
         row = {"q_h": q, "mean_h": mean, "var_h": var, "q_last": q_last, "q_soft": q_soft, "mean_soft": mean_soft,
-               "var_soft": var_soft}
+               "var_soft": var_soft,
+               "inst_a": sum(w * (1.0 - w) for _, w in soft_a if w < 1.0), "inst_b": sum(w * (1.0 - w) for _, w in soft_b if w < 1.0)}
         for side, team in (("a", team_a), ("b", team_b)):
             slot, last_t = slots[side]
             ids = np.array([i for i in slot if i is not None], dtype=np.int64)
