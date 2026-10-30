@@ -20,6 +20,7 @@ from gnomepy_research.sessions.cs2_comp.e10.run import TRAIN_START, Pass, RunCon
 
 CALIBRATION_START = pd.Timestamp("2024-10-07")
 L2 = 5.0
+DEFAULT_SPEC = "s+new"
 
 
 def logit(p) -> np.ndarray:
@@ -83,7 +84,7 @@ def build_config(use_faceit: bool, overrides: dict) -> RunConfig:
     return replace(base, hltv=hltv, faceit_skill=faceit, use_faceit=use_faceit, **run)
 
 
-def predict(data_dir: Path, targets: pd.DataFrame, use_faceit: bool, overrides: dict | None = None, spec: str = "") -> pd.DataFrame:
+def predict(data_dir: Path, targets: pd.DataFrame, use_faceit: bool, overrides: dict | None = None, spec: str = DEFAULT_SPEC) -> pd.DataFrame:
     cfg = build_config(use_faceit, overrides or {})
     weeks = sorted(targets.week_cutoff.unique())
     p = Pass(data_dir, pd.Timestamp(weeks[-1]), cfg)
@@ -101,7 +102,7 @@ def main() -> None:
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--no-faceit", action="store_true")
     ap.add_argument("--config", default="{}", help="JSON overrides of RunConfig / SkillConfig fields")
-    ap.add_argument("--spec", default="")
+    ap.add_argument("--spec", default=DEFAULT_SPEC)
     a = ap.parse_args()
     targets = pd.read_parquet(a.targets)
     out = predict(a.data, targets, not a.no_faceit, json.loads(a.config), a.spec)

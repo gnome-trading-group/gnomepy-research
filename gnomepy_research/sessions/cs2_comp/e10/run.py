@@ -22,7 +22,7 @@ from gnomepy_research.sessions.cs2_comp.e10.data import (
     hltv_rating_dev, new_index, naive_utc,
 )
 from gnomepy_research.sessions.cs2_comp.e10.ratings import RatingMaps, fit_rating_maps
-from gnomepy_research.sessions.cs2_comp.e10.skill import SkillConfig, SkillFilter
+from gnomepy_research.sessions.cs2_comp.e10.skill import NEWCOMER, SkillConfig, SkillFilter
 
 HLTV, FACEIT = 0, 1
 
@@ -40,6 +40,9 @@ class RunConfig:
     games_half: float = 20.0
     shift_min_games: int = 20
     thin_games: int = 20
+    use_moves: bool = True
+    decay: float = 0.5
+    standin_weight: float = 0.3
 
 
 class Event(NamedTuple):
@@ -70,6 +73,24 @@ class Rankings:
             return 0.0
         i = np.searchsorted(h[0], np.datetime64(day), side="left") - 1
         return float(h[1][i]) if i >= 0 else 0.0
+
+
+def roster_moves(data_dir: Path, before: pd.Timestamp) -> dict[int, list[tuple[np.datetime64, int, int]]]:
+    """Per team, the dated joins (+1) and departures (-1) of players, from the transfer log."""
+    m = load(data_dir, "hltv/cs2_roster_moves", before)
+    m = m[m.person_role == "player"]
+    out: dict[int, list] = collections.defaultdict(list)
+    leaving = {"leave", "transfer", "benched", "loan", "to_substitute", "to_coach", "loan_return"}
+    joining = {"join", "transfer", "activated", "loan", "loan_return"}
+    for r in m.itertuples(index=False):
+        date = np.datetime64(pd.Timestamp(r.event_date))
+        if r.kind in leaving and r.from_team_id and r.from_team_id > 0:
+            out[int(r.from_team_id)].append((date, int(r.person_id), -1))
+        if r.kind in joining and r.to_team_id and r.to_team_id > 0:
+            out[int(r.to_team_id)].append((date, int(r.person_id), 1))
+    for v in out.values():
+        v.sort(key=lambda x: x[0])
+    return out
 
 
 def _arr(values) -> np.ndarray:
@@ -156,11 +177,23 @@ class Pass:
         self.ff = SkillFilter(self.index.size, cfg.faceit_skill)
         self.recent: dict[int, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=cfg.k_series))
         self.pos = 0
+        self.moves = roster_moves(data_dir, last_cutoff) if cfg.use_moves else {}
+        self.standins = self._standins(data_dir, last_cutoff)
+        self.last_time: dict[int, int] = {}
         self.series = self._series_table()
         self.actual: dict = {}
         for ev in self.events:
             if ev.source == HLTV and ev.match_id not in self.actual:
                 self.actual[ev.match_id] = (set(ev.a.tolist()), set(ev.b.tolist()))
+
+    def _standins(self, data_dir: Path, last_cutoff: pd.Timestamp) -> dict[tuple, set]:
+        lu = load(data_dir, "hltv/cs2_match_lineups", last_cutoff, ["match_id", "match_date", "team_id", "player_id", "is_standin"])
+        out: dict[tuple, set] = collections.defaultdict(set)
+        for r in lu[lu.is_standin == True].itertuples(index=False):
+            idx = self.index.hltv.get(int(r.player_id))
+            if idx is not None:
+                out[(r.match_id, int(r.team_id))].add(idx)
+        return out
 
     def _series_table(self) -> pd.DataFrame:
         h = self.hm[self.hm.bo_type == 3]
@@ -193,6 +226,7 @@ class Pass:
             f.observe_rating(ev.day, ev.b, ev.dev_b)
         if ev.source == HLTV:
             for team, players in ((ev.team_a, ev.a), (ev.team_b, ev.b)):
+                self.last_time[team] = ev.time
                 q = self.recent[team]
                 if q and q[-1][0] == ev.match_id:
                     q[-1][1] = tuple(players.tolist())
@@ -207,17 +241,38 @@ class Pass:
                 self._process(ev)
             self.pos += 1
 
-    def lineup(self, team: int) -> np.ndarray | None:
+    def lineup(self, team: int, cutoff: pd.Timestamp) -> np.ndarray | None:
+        """The team's five at the cutoff: its most frequent players over its last series, then the transfer log's
+        departures since its last series removed and arrivals put first."""
         q = self.recent.get(int(team))
         if not q:
             return None
-        score: dict[int, tuple[int, int]] = {}
-        for rank, (_, players) in enumerate(q):
+        score: dict[int, tuple[float, int]] = {}
+        for age, (match_id, players) in enumerate(reversed(q)):
+            standin = self.standins.get((match_id, int(team)), ())
             for p in players:
-                c, _ = score.get(p, (0, -1))
-                score[p] = (c + 1, rank)
-        best = sorted(score, key=lambda p: (-score[p][0], -score[p][1]))[:LINEUP]
-        return _arr(best)
+                weight = self.cfg.decay ** age * (self.cfg.standin_weight if p in standin else 1.0)
+                total, latest = score.get(p, (0.0, -len(q)))
+                score[p] = (total + weight, max(latest, -age))
+        ordered = sorted(score, key=lambda p: (-score[p][0], -score[p][1]))
+        moves = self.moves.get(int(team))
+        if moves:
+            last = np.datetime64(pd.Timestamp(self.last_time[int(team)]).normalize())
+            end = np.datetime64(cutoff)
+            gone, arrived = set(), []
+            for date, pid, delta in moves:
+                if last < date < end:
+                    idx = self.index.hltv.get(pid)
+                    if idx is None:
+                        continue
+                    if delta < 0:
+                        gone.add(idx)
+                        arrived = [x for x in arrived if x != idx]
+                    elif idx not in arrived:
+                        gone.discard(idx)
+                        arrived.append(idx)
+            ordered = arrived[::-1] + [p for p in ordered if p not in gone and p not in arrived]
+        return _arr(ordered[:LINEUP]) if ordered else None
 
     def _virtual(self, team: int, day: pd.Timestamp) -> tuple[float, float]:
         cfg = self.cfg.hltv
@@ -230,24 +285,35 @@ class Pass:
             return 0.0
         return float(np.median(self.ff.s.mu[both] - self.fh.s.mu[both]))
 
-    def _faceit_residual(self, lineup: np.ndarray, day: int, shift: float) -> tuple[float, float, float, int]:
+    def _state(self, lineup: np.ndarray, team: int, day: int, cutoff: pd.Timestamp) -> tuple[np.ndarray, np.ndarray]:
+        """HLTV-filter mean and variance of the lineup; a player with no HLTV map yet gets the newcomer prior."""
+        mu, var = self.fh.current(lineup, day)
+        unknown = self.fh.s.seen[lineup] == NEWCOMER
+        if unknown.any():
+            prior, prior_var = self._virtual(team, cutoff)
+            mu, var = mu.copy(), var.copy()
+            mu[unknown], var[unknown] = prior, self.cfg.hltv.sigma0 ** 2
+        return mu, var
+
+    def _faceit_residual(self, lineup: np.ndarray, mu_h: np.ndarray, shift: float) -> tuple[float, float, float, int]:
         """Mean over the lineup of how far each player's FACEIT skill sits above his HLTV skill (net of the level
         shift), weighted by how many FACEIT maps stand behind it (zero with none). Split by whether the HLTV skill
         is itself thin: that is where a second measurement should count most."""
         g = self.ff.s.games[lineup].astype(float)
         weight = g / (g + self.cfg.games_half)
-        resid = weight * (self.ff.s.mu[lineup] - shift - self.fh.current(lineup, day)[0])
+        resid = weight * (self.ff.s.mu[lineup] - shift - mu_h)
         thin = self.fh.s.games[lineup] < self.cfg.thin_games
         return float(resid[thin].sum() / LINEUP), float(resid[~thin].sum() / LINEUP), float(weight.mean()), int((g >= 10).sum())
 
     def price(self, cutoff: pd.Timestamp, team_a: int, team_b: int, shift: float = 0.0) -> dict:
         f, day = self.fh, day_number(cutoff)
-        a, b = self.lineup(team_a), self.lineup(team_b)
+        a, b = self.lineup(team_a, cutoff), self.lineup(team_b, cutoff)
         row = {"known_a": 0 if a is None else len(a), "known_b": 0 if b is None else len(b)}
         if a is not None and b is not None and len(a) == LINEUP and len(b) == LINEUP and not set(a.tolist()) & set(b.tolist()):
-            d, s2 = f.gap(a, b, day)
-            lo_a, hi_a, wa, na = self._faceit_residual(a, day, shift)
-            lo_b, hi_b, wb, nb = self._faceit_residual(b, day, shift)
+            (mu_a, var_a), (mu_b, var_b) = self._state(a, team_a, day, cutoff), self._state(b, team_b, day, cutoff)
+            d, s2 = f.gap(a, b, day, (mu_a, mu_b), (var_a, var_b))
+            lo_a, hi_a, wa, na = self._faceit_residual(a, mu_a, shift)
+            lo_b, hi_b, wb, nb = self._faceit_residual(b, mu_b, shift)
         else:
             ma, va = self._virtual(team_a, cutoff) if a is None else (float(f.current(a, day)[0].mean()), float(f.current(a, day)[1].sum()) / len(a) ** 2)
             mb, vb = self._virtual(team_b, cutoff) if b is None else (float(f.current(b, day)[0].mean()), float(f.current(b, day)[1].sum()) / len(b) ** 2)
@@ -281,7 +347,7 @@ class Pass:
                 row = self.price(c, int(r.team_a_id), int(r.team_b_id), shift)
                 act = self.actual.get(r.match_id)
                 if act is not None:
-                    la, lb = self.lineup(r.team_a_id), self.lineup(r.team_b_id)
+                    la, lb = self.lineup(r.team_a_id, c), self.lineup(r.team_b_id, c)
                     row["ovl_a"] = -1 if la is None else len(act[0] & set(la.tolist()))
                     row["ovl_b"] = -1 if lb is None else len(act[1] & set(lb.tolist()))
                 rows.append({"match_id": r.match_id, "week_cutoff": c, "is_target": False, "y": float(r.y), **row})

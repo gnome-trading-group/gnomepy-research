@@ -30,7 +30,8 @@ def summarize(feats: pd.DataFrame, specs=("", "f", "s", "s+new")) -> dict:
     dev = feats[(feats.week_cutoff >= DEV_FIRST) & (feats.week_cutoff <= DEV_LAST) & feats.y.notna()].copy()
     cov = np.minimum(dev.nf_a, dev.nf_b)
     dev["cov"] = np.where(cov == 0, "0", np.where(cov <= 3, "1-3", "4-5"))
-    out = {"n": len(dev), "raw": float(ll(dev.p_series, dev.y).mean())}
+    out = {"n": len(dev), "raw": float(ll(dev.p_series, dev.y).mean()),
+           "exact_lineups": float(((dev.ovl_a == 5).mean() + (dev.ovl_b == 5).mean()) / 2)}
     for spec in specs:
         q = calibrate(feats, weeks, spec).reindex(dev.match_id).to_numpy()
         out[f"cal[{spec}]"] = float(ll(q, dev.y.to_numpy()).mean())
