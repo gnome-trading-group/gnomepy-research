@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
-from gnomepy_research.sessions.cs2_comp.e04.predict import predict
+from gnomepy_research.sessions.cs2_comp.e04.predict import predict, predict_detail
 from gnomepy_research.sessions.cs2_comp.e04.ratings import Params
 
 DEV_START = pd.Timestamp("2025-09-01")
@@ -87,8 +87,20 @@ def main() -> None:
         results[name]["faceit"] = faceit
         print(name, results[name]["logloss"], flush=True)
 
-    fit_base = predict(args.data, targets, faceit=True, params=base)
-    merged = targets.merge(fit_base, on="match_id", how="left")
+    detail = predict_detail(args.data, targets, faceit=True, params=base)
+    nof = predict(args.data, targets, faceit=False, params=base)
+    merged = targets.merge(detail, on="match_id", how="left")
+    merged["nof_q"] = targets.merge(nof, on="match_id", how="left").q.to_numpy()
+    thin = np.minimum(merged.faceit_players_a, merged.faceit_players_b)
+    buckets = {"0": thin == 0, "1-3": (thin >= 1) & (thin <= 3), "4-5": thin >= 4}
+    coverage = {}
+    for name, mask in buckets.items():
+        sub = merged[mask.to_numpy()]
+        if len(sub):
+            coverage[name] = {"faceit": score(sub, sub.q.to_numpy()), "no_faceit": score(sub, sub.nof_q.to_numpy())}
+        else:
+            coverage[name] = {"n": 0}
+    results["coverage_split_default"] = coverage
     q1 = merged.q.to_numpy()
     cal = {}
     for s in [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3]:
