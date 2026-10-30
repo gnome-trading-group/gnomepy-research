@@ -1,17 +1,23 @@
 """
 e11: the HLTV Bayes series price, moved by what FACEIT results say about the two fives.
 
-    logit q = logit(q_bayes) + K_FACEIT * [coverage >= 1] * (logit(q_filter_faceit) - logit(q_filter_hltv))
+    logit q = logit(q_bayes) + K_CHEMISTRY * (chem_a - chem_b)
+              + K_FACEIT * [coverage >= 1] * (logit(q_filter_faceit) - logit(q_filter_hltv))
 
-q_bayes is the current Bayes series model (bayes_part.py) priced on each team's latest five. The two filters are the
-same player-skill filter (skill.py) run over HLTV maps alone and over HLTV + FACEIT maps, priced on the same fives;
-their gap is FACEIT's evidence, added to the Bayes price with weight K_FACEIT. On series before the tune period
-(evaluate.py) the gap's outcome weight was 0.43 next to 0.77 for the overconfident HLTV filter price, i.e. 0.55
-relative to a base on the filter's scale and 0.43 relative to a calibrated one; the Bayes price's own scale before the
-tune period was not measured (its fits need Batch), so K_FACEIT splits the two. The gap is added only when both fives
-have at least one player with FACEIT history: when one has none, it compares a FACEIT-rated five with an HLTV-only one
-across two scales, and on the development series it added nothing there. With --no-faceit the price is q_bayes on
-HLTV fives alone.
+q_bayes is the current Bayes series model (bayes_part.py) priced on the announced lineups (the targets'
+team_x_lineup_ids; a team's latest five before the cutoff only when the targets carry no lineup). The two filters are
+the same player-skill filter (skill.py) run over HLTV maps alone and over HLTV + FACEIT maps, priced on the same fives;
+their gap is FACEIT's evidence, added to the Bayes price with weight K_FACEIT: on Feb-Mar 2026 series before the
+tune period (evaluate.py, outcomes only, announced lineups, posteriors fitted at 2026-02-02 and 2026-03-02) the gated
+gap's weight was 0.41 of the Bayes price's (0.39 of 0.95), and 0.38 on each team's latest five. The gap is added only
+when both fives have at least one player with FACEIT history: when one has none, it compares a FACEIT-rated five with
+an HLTV-only one across two scales, and on the development series it added nothing there.
+
+chem_x is the HLTV filter's five-chemistry bonus (round logit, kappa_max * (1 - exp(-maps / c0)) for the maps the
+exact announced five played together on HLTV in the last 180 days). The Bayes model has no cohesion term, so a five
+with stand-ins or a new signing is priced as the sum of its players; on the same Feb-Mar series the chemistry gap took
+weight 10.7 next to 0.92 for the Bayes price (month-held-out log loss 0.5879 -> 0.5853), and stand-in counts added
+nothing beyond it. With --no-faceit the price is q_bayes with the chemistry term (both HLTV-only).
 
 Every target is priced from data available before its week_cutoff: the filters see exactly the maps available
 before it (stream.py), and the Bayes posterior is fitted at the week's anchor, at most REFIT_WEEKS - 1 weeks earlier.
@@ -36,7 +42,8 @@ from gnomepy_research.sessions.cs2_comp.e11.stream import FACEIT, HLTV, build_st
 
 FACEIT_CONFIG = FilterConfig(w_faceit=0.5, a_faceit=-0.2, s_faceit=0.05)
 HLTV_CONFIG = FilterConfig()
-K_FACEIT = 0.5
+K_FACEIT = 0.4
+K_CHEMISTRY = 10.0
 MIN_COVERAGE = 1
 UNKNOWN_BASE = -4 * 10 ** 18
 
@@ -44,6 +51,14 @@ UNKNOWN_BASE = -4 * 10 ** 18
 def _placeholder(team: int) -> tuple[int, ...]:
     """Five never-seen players for a team with no five before the cutoff: they take the newcomer prior."""
     return tuple(UNKNOWN_BASE - 8 * team - k for k in range(5))
+
+
+def _announced(row, column: str) -> tuple[int, ...]:
+    """The announced five of a target, or () when the targets carry none, so the team's latest five stands in."""
+    ids = getattr(row, column, None)
+    if ids is None or (isinstance(ids, float) and np.isnan(ids)) or len(ids) != 5:
+        return ()
+    return tuple(int(p) for p in ids)
 
 
 def _logit(p) -> np.ndarray:
@@ -73,13 +88,15 @@ def filter_prices(data: Path, targets: pd.DataFrame, use_faceit: bool, cfg_f: Fi
         day = day_number(cutoff)
         for r in week.itertuples():
             a, b = int(r.team_a_id), int(r.team_b_id)
-            five_a = fives[a][1] if a in fives else _placeholder(a)
-            five_b = fives[b][1] if b in fives else _placeholder(b)
+            five_a = _announced(r, "team_a_lineup_ids") or (fives[a][1] if a in fives else _placeholder(a))
+            five_b = _announced(r, "team_b_lineup_ids") or (fives[b][1] if b in fives else _placeholder(b))
             q = [f.price(five_a, a, five_b, b, day)[0] for f, *_ in runs]
             last_filter = runs[-1][0]
             cov = min(last_filter.coverage(five_a), last_filter.coverage(five_b))
+            hltv_filter = runs[0][0]
+            chem = hltv_filter.chemistry(five_a, day) - hltv_filter.chemistry(five_b, day)
             rows.append({"match_id": r.match_id, "fit_cutoff": cutoff, "five_a": five_a, "five_b": five_b,
-                         "q_h": q[0], "q_f": q[-1], "cov": cov})
+                         "q_h": q[0], "q_f": q[-1], "cov": cov, "chem_h": chem})
     return pd.DataFrame(rows)
 
 
@@ -102,7 +119,8 @@ def predict(data: Path, targets: pd.DataFrame, use_faceit: bool, cache: Path | N
     p = filter_prices(data, targets, use_faceit)
     p["q_bayes"] = bayes_prices(data, p, targets, cache)
     gate = (p["cov"] >= MIN_COVERAGE).to_numpy(float)
-    z = _logit(p.q_bayes) + (K_FACEIT * gate * (_logit(p.q_f) - _logit(p.q_h)) if use_faceit else 0.0)
+    z = (_logit(p.q_bayes) + K_CHEMISTRY * p.chem_h.to_numpy()
+         + (K_FACEIT * gate * (_logit(p.q_f) - _logit(p.q_h)) if use_faceit else 0.0))
     p["q"] = 1 / (1 + np.exp(-z))
     return p
 

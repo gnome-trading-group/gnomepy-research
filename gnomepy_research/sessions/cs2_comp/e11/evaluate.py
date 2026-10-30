@@ -41,7 +41,7 @@ def dev_targets(data: Path, first: pd.Timestamp) -> pd.DataFrame:
     h = h[pd.to_datetime(h.match_date) >= first]
     won = h.groupby("match_id").team_a_won.agg(lambda w: int(w.sum() * 2 > len(w)))
     s = h.drop_duplicates("match_id")[["match_id", "match_date", "team_a_id", "team_b_id", "is_lan", "team_a_rank",
-                                       "team_b_rank"]].copy()
+                                       "team_b_rank", "team_a_lineup_ids", "team_b_lineup_ids"]].copy()
     d = pd.to_datetime(s.match_date)
     s["week_cutoff"] = d - pd.to_timedelta(d.dt.weekday, unit="D")
     s["y"] = s.match_id.map(won).to_numpy()
@@ -130,9 +130,13 @@ def main() -> None:
     ap.add_argument("--first", default="2025-10-06")
     ap.add_argument("--tag", default="run")
     ap.add_argument("--bayes-cache", type=Path)
+    ap.add_argument("--latest-fives", dest="announced", action="store_false",
+                    help="price on each team's latest five instead of the announced lineup")
     a = ap.parse_args()
     t0 = time.time()
     targets = dev_targets(a.data, pd.Timestamp(a.first))
+    if not a.announced:
+        targets = targets.drop(columns=["team_a_lineup_ids", "team_b_lineup_ids"])
     cfg = FilterConfig(w_faceit=a.w_faceit, a_faceit=a.a_faceit, s_faceit=a.s_faceit, sigma_series=a.sigma_series,
                        faceit_lineups=a.faceit_lineups)
     p = filter_prices(a.data, targets, a.faceit, cfg).merge(

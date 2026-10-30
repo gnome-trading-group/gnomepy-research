@@ -96,13 +96,16 @@ class SkillFilter:
                 cov[i, j] = cov[j, i] = self._cov.get((p, q), 0.0)
         return cov
 
+    def chemistry(self, players: tuple[int, ...], day: int) -> float:
+        """Round-logit bonus of a five for the maps it played together lately."""
+        five_maps = self._five_maps(players, day) if len(players) == 5 else 0.0
+        return self.c.kappa_max * (1 - math.exp(-five_maps / self.c.c0))
+
     def _lineup(self, players: tuple[int, ...], team_id: int, day: int, source: int, skill: float):
         states = [self._state(p, team_id, day, source, skill) for p in players]
         mus = [s[0] for s in states]
         weights = self._weights(mus)
-        five_maps = self._five_maps(players, day) if len(players) == 5 else 0.0
-        kappa = self.c.kappa_max * (1 - math.exp(-five_maps / self.c.c0))
-        total = sum(w * m for w, m in zip(weights, mus)) + kappa
+        total = sum(w * m for w, m in zip(weights, mus)) + self.chemistry(players, day)
         return list(players), mus, [s[1] for s in states], weights, total
 
     def gap(self, players_a, team_a, players_b, team_b, day, source=0, skill_a=math.nan, skill_b=math.nan):
