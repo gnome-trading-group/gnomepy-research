@@ -40,25 +40,37 @@ def dev_targets(data_dir: str) -> pd.DataFrame:
     }).dropna(subset=["team_a_id", "team_b_id"]).reset_index(drop=True)
 
 
-def logloss(q: np.ndarray, y: np.ndarray) -> float:
+def nll(q: np.ndarray, y: np.ndarray) -> np.ndarray:
     q = np.clip(q, 1e-4, 1 - 1e-4)
-    return float(-(y * np.log(q) + (1 - y) * np.log(1 - q)).mean())
+    return -(y * np.log(q) + (1 - y) * np.log(1 - q))
 
 
-def score(targets: pd.DataFrame, q: np.ndarray) -> dict:
-    y = targets.y.to_numpy()
-    ll = np.array([-(yy * np.log(np.clip(qq, 1e-4, 1 - 1e-4)) + (1 - yy) * np.log(1 - np.clip(qq, 1e-4, 1 - 1e-4)))
-                   for yy, qq in zip(y, q)])
-    return {"n": int(len(y)), "logloss": float(ll.mean()), "se": float(ll.std(ddof=1) / np.sqrt(len(ll)))}
-
-
-def sigmoid(x):
-    return 1.0 / (1.0 + np.exp(-x))
-
-
-def logit(p):
-    p = np.clip(p, 1e-6, 1 - 1e-6)
-    return np.log(p / (1 - p))
+def paired_row(data_dir: str, targets: pd.DataFrame, params: Params) -> dict:
+    detail = predict_detail(data_dir, targets, faceit=True, params=params)
+    nof = predict(data_dir, targets, faceit=False, params=params)
+    merged = targets.merge(detail, on="match_id", how="left")
+    merged["nof_q"] = targets.merge(nof, on="match_id", how="left").q.to_numpy()
+    y = merged.y.to_numpy()
+    ll_f = nll(merged.q.to_numpy(), y)
+    ll_n = nll(merged.nof_q.to_numpy(), y)
+    diff = ll_f - ll_n
+    thin = np.minimum(merged.faceit_players_a, merged.faceit_players_b).to_numpy()
+    buckets = {"0": thin == 0, "1-3": (thin >= 1) & (thin <= 3), "4-5": thin >= 4}
+    cov = {}
+    for name, mask in buckets.items():
+        if mask.sum() == 0:
+            cov[name] = {"n": 0}
+            continue
+        cov[name] = {"n": int(mask.sum()), "faceit_minus_nofaceit": float(diff[mask].mean()),
+                     "se": float(diff[mask].std(ddof=1) / np.sqrt(mask.sum())) if mask.sum() > 1 else None}
+    return {
+        "ll_faceit": float(ll_f.mean()),
+        "ll_nofaceit": float(ll_n.mean()),
+        "paired_diff": float(diff.mean()),
+        "paired_se": float(diff.std(ddof=1) / np.sqrt(len(diff))),
+        "coverage": cov,
+        "q_faceit": merged.q.to_numpy(),
+    }
 
 
 def main() -> None:
@@ -67,48 +79,30 @@ def main() -> None:
     args = ap.parse_args()
     targets = dev_targets(args.data)
     base = Params()
-    results = {"n_targets": int(len(targets)), "base_coinflip": score(targets, np.full(len(targets), 0.5))}
-
-    configs = {
-        "no_faceit": (False, base),
-        "faceit_default": (True, base),
+    grid = {
+        "shrink0_kfm0.6": replace(base, shrink_games=0.0),
+        "shrink4_kfm0.6": replace(base, shrink_games=4.0),
+        "shrink12_kfm0.6": replace(base, shrink_games=12.0),
+        "shrink0_kfm0.3": replace(base, shrink_games=0.0, k_faceit_mult=0.3),
+        "shrink4_kfm0.3": replace(base, shrink_games=4.0, k_faceit_mult=0.3),
+        "shrink12_kfm0.3": replace(base, shrink_games=12.0, k_faceit_mult=0.3),
+        "shrink0_kfm1.0": replace(base, shrink_games=0.0, k_faceit_mult=1.0),
+        "shrink0_kfm0.3_overlap1": replace(base, shrink_games=0.0, k_faceit_mult=0.3, overlap_power=1.0),
+        "shrink0_kfm0.3_overlap4": replace(base, shrink_games=0.0, k_faceit_mult=0.3, overlap_power=4.0),
+        "shrink0_kfm0.3_kteam24": replace(base, shrink_games=0.0, k_faceit_mult=0.3, k_team=24.0),
+        "shrink0_kfm0.3_kteam48": replace(base, shrink_games=0.0, k_faceit_mult=0.3, k_team=48.0),
     }
-    for name, val in [("k_team", [16.0, 48.0]), ("overlap_power", [1.0, 4.0]), ("shrink_games", [0.0, 30.0]),
-                      ("faceit_level_shift", [-100.0, 100.0]), ("k_faceit_mult", [0.3, 1.0]),
-                      ("k_player", [6.0, 24.0])]:
-        for v in val:
-            configs[f"faceit_{name}={v}"] = (True, replace(base, **{name: v}))
-
-    for name, (faceit, params) in configs.items():
-        pred = predict(args.data, targets, faceit=faceit, params=params)
-        merged = targets.merge(pred, on="match_id", how="left")
-        results[name] = score(targets, merged.q.to_numpy())
-        results[name]["params"] = asdict(params)
-        results[name]["faceit"] = faceit
-        print(name, results[name]["logloss"], flush=True)
-
-    detail = predict_detail(args.data, targets, faceit=True, params=base)
-    nof = predict(args.data, targets, faceit=False, params=base)
-    merged = targets.merge(detail, on="match_id", how="left")
-    merged["nof_q"] = targets.merge(nof, on="match_id", how="left").q.to_numpy()
-    thin = np.minimum(merged.faceit_players_a, merged.faceit_players_b)
-    buckets = {"0": thin == 0, "1-3": (thin >= 1) & (thin <= 3), "4-5": thin >= 4}
-    coverage = {}
-    for name, mask in buckets.items():
-        sub = merged[mask.to_numpy()]
-        if len(sub):
-            coverage[name] = {"faceit": score(sub, sub.q.to_numpy()), "no_faceit": score(sub, sub.nof_q.to_numpy())}
-        else:
-            coverage[name] = {"n": 0}
-    results["coverage_split_default"] = coverage
-    q1 = merged.q.to_numpy()
-    cal = {}
-    for s in [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3]:
-        cal[str(s)] = score(targets, sigmoid(s * logit(q1)))["logloss"]
-    results["calibration_scan_faceit_default"] = cal
-
+    results = {"n_targets": int(len(targets)), "coinflip_ll": float(nll(np.full(len(targets), 0.5), targets.y.to_numpy()).mean())}
+    for name, params in grid.items():
+        row = paired_row(args.data, targets, params)
+        row.pop("q_faceit")
+        row["params"] = asdict(params)
+        results[name] = row
+        print(name, round(row["ll_nofaceit"], 5), round(row["ll_faceit"], 5), round(row["paired_diff"], 5),
+              round(row["paired_se"], 5), flush=True)
     Path(os.environ["OUTPUT_DIR"], "dev_results.json").write_text(json.dumps(results, indent=1, default=str))
-    print(json.dumps({k: v for k, v in results.items() if isinstance(v, dict) and "logloss" in v}, indent=1, default=str))
+    print(json.dumps({k: {kk: vv for kk, vv in v.items() if kk not in ("params",)} for k, v in results.items()
+                      if isinstance(v, dict) and "paired_diff" in v}, indent=1, default=str))
 
 
 if __name__ == "__main__":
