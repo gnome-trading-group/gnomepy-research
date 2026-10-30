@@ -24,6 +24,7 @@ import numpy as np
 from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
 from gnomepy_research.sessions.cs2_comp.e07.data import FACEIT, LINEUP, HLTV, Streams
 
+RECENT_MAPS = 20
 _GH_X, _GH_W = np.polynomial.hermite_e.hermegauss(21)
 _GH_W = _GH_W / _GH_W.sum()
 _GRID = np.linspace(-8.0, 8.0, 3201)
@@ -50,6 +51,8 @@ class FilterConfig:
     sigma_series: float = 0.15
     use_faceit: bool = True
     use_hltv: bool = True
+    selection_var: float = 1.0
+    recency: float = 0.9
     rank_prior_faceit: bool = True
 
 
@@ -71,6 +74,7 @@ class Filter:
         self.five_times: dict[frozenset, list[float]] = {}
         self.player_times: dict[int, list[float]] = {}
         self.team_times: dict[int, list[float]] = {}
+        self.team_fives: dict[int, list[np.ndarray]] = {}
         self.rank_points = rank_points
         self.last_five: dict[int, tuple[np.ndarray, float]] = {}
         self.pos = 0
@@ -171,9 +175,21 @@ class Filter:
             if ta >= 0:
                 self.last_five[ta] = (ia.copy(), t)
                 self.team_times.setdefault(ta, []).append(t)
+                self._remember(ta, ia)
             if tb >= 0:
                 self.last_five[tb] = (ib.copy(), t)
                 self.team_times.setdefault(tb, []).append(t)
+                self._remember(tb, ib)
+
+    def _remember(self, team: int, ids: np.ndarray) -> None:
+        fives = self.team_fives.setdefault(team, [])
+        fives.append(ids.copy())
+        if len(fives) > 2 * RECENT_MAPS:
+            del fives[: len(fives) - RECENT_MAPS]
+
+    def recent_fives(self, team: int) -> list[np.ndarray]:
+        """The fives of the team's last maps, most recent first."""
+        return self.team_fives.get(team, [])[-RECENT_MAPS:][::-1]
 
     def advance(self, before_day: float) -> None:
         t = self.s.t
@@ -209,6 +225,33 @@ class Filter:
         mean += n_fill * self._prior(team, day, np.nan, HLTV)
         var += n_fill * c.sigma0 ** 2
         return mean / LINEUP, var / LINEUP ** 2
+
+    def weighted_state(self, slots: list[tuple[int | None, float]], team: int, t: float, day: float) -> tuple[float, float]:
+        """Mean and variance of a lineup given as (player or None, probability he plays); the probabilities sum to 5."""
+        c = self.cfg
+        prior = self._prior(team, day, np.nan, HLTV)
+        known = [(i, w / LINEUP) for i, w in slots if i is not None and not np.isnan(self.seen[i])]
+        unknown_w = sum(w / LINEUP for i, w in slots if i is None or np.isnan(self.seen[i]))
+        mean = prior * unknown_w
+        var = unknown_w ** 2 * c.sigma0 ** 2
+        if known:
+            k = np.array([i for i, _ in known])
+            w = np.array([x for _, x in known])
+            idle = np.maximum(t - self.seen[k], 0.0)
+            P = np.diag(self.var[k] + c.tau ** 2 * idle)
+            for a in range(len(k)):
+                for b in range(a + 1, len(k)):
+                    lo, hi = (k[a], k[b]) if k[a] < k[b] else (k[b], k[a])
+                    cv = self.cov.get((lo, hi))
+                    if cv is not None:
+                        P[a, b] = P[b, a] = cv
+            mean += float(w @ self.mu[k])
+            var += float(w @ P @ w)
+            total = float(w.sum() + unknown_w)
+            centre = (mean / total) if total > 0 else 0.0
+            probs = np.clip(w * LINEUP, 0.0, 1.0)
+            var += c.selection_var * float(((probs * (1 - probs)) * (self.mu[k] - centre) ** 2).sum()) / LINEUP ** 2
+        return mean, var
 
     def lineup_state(self, team: int, t: float, day: float, ids: np.ndarray | None = None) -> tuple[float, float]:
         """Mean and variance of the team's mean skill from a five (default: its last known five), or the rank prior."""
@@ -252,8 +295,12 @@ class Filter:
 
     def price(self, team_a: int, team_b: int, t: float, cutoff_day: float,
               ids_a: np.ndarray | None = None, ids_b: np.ndarray | None = None,
-              lineups: tuple[list, list] | None = None) -> tuple[float, float, float]:
-        if lineups is not None:
+              lineups: tuple[list, list] | None = None,
+              weighted: tuple[list, list] | None = None) -> tuple[float, float, float]:
+        if weighted is not None:
+            ma, va = self.weighted_state(weighted[0], team_a, t, cutoff_day)
+            mb, vb = self.weighted_state(weighted[1], team_b, t, cutoff_day)
+        elif lineups is not None:
             ma, va = self.players_state(lineups[0], team_a, t, cutoff_day)
             mb, vb = self.players_state(lineups[1], team_b, t, cutoff_day)
         else:

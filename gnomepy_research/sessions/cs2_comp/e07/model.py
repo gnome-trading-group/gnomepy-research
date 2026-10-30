@@ -65,6 +65,51 @@ class Model:
         roster = self.moves.roster(team, [self.keys[i] for i in ids], last_t, cutoff_day)
         return [self.index.get(k) if isinstance(k, int) else None for k in roster], last_t
 
+    def soft_lineup(self, team: int, cutoff_day: float) -> list[tuple[int | None, float]]:
+        """Probability that each recent player of the team plays: recency-weighted appearances over its last maps,
+        edited by the roster moves since the last map."""
+        recent = self.h.recent_fives(team)
+        if not recent:
+            return [(None, float(LINEUP))]
+        decay = self.cfg.hltv.recency
+        probs: dict[int, float] = {}
+        total = 0.0
+        for r, ids in enumerate(recent):
+            for i in ids.tolist():
+                probs[i] = probs.get(i, 0.0) + decay ** r
+            total += decay ** r
+        probs = {i: v / total for i, v in probs.items()}
+        unknown_joiners: set[int] = set()
+        if self.moves is not None:
+            last_t = self.h.last_five[team][1]
+            for person, sign in self.moves.changes(team, last_t, cutoff_day):
+                idx = self.index.get(person)
+                if sign < 0:
+                    probs.pop(idx, None)
+                    unknown_joiners.discard(person)
+                elif idx is None:
+                    unknown_joiners.add(person)
+                else:
+                    probs[idx] = 1.0
+        joiners = len(unknown_joiners)
+        return self._normalise(probs, joiners)
+
+    @staticmethod
+    def _normalise(probs: dict, joiners: int) -> list[tuple[int | None, float]]:
+        slots = list(probs.items())
+        pinned = [(i, w) for i, w in slots if w >= 1.0]
+        free = [(i, w) for i, w in slots if w < 1.0]
+        budget = LINEUP - len(pinned) - joiners
+        mass = sum(w for _, w in free)
+        scale = 1.0 if mass <= budget or mass == 0 else budget / mass
+        out = pinned + [(i, w * scale) for i, w in free]
+        if joiners:
+            out += [(None, 1.0)] * joiners
+        gap = LINEUP - sum(w for _, w in out)
+        if gap > 1e-9:
+            out.append((None, gap))
+        return out
+
     def features(self, team_a: int, team_b: int, t: float, cutoff_day: float) -> dict:
         slots = {side: self.lineup(team, cutoff_day) for side, team in (("a", team_a), ("b", team_b))}
         q_last, mean_last, var_last = self.h.price(team_a, team_b, t, cutoff_day)
@@ -72,7 +117,10 @@ class Model:
             q, mean, var = q_last, mean_last, var_last
         else:
             q, mean, var = self.h.price(team_a, team_b, t, cutoff_day, lineups=(slots["a"][0], slots["b"][0]))
-        row = {"q_h": q, "mean_h": mean, "var_h": var, "q_last": q_last}
+        soft_a, soft_b = self.soft_lineup(team_a, cutoff_day), self.soft_lineup(team_b, cutoff_day)
+        q_soft, mean_soft, var_soft = self.h.price(team_a, team_b, t, cutoff_day, weighted=(soft_a, soft_b))
+        row = {"q_h": q, "mean_h": mean, "var_h": var, "q_last": q_last, "q_soft": q_soft, "mean_soft": mean_soft,
+               "var_soft": var_soft}
         for side, team in (("a", team_a), ("b", team_b)):
             slot, last_t = slots[side]
             ids = np.array([i for i in slot if i is not None], dtype=np.int64)

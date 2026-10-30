@@ -26,6 +26,13 @@ class RosterMoves:
         for v in self._events.values():
             v.sort()
 
+    def changes(self, team: int, last_map_day: float, cutoff_day: float):
+        """(person, +1 joins as active / -1 leaves) in date order, from the last map's day (exclusive) to the cutoff."""
+        floor = np.floor(last_map_day)
+        for d, person, sign in self._events.get(team, ()):
+            if floor < d < cutoff_day:
+                yield person, sign
+
     def roster(self, team: int, five: list, last_map_day: float, cutoff_day: float) -> list:
         """`five` are player keys (HLTV ids); moves dated from the last map's day (exclusive) to the cutoff edit it."""
         roster = list(five)
