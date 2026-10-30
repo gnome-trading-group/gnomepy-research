@@ -96,29 +96,38 @@ class RankPoints:
 
 
 class FaceitFives:
-    """Latest five of an HLTV team in an organised FACEIT match, from the lineups the bundle labels with an HLTV team.
+    """Fives of HLTV-linked players who played an organised FACEIT match together, indexed by player.
 
-    Only a full five of players linked to HLTV ids counts, so the five can be priced on the HLTV skill scale."""
+    A team's HLTV history lags its roster: a new player shows up in FACEIT play before the team's next HLTV map. The
+    team is identified only through its players, so no label derived after the match is used."""
 
     def __init__(self, lineups: pd.DataFrame):
-        lu = lineups[lineups.team_id.notna() & lineups.player_id.notna()].copy()
+        lu = lineups[lineups.player_id.notna()].copy()
         lu["match_date"] = _naive(lu.match_date)
-        self.by_team: dict[int, list[tuple[pd.Timestamp, list[int]]]] = {}
-        for (team, _, date), g in lu.groupby(["team_id", "match_id", "match_date"], sort=False):
-            ids = sorted({int(p) for p in g.player_id})
+        self.by_player: dict[int, list[tuple[pd.Timestamp, tuple[int, ...]]]] = {}
+        for (_, _, date), g in lu.groupby(["match_id", "faceit_team_id", "match_date"], sort=False):
+            ids = tuple(sorted({int(p) for p in g.player_id}))
             if len(ids) == FIVE:
-                self.by_team.setdefault(int(team), []).append((date, ids))
-        for fives in self.by_team.values():
+                for p in ids:
+                    self.by_player.setdefault(p, []).append((date, ids))
+        for fives in self.by_player.values():
             fives.sort(key=lambda x: x[0])
 
-    def latest(self, team: int, after: pd.Timestamp, before: pd.Timestamp, max_age_days: int) -> list[int] | None:
-        for date, ids in reversed(self.by_team.get(team, ())):
-            if date >= before:
-                continue
-            if date <= after or (before - date).days > max_age_days:
-                return None
-            return ids
-        return None
+    def newer_five(self, last_five: list[int], after: pd.Timestamp, before: pd.Timestamp, max_age_days: int,
+                   min_overlap: int) -> tuple[int, ...] | None:
+        """The most recent FACEIT five after `after` sharing at least min_overlap players with last_five."""
+        best = None
+        for p in last_five:
+            for date, ids in reversed(self.by_player.get(p, ())):
+                if date >= before:
+                    continue
+                if date <= after or (before - date).days > max_age_days:
+                    break
+                overlap = len(set(ids) & set(last_five))
+                if overlap >= min_overlap and (best is None or (overlap, date) > best[:2]):
+                    best = (overlap, date, ids)
+                break
+        return best[2] if best else None
 
 
 def _five(ids) -> list[int] | None:
@@ -190,7 +199,7 @@ def faceit_maps(data_dir: Path, before: pd.Timestamp) -> pd.DataFrame:
 
     ro = load(data_dir, "faceit/faceit_rosters", before, ["match_id", "faceit_id", "skill_level"])
     ro = ro[ro.match_id.isin(fmh.match_id)]
-    level = {(m, f): s for m, f, s in zip(ro.match_id, ro.faceit_id, ro.skill_level) if s == s}
+    level = {(m, f): s for m, f, s in zip(ro.match_id, ro.faceit_id, ro.skill_level) if s == s and s > 0}
     fmh["fa"] = [[level.get((m, f), FACEIT_LEVEL_DEFAULT) for f in ids] for m, ids in zip(fmh.match_id, fmh.team_a_faceit_ids)]
     fmh["fb"] = [[level.get((m, f), FACEIT_LEVEL_DEFAULT) for f in ids] for m, ids in zip(fmh.match_id, fmh.team_b_faceit_ids)]
     return fmh.assign(src=FACEIT, ta=-1, tb=-1)[["time", "src", "comp", "pa", "pb", "rounds_a", "rounds", "da", "db", "fa", "fb", "ta", "tb"]]

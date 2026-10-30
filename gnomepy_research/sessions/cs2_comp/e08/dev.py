@@ -113,7 +113,7 @@ def main() -> None:
             pickle.dump(maps, open(args.cache, "wb"))
     ranks = RankPoints(load(args.data, "hltv/cs2_team_rankings", end))
     moves = Moves(load(args.data, "hltv/cs2_roster_moves", end))
-    fives = FaceitFives(load(args.data, "faceit/faceit_lineups", end, ["match_id", "match_date", "player_id", "team_id"]))
+    fives = FaceitFives(load(args.data, "faceit/faceit_lineups", end, ["match_id", "faceit_team_id", "match_date", "player_id"]))
     for k, spec in enumerate(args.run):
         params, sp = apply_overrides([x for x in spec.split(",") if x])
         t0 = time.time()

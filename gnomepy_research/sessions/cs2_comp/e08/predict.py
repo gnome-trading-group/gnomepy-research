@@ -29,7 +29,7 @@ def predict(data_dir: Path, targets: pd.DataFrame, use_faceit: bool) -> pd.DataF
     maps = build_maps(data_dir, before, use_faceit=use_faceit)
     ranks = RankPoints(load(data_dir, "hltv/cs2_team_rankings", before))
     moves = Moves(load(data_dir, "hltv/cs2_roster_moves", before))
-    fives = FaceitFives(load(data_dir, "faceit/faceit_lineups", before, ["match_id", "match_date", "player_id", "team_id"])) if use_faceit else None
+    fives = FaceitFives(load(data_dir, "faceit/faceit_lineups", before, ["match_id", "faceit_team_id", "match_date", "player_id"])) if use_faceit else None
     out, _, _ = walk(maps, targets, moves, ranks, params, SeriesParams(), fives)
     return out[["match_id", "q", "fit_cutoff"]]
 

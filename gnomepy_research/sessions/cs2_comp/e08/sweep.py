@@ -10,6 +10,7 @@ import argparse
 import json
 import multiprocessing
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +44,8 @@ def run(spec: str) -> dict:
     except (OverflowError, FloatingPointError, np.linalg.LinAlgError) as e:
         return {"spec": spec, "error": repr(e)}
     out = out.merge(s["targets"][["match_id", "y", "thin"]], on="match_id")
+    if s["save"] is not None:
+        out.to_parquet(s["save"] / (re.sub(r"[^A-Za-z0-9._=-]", "_", spec) + ".parquet"))
     res = {"spec": spec, **score(out), "round_ll_hltv": float(f.nll[0] / max(f.nmaps[0], 1)),
            "round_ll_faceit": float((ff or f).nll[1] / max((ff or f).nmaps[1], 1))}
     if ff is not None and ff is not f:
@@ -57,14 +60,18 @@ def main() -> None:
     ap.add_argument("--run", nargs="+", required=True)
     ap.add_argument("--end", default=None)
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--save-preds", action="store_true")
     args = ap.parse_args()
     end = pd.Timestamp(args.end) if args.end else DEV_END
     STATE["targets"] = dev_targets(args.data, pd.Timestamp("2025-10-06"), end)
     STATE["maps"] = build_maps(args.data, end, use_faceit=True)
     STATE["ranks"] = RankPoints(load(args.data, "hltv/cs2_team_rankings", end))
     STATE["moves"] = Moves(load(args.data, "hltv/cs2_roster_moves", end))
-    STATE["fives"] = FaceitFives(load(args.data, "faceit/faceit_lineups", end, ["match_id", "match_date", "player_id", "team_id"]))
+    STATE["fives"] = FaceitFives(load(args.data, "faceit/faceit_lineups", end, ["match_id", "faceit_team_id", "match_date", "player_id"]))
     out = args.out or Path(os.environ.get("OUTPUT_DIR", ".")) / "sweep.jsonl"
+    STATE["save"] = out.parent / "preds" if args.save_preds else None
+    if STATE["save"] is not None:
+        STATE["save"].mkdir(parents=True, exist_ok=True)
     ctx = multiprocessing.get_context("fork")
     with ctx.Pool(args.workers) as pool, open(out, "a") as fh:
         for res in pool.imap_unordered(run, args.run):
