@@ -107,9 +107,12 @@ def main() -> None:
     ap.add_argument("--targets", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--no-faceit", action="store_true")
+    ap.add_argument("--weeks", default=None, help="comma-separated week_cutoffs to predict (default: all)")
     args = ap.parse_args()
     targets = pd.read_parquet(args.targets)
     targets["week_cutoff"] = pd.to_datetime(targets.week_cutoff)
+    if args.weeks:
+        targets = targets[targets.week_cutoff.isin(pd.to_datetime(args.weeks.split(",")))]
     preds = run(args.data, targets, faceit=not args.no_faceit)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     preds.to_parquet(args.out, index=False)
