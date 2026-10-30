@@ -37,11 +37,11 @@ _GRID = np.linspace(-8.0, 8.0, 3201)
 @dataclass(frozen=True)
 class Config:
     window_days: int = 365
-    half_life_days: float = 120.0
+    half_life_days: float = 240.0
     credibility_hltv: float = 0.5
     credibility_faceit: float = 0.25
-    sigma0: float = 0.25
-    sigma_team: float = 0.15
+    sigma0: float = 0.4
+    sigma_team: float = 0.3
     debut_days: int = 60
     map_noise: float = 0.37
     series_noise: float = 0.2
