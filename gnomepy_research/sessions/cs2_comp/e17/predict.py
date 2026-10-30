@@ -8,8 +8,8 @@ The map stream (HLTV, plus FACEIT unless --no-faceit) is consumed chronologicall
 filter. At each Monday every series of the coming week is priced from the state at that Monday: a team's lineup is the
 five it last fielded, on HLTV or FACEIT, before the cutoff. Past weeks' prices of bo3 HLTV series and their outcomes
 train a logistic calibration on the HLTV-only price, the ranking-points gap, a team Elo gap, the lineups' recent HLTV
-rating gap, their recent FACEIT kills-per-round gap and FACEIT's shift of the price by coverage bucket (the HLTV-only
-features alone without FACEIT), refit for each target week on the trailing year.
+rating gap and FACEIT's shift of the price by coverage bucket (the HLTV-only features alone without FACEIT), refit for
+each target week on the trailing year.
 Everything is deterministic, so a rerun on a bundle cut at one week's cutoff reproduces that week.
 """
 from __future__ import annotations
@@ -25,8 +25,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.player_skill import PlayerSkillConfig
-from gnomepy_research.sessions.cs2_comp.e17.data import (FACEIT, HLTV, faceit_performance, hltv_maps, hltv_series, logit, map_stream, monday,
-                                                      player_ratings, rankings)
+from gnomepy_research.sessions.cs2_comp.e17.data import FACEIT, HLTV, hltv_maps, hltv_series, logit, map_stream, monday, player_ratings, rankings
 from gnomepy_research.sessions.cs2_comp.e17.skill import SkillFilter, SourceConfig
 
 UNKNOWN_FIVE = tuple(-(1 << 62) - k for k in range(1, 6))
@@ -55,18 +54,17 @@ class TeamElo:
         self._r[a], self._r[b] = ra + step, rb - step
 
 
-def lineup_mean(history: dict, five: tuple[int, ...], cutoff: np.datetime64, prior: float) -> float:
-    """Mean over the five of each player's recent per-map values before the cutoff, shrunk toward the prior over the
-    first few maps; a player with no history sits at the prior."""
+def lineup_rating(ratings: dict, five: tuple[int, ...], cutoff: np.datetime64) -> float:
+    """Mean of the five's recent HLTV ratings before the cutoff, each shrunk toward 1.0 over the first few maps."""
     total = 0.0
     for p in five:
-        r = history.get(p)
+        r = ratings.get(p)
         if r is None:
-            total += prior
+            total += 1.0
             continue
         i = int(np.searchsorted(r[0], cutoff, side="left"))
         last = r[1][max(0, i - RATING_MAPS):i]
-        total += (last.sum() + RATING_SHRINK_MAPS * prior) / (len(last) + RATING_SHRINK_MAPS)
+        total += (last.sum() + RATING_SHRINK_MAPS) / (len(last) + RATING_SHRINK_MAPS)
     return total / len(five)
 
 
@@ -96,7 +94,7 @@ def fit_logistic(X: np.ndarray, y: np.ndarray) -> np.ndarray:
     return w
 
 
-def _features(f: SkillFilter, lineups: LastLineups, sources: tuple[int, ...], ratings: dict, perf: dict, team_a: int, team_b: int,
+def _features(f: SkillFilter, lineups: LastLineups, sources: tuple[int, ...], ratings: dict, team_a: int, team_b: int,
               day: pd.Timestamp, cutoff: pd.Timestamp) -> dict:
     five_a, src_a = lineups.get(team_a, sources)
     five_b, src_b = lineups.get(team_b, sources)
@@ -107,8 +105,7 @@ def _features(f: SkillFilter, lineups: LastLineups, sources: tuple[int, ...], ra
     c64 = cutoff.to_datetime64()
     return {"d": d, "s2": s2, "q": q, "rank": rank, "known_a": src_a is not None, "known_b": src_b is not None,
             "cov_a": sum(1 for p in five_a if f.faceit_games[p] > 0), "cov_b": sum(1 for p in five_b if f.faceit_games[p] > 0),
-            "rating": lineup_mean(ratings, five_a, c64, 1.0) - lineup_mean(ratings, five_b, c64, 1.0),
-            "fperf": lineup_mean(perf, five_a, c64, 0.0) - lineup_mean(perf, five_b, c64, 0.0)}
+            "rating": lineup_rating(ratings, five_a, c64) - lineup_rating(ratings, five_b, c64)}
 
 
 def filter_config(overrides: list[str] | None) -> PlayerSkillConfig:
@@ -131,7 +128,6 @@ def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src:
     stream = map_stream(data_dir, before, use_faceit)
     ranks = rankings(data_dir, before)
     ratings = player_ratings(data_dir, before)
-    perf = faceit_performance(data_dir, before) if use_faceit else {}
     train = hltv_series(hltv_maps(data_dir, before))
     train = train[train.bo_type == 3].copy()
     train["cutoff"] = monday(train.time)
@@ -173,7 +169,7 @@ def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src:
                 team_a, team_b = (int(s.team_a), int(s.team_b)) if kind == "train" else (int(s.team_a_id), int(s.team_b_id))
                 row = {"kind": kind, "match_id": s.match_id, "cutoff": c, "y": s.y if kind == "train" else np.nan, "elo": elo.gap(team_a, team_b)}
                 for name, (f, sources) in filters.items():
-                    row.update({f"{k}_{name}": v for k, v in _features(f, lineups, sources, ratings, perf, team_a, team_b, s.day, c).items()})
+                    row.update({f"{k}_{name}": v for k, v in _features(f, lineups, sources, ratings, team_a, team_b, s.day, c).items()})
                 snapshots.append(row)
     snap = pd.DataFrame(snapshots)
     log(f"filtered {pos} maps and priced {len(snap)} series in {time.time() - t0:.0f}s")
@@ -190,8 +186,6 @@ def _design(g: pd.DataFrame, use_faceit: bool, calibration: str, extra: bool) ->
     cols = [logit(g.q_h), g.rank_h.to_numpy(float)]
     if extra:
         cols += [g.elo.to_numpy(float), g.rating_h.to_numpy(float)]
-        if use_faceit:
-            cols.append(g.fperf_u.to_numpy(float))
     if use_faceit:
         shift = logit(g.q_u) - logit(g.q_h)
         if calibration == "coverage":
@@ -223,7 +217,7 @@ def calibrate(snap: pd.DataFrame, use_faceit: bool, calibration_months: int, cal
         res = g[["match_id"]].copy()
         res["q"] = np.clip(q, 1e-3, 1 - 1e-3)
         res["fit_cutoff"] = c
-        for k in ("q_h", "cov_a_u", "cov_b_u", "known_a_u", "known_b_u", "q_u", "known_a_h", "known_b_h", "elo", "rating_h", "fperf_u"):
+        for k in ("q_h", "cov_a_u", "cov_b_u", "known_a_u", "known_b_u", "q_u", "known_a_h", "known_b_h", "elo", "rating_h"):
             if k in g:
                 res[k] = g[k].to_numpy()
         out.append(res)
@@ -241,7 +235,7 @@ def main() -> None:
     ap.add_argument("--faceit-sigma0", type=float, default=SourceConfig.faceit_sigma0)
     ap.add_argument("--calibration-months", type=int, default=12)
     ap.add_argument("--calibration", choices=("pooled", "coverage"), default="coverage")
-    ap.add_argument("--no-extra-features", dest="extra", action="store_false", help="drop the team Elo, HLTV rating channel and FACEIT performance channel from the calibration")
+    ap.add_argument("--no-extra-features", dest="extra", action="store_false", help="drop the team Elo and HLTV rating channel from the calibration")
     ap.add_argument("--filter", action="append", metavar="NAME=VALUE", help="override a PlayerSkillConfig field, e.g. tau=0.02")
     a = ap.parse_args()
     targets = pd.read_parquet(a.targets)
