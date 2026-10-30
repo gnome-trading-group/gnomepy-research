@@ -58,6 +58,14 @@ class Config:
     # Home-region offsets (Europe fixed at zero): regional scenes meet rarely, so their levels are set by the few
     # cross-region maps rather than by each team's class prior. 0 switches them off.
     sigma_region: float = 0.3
+    # Price from the announced five rather than the team's latest five before the cutoff.
+    announced_lineups: bool = True
+    # A stand-in's own rating is in the five's mean already; this is what a five loses beyond it for not having
+    # practised together, fitted on HLTV maps (FACEIT maps carry no stand-in flag and add nothing to it). 0 switches it off.
+    sigma_standin: float = 0.2
+    # A team effect belongs to the players who earned it: scale it by the share of the announced five that played for
+    # the team in the window, so a rebuilt roster under an old name does not inherit the old roster's effect.
+    team_effect_overlap: bool = False
 
 
 @dataclass
@@ -77,6 +85,8 @@ class Fit:
     gamma_var: np.ndarray = None
     home: dict = field(default_factory=dict)
     rho: np.ndarray = None
+    standin: float = 0.0
+    team_players: dict = field(default_factory=dict)
     map_table: np.ndarray = None
 
     def __post_init__(self):
@@ -173,6 +183,8 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
              - sp.csr_matrix((np.ones(n_m), (np.arange(n_m), rb)), shape=(n_m, n_reg)))[:, 2:].tocsr()
     RT = R.T.tocsr()
     n_rho = R.shape[1]
+    S = (maps.standins_a.to_numpy(float) - maps.standins_b.to_numpy(float)) if cfg.sigma_standin > 0 else np.zeros(n_m)
+    n_s = 1 if cfg.sigma_standin > 0 else 0
 
     rr = _rating_rows(maps, ratings, ia, ib, {int(p): i for i, p in enumerate(players)}) \
         if cfg.rating_weight > 0 and ratings is not None else pd.DataFrame()
@@ -193,18 +205,19 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
     # Optimised in prior-whitened coordinates, theta = F beta + sigma0 u and gamma = sigma_team z: the same optimum,
     # but a team effect and its five's mean are nearly collinear, which leaves L-BFGS crawling along a narrow valley
     # in the raw coordinates once FACEIT's tens of thousands of thinly observed players are in.
-    n_x = n_p + n_t + n_f + n_rho
+    n_x = n_p + n_t + n_f + n_rho + n_s
 
     def unpack(x):
-        u, z, beta, v = x[:n_p], x[n_p:n_p + n_t], x[n_p + n_t:n_p + n_t + n_f], x[n_p + n_t + n_f:n_x]
-        return F @ beta + cfg.sigma0 * u, cfg.sigma_team * z, u, z, beta, v
+        u, z, beta = x[:n_p], x[n_p:n_p + n_t], x[n_p + n_t:n_p + n_t + n_f]
+        v, sv = x[n_p + n_t + n_f:n_p + n_t + n_f + n_rho], x[n_x - n_s:n_x]
+        return F @ beta + cfg.sigma0 * u, cfg.sigma_team * z, u, z, beta, v, sv
 
     def objective(x):
-        theta, gamma, u, z, beta, v = unpack(x)
-        d = A @ theta + T @ gamma + cfg.sigma_region * (R @ v)
+        theta, gamma, u, z, beta, v, sv = unpack(x)
+        d = A @ theta + T @ gamma + cfg.sigma_region * (R @ v) + cfg.sigma_standin * S * sv.sum()
         log_p = -np.logaddexp(0.0, -d)
         log_q = -np.logaddexp(0.0, d)
-        f = -np.sum(w * (k * log_p + (n - k) * log_q)) + 0.5 * (u @ u + z @ z + beta @ beta + v @ v)
+        f = -np.sum(w * (k * log_p + (n - k) * log_q)) + 0.5 * (u @ u + z @ z + beta @ beta + v @ v + sv @ sv)
         r = w * (k - n / (1.0 + np.exp(-d)))
         g_theta = -(AT @ r)
         extra = []
@@ -216,16 +229,17 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
             g_theta = g_theta - BT @ (omega * e * slope[r_src])
             extra = [np.array([-np.sum((omega * e * bt)[r_src == s]) for s in (HLTV, FACEIT)]) + (slope - 1.0)]
         g = np.concatenate([cfg.sigma0 * g_theta + u, -cfg.sigma_team * (TT @ r) + z, F.T @ g_theta + beta,
-                            -cfg.sigma_region * (RT @ r) + v] + extra)
+                            -cfg.sigma_region * (RT @ r) + v, -cfg.sigma_standin * (S @ r) + sv] + extra)
         return f, g
 
     x0 = np.concatenate([np.zeros(n_x), np.ones(n_g)])
     res = opt.minimize(objective, x0, jac=True, method="L-BFGS-B",
                        options={"maxiter": 5000, "maxcor": 20, "ftol": 1e-12, "gtol": 1e-6})
-    theta, gamma, _, _, beta, v = unpack(res.x)
+    theta, gamma, _, _, beta, v, sv = unpack(res.x)
     rho = np.concatenate([np.zeros(2), cfg.sigma_region * v]) if n_rho else np.zeros(N_REGIONS)
+    standin = float(cfg.sigma_standin * sv.sum())
     x = np.concatenate([theta, gamma, beta, res.x[n_x:]])
-    d = A @ x[:n_p] + T @ x[n_p:n_p + n_t] + R @ rho[2:n_reg]
+    d = A @ x[:n_p] + T @ x[n_p:n_p + n_t] + R @ rho[2:n_reg] + standin * S
     s_ = 1.0 / (1.0 + np.exp(-d))
     h = w * n * s_ * (1.0 - s_)
     info = A.multiply(A).T @ h + inv0
@@ -235,14 +249,18 @@ def fit(maps: pd.DataFrame, rankings: pd.DataFrame, cutoff: pd.Timestamp, cfg: C
     theta_var = 1.0 / info
     gamma_var = 1.0 / (T.multiply(T).T @ h + invt)
     latest: dict = {}
+    team_players: dict = {}
     for i in order:
         latest[int(maps.team_a.iat[i])] = maps.five_a.iat[i]
         latest[int(maps.team_b.iat[i])] = maps.five_b.iat[i]
+        team_players.setdefault(int(maps.team_a.iat[i]), set()).update(maps.five_a.iat[i])
+        team_players.setdefault(int(maps.team_b.iat[i]), set()).update(maps.five_b.iat[i])
     return Fit(cfg=cfg, pidx={int(p): i for i, p in enumerate(players)}, theta=x[:n_p],
                tidx={int(t): i for i, t in enumerate(teams)}, gamma=x[n_p:n_p + n_t], beta=x[n_p + n_t:n_p + n_t + n_f],
                rank_strength=strength_of, strength_mu=mu, strength_sd=sd, latest_five=latest,
                hltv_seen={int(p) for p, s in zip(players, seen) if s > 0},
-               theta_var=np.asarray(theta_var).ravel(), gamma_var=np.asarray(gamma_var).ravel(), home=home, rho=rho)
+               theta_var=np.asarray(theta_var).ravel(), gamma_var=np.asarray(gamma_var).ravel(), home=home, rho=rho,
+               standin=standin, team_players=team_players)
 
 
 def _home_regions(maps: pd.DataFrame) -> dict:
@@ -257,26 +275,32 @@ def _home_regions(maps: pd.DataFrame) -> dict:
     return {int(t): int(r) for t, r in zip(*c.drop_duplicates("team")[["team", "region"]].to_numpy().T)}
 
 
-def team_rating(f: Fit, team: int) -> tuple[float, float]:
-    """Round-logit strength of a team's latest five plus its team effect, and its variance; unseen players take
-    their class mean with the prior's variance."""
+def team_rating(f: Fit, team: int, five: tuple | None = None, standins: int = 0) -> tuple[float, float]:
+    """Round-logit strength of a five (the announced one, else the team's latest) plus its team effect and its
+    stand-in loss, and its variance; unseen players take their class mean with the prior's variance."""
     unranked = -np.log(UNRANKED)
     s = (f.rank_strength.get(int(team), unranked) - f.strength_mu) / f.strength_sd
     newcomer = float((_features(np.array([s]), np.array([0]), np.array([1.0]), np.array([1.0])) @ f.beta)[0])
-    five = f.latest_five.get(int(team)) or (None,) * LINEUP_SIZE
+    if five is None or not f.cfg.announced_lineups:
+        five, standins = f.latest_five.get(int(team)) or (None,) * LINEUP_SIZE, 0
+    share = 1.0
+    if f.cfg.team_effect_overlap:
+        share = len(f.team_players.get(int(team), set()).intersection(five)) / LINEUP_SIZE
     known = [f.pidx.get(p) for p in five]
-    mean = np.mean([f.theta[i] if i is not None else newcomer for i in known])
+    mean = np.mean([f.theta[i] if i is not None else newcomer for i in known]) + f.standin * standins
     var = sum(f.theta_var[i] if i is not None else f.cfg.sigma0 ** 2 for i in known) / LINEUP_SIZE ** 2
     mean += f.rho[f.home.get(int(team), 0)]
     t = f.tidx.get(int(team))
     if t is None:
         return float(mean), float(var + f.cfg.sigma_team ** 2)
-    return float(mean + f.gamma[t]), float(var + f.gamma_var[t])
+    gamma_var = share ** 2 * f.gamma_var[t] + (1 - share ** 2) * f.cfg.sigma_team ** 2
+    return float(mean + share * f.gamma[t]), float(var + gamma_var)
 
 
-def series_price(f: Fit, team_a: int, team_b: int) -> float:
-    mean_a, var_a = team_rating(f, team_a)
-    mean_b, var_b = team_rating(f, team_b)
+def series_price(f: Fit, team_a: int, team_b: int, five_a: tuple | None = None, five_b: tuple | None = None,
+                 standins_a: int = 0, standins_b: int = 0) -> float:
+    mean_a, var_a = team_rating(f, team_a, five_a, standins_a)
+    mean_b, var_b = team_rating(f, team_b, five_b, standins_b)
     shared = f.cfg.series_noise ** 2 + (var_a + var_b if f.cfg.parameter_risk else 0.0)
     p = np.interp(mean_a - mean_b + np.sqrt(shared) * _GH_X, _GRID, f.map_table)
     return float(np.clip((p * p * (3 - 2 * p)) @ _GH_W, 1e-4, 1 - 1e-4))

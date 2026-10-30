@@ -5,7 +5,7 @@ Series prices for the competition targets from the credibility rating (model.py)
         [--no-faceit] [--weeks 2026-04-06,2026-04-13 | --cutoff 2026-04-06]
 
 Each week is fitted on the maps known before its Monday cutoff only, so a run on a bundle cut at that cutoff gives the
-same prices. --no-faceit drops every FACEIT map, which also removes the ESEA division classes and FACEIT lineups.
+same prices. A target is priced from its announced fives and stand-ins. --no-faceit drops every FACEIT map, which also removes the ESEA division classes and FACEIT lineups.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cs2_comp.e15.data import Raw, before, load_raw
+from gnomepy_research.sessions.cs2_comp.e15.data import LINEUP_SIZE, Raw, before, load_raw
 from gnomepy_research.sessions.cs2_comp.e15.model import Config, fit, series_price
 
 
@@ -31,10 +31,23 @@ def career_first(raw: Raw) -> pd.Series:
     return s
 
 
+def announced(targets: pd.DataFrame) -> tuple[list, list, list, list]:
+    """Each side's announced five (HLTV ids, None where none was announced) and its number of announced stand-ins."""
+    def five(ids):
+        return tuple(int(p) for p in ids) if ids is not None and len(ids) == LINEUP_SIZE else None
+
+    if "team_a_lineup_ids" not in targets:
+        return [None] * len(targets), [None] * len(targets), [0] * len(targets), [0] * len(targets)
+    return ([five(x) for x in targets.team_a_lineup_ids], [five(x) for x in targets.team_b_lineup_ids],
+            [0 if x is None else len(x) for x in targets.team_a_standin_ids],
+            [0 if x is None else len(x) for x in targets.team_b_standin_ids])
+
+
 def predict_week(raw: Raw, first: pd.Series, targets: pd.DataFrame, cutoff: pd.Timestamp, cfg: Config) -> pd.DataFrame:
     maps, rankings = before(raw, cutoff, cfg.window_days)
     f = fit(maps, rankings, cutoff, cfg, first[first < np.datetime64(pd.Timestamp(cutoff))], raw.ratings)
-    q = [series_price(f, int(a), int(b)) for a, b in zip(targets.team_a_id, targets.team_b_id)]
+    q = [series_price(f, int(ta), int(tb), *fives) for ta, tb, *fives in
+         zip(targets.team_a_id, targets.team_b_id, *announced(targets))]
     return pd.DataFrame({"match_id": targets.match_id.to_numpy(), "q": q, "fit_cutoff": pd.Timestamp(cutoff)})
 
 

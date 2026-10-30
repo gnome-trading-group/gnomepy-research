@@ -63,9 +63,11 @@ def _rounds(score_a: np.ndarray, score_b: np.ndarray) -> tuple[np.ndarray, np.nd
 def _hltv_maps(data_dir: Path) -> pd.DataFrame:
     h = load(data_dir, "hltv/cs2_match_history")
     h = h[~showmatch_mask(h) & (h.team_a_score != h.team_b_score)].copy()
-    lu = load(data_dir, "hltv/cs2_match_lineups", columns=["match_id", "team_id", "player_id", "slot"])
+    lu = load(data_dir, "hltv/cs2_match_lineups", columns=["match_id", "team_id", "player_id", "slot", "is_standin"])
     fives = {k: tuple(int(p) for p in g.sort_values("slot").player_id.tolist()[:LINEUP_SIZE])
              for k, g in lu.groupby(["match_id", "team_id"])}
+    sub = lu[lu.is_standin.fillna(False).astype(bool)]
+    standin = set(zip(sub.match_id.astype(np.int64), sub.team_id.astype(np.int64), sub.player_id.astype(np.int64)))
 
     def five(played, match_id, team_id):
         if played is not None and len(played) == LINEUP_SIZE:
@@ -80,6 +82,11 @@ def _hltv_maps(data_dir: Path) -> pd.DataFrame:
     match_time = pd.to_datetime(h.match_time)
     match_time = match_time.dt.tz_convert(None) if match_time.dt.tz is not None else match_time
     ka, n = _rounds(h.team_a_score.to_numpy(int), h.team_b_score.to_numpy(int))
+
+    def standins(match_ids, team_ids, fives_):
+        return np.array([sum((int(m), int(t), p) in standin for p in f) for m, t, f in zip(match_ids, team_ids, fives_)],
+                        dtype=int)
+
     return pd.DataFrame({
         "match_id": h.match_id.astype(str).to_numpy(), "src": HLTV,
         "known_at": np.maximum(match_date.to_numpy(), match_time.fillna(match_date).to_numpy()),
@@ -90,6 +97,7 @@ def _hltv_maps(data_dir: Path) -> pd.DataFrame:
         "bo_type": h.bo_type.fillna(0).to_numpy(int), "tier": h.event_tier.fillna(0).to_numpy(int),
         "is_lan": h.is_lan.fillna(0).to_numpy(int), "division": 0,
         "region": np.array([event_region(e) for e in h.event_name]),
+        "standins_a": standins(h.match_id, h.team_a_id, h.five_a), "standins_b": standins(h.match_id, h.team_b_id, h.five_b),
     })
 
 
@@ -130,7 +138,7 @@ def _faceit_maps(data_dir: Path) -> pd.DataFrame:
         "team_a": team(fh.team_a_id, fh.team_a_faceit_id), "team_b": team(fh.team_b_id, fh.team_b_faceit_id),
         "five_a": fh.five_a.to_numpy(), "five_b": fh.five_b.to_numpy(), "rounds_a": ka, "rounds": n,
         "bo_type": fh.bo_type.fillna(0).to_numpy(int), "tier": -1, "is_lan": fh.is_lan.fillna(0).to_numpy(int),
-        "division": np.array([division(c) for c in comp]), "region": region,
+        "division": np.array([division(c) for c in comp]), "region": region, "standins_a": 0, "standins_b": 0,
     })
 
 

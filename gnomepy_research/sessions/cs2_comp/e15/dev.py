@@ -34,6 +34,14 @@ def dev_targets(data: Path, start: str, end: str) -> pd.DataFrame:
                                   wins=("team_a_won", "sum"), maps=("team_a_won", "size"), is_lan=("is_lan", "first"),
                                   tier=("event_tier", "first")).reset_index()
     s = s[(s.t >= start) & (s.t < end) & (s.maps >= 2)]
+    first = h.drop_duplicates("match_id").set_index("match_id")
+    s["team_a_lineup_ids"] = first.team_a_lineup_ids.reindex(s.match_id).to_numpy()
+    s["team_b_lineup_ids"] = first.team_b_lineup_ids.reindex(s.match_id).to_numpy()
+    lu = load(data, "hltv/cs2_match_lineups", columns=["match_id", "team_id", "player_id", "is_standin"])
+    lu = lu[lu.is_standin.fillna(False).astype(bool)]
+    sub = lu.groupby(["match_id", "team_id"]).player_id.agg(list)
+    s["team_a_standin_ids"] = [sub.get((m, t), []) for m, t in zip(s.match_id, s.team_a_id)]
+    s["team_b_standin_ids"] = [sub.get((m, t), []) for m, t in zip(s.match_id, s.team_b_id)]
     s["y"] = (s.wins * 2 > s.maps).astype(float)
     s["week_cutoff"] = s.t.dt.normalize() - pd.to_timedelta(s.t.dt.weekday, unit="D")
     return s.reset_index(drop=True)
