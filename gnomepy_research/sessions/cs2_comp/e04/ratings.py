@@ -12,13 +12,13 @@ class Params:
     scale: float = 400.0
     k_team: float = 32.0
     k_player: float = 12.0
-    k_faceit_mult: float = 0.6
+    k_faceit_mult: float = 0.3
     faceit_level_shift: float = 0.0
     provisional_games: int = 20
     provisional_k_mult: float = 1.6
     score_clip: float = 0.05
     overlap_power: float = 2.0
-    shrink_games: float = 12.0
+    shrink_games: float = 0.0
     calibration: float = 1.0
 
 

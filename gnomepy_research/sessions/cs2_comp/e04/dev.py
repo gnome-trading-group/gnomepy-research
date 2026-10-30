@@ -45,6 +45,15 @@ def nll(q: np.ndarray, y: np.ndarray) -> np.ndarray:
     return -(y * np.log(q) + (1 - y) * np.log(1 - q))
 
 
+def sigmoid(x: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-x))
+
+
+def logit(p: np.ndarray) -> np.ndarray:
+    p = np.clip(p, 1e-6, 1 - 1e-6)
+    return np.log(p / (1 - p))
+
+
 def paired_row(data_dir: str, targets: pd.DataFrame, params: Params) -> dict:
     detail = predict_detail(data_dir, targets, faceit=True, params=params)
     nof = predict(data_dir, targets, faceit=False, params=params)
@@ -69,7 +78,7 @@ def paired_row(data_dir: str, targets: pd.DataFrame, params: Params) -> dict:
         "paired_diff": float(diff.mean()),
         "paired_se": float(diff.std(ddof=1) / np.sqrt(len(diff))),
         "coverage": cov,
-        "q_faceit": merged.q.to_numpy(),
+        "arrays": {"q_faceit": merged.q.to_numpy(), "q_nof": merged.nof_q.to_numpy(), "y": y},
     }
 
 
@@ -80,22 +89,22 @@ def main() -> None:
     targets = dev_targets(args.data)
     base = Params()
     grid = {
-        "shrink0_kfm0.6": replace(base, shrink_games=0.0),
-        "shrink4_kfm0.6": replace(base, shrink_games=4.0),
-        "shrink12_kfm0.6": replace(base, shrink_games=12.0),
-        "shrink0_kfm0.3": replace(base, shrink_games=0.0, k_faceit_mult=0.3),
-        "shrink4_kfm0.3": replace(base, shrink_games=4.0, k_faceit_mult=0.3),
-        "shrink12_kfm0.3": replace(base, shrink_games=12.0, k_faceit_mult=0.3),
-        "shrink0_kfm1.0": replace(base, shrink_games=0.0, k_faceit_mult=1.0),
-        "shrink0_kfm0.3_overlap1": replace(base, shrink_games=0.0, k_faceit_mult=0.3, overlap_power=1.0),
-        "shrink0_kfm0.3_overlap4": replace(base, shrink_games=0.0, k_faceit_mult=0.3, overlap_power=4.0),
-        "shrink0_kfm0.3_kteam24": replace(base, shrink_games=0.0, k_faceit_mult=0.3, k_team=24.0),
-        "shrink0_kfm0.3_kteam48": replace(base, shrink_games=0.0, k_faceit_mult=0.3, k_team=48.0),
+        "final": base,
+        "final_kfm0.2": replace(base, k_faceit_mult=0.2),
+        "final_kfm0.45": replace(base, k_faceit_mult=0.45),
     }
     results = {"n_targets": int(len(targets)), "coinflip_ll": float(nll(np.full(len(targets), 0.5), targets.y.to_numpy()).mean())}
     for name, params in grid.items():
         row = paired_row(args.data, targets, params)
-        row.pop("q_faceit")
+        arrays = row.pop("arrays")
+        if name == "final":
+            scan = {}
+            for s_ in [0.8, 0.9, 1.0, 1.1, 1.2]:
+                qf = sigmoid(s_ * logit(arrays["q_faceit"]))
+                qn = sigmoid(s_ * logit(arrays["q_nof"]))
+                scan[str(s_)] = {"faceit": float(nll(qf, arrays["y"]).mean()),
+                                 "no_faceit": float(nll(qn, arrays["y"]).mean())}
+            row["calibration_scan"] = scan
         row["params"] = asdict(params)
         results[name] = row
         print(name, round(row["ll_nofaceit"], 5), round(row["ll_faceit"], 5), round(row["paired_diff"], 5),
