@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.bundle import load
-from gnomepy_research.sessions.cs2_comp.e09.lineups import HISTORY, Entry, Moves, candidate_features, play_probabilities, sample_fives
+from gnomepy_research.sessions.cs2_comp.e09.lineups import HISTORY, LINEUP_SIZE, Entry, Moves, candidate_features, play_probabilities, sample_fives
 from gnomepy_research.sessions.cs2_comp.e09.maps import EPOCH, build_maps
 from gnomepy_research.sessions.cs2_comp.e09.skill import Filter, Params, RankPoints
 
@@ -66,6 +66,27 @@ def priced_lineups(team: int, cutoff_day: float, history: TeamHistory, moves: Mo
     return sample_fives(team, cands, probs, rng, n), top
 
 
+def announced_five(value) -> tuple[int, ...] | None:
+    """The announced five when the target carries one that is complete; otherwise the lineup model prices that side."""
+    if value is None:
+        return None
+    five = tuple(int(x) for x in value)
+    return five if len(five) == LINEUP_SIZE and len(set(five)) == LINEUP_SIZE else None
+
+
+def _side(f: Filter, history: TeamHistory, moves: Moves, rng: np.random.Generator, team: int, cut_day: float, announced,
+          n: int) -> tuple[list[tuple[int, ...]], tuple[int, ...], float | None]:
+    five = announced_five(announced)
+    if five is not None:
+        core = [f.mu[p] for p in five if p in f.mu]
+        return [five], five, (float(np.mean(core)) if core else None)
+    samples, top = priced_lineups(team, cut_day, history, moves, rng, n)
+    core = [f.mu[p] for p in top if p in f.mu]
+    if core:
+        f.anchor[team] = float(np.mean(core))
+    return samples, top, None
+
+
 def walk(data_dir: str | Path, targets: pd.DataFrame, params: Params, maps: pd.DataFrame | None = None,
          ranks: RankPoints | None = None) -> tuple[pd.DataFrame, Filter]:
     cutoffs = sorted(pd.to_datetime(targets.week_cutoff).unique())
@@ -98,20 +119,17 @@ def walk(data_dir: str | Path, targets: pd.DataFrame, params: Params, maps: pd.D
         for r in tg[tg.week_cutoff == cutoff].itertuples():
             ta, tb = int(r.team_a_id), int(r.team_b_id)
             kick = _day(r.match_time.tz_convert(None) if getattr(r.match_time, "tzinfo", None) else r.match_time)
-            known_a, known_b = getattr(r, "lineup_a", None), getattr(r, "lineup_b", None)
             rng = np.random.default_rng(int(r.match_id))
-            if known_a is not None and known_b is not None:
-                sa_, top_a, sb_, top_b = [known_a], known_a, [known_b], known_b
-            else:
-                sa_, top_a = priced_lineups(ta, cut_day, history, moves, rng, params_samples)
-                sb_, top_b = priced_lineups(tb, cut_day, history, moves, rng, params_samples)
-                for team, top in ((ta, top_a), (tb, top_b)):
-                    core = [f.mu[p] for p in top if p in f.mu]
-                    if core:
-                        f.anchor[team] = float(np.mean(core))
+            sides = []
+            for team, side in ((ta, "a"), (tb, "b")):
+                announced = getattr(r, f"team_{side}_lineup_ids", None)
+                sides.append(_side(f, history, moves, rng, team, cut_day, announced, params_samples))
+            (sa_, top_a, anc_a), (sb_, top_b, anc_b) = sides
+            if len(sa_) != len(sb_):
+                sa_, sb_ = sa_ * len(sb_), sb_ * len(sa_)
             qs, gaps, vars_ = [], [], []
             for la, lb in zip(sa_, sb_):
-                q, g = f.series_price(ta, tb, la, lb, kick)
+                q, g = f.series_price(ta, tb, la, lb, kick, (anc_a, anc_b))
                 qs.append(q)
                 gaps.append(g.mean)
                 vars_.append(g.var)

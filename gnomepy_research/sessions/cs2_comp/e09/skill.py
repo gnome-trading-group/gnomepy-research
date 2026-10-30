@@ -59,6 +59,8 @@ class Params:
     faceit_dev_sigma: float = 0.3
     lineup_var: float = 0.0
     tie_tolerance: float = 1e-9
+    known_anchor: float = 0.0
+    known_sigma: float = 0.2536091079975324
 
 
 class RankPoints:
@@ -118,7 +120,7 @@ class Filter:
         idle = max(day - self.class_seen[comp], 0.0)
         return self.class_mu[comp], self.class_var[comp] + self.p.class_tau ** 2 * idle
 
-    def _state(self, player: int, team: int, day: float, src: str, comp: str) -> tuple[float, float, float]:
+    def _state(self, player: int, team: int, day: float, src: str, comp: str, anchor: float | None = None) -> tuple[float, float, float]:
         """State mean, effective skill and variance. A FACEIT-only player lives under the competition class he debuted in: his
         skill is the class offset plus his own deviation, so the class level, learned through the linked players he plays
         against, is his prior."""
@@ -138,6 +140,9 @@ class Filter:
                 anchor = self.anchor.get((player - UNKNOWN_BASE) // 5, m)
                 m = (1 - self.p.newcomer_anchor) * m + self.p.newcomer_anchor * anchor + self.p.newcomer_shift
                 return m, m, self.p.newcomer_sigma ** 2
+            if anchor is not None:
+                m = (1 - self.p.known_anchor) * m + self.p.known_anchor * anchor
+                return m, m, self.p.known_sigma ** 2
             return m, m, self.p.sigma0 ** 2
         idle = max(day - self.seen[player], 0.0)
         return self.mu[player], self.mu[player], self.var[player] + self.p.tau ** 2 * idle
@@ -157,8 +162,8 @@ class Filter:
         w[best] += self.p.lam
         return w
 
-    def lineup(self, players: tuple[int, ...], team: int, day: float, src: str, comp: str) -> Lineup:
-        states = [self._state(p, team, day, src, comp) for p in players]
+    def lineup(self, players: tuple[int, ...], team: int, day: float, src: str, comp: str, anchor: float | None = None) -> Lineup:
+        states = [self._state(p, team, day, src, comp, anchor) for p in players]
         mus = [s[0] for s in states]
         effective = [s[1] for s in states]
         variances = [s[2] for s in states]
@@ -269,9 +274,10 @@ class Filter:
         var = float(wa @ a.block @ wa + wb @ b.block @ wb) + 2 * self.p.lineup_var
         return Gap(a.strength - b.strength, var)
 
-    def series_price(self, team_a: int, team_b: int, la: tuple[int, ...], lb: tuple[int, ...], day: float) -> tuple[float, Gap]:
-        a = self.lineup(la, team_a, day, "hltv", "hltv_online")
-        b = self.lineup(lb, team_b, day, "hltv", "hltv_online")
+    def series_price(self, team_a: int, team_b: int, la: tuple[int, ...], lb: tuple[int, ...], day: float,
+                     anchors: tuple[float | None, float | None] = (None, None)) -> tuple[float, Gap]:
+        a = self.lineup(la, team_a, day, "hltv", "hltv_online", anchors[0])
+        b = self.lineup(lb, team_b, day, "hltv", "hltv_online", anchors[1])
         g = self.gap(a, b)
         pm = map_win_prob(g.mean, g.var)
         return pm * pm * (3 - 2 * pm), g
