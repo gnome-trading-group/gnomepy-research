@@ -200,6 +200,11 @@ def recal_features(d: pd.DataFrame, rich: bool, lan: bool = False) -> np.ndarray
     return np.column_stack(cols + [np.ones(len(x))])
 
 
+def _logit(p):
+    p = np.clip(np.asarray(p, float), 1e-4, 1 - 1e-4)
+    return np.log(p / (1 - p))
+
+
 def data_cutoff(targets: pd.DataFrame) -> pd.Timestamp:
     return pd.Timestamp(pd.to_datetime(targets.week_cutoff).max())
 
