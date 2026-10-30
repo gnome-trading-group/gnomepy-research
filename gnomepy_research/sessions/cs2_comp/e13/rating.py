@@ -10,6 +10,8 @@ and covariance mechanics) in the ways a bookmaker's ratings differ from a fixed 
   from HLTV ranking points their (usually unranked) team does not have.
 - Ratings drift per day idle (tau), so a player returning from a break is uncertain again and the next maps move him
   quickly.
+- Each home region but Europe (and unknown) carries a strength offset learned from cross-region maps, so a team
+  whose results all come from one regional circuit is priced against other regions through every team of its region.
 - A player's per-map score relative to his four teammates (HLTV rating; FACEIT kills minus deaths per round) is a
   second, linear measurement of his skill relative to theirs, with a slope and noise per source. Rounds only rate a
   five as a whole; this says who in it carries the team, which is what prices a stand-in or a transfer.
@@ -27,6 +29,7 @@ import pandas as pd
 from gnomepy_research.models.cs2.hltv.player_skill import TIE_TOLERANCE
 
 FACEIT = 1
+EUROPE = 1
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,8 @@ class RatingConfig:
     s_h: float = 0.5
     g_f: float = 0.0
     s_f: float = 0.5
+    sigma_reg: float = 0.0
+    tau_reg: float = 0.002
 
 
 @dataclass
@@ -74,6 +79,7 @@ class RatingFilter:
         self.var: dict[int, float] = {}
         self.seen: dict[int, float] = {}
         self.cov: dict[tuple[int, int], float] = {}
+        self.region: dict[int, tuple[float, float, float]] = {}
         self.games: collections.Counter = collections.Counter()
         self.hltv_games: collections.Counter = collections.Counter()
         self.five_days: dict[frozenset, collections.deque] = collections.defaultdict(collections.deque)
@@ -177,13 +183,34 @@ class RatingFilter:
                 q = players[j]
                 self.cov[(p, q) if p < q else (q, p)] = float(cov[i, j])
 
+    def region_state(self, region: int, now: float) -> tuple[float, float]:
+        """Strength offset of a home region (mean, variance); Europe and unknown are the fixed reference."""
+        if region <= EUROPE or self.cfg.sigma_reg <= 0:
+            return 0.0, 0.0
+        mu, var, seen = self.region.get(region, (0.0, self.cfg.sigma_reg ** 2, now))
+        return mu, var + self.cfg.tau_reg ** 2 * max(now - seen, 0.0)
+
+    def region_gap(self, home_a: int, home_b: int, now: float) -> tuple[float, float]:
+        if home_a == home_b:
+            return 0.0, 0.0
+        ma, va = self.region_state(home_a, now)
+        mb, vb = self.region_state(home_b, now)
+        return ma - mb, va + vb
+
     def observe(self, t: pd.Timestamp, now: float, src: int, div: int, team_a: int, team_b: int, pa, pb,
-                rounds_a: int, rounds_b: int) -> float:
+                rounds_a: int, rounds_b: int, home_a: int = 0, home_b: int = 0) -> float:
         """Update on one map; returns the pre-map round-logit gap."""
         c = self.cfg
         a = self.lineup(pa, team_a, t, now, src, div)
         b = self.lineup(pb, team_b, t, now, src, div)
         d, s2, cov, w = self.gap(a, b)
+        regions = home_a != home_b and c.sigma_reg > 0 and max(home_a, home_b) > EUROPE
+        if regions:
+            (ma, va), (mb, vb) = self.region_state(home_a, now), self.region_state(home_b, now)
+            cov = np.block([[cov, np.zeros((10, 2))], [np.zeros((2, 10)), np.diag([va, vb])]])
+            w = np.concatenate([w, [1.0, -1.0]])
+            d += ma - mb
+            s2 += va + vb
         n = rounds_a + rounds_b
         pi = 1 / (1 + math.exp(-d))
         rho, wt = (c.rho_f, c.w_f) if src == FACEIT else (c.rho, 1.0)
@@ -191,8 +218,12 @@ class RatingFilter:
         grad, curv = (rounds_a - n * pi) / inflation, n * pi * (1 - pi) / inflation
         cw = cov @ w
         denom = 1 + curv * s2
-        mus = np.array(a.mus + b.mus) + cw * (grad / denom)
+        mus = np.array(a.mus + b.mus + ([ma, mb] if regions else [])) + cw * (grad / denom)
         cov = cov - np.outer(cw, cw) * (curv / denom)
+        if regions:
+            for k, home in ((10, home_a), (11, home_b)):
+                if home > EUROPE:
+                    self.region[home] = (float(mus[k]), max(1e-6, float(cov[k, k])), now)
         players = a.players + b.players
         hltv = src != FACEIT
         for i, p in enumerate(players):
