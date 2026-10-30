@@ -25,7 +25,7 @@ def ll(p, y) -> np.ndarray:
     return -(y * np.log(p) + (1 - y) * np.log(1 - p))
 
 
-def summarize(feats: pd.DataFrame, specs=("", "s+new+c", "s+new+c+elo")) -> dict:
+def summarize(feats: pd.DataFrame, specs=("", "s+new+c", "s+new+c+elo", "s+new+c+u", "s+new+c+age", "s+new+c+u+age")) -> dict:
     weeks = [w for w in monday_range(DEV_FIRST, DEV_LAST)]
     dev = feats[(feats.week_cutoff >= DEV_FIRST) & (feats.week_cutoff <= DEV_LAST) & feats.y.notna()].copy()
     cov = np.minimum(dev.nf_a, dev.nf_b)

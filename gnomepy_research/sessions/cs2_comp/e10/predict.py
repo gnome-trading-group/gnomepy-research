@@ -43,6 +43,10 @@ def design(f: pd.DataFrame, spec: str) -> np.ndarray:
         cols.append(np.log1p(f.coh_a.to_numpy()) - np.log1p(f.coh_b.to_numpy()))
     if "a" in tokens:
         cols.append(np.log1p(f.act_a.to_numpy()) - np.log1p(f.act_b.to_numpy()))
+    if "u" in tokens:
+        cols.append(z * (f.doubt_a + f.doubt_b).to_numpy())
+    if "age" in tokens:
+        cols.append(z * (f.age_a + f.age_b).to_numpy() / 5.0)
     if "elo" in tokens:
         cols.append(f.elo.to_numpy())
     if "lan" in tokens:

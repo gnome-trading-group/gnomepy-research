@@ -268,16 +268,26 @@ class Pass:
 
     def lineup(self, team: int, cutoff: pd.Timestamp) -> np.ndarray | None:
         """The team's five at the cutoff."""
-        ordered = self._ranked(team, cutoff)
+        ordered, _ = self._ranked(team, cutoff)
         return _arr(ordered[:LINEUP]) if ordered else None
 
-    def _ranked(self, team: int, cutoff: pd.Timestamp) -> list[int]:
+    def lineup_doubt(self, team: int, cutoff: pd.Timestamp) -> tuple[float, float]:
+        """How unsettled the five is: the weight of the sixth candidate against the fifth player, and the log of the days
+        since the team last played."""
+        ordered, weight = self._ranked(team, cutoff)
+        age = math.log1p((cutoff.value - self.last_time[team]) / DAY_NS) if team in self.last_time else math.log1p(365)
+        if len(ordered) <= LINEUP:
+            return 0.0, age
+        fifth, sixth = weight[ordered[LINEUP - 1]], weight[ordered[LINEUP]]
+        return sixth / (fifth + sixth) if fifth + sixth > 0 else 0.5, age
+
+    def _ranked(self, team: int, cutoff: pd.Timestamp) -> tuple[list[int], dict[int, float]]:
         """Candidate players, most likely first: recency-weighted appearances over the team's last series (stand-ins
         count less), then the transfer log's departures since its last series removed and arrivals put first."""
         q = self.recent.get(int(team))
         if not q:
             fallback = self._faceit_lineup(int(team))
-            return [] if fallback is None else fallback.tolist()
+            return ([] if fallback is None else fallback.tolist()), {}
         score: dict[int, tuple[float, int]] = {}
         for age, (match_id, players) in enumerate(reversed(q)):
             standin = self.standins.get((match_id, int(team)), ())
@@ -287,10 +297,11 @@ class Pass:
                 score[p] = (total + weight, max(latest, -age))
         ordered = sorted(score, key=lambda p: (-score[p][0], -score[p][1]))
         moves = self.moves.get(int(team))
+        arrived: list[int] = []
         if moves:
             last = np.datetime64(pd.Timestamp(self.last_time[int(team)]).normalize())
             end = np.datetime64(cutoff)
-            gone, arrived = set(), []
+            gone = set()
             for date, pid, delta in moves:
                 if last < date < end:
                     idx = self.index.hltv.get(pid)
@@ -303,7 +314,7 @@ class Pass:
                         gone.discard(idx)
                         arrived.append(idx)
             ordered = arrived[::-1] + [p for p in ordered if p not in gone and p not in arrived]
-        return ordered
+        return ordered, {p: score[p][0] if p in score and p not in arrived else 1.0 for p in ordered}
 
     def _faceit_lineup(self, team: int) -> np.ndarray | None:
         """A team with no HLTV map yet is known, where FACEIT matched it, by the players of its latest FACEIT matches."""
@@ -393,6 +404,8 @@ class Pass:
             lo_a = hi_a = lo_b = hi_b = wa = wb = 0.0
             na = nb = 0
             row.update({"coh_a": 0, "act_a": 0.0, "coh_b": 0, "act_b": 0.0})
+        for side, team in (("a", team_a), ("b", team_b)):
+            row[f"doubt_{side}"], row[f"age_{side}"] = self.lineup_doubt(team, cutoff)
         row["elo"] = self.team_elo.get(team_a, 0.0) - self.team_elo.get(team_b, 0.0)
         row.update({"d": d, "sd": math.sqrt(max(s2, 0.0)), "p_series": min(max(p_series, 1e-4), 1 - 1e-4),
                     "fres_lo": lo_a - lo_b, "fres_hi": hi_a - hi_b, "fw_a": wa, "fw_b": wb, "nf_a": na, "nf_b": nb})
