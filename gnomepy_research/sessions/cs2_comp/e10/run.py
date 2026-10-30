@@ -46,7 +46,6 @@ class RunConfig:
     decay: float = 0.4
     faceit_offset_var: float = 0.04
     standin_weight: float = 0.3
-    extra_var: float = 0.0
 
 
 class Event(NamedTuple):
@@ -364,7 +363,7 @@ class Pass:
                       shift: float) -> tuple[float, float, float, np.ndarray, np.ndarray]:
         (mu_a, var_a), (mu_b, var_b) = self._state(a, team_a, day, cutoff, shift), self._state(b, team_b, day, cutoff, shift)
         d, s2 = self.fh.gap(a, b, day, (mu_a, mu_b), (var_a, var_b))
-        p_map = map_win_prob(d, s2 + self.cfg.extra_var)
+        p_map = map_win_prob(d, s2)
         return p_map * p_map * (3 - 2 * p_map), d, s2, mu_a, mu_b
 
     def price(self, cutoff: pd.Timestamp, team_a: int, team_b: int, shift: float = 0.0) -> dict:
@@ -380,7 +379,7 @@ class Pass:
             ma, va = self._virtual(team_a, cutoff) if a is None else (float(f.current(a, day)[0].mean()), float(f.current(a, day)[1].sum()) / len(a) ** 2)
             mb, vb = self._virtual(team_b, cutoff) if b is None else (float(f.current(b, day)[0].mean()), float(f.current(b, day)[1].sum()) / len(b) ** 2)
             d, s2 = ma - mb, va + vb
-            p_map = map_win_prob(d, s2 + self.cfg.extra_var)
+            p_map = map_win_prob(d, s2)
             p_series = p_map * p_map * (3 - 2 * p_map)
             lo_a = hi_a = lo_b = hi_b = wa = wb = 0.0
             na = nb = 0
