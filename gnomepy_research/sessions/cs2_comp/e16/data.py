@@ -72,7 +72,15 @@ def read_bundle(data_dir: str | Path, before: pd.Timestamp, faceit: bool, since:
     moves = load(data_dir, "hltv/cs2_roster_moves", before,
                  ["event_date", "person_id", "from_team_id", "from_status", "to_team_id", "to_status"])
     moves = moves.assign(event_date=_naive(moves.event_date)).sort_values("event_date", kind="stable")
+    lu = load(data_dir, "hltv/cs2_match_lineups", before, ["match_id", "match_date", "team_id", "player_id", "is_standin"])
+    lu = lu[lu.is_standin.fillna(False).astype(bool) & lu.player_id.notna()]
+    standins: dict[tuple, frozenset] = {}
+    for (m, t), g in lu.groupby(["match_id", "team_id"]):
+        standins[(m, f"h{int(t)}")] = frozenset(f"h{int(p)}" for p in g.player_id)
     hmaps = _hltv_maps(hist)
+    empty = frozenset()
+    hmaps["standins_a"] = [standins.get((m, t), empty) for m, t in zip(hmaps.match_id, hmaps.team_a)]
+    hmaps["standins_b"] = [standins.get((m, t), empty) for m, t in zip(hmaps.match_id, hmaps.team_b)]
     hrat = _hltv_ratings(stats, hmaps)
     if not faceit:
         return Bundle(hmaps, hrat, rankings, None, None, None, moves)
@@ -165,13 +173,15 @@ def _faceit(data_dir: str | Path, before: pd.Timestamp, since: pd.Timestamp) -> 
     h["team_a"] = np.where(h.team_a_id.notna(), "h" + h.team_a_id.fillna(0).astype(int).astype(str), "f" + h.team_a_faceit_id.astype(str))
     h["team_b"] = np.where(h.team_b_id.notna(), "h" + h.team_b_id.fillna(0).astype(int).astype(str), "f" + h.team_b_faceit_id.astype(str))
     h["source"] = "faceit"
+    h["standins_a"] = h["standins_b"] = [frozenset()] * len(h)
     comp = matches.set_index("match_id").competition_name
     h["division"] = h.match_id.map(comp).map(division).astype(int)
     h["total_rounds"] = h.team_a_score + h.team_b_score
     h["n_linked"] = [sum(k.startswith("h") for k in a + b) for a, b in zip(h.lineup_a, h.lineup_b)]
     h["mkey"] = h.match_id + "|" + h.map_name
     fmaps = h[["match_id", "map_name", "time", "cut", "source", "team_a", "team_b", "lineup_a", "lineup_b", "rounds_a",
-               "rounds", "division", "bo_type", "team_a_won", "n_linked", "mkey", "total_rounds", "team_a_faceit_id"]].reset_index(drop=True)
+               "rounds", "division", "bo_type", "team_a_won", "standins_a", "standins_b", "n_linked", "mkey", "total_rounds",
+               "team_a_faceit_id"]].reset_index(drop=True)
 
     cols = ["match_id", "map_name", "faceit_id", "hltv_id", "faction", "kills", "deaths", "assists", "adr"]
     ps = _by_match(data_dir, "faceit/faceit_player_map_stats", set(fmaps.match_id), cols)
@@ -184,8 +194,7 @@ def _faceit(data_dir: str | Path, before: pd.Timestamp, since: pd.Timestamp) -> 
     adr = ps.adr.fillna(105.0 * kpr)
     # HLTV 2.0's published weights with KAST left out; constants cancel in the within-team deviation.
     ps["impact"] = 0.864 * kpr - 0.533 * dpr + 0.0996 * apr + 0.0032 * adr
-    ps["side_key"] = ps.match_id + "|" + ps.map_name + "|" + ps.faction.astype(str)
-    ps["dev"] = ps.impact - ps.groupby("side_key").impact.transform("mean")
+    ps["dev"] = ps.impact - ps.groupby(["match_id", "map_name", "faction"], observed=True).impact.transform("mean")
     in_a = np.array([p in a for p, a in zip(ps.player, ps.lineup_a)])
     in_b = np.array([p in b for p, b in zip(ps.player, ps.lineup_b)])
     ps["own"] = np.where(in_a, ps.lineup_a, np.where(in_b, ps.lineup_b, None))
@@ -194,22 +203,42 @@ def _faceit(data_dir: str | Path, before: pd.Timestamp, since: pd.Timestamp) -> 
     del ps
 
     ros = _by_match(data_dir, "faceit/faceit_rosters", set(matches.match_id), ["match_id", "faceit_id", "hltv_id", "skill_level"])
-    ros = ros[ros.skill_level.notna() & (ros.skill_level > 0)].copy()
-    ros["time"] = pd.to_datetime(ros.match_id.map(matches.set_index("match_id").finished_at), unit="s")
-    ros["cut"] = ros.time
-    ros["player"] = np.where(ros.hltv_id.notna(), "h" + ros.hltv_id.fillna(0).astype(int).astype(str), "f" + ros.faceit_id.astype(str))
-    ros = ros.sort_values(["player", "cut"], kind="stable")
-    changed = (ros.player != ros.player.shift()) | (ros.skill_level != ros.skill_level.shift())
-    levels = ros.loc[changed, ["time", "cut", "player", "skill_level"]].reset_index(drop=True)
+    ros = ros[ros.skill_level.notna() & (ros.skill_level > 0)]
+    finished_at = ros.match_id.map(matches.set_index("match_id").finished_at).astype("int64")
+    ros = pd.DataFrame({"account": ros.faceit_id.cat.codes.to_numpy(), "cut": pd.to_datetime(finished_at.to_numpy(), unit="s"),
+                        "skill_level": ros.skill_level.to_numpy(), "faceit_id": ros.faceit_id, "hltv_id": ros.hltv_id})
+    ros = ros.sort_values(["account", "cut"], kind="stable")
+    changed = (ros.account != ros.account.shift()) | (ros.skill_level != ros.skill_level.shift())
+    levels = ros[changed.to_numpy()].copy()
+    del ros
+    levels["time"] = levels.cut
+    levels["player"] = np.where(levels.hltv_id.notna(), "h" + levels.hltv_id.fillna(0).astype(int).astype(str),
+                                "f" + levels.faceit_id.astype(str))
+    levels = levels[["time", "cut", "player", "skill_level"]].reset_index(drop=True)
     return fmaps.drop(columns=["total_rounds", "team_a_faceit_id"]), frat, levels
 
 
-def team_lineups(maps: pd.DataFrame) -> dict[str, tuple[tuple[str, ...], pd.Timestamp]]:
-    """Each team's five in its latest map of `maps`."""
-    rows = pd.concat([maps[["time", "team_a", "lineup_a"]].set_axis(["time", "team", "five"], axis=1),
-                      maps[["time", "team_b", "lineup_b"]].set_axis(["time", "team", "five"], axis=1)])
-    last = rows.sort_values("time", kind="stable").groupby("team").tail(1)
-    return {t: (f, d) for t, f, d in zip(last.team, last.five, last.time)}
+def team_lineups(maps: pd.DataFrame, teams: set[str], revert_standins: bool) -> dict[str, tuple[list[str], pd.Timestamp]]:
+    """Each team's five in its latest map of `maps`. With revert_standins, a stand-in in that map is replaced by the
+    team's most recent regular from its earlier maps: a stand-in rarely carries over to the next match."""
+    cols = ["time", "team", "five", "standins"]
+    rows = pd.concat([maps[["time", "team_a", "lineup_a", "standins_a"]].set_axis(cols, axis=1),
+                      maps[["time", "team_b", "lineup_b", "standins_b"]].set_axis(cols, axis=1)])
+    rows = rows[rows.team.isin(teams)].sort_values("time", kind="stable")
+    out = {}
+    for team, g in rows.groupby("team", sort=False):
+        g = g.iloc[::-1]
+        five, st, seen = list(g.five.iloc[0]), g.standins.iloc[0], g.time.iloc[0]
+        if not revert_standins or not st:
+            out[team] = (five, seen)
+            continue
+        players = [p for p in five if p not in st]
+        for f, s in zip(g.five.iloc[1:11], g.standins.iloc[1:11]):
+            players += [p for p in f if p not in s and p not in players and p not in st]
+            if len(players) >= LINEUP:
+                break
+        out[team] = (players[:LINEUP], seen)
+    return out
 
 
 def apply_moves(five: tuple[str, ...] | None, seen: pd.Timestamp | None, team: str, moves: pd.DataFrame) -> list[str]:

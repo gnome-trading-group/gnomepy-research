@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.e16.data import Bundle, apply_moves, read_bundle, team_lineups
-from gnomepy_research.sessions.cs2_comp.e16.model import Config, fit, rank_feature
+from gnomepy_research.sessions.cs2_comp.e16.model import Config, Fit, fit, rank_feature
 
 
 def window(df: pd.DataFrame, cutoff: pd.Timestamp, days: int) -> pd.DataFrame:
@@ -31,34 +31,50 @@ def window(df: pd.DataFrame, cutoff: pd.Timestamp, days: int) -> pd.DataFrame:
 def _five(fives: dict, team: str, moves: pd.DataFrame, cfg: Config) -> list[str] | None:
     five, seen = fives.get(team, (None, None))
     if not cfg.roster_moves:
-        return list(five) if five is not None else None
+        return five
     return apply_moves(five, seen, team, moves)
 
 
+def _gaps(maps: pd.DataFrame, ratings: pd.DataFrame, levels: pd.DataFrame | None, b: Bundle, targets: pd.DataFrame,
+          cutoff: pd.Timestamp, cfg: Config) -> tuple[np.ndarray, np.ndarray, Fit]:
+    """Fit on the given maps and return each target's pre-veto gap and its variance."""
+    rank_of = rank_feature(b.rankings, cutoff)
+    f = fit(maps, ratings, levels, rank_of, cutoff, cfg)
+    teams = {f"h{int(t)}" for t in pd.concat([targets.team_a_id, targets.team_b_id])}
+    fives = team_lineups(maps, teams, bool(cfg.revert_standins))
+    moves = b.moves[b.moves.event_date < cutoff]
+    gaps = []
+    for r in targets.itertuples():
+        ka, kb = f"h{int(r.team_a_id)}", f"h{int(r.team_b_id)}"
+        five_a, five_b = (_five(fives, k, moves, cfg) for k in (ka, kb))
+        gaps.append(f.gap(ka, five_a, rank_of.get(ka, 0.0), kb, five_b, rank_of.get(kb, 0.0)))
+    g = np.array(gaps, dtype=float).reshape(-1, 2)
+    return g[:, 0], g[:, 1], f
+
+
 def predict_week(b: Bundle, targets: pd.DataFrame, cutoff: pd.Timestamp, cfg: Config) -> tuple[pd.DataFrame, dict]:
+    """HLTV-only gaps; with FACEIT, mixed with the joint HLTV + FACEIT fit's gaps by cfg.faceit_weight. Pooling the
+    sources moves well-measured HLTV players too far on online results, while the HLTV-only fit is blind where
+    HLTV is thin; the mix keeps most of the FACEIT gain on thin teams without the loss on established ones."""
     maps = window(b.hltv_maps, cutoff, cfg.window_days)
     ratings = window(b.hltv_ratings, cutoff, cfg.window_days).assign(source="hltv")
-    levels = None
+    gap, var, f = _gaps(maps, ratings, None, b, targets, cutoff, cfg)
+    info = {"hltv": f.info}
     if b.faceit_maps is not None:
         fmaps = window(b.faceit_maps, cutoff, cfg.faceit_window_days)
         fmaps = fmaps[fmaps.n_linked >= cfg.faceit_min_linked]
         frat = window(b.faceit_ratings, cutoff, cfg.faceit_window_days)
         frat = frat[frat.mkey.isin(set(fmaps.mkey))]
-        maps = pd.concat([maps, fmaps.drop(columns=["n_linked", "mkey"])], ignore_index=True)
-        ratings = pd.concat([ratings, frat.drop(columns=["mkey"]).assign(source="faceit")], ignore_index=True)
+        jmaps = pd.concat([maps, fmaps.drop(columns=["n_linked", "mkey"])], ignore_index=True)
+        jratings = pd.concat([ratings, frat.drop(columns=["mkey"]).assign(source="faceit")], ignore_index=True)
         levels = b.faceit_levels[b.faceit_levels.cut < cutoff]
-    rank_of = rank_feature(b.rankings, cutoff)
-    f = fit(maps, ratings, levels, rank_of, cutoff, cfg)
-    fives = team_lineups(maps)
-    moves = b.moves[b.moves.event_date < cutoff]
-    out = []
-    for r in targets.itertuples():
-        ka, kb = f"h{int(r.team_a_id)}", f"h{int(r.team_b_id)}"
-        five_a, five_b = (_five(fives, k, moves, cfg) for k in (ka, kb))
-        mean, var = f.gap(ka, five_a, rank_of.get(ka, 0.0), kb, five_b, rank_of.get(kb, 0.0))
-        out.append({"match_id": r.match_id, "q": f.price(mean, var), "gap": mean, "gap_var": var,
-                    "fit_cutoff": cutoff})
-    return pd.DataFrame(out), f.info
+        gap_j, var_j, fj = _gaps(jmaps, jratings, levels, b, targets, cutoff, cfg)
+        w = cfg.faceit_weight
+        gap, var = (1 - w) * gap + w * gap_j, (1 - w) * var + w * var_j
+        info["joint"] = fj.info
+    q = [f.price(m, v) for m, v in zip(gap, var)]
+    out = pd.DataFrame({"match_id": targets.match_id.to_numpy(), "q": q, "gap": gap, "gap_var": var, "fit_cutoff": cutoff})
+    return out, info
 
 
 def run(data: Path, targets: pd.DataFrame, faceit: bool, cfg: Config, verbose: bool = True) -> pd.DataFrame:

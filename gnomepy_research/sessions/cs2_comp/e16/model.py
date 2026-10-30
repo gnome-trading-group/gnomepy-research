@@ -54,8 +54,11 @@ class Config:
     faceit_window_days: int = 365
     # FACEIT maps with fewer HLTV-linked players than this are left out: maps between FACEIT-only players move HLTV
     # players' skills only through long chains, and they are most of the fitting time.
-    faceit_min_linked: int = 0
+    faceit_min_linked: int = 1
+    sigma_offset: float = 0.0
+    faceit_weight: float = 0.5
     roster_moves: int = 1
+    revert_standins: int = 0
 
 
 @dataclass
@@ -183,12 +186,23 @@ def fit(maps: pd.DataFrame, ratings: pd.DataFrame, levels: pd.DataFrame | None, 
     k = X.shape[1]
     s0, st, sb = cfg.sigma0 ** 2, cfg.sigma_team ** 2, cfg.sigma_beta ** 2
 
+    # With sigma_offset > 0 each player also has a FACEIT offset: his FACEIT results measure theta + offset, so
+    # FACEIT moves an established HLTV player little and a player with thin HLTV history a lot.
+    n_o = n_p if cfg.sigma_offset > 0 else 0
+    Af = sp.diags((maps.source == "faceit").to_numpy(float)) @ A if n_o else None
+    so = cfg.sigma_offset ** 2
+
     def unpack(z):
-        return z[:n_p], z[n_p:n_p + n_t], z[n_p + n_t:n_p + n_t + k], z[n_p + n_t + k:]
+        b0 = n_p + n_t + k
+        return z[:n_p], z[n_p:n_p + n_t], z[n_p + n_t:b0], z[b0:b0 + 2], z[b0 + 2:]
+
+    def gap(theta, team, offset):
+        d = A @ theta + T @ team
+        return d + Af @ offset if n_o else d
 
     def objective(z):
-        theta, team, beta, gamma = unpack(z)
-        d = A @ theta + T @ team
+        theta, team, beta, gamma, offset = unpack(z)
+        d = gap(theta, team, offset)
         sig = 1 / (1 + np.exp(-d))
         ll = c * (ra * np.log(np.clip(sig, 1e-12, None)) + (n - ra) * np.log(np.clip(1 - sig, 1e-12, None)))
         g_d = -c * (ra - n * sig)
@@ -202,12 +216,15 @@ def fit(maps: pd.DataFrame, ratings: pd.DataFrame, levels: pd.DataFrame | None, 
         g_beta = -X.T @ resid / s0
         g_beta[1:] += beta[1:] / sb
         g_gamma = np.array([-(rw * e * rel)[src == s].sum() for s in (0, 1)]) + gamma
-        return loss, np.concatenate([g_theta, g_team, g_beta, g_gamma])
+        if not n_o:
+            return loss, np.concatenate([g_theta, g_team, g_beta, g_gamma])
+        loss += 0.5 * (offset @ offset) / so
+        return loss, np.concatenate([g_theta, g_team, g_beta, g_gamma, Af.T @ g_d + offset / so])
 
-    z0 = np.concatenate([np.zeros(n_p + n_t + k), np.array([0.5, 0.5])])
+    z0 = np.concatenate([np.zeros(n_p + n_t + k), np.array([0.5, 0.5]), np.zeros(n_o)])
     res = minimize(objective, z0, jac=True, method="L-BFGS-B", options={"maxiter": 3000, "maxcor": 20, "gtol": 1e-6})
-    theta, team, beta, gamma = unpack(res.x)
-    sig = 1 / (1 + np.exp(-(A @ theta + T @ team)))
+    theta, team, beta, gamma, offset = unpack(res.x)
+    sig = 1 / (1 + np.exp(-gap(theta, team, offset)))
     fisher = np.asarray((A.multiply(A)).T @ (c * n * sig * (1 - sig))).ravel()
     fisher += np.asarray((R.multiply(R)).T @ (rw * gamma[src] ** 2)).ravel()
     var = 1 / (fisher + 1 / s0)
