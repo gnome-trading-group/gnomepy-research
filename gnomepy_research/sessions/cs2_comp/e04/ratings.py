@@ -20,6 +20,7 @@ class Params:
     overlap_power: float = 2.0
     shrink_games: float = 12.0
     seed_player: float = 1500.0
+    calibration: float = 1.0
 
 
 @dataclass
