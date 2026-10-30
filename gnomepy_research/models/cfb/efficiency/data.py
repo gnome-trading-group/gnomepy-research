@@ -25,6 +25,19 @@ DEF_FEATURES = [
 ]
 # Flags that widen the preseason prior: less is known about a team that changed a lot.
 UNCERTAINTY_FLAGS = ["coach_new", "qb_not_returning", "prior_missing"]
+RETURNING_FEATURES = ["returning_pct_ppa", "returning_pct_passing_ppa"]
+# CFBD's returning production comes from its own roster snapshot. When last season's primary passer has left (our roster
+# check) yet at least this share of passing production "returns", that snapshot is stale.
+STALE_RETURNING_PASSING = 0.8
+
+
+def unknown_stale_returning(pre: pd.DataFrame) -> pd.DataFrame:
+    """Returning production read from a stale CFBD roster snapshot becomes unknown (the season mean once standardized).
+    2026 Southern Miss: 97% of passing production 'returning' after its 2025 starter left."""
+    pre = pre.copy()
+    stale = (pre["qb_returning_starter"] == 0) & (pre["returning_pct_passing_ppa"] >= STALE_RETURNING_PASSING)
+    pre.loc[stale.to_numpy(), RETURNING_FEATURES] = np.nan
+    return pre
 
 
 @dataclass
@@ -79,6 +92,7 @@ def build_model_data(preseason: pd.DataFrame, efficiency: pd.DataFrame, games: p
                      seasons: list[int]) -> ModelData:
     """`efficiency` must already be point-in-time filtered (as_of the fit's cutoff)."""
     pre = preseason[preseason["season"].isin(seasons)].sort_values(["season", "team_id"]).reset_index(drop=True)
+    pre = unknown_stale_returning(pre)
     pre["qb_returning_starter"] = pre["qb_returning_starter"].astype(float)
     pre["coach_new"] = pre["coach_new"].astype(float)
     xo, off_names = _standardize(pre, OFF_FEATURES)
