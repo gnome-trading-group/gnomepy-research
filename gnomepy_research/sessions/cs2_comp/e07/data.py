@@ -202,7 +202,8 @@ def build(data_dir, before: pd.Timestamp, use_faceit: bool) -> Streams:
 
 
 class RankPoints:
-    """HLTV ranking points of a team on or before a day (days since epoch); 0 when unranked or the ranking is stale."""
+    """HLTV ranking points of a team from the latest ranking dated before a day (days since epoch); 0 when unranked or the
+    ranking is stale. Strictly before, because a ranking published on the cutoff day is not in a bundle cut there."""
 
     MAX_AGE_DAYS = 120.0
 
@@ -214,7 +215,7 @@ class RankPoints:
         h = self._hist.get(int(team))
         if h is None:
             return 0.0
-        i = int(np.searchsorted(h[0], day, side="right")) - 1
+        i = int(np.searchsorted(h[0], day, side="left")) - 1
         if i < 0 or day - h[0][i] > self.MAX_AGE_DAYS:
             return 0.0
         return float(h[1][i])

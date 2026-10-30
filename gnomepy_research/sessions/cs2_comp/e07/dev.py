@@ -66,9 +66,9 @@ def build_config(overrides: dict) -> ModelConfig:
     """Keys prefixed h_ or f_ go to the HLTV or FACEIT filter; use_faceit goes to the model."""
     h = {k[2:]: v for k, v in overrides.items() if k.startswith("h_")}
     f = {k[2:]: v for k, v in overrides.items() if k.startswith("f_")}
-    base = ModelConfig()
+    base = FINAL
     model = {k: v for k, v in overrides.items() if k in ("use_faceit", "roster_moves", "faceit_lineup_weight", "faceit_lineup_days", "newcomer_prob")}
-    return replace(base, hltv=replace(FINAL.hltv, **h), faceit=replace(FINAL.faceit, **f), **model)
+    return replace(base, hltv=replace(base.hltv, **h), faceit=replace(base.faceit, **f), **model)
 
 
 def main() -> None:
