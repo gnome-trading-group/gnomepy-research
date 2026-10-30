@@ -34,6 +34,9 @@ RIDGE = 1e-3
 RATING_MAPS = 10
 RATING_SHRINK_MAPS = 5
 ELO_K = 20.0
+# The filter settings were fitted on one-step-ahead map log loss; for weekly series prices on Oct 2025 - Mar 2026 no
+# weight on the best player and a tighter newcomer prior each did a little better, and the rest of the fit held.
+FILTER_DEFAULTS = {"lam": 0.0, "sigma0": 0.15}
 
 
 class TeamElo:
@@ -110,7 +113,7 @@ def _features(f: SkillFilter, lineups: LastLineups, sources: tuple[int, ...], ra
 
 def filter_config(overrides: list[str] | None) -> PlayerSkillConfig:
     """The fitted filter settings, with `name=value` overrides from the command line."""
-    cfg = PlayerSkillConfig()
+    cfg = dataclasses.replace(PlayerSkillConfig(), **FILTER_DEFAULTS)
     for item in overrides or ():
         name, value = item.split("=")
         cfg = dataclasses.replace(cfg, **{name: type(getattr(cfg, name))(value)})
@@ -118,7 +121,7 @@ def filter_config(overrides: list[str] | None) -> PlayerSkillConfig:
 
 
 def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src: SourceConfig = SourceConfig(),
-             cfg: PlayerSkillConfig = PlayerSkillConfig(), log=print) -> pd.DataFrame:
+             cfg: PlayerSkillConfig | None = None, log=print) -> pd.DataFrame:
     """Filter the map stream and price every training and target series at its week's Monday: one row each."""
     targets = targets.copy()
     targets["week_cutoff"] = pd.to_datetime(targets.week_cutoff)
@@ -134,6 +137,7 @@ def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src:
     train["day"] = train.time.dt.normalize()
     log(f"stream {len(stream)} maps ({int((stream.source == FACEIT).sum())} FACEIT), {len(train)} bo3 series, loaded in {time.time() - t0:.0f}s")
 
+    cfg = cfg or filter_config(None)
     filters = {"h": (SkillFilter(cfg, src, ranks, use_faceit=False), (HLTV,))}
     if use_faceit:
         filters["u"] = (SkillFilter(cfg, src, ranks, use_faceit=True), (HLTV, FACEIT))
@@ -177,7 +181,7 @@ def snapshot(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src:
 
 
 def run(data_dir: str | Path, targets: pd.DataFrame, use_faceit: bool, src: SourceConfig = SourceConfig(),
-        calibration_months: int = 12, calibration: str = "coverage", extra: bool = True, cfg: PlayerSkillConfig = PlayerSkillConfig(),
+        calibration_months: int = 12, calibration: str = "coverage", extra: bool = True, cfg: PlayerSkillConfig | None = None,
         log=print) -> pd.DataFrame:
     return calibrate(snapshot(data_dir, targets, use_faceit, src, cfg, log), use_faceit, calibration_months, calibration, extra, log)
 
