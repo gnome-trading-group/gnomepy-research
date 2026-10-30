@@ -5,7 +5,7 @@ A posterior is fitted at an anchor cutoff every REFIT_WEEKS weeks and prices eve
 to the next one. The anchor depends only on the target week, so a run on a bundle cut at any week cutoff fits the
 same posterior from the same rows. Fits are slow (NUTS), so a cache directory can hold them between runs; on Batch,
 
-    python -m gnomepy_research.sessions.cs2_comp.e11.bayes_part --data <bundle> --anchors 2026-03-30,2026-04-13
+    python -m gnomepy_research.sessions.cs2_comp.e11.bayes_part --data <bundle> --anchors 2026-03-30,2026-04-27
 
 fits those anchors into $OUTPUT_DIR, which predict.py then reads as its --cache.
 """
@@ -25,7 +25,7 @@ from gnomepy_research.models.cs2.hltv.bayes_series import RankStrength, SeriesPo
 from gnomepy_research.sessions.cs2_comp import bundle
 
 ANCHOR_EPOCH = pd.Timestamp("2024-01-08")
-REFIT_WEEKS = 2
+REFIT_WEEKS = 4
 STATS_COLUMNS = ["match_id", "match_date", "map_name", "player_id", "team_id", "side", "rating"]
 
 
