@@ -5,10 +5,13 @@ e11: the HLTV Bayes series price, moved by what FACEIT results say about the two
 
 q_bayes is the current Bayes series model (bayes_part.py) priced on each team's latest five. The two filters are the
 same player-skill filter (skill.py) run over HLTV maps alone and over HLTV + FACEIT maps, priced on the same fives;
-their gap is FACEIT's evidence, added to the Bayes price at a weight fitted on series before the tune period
-(evaluate.py). It is added only when both fives have at least one player with FACEIT history: when one has none, the
-gap compares a FACEIT-rated five with an HLTV-only one across two scales, and on the development series it added
-nothing there. With --no-faceit the price is q_bayes on HLTV fives alone.
+their gap is FACEIT's evidence, added to the Bayes price with weight K_FACEIT. On series before the tune period
+(evaluate.py) the gap's outcome weight was 0.43 next to 0.77 for the overconfident HLTV filter price, i.e. 0.55
+relative to a base on the filter's scale and 0.43 relative to a calibrated one; the Bayes price's own scale before the
+tune period was not measured (its fits need Batch), so K_FACEIT splits the two. The gap is added only when both fives
+have at least one player with FACEIT history: when one has none, it compares a FACEIT-rated five with an HLTV-only one
+across two scales, and on the development series it added nothing there. With --no-faceit the price is q_bayes on
+HLTV fives alone.
 
 Every target is priced from data available before its week_cutoff: the filters see exactly the maps available
 before it (stream.py), and the Bayes posterior is fitted at the week's anchor, at most REFIT_WEEKS - 1 weeks earlier.
@@ -33,7 +36,7 @@ from gnomepy_research.sessions.cs2_comp.e11.stream import FACEIT, HLTV, build_st
 
 FACEIT_CONFIG = FilterConfig(w_faceit=0.5, a_faceit=-0.2, s_faceit=0.05)
 HLTV_CONFIG = FilterConfig()
-K_FACEIT = 0.55
+K_FACEIT = 0.5
 MIN_COVERAGE = 1
 UNKNOWN_BASE = -4 * 10 ** 18
 
