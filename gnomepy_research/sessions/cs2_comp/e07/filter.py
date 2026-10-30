@@ -189,6 +189,27 @@ class Filter:
         w = np.full(LINEUP, 1.0 / LINEUP)
         return float(w @ self.mu[ids]), float(w @ P @ w)
 
+    def players_state(self, ids: list, team: int, t: float, day: float) -> tuple[float, float]:
+        """Mean and variance of the mean skill of a lineup whose slots may be unknown (None) or never seen: those take the prior."""
+        c = self.cfg
+        known = [i for i in ids if i is not None and not np.isnan(self.seen[i])]
+        n_fill = LINEUP - len(known)
+        mean = sum(self.mu[i] for i in known)
+        var = 0.0
+        if known:
+            k = np.array(known)
+            idle = np.maximum(t - self.seen[k], 0.0)
+            P = np.zeros((len(k), len(k)))
+            for a in range(len(k)):
+                P[a, a] = self.var[k[a]] + c.tau ** 2 * idle[a]
+                for b in range(a + 1, len(k)):
+                    lo, hi = (k[a], k[b]) if k[a] < k[b] else (k[b], k[a])
+                    P[a, b] = P[b, a] = self.cov.get((lo, hi), 0.0)
+            var = float(P.sum())
+        mean += n_fill * self._prior(team, day, np.nan, HLTV)
+        var += n_fill * c.sigma0 ** 2
+        return mean / LINEUP, var / LINEUP ** 2
+
     def lineup_state(self, team: int, t: float, day: float, ids: np.ndarray | None = None) -> tuple[float, float]:
         """Mean and variance of the team's mean skill from a five (default: its last known five), or the rank prior."""
         if ids is None:
@@ -230,9 +251,14 @@ class Filter:
         return float((self.mu[ids[covered]] - c.faceit_prior).sum() / LINEUP), float(var.sum() / LINEUP ** 2), int(covered.sum())
 
     def price(self, team_a: int, team_b: int, t: float, cutoff_day: float,
-              ids_a: np.ndarray | None = None, ids_b: np.ndarray | None = None) -> tuple[float, float, float]:
-        ma, va = self.lineup_state(team_a, t, cutoff_day, ids_a)
-        mb, vb = self.lineup_state(team_b, t, cutoff_day, ids_b)
+              ids_a: np.ndarray | None = None, ids_b: np.ndarray | None = None,
+              lineups: tuple[list, list] | None = None) -> tuple[float, float, float]:
+        if lineups is not None:
+            ma, va = self.players_state(lineups[0], team_a, t, cutoff_day)
+            mb, vb = self.players_state(lineups[1], team_b, t, cutoff_day)
+        else:
+            ma, va = self.lineup_state(team_a, t, cutoff_day, ids_a)
+            mb, vb = self.lineup_state(team_b, t, cutoff_day, ids_b)
         mean, var = ma - mb, va + vb + self.cfg.sigma_series ** 2
         d = mean + math.sqrt(var) * _GH_X
         p = np.interp(d, _GRID, self._map_table)

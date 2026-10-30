@@ -21,6 +21,7 @@ from gnomepy_research.sessions.cs2_comp import bundle
 from gnomepy_research.sessions.cs2_comp.e07 import data
 from gnomepy_research.sessions.cs2_comp.e07 import stack
 from gnomepy_research.sessions.cs2_comp.e07.final_config import FINAL, STACK_FACEIT, STACK_HLTV
+from gnomepy_research.sessions.cs2_comp.e07.lineup import RosterMoves
 from gnomepy_research.sessions.cs2_comp.e07.model import Model, ModelConfig
 
 Q_FLOOR = 0.02
@@ -30,7 +31,8 @@ def run(data_dir: Path, targets: pd.DataFrame, cfg: ModelConfig) -> pd.DataFrame
     cutoffs = sorted(targets.week_cutoff.unique())
     last = pd.Timestamp(cutoffs[-1])
     streams = data.build(data_dir, last, cfg.use_faceit)
-    model = Model(cfg, streams, data.RankPoints(bundle.load(data_dir, "hltv/cs2_team_rankings", last)))
+    model = Model(cfg, streams, data.RankPoints(bundle.load(data_dir, "hltv/cs2_team_rankings", last)),
+                  RosterMoves(bundle.load(data_dir, "hltv/cs2_roster_moves", last)))
     weights = STACK_FACEIT if cfg.use_faceit else STACK_HLTV
     out = []
     for cutoff in cutoffs:
