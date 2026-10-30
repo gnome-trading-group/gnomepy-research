@@ -51,6 +51,7 @@ class RatingConfig:
     s_h: float = 0.5
     g_f: float = 0.0
     s_f: float = 0.5
+    sigma_u: float = 0.0
 
 
 @dataclass
@@ -74,6 +75,7 @@ class RatingFilter:
         self.var: dict[int, float] = {}
         self.seen: dict[int, float] = {}
         self.cov: dict[tuple[int, int], float] = {}
+        self.style: dict[tuple[int, int], tuple[float, float]] = {}
         self.games: collections.Counter = collections.Counter()
         self.hltv_games: collections.Counter = collections.Counter()
         self.five_days: dict[frozenset, collections.deque] = collections.defaultdict(collections.deque)
@@ -157,15 +159,24 @@ class RatingFilter:
         return a.total - b.total, float(w @ cov @ w) + extra, cov, w
 
     def observe_dev(self, players, devs, src: int) -> None:
-        """Kalman update of a five on its players' scores relative to the five's mean (call after observe)."""
+        """Kalman update of a five on its players' scores relative to the five's mean (call after observe).
+
+        A player's role moves his score as much as his skill does (an AWPer out-rates a support), so with sigma_u > 0
+        each player also carries a persistent style offset per source, learned alongside his skill."""
         c = self.cfg
         g, s = (c.g_f, c.s_f) if src == FACEIT else (c.g_h, c.s_h)
         if g <= 0:
             return
         players = list(players)
+        centre = np.eye(5) - 0.2
         cov = self.block(players, [self.var[p] for p in players])
         mu = np.array([self.mu[p] for p in players])
-        h = g * (np.eye(5) - 0.2)
+        h = g * centre
+        if c.sigma_u > 0:
+            styles = [self.style.get((p, src), (0.0, c.sigma_u ** 2)) for p in players]
+            cov = np.block([[cov, np.zeros((5, 5))], [np.zeros((5, 5)), np.diag([v for _, v in styles])]])
+            mu = np.concatenate([mu, [m for m, _ in styles]])
+            h = np.hstack([h, centre])
         ph = cov @ h.T
         gain = ph @ np.linalg.inv(h @ ph + s * s * np.eye(5))
         mu = mu + gain @ (np.asarray(devs, float) - h @ mu)
@@ -176,6 +187,8 @@ class RatingFilter:
             for j in range(i + 1, 5):
                 q = players[j]
                 self.cov[(p, q) if p < q else (q, p)] = float(cov[i, j])
+            if c.sigma_u > 0:
+                self.style[(p, src)] = (float(mu[5 + i]), max(1e-6, float(cov[5 + i, 5 + i])))
 
     def observe(self, t: pd.Timestamp, now: float, src: int, div: int, team_a: int, team_b: int, pa, pb,
                 rounds_a: int, rounds_b: int) -> float:

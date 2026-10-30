@@ -5,7 +5,8 @@ scored against their outcomes (no market), for a list of RatingConfig variants.
     python -m gnomepy_research.sessions.cs2_comp.e13.dev --data <bundle> --out <dir> [--no-faceit] '<json>' ...
 
 Each variant is a JSON object of RatingConfig overrides, plus optional run() keywords (use_moves, sigma_map,
-sigma_series). Writes one line per variant to summary.txt and its weekly prices to hist_<i>.parquet.
+sigma_series, actual_fives,
+core_maps). Writes one line per variant to summary.txt and its weekly prices to hist_<i>.parquet.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ from gnomepy_research.sessions.cs2_comp.e13.rating import RatingConfig
 DEV_END = pd.Timestamp("2026-03-30")
 DEV_FROM = pd.Timestamp("2025-10-06")
 HISTORY_FROM = pd.Timestamp("2025-04-07")
-RUN_KEYS = ("use_moves", "sigma_map", "sigma_series")
+RUN_KEYS = ("use_moves", "sigma_map", "sigma_series", "actual_fives", "core_maps")
 
 
 def log_loss(p, y) -> np.ndarray:

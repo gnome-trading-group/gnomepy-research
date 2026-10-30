@@ -30,6 +30,7 @@ from gnomepy_research.sessions.cs2_comp.e13.data import FACEIT, Bundle, build
 from gnomepy_research.sessions.cs2_comp.e13.rating import RatingConfig, RatingFilter
 
 CAL_WEEKS = 26
+CORE_MAPS = 1
 SIGMA_MAP = 0.15
 SIGMA_SERIES = 0.10
 EPOCH = pd.Timestamp("2020-01-01")
@@ -49,10 +50,14 @@ def series_price(d: float, s2: float, curve: np.ndarray, sigma_series: float) ->
 
 
 class Rosters:
-    """The five each team is expected to field at a cutoff."""
+    """The five each team is expected to field at a cutoff.
 
-    def __init__(self, moves: pd.DataFrame):
-        self.last: dict[int, tuple[float, tuple[int, ...]]] = {}
+    With core_maps > 1 the five is the team's regulars over its last core_maps maps (most appearances, then the most
+    recent), not just its last five: a stand-in who filled one series does not displace the player he stood in for."""
+
+    def __init__(self, moves: pd.DataFrame, core_maps: int = 1):
+        self.core_maps = max(1, core_maps)
+        self.hist: dict[int, collections.deque] = {}
         self.moves: dict[int, list[tuple[float, int, bool]]] = collections.defaultdict(list)
         for r in moves.itertuples():
             now = _days(r.event_date)
@@ -62,44 +67,44 @@ class Rosters:
                 self.moves[int(r.to_team_id)].append((now, int(r.person_id), True))
 
     def played(self, team: int, now: float, five: tuple[int, ...]) -> None:
-        self.last[team] = (now, five)
+        h = self.hist.get(team)
+        if h is None:
+            h = self.hist[team] = collections.deque(maxlen=self.core_maps)
+        h.append((now, five))
 
     def five(self, team: int, now: float, use_moves: bool) -> tuple[list[int], int]:
-        last = self.last.get(team)
-        if last is None:
+        h = self.hist.get(team)
+        if not h:
             return [], 5
-        since, five = last
-        players = list(five)
+        since = h[-1][0]
+        last_seen: dict[int, float] = {}
+        count: collections.Counter = collections.Counter()
+        for t, five in h:
+            for p in five:
+                count[p] += 1
+                last_seen[p] = t
+        ranked = sorted(count, key=lambda p: (-count[p], -last_seen[p], p))
+        departed: set[int] = set()
+        joined: list[int] = []
         if use_moves:
-            joined: list[int] = []
             for when, person, arrives in self.moves.get(team, ()):
-                if since <= when < now:
-                    if arrives:
-                        if person not in players and person not in joined:
-                            joined.insert(0, person)
-                    else:
-                        if person in players:
-                            players.remove(person)
-                        if person in joined:
-                            joined.remove(person)
-            for p in joined:
-                if len(players) >= 5:
-                    break
+                if when >= now:
+                    continue
+                if arrives:
+                    if when >= since and person not in ranked[:5] and person not in joined:
+                        joined.insert(0, person)
+                    departed.discard(person)
+                elif when >= last_seen.get(person, since):
+                    departed.add(person)
+                    if person in joined:
+                        joined.remove(person)
+        players = [p for p in ranked[:5] if p not in departed]
+        for p in joined + ranked[5:]:
+            if len(players) >= 5:
+                break
+            if p not in departed and p not in players:
                 players.append(p)
         return players, 5 - len(players)
-
-
-def rosters_at(b: Bundle, cutoff: pd.Timestamp) -> Rosters:
-    r = Rosters(b.moves)
-    m = b.maps[b.maps.t < cutoff]
-    for side in ("a", "b"):
-        known = m[(m.src != FACEIT) | (m[f"team_{side}"] > 0)]
-        for team, t, five in zip(known[f"team_{side}"], known.t, known[f"players_{side}"]):
-            prev = r.last.get(int(team))
-            now = _days(t)
-            if prev is None or prev[0] <= now:
-                r.last[int(team)] = (now, five)
-    return r
 
 
 def _days(t) -> float:
@@ -128,10 +133,11 @@ def data_cutoff(targets: pd.DataFrame) -> pd.Timestamp:
 
 
 def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = True,
-        sigma_map: float = SIGMA_MAP, sigma_series: float = SIGMA_SERIES, history_from: pd.Timestamp | None = None
-        ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        sigma_map: float = SIGMA_MAP, sigma_series: float = SIGMA_SERIES, history_from: pd.Timestamp | None = None,
+        actual_fives: bool = False, core_maps: int = CORE_MAPS) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Returns (target prices, HLTV bo3 series priced at each cutoff from history_from on); b is built at
-    data_cutoff(targets)."""
+    data_cutoff(targets). actual_fives prices the history series with the fives that went on to play them, which
+    only a diagnostic may do: it measures what predicting the fives costs."""
     cutoffs = sorted(pd.to_datetime(targets.week_cutoff).unique())
     last = pd.Timestamp(cutoffs[-1])
     first = pd.Timestamp(cutoffs[0]) - pd.Timedelta(weeks=CAL_WEEKS)
@@ -139,7 +145,7 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
         first = min(first, pd.Timestamp(history_from))
     weeks = list(pd.date_range(first, last, freq="7D"))
     f = RatingFilter(cfg, b.rankings, b.faceit_level)
-    rosters = Rosters(b.moves)
+    rosters = Rosters(b.moves, core_maps)
     curve = _series_curve(sigma_map)
     series = b.series[(b.series.bo_type == 3) & b.series.y.notna()].copy()
     series["week"] = series.t.dt.normalize() - pd.to_timedelta(series.t.dt.dayofweek, unit="D")
@@ -147,9 +153,16 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
     tg = targets.assign(week_cutoff=pd.to_datetime(targets.week_cutoff))
     t_by_week = {w: g for w, g in tg.groupby("week_cutoff")}
 
-    def price(team_a: int, team_b: int, w: pd.Timestamp, now: float) -> dict:
-        fa, ua = rosters.five(team_a, now, use_moves)
-        fb, ub = rosters.five(team_b, now, use_moves)
+    played = b.maps[b.maps.src != FACEIT].drop_duplicates("match_id").set_index("match_id")[["players_a", "players_b"]] \
+        if actual_fives else None
+
+    def price(team_a: int, team_b: int, w: pd.Timestamp, now: float, match_id=None) -> dict:
+        if played is not None and str(match_id) in played.index:
+            fa, fb = played.loc[str(match_id)]
+            fa, fb, ua, ub = list(fa), list(fb), 0, 0
+        else:
+            fa, ua = rosters.five(team_a, now, use_moves)
+            fb, ub = rosters.five(team_b, now, use_moves)
         la = f.lineup(tuple(fa), team_a, w, now, 0, -1, ua)
         lb = f.lineup(tuple(fb), team_b, w, now, 0, -1, ub)
         d, s2, _, _ = f.gap(la, lb)
@@ -181,7 +194,7 @@ def run(b: Bundle, targets: pd.DataFrame, cfg: RatingConfig, use_moves: bool = T
         now = _days(w)
         for r in by_week.get(w, pd.DataFrame()).itertuples():
             hist_rows.append({"match_id": r.match_id, "week": w, "y": r.y, "is_lan": r.is_lan,
-                              **price(int(r.team_a), int(r.team_b), w, now)})
+                              **price(int(r.team_a), int(r.team_b), w, now, r.match_id)})
         for r in t_by_week.get(w, pd.DataFrame()).itertuples():
             out_rows.append({"match_id": r.match_id, "fit_cutoff": w, **price(int(r.team_a_id), int(r.team_b_id), w, now)})
     hist = pd.DataFrame(hist_rows)
