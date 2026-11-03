@@ -161,9 +161,22 @@ def load_faceit(data_dir: Path, until: pd.Timestamp) -> tuple[pd.DataFrame, pd.D
     fh = fh[ok]
     sa, sb = fh.team_a_score.to_numpy(int), fh.team_b_score.to_numpy(int)
     ot = ((fh.team_a_ot_score.fillna(0) + fh.team_b_ot_score.fillna(0)) > 0).to_numpy() | (sa + sb > 24)
+    st = load(data_dir, "faceit/faceit_player_map_stats", until, ["match_id", "map_name", "faceit_id", "adr", "kills", "deaths"])
+    st = st.dropna()
+    rounds_of = dict(zip(zip(fh.match_id, fh.map_name), sa + sb))
+    n = np.array([rounds_of.get(k, np.nan) for k in zip(st.match_id, st.map_name)], float)
+    # HLTV's rating weights on the per-round stats FACEIT reports; only deviations within a five are used, so the
+    # terms FACEIT lacks (KAST, impact) only cost precision.
+    proxy = 0.0032 * st.adr.to_numpy(float) + (0.36 * st.kills.to_numpy(float) - 0.53 * st.deaths.to_numpy(float)) / n
+    ok_st = np.isfinite(proxy)
+    perf = dict(zip(zip(st.match_id[ok_st], st.map_name[ok_st], [uid(f) for f in st.faceit_id[ok_st]]), proxy[ok_st]))
+    fa_ok = [x for x, k in zip(fa, ok) if k]
+    fb_ok = [x for x, k in zip(fb, ok) if k]
     maps = pd.DataFrame({"match_id": fh.match_id.to_numpy(), "time": fh.time.to_numpy(), "known": fh.known.to_numpy(),
                          "won_a": (sa > sb).astype(float), "rounds_a": np.where(ot, 12, sa), "rounds": np.where(ot, 24, sa + sb),
-                         "five_a": [x for x, k in zip(fa, ok) if k], "five_b": [x for x, k in zip(fb, ok) if k]})
+                         "five_a": fa_ok, "five_b": fb_ok,
+                         "rating_a": [[perf.get((m, n, p), np.nan) for p in f] for m, n, f in zip(fh.match_id, fh.map_name, fa_ok)],
+                         "rating_b": [[perf.get((m, n, p), np.nan) for p in f] for m, n, f in zip(fh.match_id, fh.map_name, fb_ok)]})
     ro = load(data_dir, "faceit/faceit_rosters", until, ["match_id", "faceit_id", "played", "skill_level"])
     ro = ro[ro.played & ro.skill_level.notna() & ro.faceit_id.isin(f2h.keys())]
     ro = ro.merge(fm[["match_id", "known"]], on="match_id")

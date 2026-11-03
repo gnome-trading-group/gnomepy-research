@@ -41,10 +41,17 @@ class RaterConfig:
     market_k: float = 0.25
     market_k_new: float = 0.6
     form_half_life: float = 90.0
-    g_var0: float = 0.5
+    bias_k: float = 0.1
+    r_gamma: float = 0.3
+    r_sd: float = 0.6
+    g_var0: float = 0.8
+    g_team_var0: float = 0.0
+    fr_gamma: float = 0.3
+    fr_sd: float = 0.4
+    g_hltv_step: float = 1.0
     g_tau2: float = 0.00002
     g_init: float = -0.2
-    g_fill_drop: float = 0.5
+    g_fill_drop: float = 0.6
     g_faceit_step: float = 0.5
     g_faceit_scale: float = 1.2
 
@@ -95,11 +102,14 @@ class GaussPlayer:
     """Player skills as independent Gaussians updated by one Newton step per map on the round likelihood (a
     Glicko-style filter): steps shrink as a player's variance does, and variance grows again while a player is idle."""
 
-    def __init__(self, var0: float, tau2: float, init: float, fill_drop: float):
-        self.var0, self.tau2, self.init, self.fill_drop = var0, tau2, init, fill_drop
+    def __init__(self, var0: float, tau2: float, init: float, fill_drop: float, team_var0: float = 0.0):
+        self.var0, self.tau2, self.init, self.fill_drop, self.team_var0 = var0, tau2, init, fill_drop, team_var0
         self.mu: dict[int, float] = {}
         self.var: dict[int, float] = {}
         self.t: dict[int, float] = {}
+        self.tmu: dict[int, float] = {}
+        self.tvar: dict[int, float] = {}
+        self.tt: dict[int, float] = {}
 
     def _state(self, five, now: float) -> tuple[np.ndarray, np.ndarray]:
         known = [self.mu[p] for p in five if p in self.mu]
@@ -109,11 +119,20 @@ class GaussPlayer:
                         for p in five])
         return mu, var
 
-    def update(self, five_a, five_b, rounds_a: float, rounds: float, now: float, step: float = 1.0, scale: float = 1.0) -> None:
+    def _team(self, team, now: float) -> tuple[float, float]:
+        if team is None or not self.team_var0:
+            return 0.0, 0.0
+        if team not in self.tmu:
+            return 0.0, self.team_var0
+        return self.tmu[team], min(self.tvar[team] + self.tau2 * max(now - self.tt[team], 0.0), self.team_var0)
+
+    def update(self, five_a, five_b, rounds_a: float, rounds: float, now: float, step: float = 1.0, scale: float = 1.0,
+               team_a=None, team_b=None) -> None:
         ma, va = self._state(five_a, now)
         mb, vb = self._state(five_b, now)
-        d = scale * (ma.mean() - mb.mean())
-        vd = scale * scale * (va.sum() + vb.sum()) / (FIVE * FIVE)
+        (ta, tva), (tb, tvb) = self._team(team_a, now), self._team(team_b, now)
+        d = scale * (ma.mean() - mb.mean() + ta - tb)
+        vd = scale * scale * ((va.sum() + vb.sum()) / (FIVE * FIVE) + tva + tvb)
         p = 1.0 / (1.0 + np.exp(-d))
         h = step * rounds * p * (1 - p)
         g = step * (rounds_a - rounds * p)
@@ -123,12 +142,37 @@ class GaussPlayer:
                 self.mu[pl] = m[i] + sign * v[i] * k * g
                 self.var[pl] = max(v[i] - (v[i] * scale / FIVE) ** 2 * h / (1.0 + vd * h), 1e-4)
                 self.t[pl] = now
+        if self.team_var0:
+            kt = scale / (1.0 + vd * h)
+            for team, m, v, sign in ((team_a, ta, tva, 1.0), (team_b, tb, tvb, -1.0)):
+                if team is not None:
+                    self.tmu[team] = m + sign * v * kt * g
+                    self.tvar[team] = max(v - (v * scale) ** 2 * h / (1.0 + vd * h), 1e-5)
+                    self.tt[team] = now
 
-    def price(self, five, now: float) -> tuple[float, float]:
+    def rate(self, five, ratings, gamma: float, sd: float) -> None:
+        """HLTV map ratings relative to teammates as a measurement of who carries the five:
+        rating_p - mean(rating) ~ N(gamma * (s_p - mean(s)), sd^2), one player at a time."""
+        rt = np.asarray(ratings, float)
+        if not np.isfinite(rt).all() or any(p not in self.mu for p in five):
+            return
+        obs = (rt - rt.mean()) / gamma
+        r2 = (sd / gamma) ** 2
+        mu = np.array([self.mu[p] for p in five])
+        dev = mu - mu.mean()
+        lead = 1.0 - 1.0 / FIVE
+        for i, p in enumerate(five):
+            v = self.var[p]
+            k = v * lead / (v * lead * lead + r2)
+            self.mu[p] = mu[i] + k * (obs[i] - dev[i])
+            self.var[p] = max(v * (1.0 - k * lead), 1e-4)
+
+    def price(self, five, now: float, team=None) -> tuple[float, float]:
+        tm, tv = self._team(team, now)
         if not five:
-            return self.init, self.var0
+            return self.init + tm, self.var0
         mu, var = self._state(five, now)
-        return float(mu.mean()), float(var.mean())
+        return float(mu.mean()) + tm, float(var.mean())
 
 
 class Replay:
@@ -141,7 +185,7 @@ class Replay:
         self.last_five: dict[int, tuple] = {}
         self.player = PlayerElo(cfg.player_k, cfg.player_k_new, cfg.player_init)
         self.joint = PlayerElo(cfg.player_k, cfg.player_k_new, cfg.player_init)
-        self.gauss = GaussPlayer(cfg.g_var0, cfg.g_tau2, cfg.g_init, cfg.g_fill_drop)
+        self.gauss = GaussPlayer(cfg.g_var0, cfg.g_tau2, cfg.g_init, cfg.g_fill_drop, cfg.g_team_var0)
         self.gauss_h = GaussPlayer(cfg.g_var0, cfg.g_tau2, cfg.g_init, cfg.g_fill_drop)
         self.rating: dict[int, float] = {}
         self.rating_n: dict[int, int] = {}
@@ -149,6 +193,8 @@ class Replay:
         self.mkt: dict[int, float] = {}
         self.mkt_n: dict[int, int] = {}
         self.sub_hist: dict[int, list] = {}
+        self.bias: dict[int, float] = {}
+        self._m0 = {int(k): float(v) for k, v in zip(inputs.market.match_id, inputs.market.m0) if np.isfinite(v)}
         self._hi = self._fi = self._mi = self._li = self._si = self._ri = 0
         self._rank_now: dict[int, tuple[pd.Timestamp, float, float]] = {}
         self._maps = list(inputs.maps.itertuples(index=False))
@@ -172,6 +218,9 @@ class Replay:
             r = f[self._fi]
             self.joint.update(r.five_a, r.five_b, r.rounds_a, r.rounds, c.faceit_step)
             self.gauss.update(r.five_a, r.five_b, r.rounds_a, r.rounds, _days(r.time), c.g_faceit_step, c.g_faceit_scale)
+            if c.fr_gamma > 0:
+                self.gauss.rate(r.five_a, r.rating_a, c.fr_gamma, c.fr_sd)
+                self.gauss.rate(r.five_b, r.rating_b, c.fr_gamma, c.fr_sd)
             self._fi += 1
         lk, lp, lv = self._levels
         end = int(np.searchsorted(lk, np.datetime64(cutoff), side="left"))
@@ -189,6 +238,13 @@ class Replay:
             r = s[self._si]
             for team, sub in ((int(r.team_a), r.sub_a), (int(r.team_b), r.sub_b)):
                 self.sub_hist.setdefault(team, []).append(int(sub > 0))
+            m0 = self._m0.get(int(r.match_id))
+            if m0 is not None and np.isfinite(r.y):
+                # Teams the market keeps mispricing: an online rating of the outcome's surprise against the kickoff price.
+                a, b = int(r.team_a), int(r.team_b)
+                e = c.bias_k * (r.y - m0)
+                self.bias[a] = self.bias.get(a, 0.0) + e
+                self.bias[b] = self.bias.get(b, 0.0) - e
             self._si += 1
         rd, rt, rp, rr = self._ranks
         end = int(np.searchsorted(rd, np.datetime64(cutoff), side="left"))
@@ -211,7 +267,10 @@ class Replay:
         self.last_five[a], self.last_five[b] = r.five_a, r.five_b
         self.player.update(r.five_a, r.five_b, r.rounds_a, r.rounds)
         self.joint.update(r.five_a, r.five_b, r.rounds_a, r.rounds)
-        self.gauss.update(r.five_a, r.five_b, r.rounds_a, r.rounds, _days(r.time))
+        self.gauss.update(r.five_a, r.five_b, r.rounds_a, r.rounds, _days(r.time), c.g_hltv_step, 1.0, a, b)
+        if c.r_gamma > 0:
+            self.gauss.rate(r.five_a, r.rating_a, c.r_gamma, c.r_sd)
+            self.gauss.rate(r.five_b, r.rating_b, c.r_gamma, c.r_sd)
         self.gauss_h.update(r.five_a, r.five_b, r.rounds_a, r.rounds, _days(r.time))
         for five, rt in ((r.five_a, r.rating_a), (r.five_b, r.rating_b)):
             for p, x in zip(five, rt):
@@ -239,7 +298,7 @@ class Replay:
         c = self.cfg
         pe, pu = self.player.price(five)
         je, ju = self.joint.price(five)
-        ge, gv = self.gauss.price(five, _days(cutoff))
+        ge, gv = self.gauss.price(five, _days(cutoff), team)
         he, hv = self.gauss_h.price(five, _days(cutoff))
         rts = [self.rating[p] for p in (five or ()) if p in self.rating]
         lvl = [self.level[p] for p in (five or ()) if p in self.level]
@@ -258,6 +317,7 @@ class Replay:
             "faceit_level": float(np.mean(lvl)) if lvl else np.nan, "level_n": len(lvl),
             "log_points": np.log1p(rk[1]) if fresh else 0.0, "ranked": float(fresh),
             "rank": rk[2] if fresh else 300.0,
+            "market_bias": self.bias.get(team, 0.0),
             "market_elo": self.mkt.get(team, 0.0), "market_n": self.mkt_n.get(team, 0),
             "idle_days": (cutoff - last).total_seconds() / DAY if last is not None else 365.0,
             "new_players": FIVE - len(set(five or ()) & set(last_five or ())) if five and last_five else FIVE,

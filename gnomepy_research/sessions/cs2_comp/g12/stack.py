@@ -69,6 +69,7 @@ def stage1_design(d: pd.DataFrame) -> pd.DataFrame:
     X["standin"] = d.standin_share_a - d.standin_share_b
     X["form"] = np.log1p(d.form_a) - np.log1p(d.form_b)
     X["market_elo"] = d.market_elo_a - d.market_elo_b
+    X["market_bias"] = d.market_bias_a - d.market_bias_b
     return pd.DataFrame(X, index=d.index).astype(float)
 
 
@@ -85,13 +86,28 @@ def stage2_design(d: pd.DataFrame, z: np.ndarray) -> pd.DataFrame:
                          "m_weak": lm * weak, "drift": drift, "mk_gap": (mk - lm) * mk_ok, "one": 1.0}, index=d.index)
 
 
+def market_terms(d: pd.DataFrame) -> pd.DataFrame:
+    """Shape of the market's own price: curvature, books that are young or barely move, and the last day's drift."""
+    lm = logit(d.m0.to_numpy(float))
+    weak = ((d.rank_a.to_numpy(float) > 100) | (d.rank_b.to_numpy(float) > 100)).astype(float)
+    return pd.DataFrame({"m_curve": lm * np.abs(lm), "m_weak": lm * weak,
+                         "m_young": lm * (d.age_h.to_numpy(float) < 12),
+                         "m_still": lm * (d.changes.to_numpy(float) < 30),
+                         "drift": lm - logit(d.m_24h.fillna(d.m_first).to_numpy(float)),
+                         "m_lan": lm * d.is_lan.to_numpy(float)}, index=d.index)
+
+
 @dataclass
 class Stack:
     l2_1: float = 3.0
     l2_2: float = 10.0
     window_days: int = 365
     cols2: list = field(default_factory=lambda: ["m", "z", "z_young", "z_still", "z_weak", "z_lan", "m_weak", "drift", "mk_gap", "one"])
-    exclude1: tuple = ("market_elo",)
+    exclude1: tuple = ("market_elo", "market_bias")
+    use1: tuple | None = None
+    direct: tuple | None = None
+    l2_d: float = 20.0
+    market_terms: tuple = ()
     b1: np.ndarray | None = None
     b2: np.ndarray | None = None
     b_fallback: np.ndarray | None = None
@@ -101,7 +117,7 @@ class Stack:
         h = hist[(hist.known < cutoff) & hist.y.notna() & (hist.bo_type == 3)
                  & (hist.week_cutoff >= cutoff - pd.Timedelta(days=self.window_days))]
         X1 = stage1_design(h)
-        self.cols1 = [c for c in X1.columns if c not in self.exclude1]
+        self.cols1 = list(self.use1) if self.use1 else [c for c in X1.columns if c not in self.exclude1]
         X1 = X1[self.cols1]
         y = h.y.to_numpy(float)
         self.b1 = fit_logistic(X1.to_numpy(), y, self.l2_1)
@@ -114,8 +130,22 @@ class Stack:
         pen[self.cols2.index("m")] = 1e-3
         pen[self.cols2.index("z")] = 1e-3
         self.b2 = fit_logistic(X2.to_numpy(), y[has_m], pen)
+        if self.direct:
+            Xd = self._direct(h[has_m])
+            self.sd = Xd.std(axis=0) + 1e-9
+            self.sd[0] = 1.0
+            self.sd[-1] = 1.0
+            pen = np.full(Xd.shape[1], self.l2_d)
+            pen[0] = pen[-1] = 1e-3
+            self.bd = fit_logistic(Xd / self.sd, y[has_m], pen)
         self.n_train = (len(h), int(has_m.sum()))
         return self
+
+    def _direct(self, d: pd.DataFrame) -> np.ndarray:
+        X = stage1_design(d)[list(self.direct)].to_numpy()
+        lm = logit(d.m0.to_numpy(float))
+        extra = [market_terms(d)[list(self.market_terms)].to_numpy()] if self.market_terms else []
+        return np.column_stack([lm, X] + extra + [np.ones(len(d))])
 
     def z(self, d: pd.DataFrame) -> np.ndarray:
         return stage1_design(d)[self.cols1].to_numpy() @ self.b1
@@ -126,5 +156,8 @@ class Stack:
         mk = (d.market_elo_a - d.market_elo_b).to_numpy(float)
         out = sigmoid(np.column_stack([z, mk]) @ self.b_fallback)
         if has_m.any():
-            out[has_m] = sigmoid(stage2_design(d[has_m], z[has_m])[self.cols2].to_numpy() @ self.b2)
+            if self.direct:
+                out[has_m] = sigmoid((self._direct(d[has_m]) / self.sd) @ self.bd)
+            else:
+                out[has_m] = sigmoid(stage2_design(d[has_m], z[has_m])[self.cols2].to_numpy() @ self.b2)
         return out
