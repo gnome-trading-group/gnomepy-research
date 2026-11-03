@@ -106,14 +106,10 @@ def main():
            "unknown", "idle", "new", "sub", "standin", "form", "market_elo")
     allseg = ("s_unknown", "s_new", "s_young", "s_still", "s_lan", "s_unranked", "s_var")
     variants = {
-        "gauss": partial(Stack, use1=("gauss",), model_only=True),
-        "gauss_unc": partial(Stack, use1=("gauss", "gauss_unc"), model_only=True),
-        "gauss_cube": partial(Stack, use1=("gauss", "gauss_cube"), model_only=True),
         "ens": partial(Stack, use1=("gauss", "gx_a", "gx_b", "gx_fast", "gx_slow"), model_only=True),
-        "ens_unc": partial(Stack, use1=("gauss", "gx_a", "gx_b", "gx_fast", "gx_slow") + ("gauss_unc",), model_only=True),
-        "ens_ctx": partial(Stack, use1=("gauss", "gx_a", "gx_b", "gx_fast", "gx_slow") + ("gauss_unc", "unknown", "new", "sub", "idle"), model_only=True),
-        "gx_a": partial(Stack, use1=("gx_a",), model_only=True),
-        "gx_b": partial(Stack, use1=("gx_b",), model_only=True),
+        "ens_coh": partial(Stack, use1=("gauss", "gx_a", "gx_b", "gx_fast", "gx_slow") + ("together", "gauss_lowcoh"), model_only=True),
+        "ens_lan": partial(Stack, use1=("gauss", "gx_a", "gx_b", "gx_fast", "gx_slow") + ("lan_res",), model_only=True),
+        "ens_coh_lan_sub": partial(Stack, use1=("gauss", "gx_a", "gx_b", "gx_fast", "gx_slow") + ("together", "gauss_lowcoh", "lan_res", "sub"), model_only=True),
     }
     for name, mk in variants.items():
         res = walk(p, weeks, mk, ev)

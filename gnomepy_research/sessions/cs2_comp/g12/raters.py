@@ -47,6 +47,7 @@ class RaterConfig:
     r_sd: float = 0.8
     g_var0: float = 0.8
     extra: tuple = ()
+    lan_alpha: float = 0.05
     g_team_var0: float = 0.0
     map_var0: float = 0.05
     map_slope: float = 4.0
@@ -269,6 +270,8 @@ class Replay:
         self.mkt_n: dict[int, int] = {}
         self.sub_hist: dict[int, list] = {}
         self.bias: dict[int, float] = {}
+        self.lan: dict[int, float] = {}
+        self.fives: dict[int, list] = {}
         self._m0 = {int(k): float(v) for k, v in zip(inputs.market.match_id, inputs.market.m0) if np.isfinite(v)}
         self._hi = self._fi = self._mi = self._li = self._si = self._ri = 0
         self._rank_now: dict[int, tuple[pd.Timestamp, float, float]] = {}
@@ -349,6 +352,15 @@ class Replay:
         self.last_five[a], self.last_five[b] = r.five_a, r.five_b
         self.player.update(r.five_a, r.five_b, r.rounds_a, r.rounds)
         self.joint.update(r.five_a, r.five_b, r.rounds_a, r.rounds)
+        if r.is_lan:
+            # Who over- or under-performs the player model on LAN: a running residual per player.
+            gap = self.gauss.price(r.five_a, now)[0] - self.gauss.price(r.five_b, now)[0]
+            res = (r.rounds_a - r.rounds / (1.0 + np.exp(-gap))) / r.rounds
+            for five, sign in ((r.five_a, 1.0), (r.five_b, -1.0)):
+                for pl in five:
+                    self.lan[pl] = (1 - c.lan_alpha) * self.lan.get(pl, 0.0) + c.lan_alpha * sign * res
+        for t, five in ((a, r.five_a), (b, r.five_b)):
+            self.fives.setdefault(t, []).append((now, frozenset(five)))
         self.gauss.update(r.five_a, r.five_b, r.rounds_a, r.rounds, _days(r.time), c.g_hltv_step, 1.0, a, b)
         if c.r_gamma > 0:
             self.gauss.rate(r.five_a, r.rating_a, c.r_gamma, c.r_sd)
@@ -386,6 +398,10 @@ class Replay:
         pe, pu = self.player.price(five)
         je, ju = self.joint.price(five)
         ge, gv = self.gauss.price(five, _days(cutoff), team)
+        now = _days(cutoff)
+        fs = set(five or ())
+        together = sum(1 for t, f in reversed(self.fives.get(team, [])) if now - t <= 120 and len(f & fs) >= 4)
+        lan_res = float(np.mean([self.lan.get(p, 0.0) for p in fs])) if fs else 0.0
         he, hv = self.gauss_h.price(five, _days(cutoff))
         rts = [self.rating[p] for p in (five or ()) if p in self.rating]
         lvl = [self.level[p] for p in (five or ()) if p in self.level]
@@ -399,6 +415,7 @@ class Replay:
             "team_elo": self.team.get(team, c.team_init), "team_n": self.team_n.get(team, 0.0),
             "form": form[0] * 0.5 ** ((cutoff - form[1]).total_seconds() / DAY / c.form_half_life) if form else 0.0,
             "player_elo": pe, "player_unknown": pu, "joint_elo": je, "joint_unknown": ju,
+            "together": together, "lan_res": lan_res,
             "gauss": ge, "gauss_var": gv, "gauss_h": he, "gauss_h_var": hv,
             **{name: gm.price(five, _days(cutoff))[0] for name, _, gm in self.extra},
             "hltv_rating": float(np.mean(rts)) if rts else np.nan, "rating_n": len(rts),
