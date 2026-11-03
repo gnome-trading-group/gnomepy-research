@@ -42,6 +42,9 @@ class Config:
     faceit_weight: float = 0.5
     rating_gamma: float = 0.6
     rating_sd: float = 0.31
+    # Prior sd of a team's map-specific round-logit offset, and the window that sets the active map pool.
+    map_sds: tuple = (0.1, 0.2, 0.3)
+    pool_days: int = 60
 
 
 def communities(ia: np.ndarray, ib: np.ndarray, w: np.ndarray, P: int, k: int) -> np.ndarray:
@@ -76,6 +79,8 @@ class GraphFit:
     sigma: float
     lu: object
     X: np.ndarray
+    map_offset: dict = field(default_factory=dict)
+    pool: tuple = ()
     info: dict = field(default_factory=dict)
 
     @classmethod
@@ -146,7 +151,8 @@ class GraphFit:
                      [-inv_var * C.T, inv_var * (C.T @ Xs), inv_var * (C.T @ C) + inv_tau * sp.eye(NC)]]).tocsc()
         lu = splu(H)
         played = np.bincount(np.concatenate([ia.ravel(), ib.ravel()]), minlength=P)
-        return cls(cutoff, players, s, played, comm, g, c, cfg.sigma, lu, X,
+        offsets, pool = map_offsets(f, w, ra, n, pr, cutoff, cfg)
+        return cls(cutoff, players, s, played, comm, g, c, cfg.sigma, lu, X, offsets, pool,
                    {"maps": M, "players": P, "iters": int(res.nit), "converged": bool(res.success),
                     "c": np.round(c, 3).tolist()})
 
@@ -172,7 +178,7 @@ class GraphFit:
                 thin += 1
         return float(np.mean(vals)), extra, thin, comms
 
-    def gap(self, five_a, rank_a, five_b, rank_b) -> dict:
+    def gap(self, five_a, rank_a, five_b, rank_b, team_a: int = -1, team_b: int = -1) -> dict:
         n = self.lu.shape[0]
         v = np.zeros(n)
         ma, ea, ta, ca = self._vec(five_a, rank_a, 1.0, v)
@@ -180,8 +186,54 @@ class GraphFit:
         var = float(v @ self.lu.solve(v)) + ea + eb
         dom_a = max(set(ca), key=ca.count) if ca else -1
         dom_b = max(set(cb), key=cb.count) if cb else -1
-        return {"gap": ma - mb, "gap_var": var, "thin_a": ta, "thin_b": tb, "comm_a": dom_a, "comm_b": dom_b,
+        first = next(iter(self.map_offset.values()), {})
+        known = sum(1 for m in self.pool if (team_a, m) in first) + sum(1 for m in self.pool if (team_b, m) in first)
+        out = {f"q_veto_{int(round(sd * 100))}": veto_price(ma - mb, team_a, team_b, o, self.pool)
+               for sd, o in self.map_offset.items()}
+        return out | {"gap": ma - mb, "gap_var": var, "pool_known": known, "thin_a": ta, "thin_b": tb, "comm_a": dom_a, "comm_b": dom_b,
                 "cross": int(dom_a != dom_b or dom_a < 0)}
+
+
+def map_offsets(f: pd.DataFrame, w: np.ndarray, ra: np.ndarray, n: np.ndarray, pr: np.ndarray, cutoff: pd.Timestamp,
+                cfg: Config) -> tuple[dict, tuple]:
+    """Each team's round-logit offset on each map beyond its five's skill: one Newton step from zero on the map's
+    residual rounds, shrunk by a N(0, map_sd^2) prior. Also the active pool: the seven most played maps lately."""
+    team = np.concatenate([f.team_a.to_numpy(), f.team_b.to_numpy()])
+    mp = np.concatenate([f.map_name.to_numpy(), f.map_name.to_numpy()])
+    res = w * (ra - n * pr)
+    info = w * n * pr * (1 - pr)
+    d = pd.DataFrame({"team": team, "map": mp, "res": np.concatenate([res, -res]), "fisher": np.concatenate([info, info])})
+    d = d[d.team >= 0]
+    g = d.groupby(["team", "map"])[["res", "fisher"]].sum()
+    offsets = {}
+    for sd in cfg.map_sds:
+        b = g.res / (g.fisher + 1.0 / sd ** 2)
+        offsets[sd] = {(int(t), m): float(v) for (t, m), v in b.items()}
+    recent = f[(f.time >= cutoff - pd.Timedelta(days=cfg.pool_days)) & (f.source == "hltv")]
+    counts = recent.map_name.value_counts()
+    pool = tuple(sorted(counts.index[:7]))
+    return offsets, pool
+
+
+def veto_price(gap: float, team_a: int, team_b: int, offsets: dict, pool: tuple) -> float:
+    """P(A wins a bo3) when both sides veto greedily on their map advantages (ban, ban, pick, pick, ban, ban,
+    decider), averaged over which side starts the veto."""
+    if len(pool) < 7:
+        return float(series_price(np.array([gap]))[0])
+    adv = {m: gap + offsets.get((team_a, m), 0.0) - offsets.get((team_b, m), 0.0) for m in pool}
+    out = 0.0
+    for first in (1.0, -1.0):
+        left = list(pool)
+        picks = []
+        for step, actor in enumerate((first, -first, first, -first, first, -first)):
+            key = lambda m: actor * adv[m]
+            m = min(left, key=key) if step in (0, 1, 4, 5) else max(left, key=key)
+            left.remove(m)
+            if step in (2, 3):
+                picks.append(m)
+        p1, p2, p3 = regulation_map_win(np.array([adv[picks[0]], adv[picks[1]], adv[left[0]]]))
+        out += 0.5 * (p1 * p2 + p1 * (1 - p2) * p3 + (1 - p1) * p2 * p3)
+    return float(out)
 
 
 def series_price(gap: np.ndarray, var: np.ndarray | None = None) -> np.ndarray:

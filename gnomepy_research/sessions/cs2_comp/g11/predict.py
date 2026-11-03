@@ -21,6 +21,7 @@ from gnomepy_research.sessions.cs2_comp.g11.layer import features, fit_logistic
 from gnomepy_research.sessions.cs2_comp.g11.pipeline import WEEK, build
 
 CONFIG = Config()
+SHORT = None
 FACEIT = False
 HISTORY_WEEKS = 26
 COLUMNS = ["zm", "zr", "zr_nomkt", "one"]
@@ -28,7 +29,7 @@ L2 = 1.0
 
 
 def predict(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = False, rows_dir: str | Path | None = None) -> pd.DataFrame:
-    train, tgt = build(str(data_dir), targets, CONFIG, FACEIT, HISTORY_WEEKS, verbose=verbose)
+    train, tgt = build(str(data_dir), targets, CONFIG, FACEIT, HISTORY_WEEKS, SHORT, verbose=verbose)
     if rows_dir is not None:
         Path(rows_dir).mkdir(parents=True, exist_ok=True)
         train.to_parquet(Path(rows_dir) / "train.parquet", index=False)

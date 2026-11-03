@@ -22,6 +22,7 @@ ap.add_argument("--faceit", action="store_true")
 ap.add_argument("--tau", type=float, default=0.3)
 ap.add_argument("--communities", type=int, default=8)
 ap.add_argument("--tag", default="")
+ap.add_argument("--short-hl", type=float, default=0.0)
 a = ap.parse_args()
 t = pd.read_parquet(a.targets or Path(a.data) / "targets_tune.parquet")
 wc = pd.to_datetime(t.week_cutoff)
@@ -29,7 +30,8 @@ t["week_cutoff"] = wc.dt.tz_convert(None) if wc.dt.tz is not None else wc
 if a.weeks:
     t = t[t.week_cutoff.isin(pd.to_datetime(a.weeks.split(",")))]
 cfg = Config(tau=a.tau, communities=a.communities)
-train, tgt = build(a.data, t, cfg, a.faceit, a.history_weeks, verbose=True)
+short = Config(tau=a.tau, communities=a.communities, half_life_days=a.short_hl, window_days=int(3 * a.short_hl)) if a.short_hl else None
+train, tgt = build(a.data, t, cfg, a.faceit, a.history_weeks, short, verbose=True)
 out = Path(a.out)
 out.mkdir(parents=True, exist_ok=True)
 tag = a.tag or f"{t.week_cutoff.min():%Y%m%d}"
