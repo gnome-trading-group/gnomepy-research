@@ -10,7 +10,8 @@ prior mean, and the fit is wrong in a structured way whenever it compares across
 scene move together, and a scene's level is set by the cross-scene maps there are.
 
 x_p is the prior mean design: the HLTV rank of the teams the player played for and the player's latest FACEIT skill
-level. HLTV map ratings relative to teammates are a further measurement of who carries a five (as in e12).
+level. A player the fit never saw gets the prior mean from his team's rank, his FACEIT level when known, and the
+community effects of his known teammates. HLTV map ratings relative to teammates are a further measurement of who carries a five (as in e12).
 
 A series is priced from the gap in mean skill of the two announced fives, shifted by each team's map offsets averaged
 over the active map pool. Optionally a Laplace approximation gives the posterior variance of each gap.
