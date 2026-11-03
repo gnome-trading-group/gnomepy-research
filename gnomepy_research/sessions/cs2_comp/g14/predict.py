@@ -27,11 +27,13 @@ from gnomepy_research.sessions.cs2_comp.g14.ratings import RatingConfig
 from gnomepy_research.sessions.cs2_comp.g14.skillfit import FitConfig
 
 RATING = RatingConfig()
-FIT = FitConfig(period_days=365, team_offsets=False, sigma=4.0)
+FIT = FitConfig(period_days=365, team_offsets=False, sigma=2.0)
 LAYER = LayerConfig()
 # Fitted by freeze.py on the monthly walk-forward rows of Apr 2025 - Mar 2026 (series before the first dev cutoff).
-WEIGHTS: dict[str, float] = {"z_fit": 0.604798, "z_fit_thin": -0.077406, "rank": 0.241546, "new": -0.421694,
-                             "sub": -0.049218, "intercept": 0.023177}
+# The prior sd 2.0 is the best of 0.35-10 on those same rows held out by month; 4.0 scored a little better on the
+# dev months but worse out of them, so the wider value was not kept.
+WEIGHTS: dict[str, float] = {"z_fit": 0.648225, "z_fit_thin": -0.076484, "rank": 0.194348, "new": -0.391445,
+                             "sub": -0.047416, "intercept": 0.017504}
 
 
 def main() -> None:
