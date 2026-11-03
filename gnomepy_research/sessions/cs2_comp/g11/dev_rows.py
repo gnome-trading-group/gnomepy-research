@@ -28,13 +28,14 @@ ap.add_argument("--sigma", type=float, default=0.5)
 ap.add_argument("--window", type=int, default=365)
 ap.add_argument("--team-sd", type=float, default=0.0)
 ap.add_argument("--no-laplace", action="store_true")
+ap.add_argument("--levels-only", action="store_true")
 a = ap.parse_args()
 t = pd.read_parquet(a.targets or Path(a.data) / "targets_tune.parquet")
 wc = pd.to_datetime(t.week_cutoff)
 t["week_cutoff"] = wc.dt.tz_convert(None) if wc.dt.tz is not None else wc
 if a.weeks:
     t = t[t.week_cutoff.isin(pd.to_datetime(a.weeks.split(",")))]
-cfg = Config(tau=a.tau, communities=tuple(int(k) for k in a.communities.split(",")), half_life_days=a.hl, sigma=a.sigma, window_days=a.window, team_sd=a.team_sd, laplace=not a.no_laplace)
+cfg = Config(tau=a.tau, communities=tuple(int(k) for k in a.communities.split(",")), half_life_days=a.hl, sigma=a.sigma, window_days=a.window, team_sd=a.team_sd, laplace=not a.no_laplace, faceit_maps=not a.levels_only)
 short = Config(tau=a.tau, communities=tuple(int(k) for k in a.communities.split(",")), half_life_days=a.short_hl, window_days=int(3 * a.short_hl)) if a.short_hl else None
 train, tgt = build(a.data, t, cfg, a.faceit, a.history_weeks, short, verbose=True)
 out = Path(a.out)

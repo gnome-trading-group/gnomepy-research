@@ -49,6 +49,8 @@ class Config:
     team_sd: float = 0.0
     # The Laplace factorisation is only needed for gap variances.
     laplace: bool = True
+    # With FACEIT on, False keeps FACEIT to the skill prior (levels) and fits on HLTV maps only.
+    faceit_maps: bool = True
     pool_days: int = 60
 
 
@@ -91,11 +93,13 @@ class GraphFit:
     prefs: dict = field(default_factory=dict)
     team_eff: dict = field(default_factory=dict)
     team_index: dict = field(default_factory=dict)
+    levels: dict = field(default_factory=dict)
+    taus: tuple = ()
     info: dict = field(default_factory=dict)
 
     @classmethod
     def fit(cls, inputs: Inputs, cutoff: pd.Timestamp, cfg: Config, faceit: bool) -> GraphFit:
-        maps = inputs.maps(cutoff, cutoff - pd.Timedelta(days=cfg.window_days), faceit)
+        maps = inputs.maps(cutoff, cutoff - pd.Timedelta(days=cfg.window_days), faceit and cfg.faceit_maps)
         f = maps.frame
         players = np.unique(np.concatenate([maps.five_a.ravel(), maps.five_b.ravel()]))
         P, M = len(players), len(f)
@@ -119,6 +123,8 @@ class GraphFit:
         n = f.rounds.to_numpy(float)
         ra = f.rounds_a.to_numpy(float)
         X0 = _prior_design(maps, players, inputs, cutoff, faceit)
+        # Division shares are all zero without FACEIT maps; an all-zero column only slows the solver.
+        X0 = X0[:, np.r_[np.ones(min(5, X0.shape[1]), bool), X0[:, 5:].any(axis=0)]]
         K = X0.shape[1]
         Xs = sp.vstack([sp.csr_matrix(X0), sp.csr_matrix((T, K))]).tocsr()
         levels = [communities(ia, ib, w, P, k) for k in cfg.communities]
@@ -162,7 +168,7 @@ class GraphFit:
             return np.concatenate([hs, hg, hc])
 
         res = minimize(objective, np.zeros(Q + K + NC), jac=True, hessp=hessp, method="trust-krylov",
-                       options={"maxiter": 200, "gtol": 1e-6})
+                       options={"maxiter": 1000, "gtol": 1e-6})
         s, g, c = split(res.x)
         pr = expit(A @ s)
         Pm = sp.diags(prec)
@@ -181,8 +187,13 @@ class GraphFit:
         played = np.bincount(np.concatenate([ia.ravel(), ib.ravel()]), minlength=P)
         offsets, pool = map_offsets(f, w, ra, n, pr, cutoff, cfg)
         prefs = map_preferences(f, cutoff, pool)
+        levels = {}
+        if faceit:
+            lv = inputs.levels[inputs.levels.known < cutoff]
+            levels = {int(u): float(x) for u, x in lv.groupby("uid")["level"].last().items()}
         return cls(cutoff, players, s, played, comm, g, c, cfg.sigma, cfg.tau, lu, n_theta, X, offsets, pool, prefs, team_eff, team_index,
-                   {"maps": M, "players": P, "iters": int(res.nit), "converged": bool(res.success),
+                   levels, cfg.communities,
+                   {"maps": M, "players": P, "iters": int(res.nit), "converged": bool(res.success), "message": str(res.message), "gnorm": float(np.abs(res.jac).max()),
                     "c": np.round(c, 3).tolist()})
 
     def _vec(self, five: tuple[int, ...] | None, rank: float, sign: float, v: np.ndarray) -> tuple[float, float, int, list]:
@@ -190,12 +201,12 @@ class GraphFit:
         players the fit never saw, how many it barely knows, and the communities of its known players."""
         P, K = len(self.players), len(self.gamma)
         g_start = self.n_theta - K - len(self.c)
-        xu = np.array([1.0, 1.0, np.log(UNRANKED) - np.log(rank)])
-        prior_unknown = float(self.gamma[:3] @ xu)
-        unknown_var = self.sigma ** 2 + self.tau ** 2
+        base = np.zeros(K)
+        base[:3] = [1.0, 1.0, np.log(UNRANKED) - np.log(rank)]
+        unknown_var = self.sigma ** 2 + self.tau ** 2 * len(self.taus)
         if not five:
-            v[g_start:g_start + 3] += sign * xu
-            return prior_unknown, unknown_var, FIVE, []
+            v[g_start:g_start + K] += sign * base
+            return float(self.gamma @ base), unknown_var, FIVE, []
         vals, extra, thin, comms = [], 0.0, 0, []
         for p in five:
             i = np.searchsorted(self.players, p)
@@ -206,8 +217,12 @@ class GraphFit:
                 comms.append(int(self.community[i]))
             else:
                 # The prior mean of a player the fit never saw moves with the fitted gamma, so it goes in v too.
-                vals.append(prior_unknown)
-                v[g_start:g_start + 3] += sign * xu / FIVE
+                xu = base.copy()
+                level = self.levels.get(int(p))
+                if level is not None and K > 4:
+                    xu[3:5] = [1.0, level - 8.0]
+                vals.append(float(self.gamma @ xu))
+                v[g_start:g_start + K] += sign * xu / FIVE
                 extra += unknown_var / FIVE ** 2
                 thin += 1
         return float(np.mean(vals)), extra, thin, comms
