@@ -16,7 +16,8 @@ import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g09.core import UNRANKED, bo3, logit
 
-FEATURES = ("z0", "d3", "ze", "rk", "nomkt_ze", "nomkt_rk", "nomkt")
+FEATURES = ("ze",)
+TRAIN_DAYS = 365.0
 L2 = 1.0
 
 
@@ -54,5 +55,7 @@ def fit_logistic(X: np.ndarray, y: np.ndarray, l2: float = L2) -> np.ndarray:
 
 
 def fit_predict(train: pd.DataFrame, targets: pd.DataFrame, features=FEATURES, l2: float = L2) -> np.ndarray:
+    cutoff = targets.snap.max()
+    train = train[train.kickoff >= cutoff - pd.Timedelta(days=TRAIN_DAYS)]
     w = fit_logistic(design(train, features), train.y.to_numpy(float), l2)
     return 1 / (1 + np.exp(-design(targets, features) @ w))

@@ -86,7 +86,8 @@ def load_faceit_maps(data_dir: str | Path, cutoff: pd.Timestamp) -> pd.DataFrame
     has and without excluded rows. Players are keyed by HLTV id where linked, else by FACEIT id."""
     m = load(data_dir, "faceit/faceit_matches", cutoff, ["match_id", "finished_at"])
     h = load(data_dir, "faceit/faceit_match_history", cutoff,
-             ["match_id", "map_name", "team_a_faceit_ids", "team_b_faceit_ids", "team_a_score", "team_b_score", "team_a_won"])
+             ["match_id", "map_name", "map_position_in_series", "team_a_faceit_ids", "team_b_faceit_ids", "team_a_score",
+              "team_b_score", "team_a_won"])
     link = load(data_dir, "faceit/faceit_hltv_series_link", cutoff)
     ex = load(data_dir, "faceit/faceit_exclusions", cutoff)
     h = h[~h.match_id.isin(link.faceit_match_id)]
@@ -104,7 +105,22 @@ def load_faceit_maps(data_dir: str | Path, cutoff: pd.Timestamp) -> pd.DataFrame
     return pd.DataFrame({"time": h.time.to_numpy(), "team_a_player_ids": h.team_a_player_ids.to_numpy(),
                          "team_b_player_ids": h.team_b_player_ids.to_numpy(), "team_a_score": h.team_a_score.to_numpy(float),
                          "team_b_score": h.team_b_score.to_numpy(float), "team_a_won": h.team_a_won.to_numpy(float),
-                         "team_a_rank": np.nan, "team_b_rank": np.nan, "src": "faceit"})
+                         "team_a_rank": np.nan, "team_b_rank": np.nan, "src": "faceit",
+                         "mapstatsid": [f"{m}#{p}" for m, p in zip(h.match_id, h.map_position_in_series)]})
+
+
+def faceit_map_stats(data_dir: str | Path, cutoff: pd.Timestamp) -> dict:
+    """FACEIT map key -> {player: (performance on an HLTV-rating-like scale, 0)}, from kills per round and ADR, so
+    FACEIT maps also say who carries a five. Players keyed as in load_faceit_maps."""
+    s = load(data_dir, "faceit/faceit_player_map_stats", cutoff, ["match_id", "map_position_in_series", "hltv_id", "faceit_id", "adr", "k_r_ratio"])
+    s = s[s.adr.notna() & s.k_r_ratio.notna()]
+    perf = 0.5 * s.k_r_ratio.astype(float) / 0.7 + 0.5 * s.adr.astype(float) / 75.0
+    key = [int(h) if h == h and h is not None else f for h, f in zip(s.hltv_id, s.faceit_id)]
+    mk = s.match_id.astype(str) + "#" + s.map_position_in_series.astype(int).astype(str)
+    out: dict = {}
+    for k, p, v in zip(mk, key, perf):
+        out.setdefault(k, {})[p] = (float(v), 0.0)
+    return out
 
 
 def map_ratings(data_dir: str | Path, cutoff: pd.Timestamp) -> dict:
@@ -113,6 +129,15 @@ def map_ratings(data_dir: str | Path, cutoff: pd.Timestamp) -> dict:
     s = s[(s.side == "all") & s.rating.notna() & s.mapstatsid.notna()]
     sw = s.round_swing_pct.fillna(0.0).astype(float) / 10.0
     return {k: dict(zip(g.player_id.astype(int), zip(g.rating.astype(float), sw[g.index]))) for k, g in s.groupby("mapstatsid")}
+
+
+def player_stats(data_dir: str | Path, cutoff: pd.Timestamp, cfg: EloConfig) -> dict | None:
+    if cfg.ind_weight == 0 and cfg.swing_weight == 0:
+        return None
+    st = map_ratings(data_dir, cutoff)
+    if cfg.k_faceit > 0 and cfg.faceit_stats:
+        st.update(faceit_map_stats(data_dir, cutoff))
+    return st
 
 
 def combined_maps(maps: pd.DataFrame, faceit: pd.DataFrame | None) -> pd.DataFrame:
@@ -142,6 +167,10 @@ class EloConfig:
     ind_weight: float = 13.0
     ind_alpha: float = 0.0044
     swing_weight: float = 0.0
+    faceit_stats: bool = False
+    # A fast component on top of the slow rating: reacts to the last few maps, then fades.
+    k_fast: float = 0.0
+    fast_decay: float = 0.1
 
 
 def elo_pass(maps: pd.DataFrame, requests: pd.DataFrame, cfg: EloConfig = EloConfig(),
@@ -162,9 +191,10 @@ def elo_pass(maps: pd.DataFrame, requests: pd.DataFrame, cfg: EloConfig = EloCon
     out = np.full((len(req), 5), np.nan)
 
     dev2: dict[int, float] = {}
+    fast: dict[int, float] = {}
 
     def strength(p):
-        return rating[p] + cfg.ind_weight * dev.get(p, 0.0) + cfg.swing_weight * dev2.get(p, 0.0)
+        return rating[p] + cfg.ind_weight * dev.get(p, 0.0) + cfg.swing_weight * dev2.get(p, 0.0) + fast.get(p, 0.0)
     ri = 0
 
     def team_rating(five, rank, now):
@@ -234,6 +264,8 @@ def elo_pass(maps: pd.DataFrame, requests: pd.DataFrame, cfg: EloConfig = EloCon
             for p in five:
                 k = cfg.k + (cfg.k_new - cfg.k) * np.exp(-nmaps[p] / cfg.n_settle)
                 rating[p] += sgn * kmult * k * delta
+                if cfg.k_fast > 0:
+                    fast[p] = (1 - cfg.fast_decay) * fast.get(p, 0.0) + sgn * kmult * cfg.k_fast * delta
                 nmaps[p] += 1
                 last_seen[p] = now
         st = stats.get(msid[i]) if stats is not None else None
@@ -363,7 +395,7 @@ def build_rows(data_dir: str | Path, cutoff: pd.Timestamp, targets: pd.DataFrame
     req = rows[["key", "snap", "lineup_a", "lineup_b", "team_a_rank", "team_b_rank"]].rename(
         columns={"key": "match_id", "team_a_rank": "rank_a", "team_b_rank": "rank_b"})
     cm = combined_maps(maps, load_faceit_maps(data_dir, cutoff) if elo_cfg.k_faceit > 0 else None)
-    e, resid_all = elo_pass(cm, req, elo_cfg, map_ratings(data_dir, cutoff) if elo_cfg.ind_weight != 0 or elo_cfg.swing_weight != 0 else None)
+    e, resid_all = elo_pass(cm, req, elo_cfg, player_stats(data_dir, cutoff, elo_cfg))
     e = e.rename(columns={"match_id": "key"})
     resid = np.full(len(maps), np.nan)
     hidx = cm.hidx.to_numpy()
