@@ -22,6 +22,7 @@ from scipy.special import expit
 
 from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
 from gnomepy_research.sessions.cs2_comp.g15.data import FIVE
+from gnomepy_research.sessions.cs2_comp.g15.faceit import DIVISIONS
 
 UNRANKED = 300.0
 LOG_UNRANKED = math.log(UNRANKED)
@@ -34,8 +35,13 @@ class FitConfig:
     sigma: float = 0.5
     team_sigma: float = 0.0
     faceit_weight: float = 0.5
+    # Weight of LAN maps relative to online ones: teams field their real five and play for more on LAN.
+    lan_weight: float = 1.0
     # With FACEIT maps, use each player's latest FACEIT skill level in the skill prior.
     faceit_levels: bool = False
+    # With FACEIT maps, use the share of each player's FACEIT maps in each ESEA division in the skill prior: Open
+    # and Advanced players should not start from the same mean.
+    faceit_divisions: bool = False
     # HLTV map ratings relative to teammates as a second measurement of who in a five carries it:
     # rating_p - mean(rating_five) ~ N(rating_gamma * (s_p - mean(s_five)), rating_sd^2). Zero turns it off.
     rating_gamma: float = 0.0
@@ -75,6 +81,7 @@ class MapSet:
                           "rank_b": maps.rank_b.fillna(UNRANKED).to_numpy(float) if "rank_b" in maps else UNRANKED,
                           "source": source,
                           "map_name": maps.map_name.to_numpy() if "map_name" in maps else "",
+                          "division": maps.division.to_numpy() if "division" in maps else "",
                           "is_lan": maps.is_lan.to_numpy(float) if "is_lan" in maps else 0.0})
         for side in ("a", "b"):
             for j in range(FIVE):
@@ -161,7 +168,7 @@ class Fit:
         return float(np.mean(vals)), unseen, few
 
 
-def _prior_design(ms: MapSet, players: np.ndarray) -> np.ndarray:
+def _prior_design(ms: MapSet, players: np.ndarray, divisions: bool = False) -> np.ndarray:
     f = ms.frame
     pl = np.concatenate([ms.five_a.ravel(), ms.five_b.ravel()])
     pos = np.searchsorted(players, pl)
@@ -171,7 +178,21 @@ def _prior_design(ms: MapSet, players: np.ndarray) -> np.ndarray:
     P = len(players)
     n_hltv = np.bincount(pos[is_hltv], minlength=P)
     sum_strength = np.bincount(pos[is_hltv], weights=strength[is_hltv], minlength=P)
-    return np.column_stack([np.ones(P), (n_hltv > 0).astype(float), sum_strength / np.maximum(n_hltv, 1)])
+    cols = [np.ones(P), (n_hltv > 0).astype(float), sum_strength / np.maximum(n_hltv, 1)]
+    if ms.levels is not None:
+        # The latest FACEIT skill level known for each player, centred on 8: a prior for players the window barely saw.
+        last = ms.levels[ms.levels.uid.isin(players)].groupby("uid")["level"].last()
+        level = np.full(P, np.nan)
+        level[np.searchsorted(players, last.index.to_numpy())] = last.to_numpy()
+        has = ~np.isnan(level)
+        cols += [has.astype(float), np.where(has, level - 8.0, 0.0)]
+    if divisions and (f.source == "faceit").any():
+        div = np.tile(np.repeat(f.division.astype(str).to_numpy(), FIVE), 2)
+        n_faceit = np.bincount(pos[~is_hltv], minlength=P)
+        for d in DIVISIONS:
+            m = (div == d) & ~is_hltv
+            cols.append(np.bincount(pos[m], minlength=P) / np.maximum(n_faceit, 1))
+    return np.column_stack(cols)
 
 
 def _rating_rows(f: pd.DataFrame, ia: np.ndarray, ib: np.ndarray, w: np.ndarray, P: int,
@@ -217,8 +238,10 @@ def fit_window(ms: MapSet, cutoff: pd.Timestamp, cfg: FitConfig) -> Fit:
         Bt = B.T.tocsr()
     age = (cutoff - f.time).dt.total_seconds().to_numpy() / 86400.0
     w = 0.5 ** (age / cfg.half_life_days) * np.where(f.source == "faceit", cfg.faceit_weight, 1.0)
+    if cfg.lan_weight != 1.0:
+        w = w * np.where(f.is_lan.to_numpy(float) > 0, cfg.lan_weight, 1.0)
     n, ra = f.rounds.to_numpy(float), f.rounds_a.to_numpy(float)
-    X = _prior_design(ms, players)
+    X = _prior_design(ms, players, cfg.faceit_divisions)
     K = X.shape[1]
     inv_var = 1.0 / cfg.sigma ** 2
     inv_team = 1.0 / cfg.team_sigma ** 2 if use_team else 0.0

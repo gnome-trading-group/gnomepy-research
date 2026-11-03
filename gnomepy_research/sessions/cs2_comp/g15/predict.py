@@ -8,7 +8,8 @@ Per distinct week_cutoff, two batch skill fits on the maps of the trailing 900 d
 
 - HLTV maps, with the per-player map-rating channel and per-player map deviations; the announced fives are priced on
   each map of the active pool and the bo3 goes through the veto (`skillfit.veto_series`);
-- HLTV plus FACEIT maps, priced as one bo3 from the fives' mean skill.
+- HLTV plus FACEIT maps, with each player's latest FACEIT skill level and ESEA division shares in the skill prior,
+  priced as one bo3 from the fives' mean skill.
 
 The fixed logistic layer below blends the two bo3 logits; its weights were fitted by `dev_layer.py` on the Sep 2024 -
 Mar 2026 weekly walk-forward, all before the first tune cutoff, so they are point-in-time for every target.
@@ -30,9 +31,9 @@ from gnomepy_research.sessions.cs2_comp.g15.skillfit import FitConfig
 LONG = dict(window_days=900, half_life_days=900)
 FITS = {
     "g": (FitConfig(sigma=0.7, rating_gamma=0.3, rating_sd=0.45, map_sigma=0.35, **LONG), False),
-    "f": (FitConfig(sigma=0.7, faceit_weight=0.5, **LONG), True),
+    "f": (FitConfig(sigma=0.7, faceit_weight=0.5, faceit_levels=True, faceit_divisions=True, **LONG), True),
 }
-LAYER = {"one": 0.020948, "z_g_veto": 0.402839, "z_f": 0.231434}
+LAYER = {"one": 0.021226, "z_g_veto": 0.392488, "z_f": 0.234510}
 
 
 def z_columns(rows: pd.DataFrame) -> dict[str, np.ndarray]:

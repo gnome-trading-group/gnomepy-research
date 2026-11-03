@@ -9,6 +9,7 @@ once FACEIT finalised its match (`finished_at`), which can be weeks after it was
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,23 @@ import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.bundle import load
 from gnomepy_research.sessions.cs2_comp.g15.data import FIVE, naive
+
+
+DIVISIONS = ("entry", "open", "intermediate", "main", "advanced", "pro", "qualifier")
+_DIVISION_RE = re.compile(r"(entry|open10|open|intermediate|main|advanced|premier|challenger|pro league|qualifier)", re.I)
+
+
+def division(competition_name: str | None) -> str:
+    """The ESEA division a FACEIT competition belongs to ("other" when the name says nothing)."""
+    m = _DIVISION_RE.search(competition_name or "")
+    if m is None:
+        return "other"
+    d = m.group(1).lower()
+    if d == "open10":
+        return "open"
+    if d in ("premier", "challenger", "pro league"):
+        return "pro"
+    return d
 
 
 def faceit_uid(faceit_id: str) -> int:
@@ -72,7 +90,7 @@ def load_faceit_maps(data_dir: str | Path, until: pd.Timestamp, link: FaceitLink
                         "team_b": fh.faction2_hltv_team.fillna(-1).astype(np.int64).to_numpy(),
                         "five_a": fh.five_a.to_numpy(), "five_b": fh.five_b.to_numpy(),
                         "rounds_a": fh.rounds_a.to_numpy(), "rounds_b": fh.rounds_b.to_numpy(),
-                        "competition": fh.competition_name.to_numpy()})
+                        "division": [division(c) for c in fh.competition_name]})
     return out.sort_values(["time", "match_id"], kind="stable").reset_index(drop=True)
 
 

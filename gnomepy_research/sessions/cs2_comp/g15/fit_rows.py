@@ -107,11 +107,13 @@ def main() -> None:
     ap.add_argument("--map-sigma", type=float, default=0.0)
     ap.add_argument("--lan-sigma", type=float, default=0.0)
     ap.add_argument("--faceit-levels", action="store_true")
+    ap.add_argument("--faceit-divisions", action="store_true")
     ap.add_argument("--prefix", default="bf")
     a = ap.parse_args()
     cfg = FitConfig(window_days=a.window, half_life_days=a.half_life, sigma=a.sigma, team_sigma=a.team_sigma, faceit_weight=a.faceit_weight,
                     rating_gamma=a.rating_gamma, rating_sd=a.rating_sd, map_sigma=a.map_sigma,
-                    lan_sigma=a.lan_sigma, faceit_levels=a.faceit_levels)
+                    lan_sigma=a.lan_sigma, faceit_levels=a.faceit_levels,
+                    faceit_divisions=a.faceit_divisions)
     if a.targets:
         jobs = target_jobs(pd.read_parquet(a.targets))
     else:
