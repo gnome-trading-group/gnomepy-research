@@ -18,7 +18,7 @@ from sklearn.linear_model import LogisticRegression
 from gnomepy_research.sessions.cs2_comp.bundle import load
 from gnomepy_research.sessions.cs2_comp.g08.data import Inputs
 from gnomepy_research.sessions.cs2_comp.g08.market import path_features
-from gnomepy_research.sessions.cs2_comp.g08.model import _queries, logit
+from gnomepy_research.sessions.cs2_comp.g08.model import _queries, layer_features, logit
 from gnomepy_research.sessions.cs2_comp.g08.ratings import RatingConfig, run
 
 DATA = Path("/work/in/comp")
@@ -45,16 +45,6 @@ def ci(d):
     rng = np.random.default_rng(0)
     b = d[rng.integers(0, len(d), (1000, len(d)))].mean(1)
     return [float(d.mean()), float(np.percentile(b, 2.5)), float(np.percentile(b, 97.5))]
-
-
-def layer_features(F: pd.DataFrame, cols: list[str]) -> np.ndarray:
-    feats = {"sv": logit(F.series_veto), "sf": logit(F.series_flat), "su": logit(F.series_unc),
-             "unk": (F.unknown_a - F.unknown_b).to_numpy(float), "form": (F.form_a - F.form_b).to_numpy(float),
-             "coh": (F.cohesion_a - F.cohesion_b).to_numpy(float)}
-    feats["sv_lan"] = feats["sv"] * F.lan.to_numpy(float)
-    for t in sorted(F.tier.unique()):
-        feats[f"sv_t{t}"] = feats["sv"] * (F.tier == t).to_numpy(float)
-    return np.column_stack([feats[c] for c in cols])
 
 
 def evaluate(inputs, targets, market, cfg, cols):
