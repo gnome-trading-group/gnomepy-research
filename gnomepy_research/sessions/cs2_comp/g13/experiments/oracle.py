@@ -21,6 +21,8 @@ CANDIDATES = [
     ["z_s20"], ["z_s45"], ["z_s90"], ["z_nr300"], ["z_s45_d"], ["z_s90_d"],
     ["mp_edge"], ["mp_pick"], ["mp_opp"], ["mp_decider"], ["mp_depth"], ["mp_h2h"], ["mp_h2h_n"],
     ["drift6"], ["drift24"], ["z_lan", "lm0_lan"], ["log_rank"], ["standin", "idle"], ["z_unk"], ["z_new"], ["z_linked"],
+    ["lm0_thinb", "z_thinb"], ["z_thinb"], ["lm0_thinb"], ["z_days"], ["lm0_days"], ["z_days", "lm0_days"],
+    ["z_tier0", "lm0_tier0"], ["igl_missing"], ["awp_missing"], ["igl_missing", "awp_missing"],
 ]
 
 
@@ -48,6 +50,14 @@ def columns(d: pd.DataFrame) -> dict[str, np.ndarray]:
         cols[k + "_d"] = d[k].to_numpy() - z
     for k in [c for c in d.columns if c.startswith("mp_")]:
         cols[k] = d[k].fillna(0).to_numpy()
+    if "thin_brief" in d:
+        thin_b = d.thin_brief.to_numpy(float)
+        days = (pd.to_datetime(d.time) - pd.to_datetime(d.week_cutoff)).dt.total_seconds().to_numpy() / 86400
+        days = days - days.mean()
+        tier0 = (d.tier == 0).to_numpy(float)
+        cols.update({"lm0_thinb": lm0 * thin_b, "z_thinb": z * thin_b, "z_days": z * days, "lm0_days": lm0 * days,
+                     "z_tier0": z * tier0, "lm0_tier0": lm0 * tier0, "igl_missing": d.igl_missing.fillna(0).to_numpy(),
+                     "awp_missing": d.awp_missing.fillna(0).to_numpy()})
     return cols
 
 
