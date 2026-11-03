@@ -39,7 +39,7 @@ def load_maps(data_dir, until: pd.Timestamp) -> pd.DataFrame:
     sa, sb = h.team_a_score.to_numpy(int), h.team_b_score.to_numpy(int)
     ot = sa + sb > 24
     return pd.DataFrame({"time": h.time.to_numpy(), "team_a": h.team_a_id.astype(np.int64).to_numpy(),
-                         "team_b": h.team_b_id.astype(np.int64).to_numpy(), "map": h.map_name.to_numpy(),
+                         "team_b": h.team_b_id.astype(np.int64).to_numpy(), "map_name": h.map_name.to_numpy(),
                          "rounds": np.where(ot, 24, sa + sb), "rounds_a": np.where(ot, 12, sa),
                          "five_a": h.team_a_player_ids.to_numpy(), "five_b": h.team_b_player_ids.to_numpy()})
 
@@ -60,7 +60,7 @@ def _five_skill(fit, fives, ranks=None) -> np.ndarray:
 class MapModel:
     def __init__(self, maps: pd.DataFrame, fit, cutoff: pd.Timestamp, cfg: MapConfig):
         m = maps[(maps.time < cutoff) & (maps.time >= cutoff - pd.Timedelta(days=cfg.window_days))]
-        recent = m[m.time >= cutoff - pd.Timedelta(days=cfg.pool_days)].map.value_counts()
+        recent = m[m.time >= cutoff - pd.Timedelta(days=cfg.pool_days)].map_name.value_counts()
         self.pool = list(recent.index[:POOL_SIZE])
         d = _five_skill(fit, m.five_a) - _five_skill(fit, m.five_b)
         ok = ~np.isnan(d)
@@ -71,7 +71,7 @@ class MapModel:
         n = m.rounds.to_numpy(float)
         r = m.rounds_a.to_numpy(float) - n * p
         info = w * n * p * (1 - p)
-        long = pd.DataFrame({"team": np.r_[m.team_a, m.team_b], "map": np.r_[m.map, m.map],
+        long = pd.DataFrame({"team": np.r_[m.team_a, m.team_b], "map": np.r_[m.map_name, m.map_name],
                              "g": np.r_[w * r, -w * r], "h": np.r_[info, info]})
         agg = long.groupby(["team", "map"]).sum()
         prior = cfg.prior_rounds * 0.25
