@@ -6,6 +6,7 @@ start) and for the targets (snapshotted at the cutoff).
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from gnomepy_research.sessions.cs2_comp.bundle import load, target_paths
 from gnomepy_research.sessions.cs2_comp.g09.team import team_features
 
 UNRANKED = 300.0
+LOW_DIVISION = re.compile(r"entry|open|intermediate", re.I)
 
 
 def logit(p) -> np.ndarray:
@@ -84,7 +86,7 @@ def _ids(v) -> tuple:
 def load_faceit_maps(data_dir: str | Path, cutoff: pd.Timestamp) -> pd.DataFrame:
     """FACEIT 5v5 maps known before cutoff, timed by when FACEIT finalised the match, without series that HLTV also
     has and without excluded rows. Players are keyed by HLTV id where linked, else by FACEIT id."""
-    m = load(data_dir, "faceit/faceit_matches", cutoff, ["match_id", "finished_at"])
+    m = load(data_dir, "faceit/faceit_matches", cutoff, ["match_id", "finished_at", "competition_name"])
     h = load(data_dir, "faceit/faceit_match_history", cutoff,
              ["match_id", "map_name", "map_position_in_series", "team_a_faceit_ids", "team_b_faceit_ids", "team_a_score",
               "team_b_score", "team_a_won"])
@@ -106,6 +108,7 @@ def load_faceit_maps(data_dir: str | Path, cutoff: pd.Timestamp) -> pd.DataFrame
                          "team_b_player_ids": h.team_b_player_ids.to_numpy(), "team_a_score": h.team_a_score.to_numpy(float),
                          "team_b_score": h.team_b_score.to_numpy(float), "team_a_won": h.team_a_won.to_numpy(float),
                          "team_a_rank": np.nan, "team_b_rank": np.nan, "src": "faceit",
+                         "low": [bool(LOW_DIVISION.search(c or "")) for c in h.competition_name],
                          "mapstatsid": [f"{m}#{p}" for m, p in zip(h.match_id, h.map_position_in_series)]})
 
 
@@ -168,6 +171,8 @@ class EloConfig:
     ind_alpha: float = 0.0044
     swing_weight: float = 0.0
     faceit_stats: bool = False
+    # FACEIT's entry, open and intermediate divisions, relative to its other competitions.
+    k_faceit_low: float = 1.0
     # A fast component on top of the slow rating: reacts to the last few maps, then fades.
     k_fast: float = 0.0
     fast_decay: float = 0.1
@@ -231,13 +236,14 @@ def elo_pass(maps: pd.DataFrame, requests: pd.DataFrame, cfg: EloConfig = EloCon
     rka, rkb = maps.team_a_rank.to_numpy(float), maps.team_b_rank.to_numpy(float)
     faceit = (maps.src == "faceit").to_numpy() if "src" in maps else np.zeros(len(maps), bool)
     msid = maps.mapstatsid.to_numpy() if "mapstatsid" in maps else np.full(len(maps), None)
+    low = maps.low.fillna(False).to_numpy(bool) if "low" in maps else np.zeros(len(maps), bool)
     resid = np.full(len(maps), np.nan)
     for i in range(len(maps)):
         answer(times[i])
         A, B = fa[i], fb[i]
         if len(A) < 4 or len(B) < 4 or (faceit[i] and cfg.k_faceit <= 0):
             continue
-        kmult = cfg.k_faceit if faceit[i] else 1.0
+        kmult = (cfg.k_faceit * (cfg.k_faceit_low if low[i] else 1.0)) if faceit[i] else 1.0
         now = pd.Timestamp(times[i])
         for five, rank in ((A, rka[i]), (B, rkb[i])):
             new = [p for p in five if p not in rating]

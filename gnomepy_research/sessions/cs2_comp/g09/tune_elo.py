@@ -20,9 +20,9 @@ import pandas as pd
 from gnomepy_research.sessions.cs2_comp.g09.core import (EloConfig, _ids, combined_maps, elo_pass, load_faceit_maps, load_maps,
                                                          player_stats, series_outcomes, week_start)
 
-MULT = ("k", "k_new", "n_settle", "k_faceit", "decay_days", "ind_alpha", "fast_decay")
+MULT = ("k", "k_new", "n_settle", "k_faceit", "decay_days", "ind_alpha", "fast_decay", "k_faceit_low")
 STEPS = {"k": 1.3, "k_new": 1.4, "n_settle": 1.6, "new_gap": 0.15, "rank_scale": 0.3, "margin": 0.1, "k_faceit": 1.5,
-         "faceit_offset": 0.4, "decay_days": 2.0, "ind_weight": 0.5, "ind_alpha": 1.5, "swing_weight": 0.5, "k_fast": 0.05, "fast_decay": 1.5}
+         "faceit_offset": 0.4, "decay_days": 2.0, "ind_weight": 0.5, "ind_alpha": 1.5, "swing_weight": 0.5, "k_fast": 0.05, "fast_decay": 1.5, "k_faceit_low": 1.4}
 STATE = {}
 
 
@@ -65,7 +65,7 @@ def main() -> None:
     if not a.ind:
         cur = replace(cur, ind_weight=0.0, swing_weight=0.0)
     STATE.update(cm=cm, req=req, y=ev.y.reindex(req.match_id).to_numpy(), stats=player_stats(a.data, cutoff, cur))
-    params = [p for p in STEPS if (a.faceit or p not in ("k_faceit", "faceit_offset")) and (a.ind or p not in ("ind_weight", "ind_alpha", "swing_weight"))
+    params = [p for p in STEPS if (a.faceit or p not in ("k_faceit", "faceit_offset", "k_faceit_low")) and (a.ind or p not in ("ind_weight", "ind_alpha", "swing_weight"))
               and (a.fast or p not in ("k_fast", "fast_decay"))]
     log = []
     out = Path(os.environ.get("OUTPUT_DIR", "."))
