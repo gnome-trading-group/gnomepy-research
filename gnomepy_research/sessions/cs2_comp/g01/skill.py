@@ -7,8 +7,9 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import cg
 
 ANCHOR = {"rating": 1.0}
+NEW_MAPS = 5.0
 STAT_TARGETS = ["rating", "swing"]
-FEATURES = ["margin", *STAT_TARGETS, "min_n", "exp", "team", "margin_short"]
+FEATURES = ["margin", *STAT_TARGETS, "min_n", "exp", "team", "margin_short", "coh", "coh_min", "new"]
 
 
 STATS_COLUMNS = ["mapstatsid", "is_team_a", "player_id", "side", "rating", "adr", "kast", "ek", "ed", "round_swing_pct"]
@@ -102,6 +103,10 @@ class SkillFit:
         self.n_maps = np.asarray(sp.csr_matrix((np.repeat(w, 5), (rows, ca)), shape=shape).sum(0)).ravel() + \
             np.asarray(sp.csr_matrix((np.repeat(w, 5), (rows, cb)), shape=shape).sum(0)).ravel()
 
+        self.team_history: dict = {}
+        for tid, lu, wt in zip(np.concatenate([m.team_a_id.values, m.team_b_id.values]),
+                               list(m.team_a_player_ids) + list(m.team_b_player_ids), np.concatenate([w_h, w_h])):
+            self.team_history.setdefault(tid, []).append((frozenset(lu), wt))
         self.stat_skill: dict[str, np.ndarray] = {}
         if stats is not None:
             self._fit_stats(m, stats, w_h, lam_rating, gamma)
@@ -148,6 +153,18 @@ class SkillFit:
         v = self.stat_skill[name]
         return float(sum(v[self.index[p]] for p in ids if p in self.index))
 
+    def cohesion(self, ids, team) -> float:
+        cur = frozenset(ids)
+        return float(sum(wt for lu, wt in self.team_history.get(team, ()) if len(lu & cur) >= 4))
+
+    def newcomers(self, ids) -> float:
+        return float(sum(1 for p in ids if self.n_maps[self.index[p]] < NEW_MAPS if p in self.index) +
+                     sum(1 for p in ids if p not in self.index))
+
+    def cohesion_features(self, pa, pb, ta, tb) -> list[float]:
+        ca, cb = np.log1p(self.cohesion(pa, ta)), np.log1p(self.cohesion(pb, tb))
+        return [ca - cb, min(ca, cb)]
+
     def team_diff(self, ta, tb) -> float:
         if not self.team_index:
             return 0.0
@@ -156,7 +173,7 @@ class SkillFit:
     def diff(self, pa, pb, ta=None, tb=None) -> list[float]:
         sa, na = self.lineup(pa)
         sb, nb = self.lineup(pb)
-        return [sa - sb] + [self.stat_lineup(k, pa) - self.stat_lineup(k, pb) for k in STAT_TARGETS] + [np.log1p(min(na, nb)), self.exp_lineup(pa) - self.exp_lineup(pb), self.team_diff(ta, tb)]
+        return [sa - sb] + [self.stat_lineup(k, pa) - self.stat_lineup(k, pb) for k in STAT_TARGETS] + [np.log1p(min(na, nb)), self.exp_lineup(pa) - self.exp_lineup(pb), self.team_diff(ta, tb)] + self.cohesion_features(pa, pb, ta, tb)
 
 
 class MultiFit:
@@ -172,4 +189,5 @@ class MultiFit:
     def diff(self, pa, pb, ta=None, tb=None) -> list[float]:
         d = self.main.diff(pa, pb, ta, tb)
         short = 0.0 if self.short is None else self.short.lineup(pa)[0] - self.short.lineup(pb)[0]
-        return d + [short]
+        new = self.main.newcomers(pa) - self.main.newcomers(pb)
+        return d[:6] + [short] + d[6:] + [new]
