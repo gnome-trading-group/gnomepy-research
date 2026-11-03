@@ -1,6 +1,6 @@
 """Skill-fit feature rows for one configuration over a range of weekly cutoffs, for comparing configurations.
 
-    python -m gnomepy_research.sessions.cs2_comp.g05.variants --data <bundle> --name <variant> --mode dev|pre
+    python -m gnomepy_research.sessions.cs2_comp.g05.variants --data <bundle> --name <variant> --mode dev|pre|both
         [--first 2025-09-29 --last 2026-03-23] [--set half_life_days=150 --set faceit_weight=1.0 ...] [--out <dir>]
 
 `dev` builds rows for the target series of the bundle (priced with their announced fives); `pre` builds them for the
@@ -32,8 +32,8 @@ def config(sets: list[str]) -> Config:
     return dataclasses.replace(BASE, **kw)
 
 
-def dev_targets(data: str) -> pd.DataFrame:
-    targets = pd.read_parquet(Path(data) / "targets_tune.parquet")
+def prepare_targets(targets: pd.DataFrame) -> pd.DataFrame:
+    """Target series in the shape feature_rows takes: naive week_cutoff, announced fives and stand-in counts."""
     wc = pd.to_datetime(targets.week_cutoff)
     t = targets.rename(columns={"team_a_id": "team_a", "team_b_id": "team_b"})[["match_id", "team_a", "team_b"]].copy()
     t["week_cutoff"] = wc.dt.tz_convert(None) if wc.dt.tz is not None else wc
@@ -53,7 +53,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", required=True)
     ap.add_argument("--name", required=True)
-    ap.add_argument("--mode", choices=["dev", "pre"], required=True)
+    ap.add_argument("--mode", choices=["dev", "pre", "both"], required=True)
     ap.add_argument("--first")
     ap.add_argument("--last")
     ap.add_argument("--set", dest="sets", action="append", default=[])
@@ -61,17 +61,20 @@ def main() -> None:
     a = ap.parse_args()
     cfg = config(a.sets)
     print(a.name, cfg, flush=True)
-    if a.mode == "dev":
-        targets = dev_targets(a.data)
-        inputs = Inputs(a.data, targets.week_cutoff.max(), faceit=True)
-    else:
-        cutoffs = list(pd.date_range(a.first, a.last, freq="7D"))
-        inputs = Inputs(a.data, cutoffs[-1] + pd.Timedelta(days=7), faceit=True)
-        targets = pre_targets(inputs, cutoffs)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    feature_rows(inputs, targets, cfg, False, verbose=True).to_parquet(out / f"{a.name}_{a.mode}_hltv.parquet", index=False)
-    feature_rows(inputs, targets, cfg, True, verbose=True).to_parquet(out / f"{a.name}_{a.mode}_faceit.parquet", index=False)
+    for mode in (("dev", "pre") if a.mode == "both" else (a.mode,)):
+        if mode == "dev":
+            targets = prepare_targets(pd.read_parquet(Path(a.data) / "targets_tune.parquet"))
+            inputs = Inputs(a.data, targets.week_cutoff.max(), faceit=True)
+        else:
+            cutoffs = list(pd.date_range(a.first, a.last, freq="7D"))
+            inputs = Inputs(a.data, cutoffs[-1] + pd.Timedelta(days=7), faceit=True)
+            targets = pre_targets(inputs, cutoffs)
+        for faceit in (False, True):
+            rows = feature_rows(inputs, targets, cfg, faceit, verbose=True)
+            rows.to_parquet(out / f"{a.name}_{mode}_{'faceit' if faceit else 'hltv'}.parquet", index=False)
+        del inputs
 
 
 if __name__ == "__main__":
