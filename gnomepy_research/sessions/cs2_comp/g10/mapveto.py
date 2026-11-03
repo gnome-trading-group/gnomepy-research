@@ -25,6 +25,7 @@ class MapConfig:
     window_days: int = 365
     prior_rounds: float = 60.0
     pool_days: int = 60
+    form_half_life_days: float = 21.0
 
 
 def _naive(s: pd.Series) -> pd.Series:
@@ -79,6 +80,18 @@ class MapModel:
         self.offset = (agg.g / (agg.h + prior)).to_dict()
         agg = long.groupby(["team", "lan"])[["g", "h"]].sum()
         self.lan_offset = (agg.g / (agg.h + prior)).to_dict()
+        agg = long.groupby("team")[["g", "h"]].sum()
+        self.team_offset = (agg.g / (agg.h + prior)).to_dict()
+        recent = age <= 3 * cfg.form_half_life_days
+        wf = 0.5 ** (age[recent] / cfg.form_half_life_days)
+        rr, inf = r[recent] , (n * p * (1 - p))[recent]
+        form = pd.DataFrame({"team": np.r_[m.team_a.to_numpy()[recent], m.team_b.to_numpy()[recent]],
+                             "g": np.r_[wf * rr, -wf * rr], "h": np.r_[wf * inf, wf * inf]}).groupby("team")[["g", "h"]].sum()
+        self.form_offset = (form.g / (form.h + prior)).to_dict()
+
+    def offset_gap(self, gap: float, team_a: int, team_b: int, which: str) -> float:
+        o = getattr(self, f"{which}_offset")
+        return gap + o.get(team_a, 0.0) - o.get(team_b, 0.0)
 
     def lan_gap(self, gap: float, team_a: int, team_b: int, is_lan: int) -> float:
         """The skill gap plus each team's residual in this setting (LAN or online)."""
