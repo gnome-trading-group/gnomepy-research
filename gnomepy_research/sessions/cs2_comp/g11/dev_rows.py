@@ -29,6 +29,8 @@ ap.add_argument("--hl", type=float, default=300.0)
 ap.add_argument("--sigma", type=float, default=0.5)
 ap.add_argument("--window", type=int, default=365)
 ap.add_argument("--seed", type=int, default=0)
+ap.add_argument("--scene-days", type=int, default=0)
+ap.add_argument("--scene-sd", type=float, default=0.1)
 ap.add_argument("--tag", default="")
 a = ap.parse_args()
 t = pd.read_parquet(a.targets or Path(a.data) / "targets_tune.parquet")
@@ -37,7 +39,7 @@ t["week_cutoff"] = wc.dt.tz_convert(None) if wc.dt.tz is not None else wc
 if a.weeks:
     t = t[t.week_cutoff.isin(pd.to_datetime(a.weeks.split(",")))]
 cfg = Config(tau=a.tau, communities=tuple(int(k) for k in a.communities.split(",")), half_life_days=a.hl, sigma=a.sigma,
-             window_days=a.window, laplace=a.laplace, faceit_maps=a.faceit_maps, community_seed=a.seed)
+             window_days=a.window, laplace=a.laplace, faceit_maps=a.faceit_maps, community_seed=a.seed, scene_days=a.scene_days, scene_sd=a.scene_sd)
 train, tgt = build(a.data, t, cfg, a.faceit, a.history_weeks, verbose=True)
 out = Path(a.out)
 out.mkdir(parents=True, exist_ok=True)
