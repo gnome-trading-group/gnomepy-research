@@ -18,7 +18,7 @@ def path_features(paths: pd.DataFrame, window_min: int = 120) -> pd.DataFrame:
     """One row per match_id: m_last, m0 (last print within 30 min of kickoff), twap over the final window, print
     counts, hours of active trading and the spread of the final window."""
     if paths.empty:
-        return pd.DataFrame(columns=["match_id", "m_last", "m0", "twap", "n", "n_active", "active_hours", "sd_window", "n_window"])
+        return pd.DataFrame(columns=["match_id", "m_last", "m0", "twap", "n", "n_active", "active_hours", "sd_window", "n_window", "p_open"])
     p = paths.sort_values(["match_id", "t"], kind="stable")
     minutes = (p.kickoff - p.t).dt.total_seconds().to_numpy() / 60.0
     pa = p.p_a.to_numpy(float)
@@ -27,11 +27,13 @@ def path_features(paths: pd.DataFrame, window_min: int = 120) -> pd.DataFrame:
     d["min_active"] = np.where(d.active, d["min"], np.nan)
     last = d.groupby("match_id").agg(m_last=("p", "last"), n=("p", "size"), n_active=("active", "sum"),
                                      first_active_min=("min_active", "max"))
+    opened = d[d.active].groupby("match_id").p.first().rename("p_open")
     k = d[d["min"] <= KICKOFF_WINDOW_MIN].groupby("match_id").p.last().rename("m0")
     w = d[d["min"] <= window_min].groupby("match_id").p.agg(twap="mean", sd_window="std", n_window="size")
-    out = last.join(k).join(w).reset_index()
+    out = last.join(k).join(w).join(opened).reset_index()
     out["active_hours"] = out.first_active_min.fillna(0.0) / 60.0
     out["twap"] = out.twap.fillna(out.m_last)
+    out["p_open"] = out.p_open.fillna(out.twap)
     out["sd_window"] = out.sd_window.fillna(0.0)
     out["n_window"] = out.n_window.fillna(0).astype(int)
     return out.drop(columns=["first_active_min"])

@@ -36,9 +36,12 @@ def design(rows: pd.DataFrame, spec: Spec) -> np.ndarray:
     zs = logit(rows.p_series)
     liq = np.log1p(rows.n_active.to_numpy(float)) - np.log1p(600.0)
     gs = rows.gap_sd.to_numpy(float)
+    lan = rows.is_lan.to_numpy(float)
     cols = {"zm": zm, "zs": zs, "dz": zl - zm, "zm_liq": zm * liq, "zs_liq": zs * liq, "zs_sd": zs * gs,
             "zm_sd": zm * gs, "new": (rows.new_a - rows.new_b).to_numpy(float), "zs_new": zs * (rows.new_a + rows.new_b).to_numpy(float),
-            "dz_liq": (zl - zm) * liq, "zl": zl}
+            "dz_liq": (zl - zm) * liq, "zl": zl, "standins": (rows.standins_a - rows.standins_b).to_numpy(float),
+            "mom": zm - logit(rows.p_open), "zs_lan": zs * lan, "zm_lan": zm * lan,
+            "chem": (rows.chem_a - rows.chem_b).to_numpy(float), "unknown": (rows.known_b - rows.known_a).to_numpy(float)}
     X = np.column_stack([cols[c] for c in spec.columns])
     if spec.intercept:
         X = np.column_stack([X, np.ones(len(rows))])

@@ -68,7 +68,7 @@ def regulation(score_a: np.ndarray, score_b: np.ndarray, overtime: np.ndarray) -
 
 
 MAP_COLUMNS = ["match_id", "time", "day", "known", "team_a", "team_b", "five_a", "five_b", "rounds_a", "rounds_b", "pos", "source",
-               "division", "rating_a", "rating_b"]
+               "division", "rating_a", "rating_b", "won_a"]
 
 
 class Inputs:
@@ -114,7 +114,8 @@ class Inputs:
                              "team_a": d.team_a_id.astype(np.int64).to_numpy(), "team_b": d.team_b_id.astype(np.int64).to_numpy(),
                              "five_a": d.five_a.to_numpy(), "five_b": d.five_b.to_numpy(), "rounds_a": ra, "rounds_b": rb,
                              "pos": d.map_position_in_series.fillna(0).to_numpy(int), "source": "hltv", "division": "hltv",
-                             "rating_a": rated(d.five_a, d.match_id, d.map_name), "rating_b": rated(d.five_b, d.match_id, d.map_name)})[MAP_COLUMNS]
+                             "rating_a": rated(d.five_a, d.match_id, d.map_name), "rating_b": rated(d.five_b, d.match_id, d.map_name),
+                             "won_a": (d.team_a_score > d.team_b_score).to_numpy(float)})[MAP_COLUMNS]
 
     def _faceit_maps(self) -> pd.DataFrame:
         d = self.data_dir
@@ -151,7 +152,8 @@ class Inputs:
                              "team_b": fh.faction2_hltv_team.fillna(NO_TEAM).astype(np.int64).to_numpy(),
                              "five_a": fh.five_a.to_numpy(), "five_b": fh.five_b.to_numpy(), "rounds_a": ra, "rounds_b": rb,
                              "pos": fh.map_position_in_series.fillna(0).to_numpy(int), "source": "faceit",
-                             "division": [division(c) for c in fh.competition_name], "rating_a": None, "rating_b": None})[MAP_COLUMNS]
+                             "division": [division(c) for c in fh.competition_name], "rating_a": None, "rating_b": None,
+                             "won_a": (fh.team_a_score > fh.team_b_score).to_numpy(float)})[MAP_COLUMNS]
 
     def _series(self, h: pd.DataFrame) -> pd.DataFrame:
         g = h.groupby("match_id")

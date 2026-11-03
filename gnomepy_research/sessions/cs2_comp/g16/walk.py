@@ -28,6 +28,12 @@ SPECS = {
     "intercept": Spec(columns=("zm", "dz", "zs"), prior_mean={"zm": 1.0}, intercept=True),
     "tight": Spec(columns=("zm", "dz", "zs"), prior_mean={"zm": 1.0}, prior_precision=20.0),
     "loose": Spec(columns=("zm", "dz", "zs"), prior_mean={"zm": 1.0}, prior_precision=0.5),
+    "standins": Spec(columns=("zm", "dz", "zs", "standins"), prior_mean={"zm": 1.0}),
+    "mom": Spec(columns=("zm", "dz", "zs", "mom"), prior_mean={"zm": 1.0}),
+    "lan": Spec(columns=("zm", "dz", "zs", "zs_lan", "zm_lan"), prior_mean={"zm": 1.0}),
+    "chem": Spec(columns=("zm", "dz", "zs", "chem"), prior_mean={"zm": 1.0}),
+    "unknown": Spec(columns=("zm", "dz", "zs", "unknown"), prior_mean={"zm": 1.0}),
+    "kitchen": Spec(columns=("zm", "dz", "zs", "new", "standins", "mom", "zs_lan", "chem"), prior_mean={"zm": 1.0}),
 }
 
 

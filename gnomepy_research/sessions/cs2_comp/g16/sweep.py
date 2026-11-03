@@ -3,7 +3,8 @@ Walk-forward evaluation of one skill configuration on the dev targets, from the 
 
     python -m gnomepy_research.sessions.cs2_comp.g16.sweep --data <bundle> --targets <parquet> --config '<json>' [--out <dir>]
 
-The config JSON holds a name, overrides of PlayerSkillConfig under "filter", and "faceit_weight". Writes
+The config JSON holds a name and the values `fit.make_config` reads (filter parameters, faceit_weight, rating_gamma,
+rating_sd, off_low/off_mid/off_high). Writes
 <out>/<name>.json with the pool score per layer spec and <out>/<name>_{train,targets}.parquet with the skill rows,
 so layer specs can be compared again without refitting. On Batch, --out defaults to $OUTPUT_DIR.
 """
@@ -13,23 +14,17 @@ import argparse
 import json
 import os
 import time
-from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
 
-from gnomepy_research.models.cs2.hltv.player_skill import PlayerSkillConfig
 from gnomepy_research.sessions.cs2_comp.bundle import target_paths
 from gnomepy_research.sessions.cs2_comp.g16.data import Inputs, naive, target_rows
+from gnomepy_research.sessions.cs2_comp.g16.fit import make_config
 from gnomepy_research.sessions.cs2_comp.g16.market import path_features
 from gnomepy_research.sessions.cs2_comp.g16.predict import training_rows
-from gnomepy_research.sessions.cs2_comp.g16.skill import SkillConfig, weekly_rows
+from gnomepy_research.sessions.cs2_comp.g16.skill import weekly_rows
 from gnomepy_research.sessions.cs2_comp.g16.walk import SPECS, evaluate
-
-
-def skill_config(config: dict) -> SkillConfig:
-    return SkillConfig(replace(PlayerSkillConfig(), **config.get("filter", {})), config.get("faceit_weight", 1.0),
-                       config.get("rating_gamma", 0.0), config.get("rating_sd", 0.31))
 
 
 def main() -> None:
@@ -41,7 +36,7 @@ def main() -> None:
     ap.add_argument("--specs", default="default,new")
     a = ap.parse_args()
     config = json.loads(a.config)
-    cfg = skill_config(config)
+    cfg = make_config(config)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     targets = pd.read_parquet(a.targets)
