@@ -52,17 +52,22 @@ class Config:
     # With FACEIT on, False keeps FACEIT to the skill prior (levels) and fits on HLTV maps only.
     faceit_maps: bool = True
     community_seed: int = 0
+    teammate_weight: float = 1.0
     pool_days: int = 60
 
 
-def communities(ia: np.ndarray, ib: np.ndarray, w: np.ndarray, P: int, k: int, seed: int = 0) -> np.ndarray:
-    """Spectral communities of the player graph (teammates and opponents on a map are linked, by map weight)."""
+def communities(ia: np.ndarray, ib: np.ndarray, w: np.ndarray, P: int, k: int, seed: int = 0,
+                teammate_weight: float = 1.0) -> np.ndarray:
+    """Spectral communities of the player graph: opponents on a map are linked by the map's weight, teammates by
+    teammate_weight times it."""
     if k <= 1 or P < 10 * k:
         return np.zeros(P, dtype=int)
     ten = np.concatenate([ia, ib], axis=1)
     r = np.repeat(ten, 10, axis=1).ravel()
     c = np.tile(ten, (1, 10)).ravel()
-    ww = np.repeat(w, 100)
+    side = np.repeat(np.r_[np.zeros(FIVE), np.ones(FIVE)], 1)
+    same = (side[:, None] == side[None, :]).ravel()
+    ww = np.repeat(w, 100) * np.tile(np.where(same, teammate_weight, 1.0), len(w))
     W = sp.csr_matrix((ww, (r, c)), shape=(P, P))
     W.setdiag(0)
     W.eliminate_zeros()
@@ -128,7 +133,7 @@ class GraphFit:
         X0 = X0[:, np.r_[np.ones(min(5, X0.shape[1]), bool), X0[:, 5:].any(axis=0)]]
         K = X0.shape[1]
         Xs = sp.vstack([sp.csr_matrix(X0), sp.csr_matrix((T, K))]).tocsr()
-        levels = [communities(ia, ib, w, P, k, cfg.community_seed) for k in cfg.communities]
+        levels = [communities(ia, ib, w, P, k, cfg.community_seed, cfg.teammate_weight) for k in cfg.communities]
         comm = levels[0]
         C = sp.hstack([sp.csr_matrix((np.ones(P), (np.arange(P), lv)), shape=(Q, int(lv.max()) + 1)) for lv in levels]).tocsr()
         NC = C.shape[1]

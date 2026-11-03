@@ -27,6 +27,7 @@ FACEIT = True
 HISTORY_WEEKS = 40
 COLUMNS = ["zm", "zr", "one"]
 L2 = 1.0
+MIN_TRAIN = 100
 
 
 def predict(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = False, rows_dir: str | Path | None = None) -> pd.DataFrame:
@@ -42,7 +43,11 @@ def predict(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = False, 
     for c in sorted(tgt.week_cutoff.unique()):
         c = pd.Timestamp(c)
         use = ((train.known < c) & (train.kickoff >= c - HISTORY_WEEKS * WEEK) & train.m0.notna()).to_numpy()
-        w = fit_logistic(Ftr[use], y[use], L2)
+        if use.sum() >= MIN_TRAIN:
+            w = fit_logistic(Ftr[use], y[use], L2)
+        else:
+            # Too few finished market series to learn a blend from: an even blend of the two logits.
+            w = np.array([0.5, 0.5, 0.0])
         sel = (tgt.week_cutoff == c).to_numpy()
         q[sel] = 1 / (1 + np.exp(-Ftg[sel] @ w))
         if verbose:
