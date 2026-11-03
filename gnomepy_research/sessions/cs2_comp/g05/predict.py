@@ -10,15 +10,15 @@ interactions, persistent per-team market surprise) added nothing once a skill pr
 market is left to the pool.
 
 The skill price is the e12 player-skill fit (borrowed: HLTV maps, and HLTV plus FACEIT maps, each side priced with its
-announced five) run under each configuration in SKILL, each turned into a price by a small logistic layer, and the
-prices averaged in logit space. Each layer's weights were fitted on the weekly walk-forward rows of Oct 2025 - Mar 2026
-(`variants.py --mode pre`), all before the first tune cutoff, so they are point-in-time for every target.
+announced five) under each configuration in SKILL, turned into a price by a small logistic layer, with the prices
+averaged in logit space. SKILL holds only e12's own configuration and layer weights (fitted by e12 on its Apr 2025 -
+Mar 2026 walk-forward, before the first tune cutoff, so point-in-time for every target): configuration variants with
+layers refitted on Oct 2025 - Mar 2026 (`variants.py --mode pre`) did no better alongside the market.
 """
 from __future__ import annotations
 
 import argparse
 import os
-import dataclasses
 from pathlib import Path
 
 import numpy as np
@@ -33,7 +33,7 @@ from gnomepy_research.sessions.cs2_comp.g05.variants import BASE, prepare_target
 
 LAYER_COLUMNS = ["zh", "zh_thin", "standin", "idle", "zf", "zf_thin"]
 SKILL: dict[str, tuple[Config, list[float]]] = {
-    "base": (BASE, [0.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+    "base": (BASE, [0.149912, -0.043914, -0.099792, -0.026092, 0.646569, 0.00154]),
 }
 
 
