@@ -3,6 +3,9 @@ Fit skill-filter hyperparameters by one-step-ahead log loss on HLTV maps, before
 
     python -m gnomepy_research.sessions.cs2_comp.g16.fit --data <bundle> --until 2026-03-30 --score-from 2025-01-01
         --params sigma0,tau,rho,faceit_weight,off_low,off_mid,off_high [--init '<json>'] [--maxfev 150] [--out <dir>]
+    python -m gnomepy_research.sessions.cs2_comp.g16.fit ... --evaluate '[{"name": ..., "sigma0": ...}, ...]'
+
+`--evaluate` scores each listed set of values once instead of optimising, so a grid can be spread over Batch tasks.
 
 Every map before --until is consumed; only HLTV maps from --score-from count in the loss, each priced with the fives
 that played, from the state just before it. The targets are HLTV series, so HLTV maps are the right domain; FACEIT
@@ -67,6 +70,7 @@ def main() -> None:
     ap.add_argument("--score-from", required=True)
     ap.add_argument("--params", required=True)
     ap.add_argument("--init", default="{}")
+    ap.add_argument("--evaluate")
     ap.add_argument("--maxfev", type=int, default=150)
     ap.add_argument("--name", default="fit")
     ap.add_argument("--out", default=os.environ.get("OUTPUT_DIR", "."))
@@ -81,6 +85,16 @@ def main() -> None:
     params = a.params.split(",")
     won = inputs.maps.won_a.to_numpy(float)
     trace = []
+    if a.evaluate:
+        for point in json.loads(a.evaluate):
+            v = dict(values)
+            v.update({k: x for k, x in point.items() if k != "name"})
+            t0 = time.time()
+            loss = map_loss(inputs, make_config(v), pd.Timestamp(a.score_from), won)
+            trace.append({"name": point.get("name"), "loss": loss, "values": v, "seconds": time.time() - t0})
+            print(f"{point.get('name')} {loss:.5f} {time.time() - t0:.0f}s", flush=True)
+            (out / f"{a.name}.json").write_text(json.dumps(trace, indent=1))
+        return
 
     def unpack(x: np.ndarray) -> dict:
         v = dict(values)
