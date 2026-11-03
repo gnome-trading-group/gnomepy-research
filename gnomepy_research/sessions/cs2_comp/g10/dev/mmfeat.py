@@ -11,15 +11,10 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
-from gnomepy_research.sessions.cs2_comp.g10.mm import MMConfig, five_form, mm_rows, player_form
+from gnomepy_research.sessions.cs2_comp.g10.mm import MMConfig, five_mean, mm_rows, player_form
 from gnomepy_research.sessions.cs2_comp.g10.rows import monday
 
-CONFIGS = {"mm120": MMConfig(half_life_days=120.0, prior_games=80.0),
-           "mm240": MMConfig(half_life_days=240.0, window_days=365, prior_games=80.0),
-           "mm120p": MMConfig(half_life_days=120.0, prior_games=200.0),
-           "mm120s4": MMConfig(half_life_days=120.0, prior_games=80.0, level_slope=0.4),
-           "mm120s1": MMConfig(half_life_days=120.0, prior_games=80.0, level_slope=0.1),
-           "mm120w": MMConfig(half_life_days=120.0, window_days=365, prior_games=80.0)}
+CONFIGS = {"mm": MMConfig(), "mm60": MMConfig(half_life_days=60.0, window_days=180)}
 
 
 def main() -> None:
@@ -38,7 +33,7 @@ def main() -> None:
                        "week_cutoff": pd.to_datetime(t.week_cutoff)})
     s = s[~s.match_id.isin(tg.match_id)].assign(week_cutoff=lambda x: monday(x.time))
     allr = pd.concat([s[["match_id", "lineup_a", "lineup_b", "week_cutoff"]], tg], ignore_index=True)
-    rows = mm_rows(a.data, allr.week_cutoff.max(), verbose=True)
+    rows = mm_rows(a.data, allr.week_cutoff.max())
     print(f"mm rows {len(rows)} players {rows.hltv_id.nunique()} {time.time() - t0:.0f}s", flush=True)
     out = []
     for c in sorted(allr.week_cutoff.unique()):
@@ -47,16 +42,9 @@ def main() -> None:
         rec = {"match_id": wk.match_id.to_numpy()}
         for name, cfg in CONFIGS.items():
             form = player_form(rows, c, cfg)
-            fa = [five_form(form, v) for v in wk.lineup_a]
-            fb = [five_form(form, v) for v in wk.lineup_b]
-            rec[f"{name}_a"] = [x[0] for x in fa]
-            rec[f"{name}_b"] = [x[0] for x in fb]
-            rec[f"{name}_ka"] = [x[1] for x in fa]
-            rec[f"{name}_kb"] = [x[1] for x in fb]
-            if name == "mm120":
-                act = np.log1p(form.n)
-                rec["act_a"] = [np.mean([act.get(int(p), 0.0) for p in v]) if v is not None and len(v) else 0.0 for v in wk.lineup_a]
-                rec["act_b"] = [np.mean([act.get(int(p), 0.0) for p in v]) if v is not None and len(v) else 0.0 for v in wk.lineup_b]
+            for col, short in (("form", name), ("activity", f"{name}act")):
+                rec[f"{short}_a"] = [five_mean(form, v, col) for v in wk.lineup_a]
+                rec[f"{short}_b"] = [five_mean(form, v, col) for v in wk.lineup_b]
         out.append(pd.DataFrame(rec))
     res = pd.concat(out, ignore_index=True)
     print(res.describe().T.to_string(), flush=True)

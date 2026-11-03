@@ -34,10 +34,12 @@ from gnomepy_research.sessions.cs2_comp.g10.e12_data import Inputs
 from gnomepy_research.sessions.cs2_comp.g10.e12_model import SkillFit, series_price
 from gnomepy_research.sessions.cs2_comp.g10.e12_predict import CONFIG_HLTV, LAYER_FACEIT, design, rows
 from gnomepy_research.sessions.cs2_comp.g10.mapveto import MapConfig, MapModel, load_maps
+from gnomepy_research.sessions.cs2_comp.g10.mm import MMConfig, five_mean, mm_rows, player_form
 
 MAP_CONFIG = MapConfig(half_life_days=240.0, prior_rounds=240.0)
 SETTING_CONFIG = MapConfig(half_life_days=240.0, prior_rounds=120.0)
-WEIGHTS = {"map": 0.166, "setting": 0.09, "form": 0.13}
+MM_CONFIG = MMConfig()
+WEIGHTS = {"q_map": 0.166, "q_setting": 0.09, "q_form": 0.13}
 
 
 def _logit(p) -> np.ndarray:
@@ -59,6 +61,8 @@ def components(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = Fals
                         "gap": h.gap.to_numpy(), "q_e12": q_e12})
     out = out.merge(t[["match_id", "team_a", "team_b", "is_lan"]], on="match_id")
     maps = load_maps(data_dir, until)
+    mm = mm_rows(data_dir, until)
+    lineups = t.set_index("match_id")[["lineup_a", "lineup_b"]]
     parts = []
     for c in sorted(out.week_cutoff.unique()):
         c = pd.Timestamp(c)
@@ -72,6 +76,11 @@ def components(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = Fals
         wk["q_map"] = [mm.series_price(g, a, b) for g, a, b, _ in trip]
         wk["q_setting"] = series_price(np.array([ms.lan_gap(g, a, b, lan) for g, a, b, lan in trip]))
         wk["q_form"] = series_price(np.array([ms.offset_gap(g, a, b, "form") for g, a, b, _ in trip]))
+        form = player_form(mm, c, MM_CONFIG)
+        lu = lineups.loc[wk.match_id]
+        for col in ("form", "activity"):
+            wk[f"mm_{col}"] = (np.array([five_mean(form, v, col) for v in lu.lineup_a])
+                               - np.array([five_mean(form, v, col) for v in lu.lineup_b]))
         parts.append(wk)
         if verbose:
             print(f"{c:%Y-%m-%d} corrections {time.time() - t0:.1f}s series {len(wk)}", flush=True)
@@ -82,7 +91,7 @@ def combine(comp: pd.DataFrame, weights: dict[str, float] = WEIGHTS) -> np.ndarr
     z = _logit(comp.q_e12)
     base = _logit(comp.q_hltv)
     for k, w in weights.items():
-        z = z + w * (_logit(comp[f"q_{k}"]) - base)
+        z = z + w * ((_logit(comp[k]) - base) if k.startswith("q_") else comp[k].to_numpy(float))
     return expit(z)
 
 

@@ -30,7 +30,7 @@ def main() -> None:
     y, mo = d.y.to_numpy(float), d.month.to_numpy()
     z0, ze, zb = logit(d.m0), logit(d.q_e12), logit(d.q_hltv)
     base = ll(pool([d.m0, d.q_e12], y, mo), y)
-    incs = {k: logit(d[f"q_{k}"]) - zb for k in WEIGHTS}
+    incs = {k: (logit(d[k]) - zb) if k.startswith("q_") else d[k].to_numpy(float) for k in WEIGHTS}
     X = np.column_stack([z0, ze] + list(incs.values()) + [np.ones(len(y))])
     out = np.empty(len(y))
     for m in np.unique(mo):
