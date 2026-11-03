@@ -47,6 +47,8 @@ class Config:
     map_sds: tuple = (0.1, 0.2, 0.3)
     # Prior sd of a team's own round-logit effect beyond its players (zero turns team nodes off).
     team_sd: float = 0.0
+    # The Laplace factorisation is only needed for gap variances.
+    laplace: bool = True
     pool_days: int = 60
 
 
@@ -82,6 +84,7 @@ class GraphFit:
     sigma: float
     tau: float
     lu: object
+    n_theta: int
     X: np.ndarray
     map_offset: dict = field(default_factory=dict)
     pool: tuple = ()
@@ -163,13 +166,14 @@ class GraphFit:
         s, g, c = split(res.x)
         pr = expit(A @ s)
         Pm = sp.diags(prec)
+        n_theta = Q + K + NC
         Hss = At @ sp.diags(w * n * pr * (1 - pr)) @ A + Pm
         if kappa:
             Hss = Hss + kappa * (L.T @ sp.diags(wr) @ L)
         H = sp.bmat([[Hss, -Pm @ Xs, -Pm @ C],
                      [-(Pm @ Xs).T, Xs.T @ Pm @ Xs + 1e-2 * sp.eye(K), Xs.T @ Pm @ C],
                      [-(Pm @ C).T, C.T @ Pm @ Xs, C.T @ Pm @ C + inv_tau * sp.eye(NC)]]).tocsc()
-        lu = splu(H)
+        lu = splu(H) if cfg.laplace else None
         team_eff = dict(zip(teams.tolist(), s[P:].tolist()))
         team_index = dict(zip(teams.tolist(), range(P, Q)))
         s = s[:P]
@@ -177,7 +181,7 @@ class GraphFit:
         played = np.bincount(np.concatenate([ia.ravel(), ib.ravel()]), minlength=P)
         offsets, pool = map_offsets(f, w, ra, n, pr, cutoff, cfg)
         prefs = map_preferences(f, cutoff, pool)
-        return cls(cutoff, players, s, played, comm, g, c, cfg.sigma, cfg.tau, lu, X, offsets, pool, prefs, team_eff, team_index,
+        return cls(cutoff, players, s, played, comm, g, c, cfg.sigma, cfg.tau, lu, n_theta, X, offsets, pool, prefs, team_eff, team_index,
                    {"maps": M, "players": P, "iters": int(res.nit), "converged": bool(res.success),
                     "c": np.round(c, 3).tolist()})
 
@@ -185,7 +189,7 @@ class GraphFit:
         """Adds sign/5 per known player of the five into v; returns the five's mean skill, the variance it adds for
         players the fit never saw, how many it barely knows, and the communities of its known players."""
         P, K = len(self.players), len(self.gamma)
-        g_start = self.lu.shape[0] - K - len(self.c)
+        g_start = self.n_theta - K - len(self.c)
         xu = np.array([1.0, 1.0, np.log(UNRANKED) - np.log(rank)])
         prior_unknown = float(self.gamma[:3] @ xu)
         unknown_var = self.sigma ** 2 + self.tau ** 2
@@ -209,7 +213,7 @@ class GraphFit:
         return float(np.mean(vals)), extra, thin, comms
 
     def gap(self, five_a, rank_a, five_b, rank_b, team_a: int = -1, team_b: int = -1, is_lan: int = 0) -> dict:
-        n = self.lu.shape[0]
+        n = self.n_theta
         v = np.zeros(n)
         ma, ea, ta, ca = self._vec(five_a, rank_a, 1.0, v)
         mb, eb, tb, cb = self._vec(five_b, rank_b, -1.0, v)
@@ -219,7 +223,7 @@ class GraphFit:
                 v[self.team_index[team]] += sign
                 gap_players_team = self.team_eff[team]
                 ma, mb = (ma + gap_players_team, mb) if sign > 0 else (ma, mb + gap_players_team)
-        var = float(v @ self.lu.solve(v)) + ea + eb
+        var = float(v @ self.lu.solve(v)) + ea + eb if self.lu is not None else float('nan')
         dom_a = max(set(ca), key=ca.count) if ca else -1
         dom_b = max(set(cb), key=cb.count) if cb else -1
         first = next(iter(self.map_offset.values()), {})
