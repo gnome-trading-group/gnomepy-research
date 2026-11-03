@@ -15,14 +15,18 @@ from pathlib import Path
 
 import pandas as pd
 
-from gnomepy_research.sessions.cs2_comp.g09.core import build_rows, naive
+from gnomepy_research.sessions.cs2_comp.g09.core import EloConfig, build_rows, naive
 from gnomepy_research.sessions.cs2_comp.g09.layer import fit_predict
+
+# Tuned by tune_elo.py on HLTV bo3 series from Jun 2025 to Mar 2026, before the first dev cutoff.
+MAIN_ELO = EloConfig(k_faceit=1.0, faceit_stats=True)
+EXTRA_ELO = {"h": EloConfig()}
 
 
 def predict(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
     out = []
     for cutoff, t in targets.groupby("week_cutoff"):
-        train, tgt = build_rows(data_dir, pd.Timestamp(cutoff), t)
+        train, tgt = build_rows(data_dir, pd.Timestamp(cutoff), t, elo_cfg=MAIN_ELO, extra_elo=EXTRA_ELO)
         q = fit_predict(train, tgt)
         out.append(pd.DataFrame({"match_id": tgt.match_id.to_numpy(), "q": q, "fit_cutoff": pd.Timestamp(cutoff)}))
         if verbose:

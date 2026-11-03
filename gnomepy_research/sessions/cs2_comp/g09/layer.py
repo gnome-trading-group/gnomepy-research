@@ -16,7 +16,7 @@ import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g09.core import UNRANKED, bo3, logit
 
-FEATURES = ("ze",)
+FEATURES = ("ze", "ze_h")
 TRAIN_DAYS = 365.0
 L2 = 1.0
 
