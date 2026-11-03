@@ -41,7 +41,8 @@ def load_maps(data_dir, until: pd.Timestamp) -> pd.DataFrame:
     return pd.DataFrame({"time": h.time.to_numpy(), "team_a": h.team_a_id.astype(np.int64).to_numpy(),
                          "team_b": h.team_b_id.astype(np.int64).to_numpy(), "map_name": h.map_name.to_numpy(),
                          "rounds": np.where(ot, 24, sa + sb), "rounds_a": np.where(ot, 12, sa),
-                         "five_a": h.team_a_player_ids.to_numpy(), "five_b": h.team_b_player_ids.to_numpy()})
+                         "five_a": h.team_a_player_ids.to_numpy(), "five_b": h.team_b_player_ids.to_numpy(),
+                         "is_lan": h.is_lan.fillna(0).astype(int).to_numpy()})
 
 
 def _five_skill(fit, fives, ranks=None) -> np.ndarray:
@@ -72,10 +73,16 @@ class MapModel:
         r = m.rounds_a.to_numpy(float) - n * p
         info = w * n * p * (1 - p)
         long = pd.DataFrame({"team": np.r_[m.team_a, m.team_b], "map": np.r_[m.map_name, m.map_name],
-                             "g": np.r_[w * r, -w * r], "h": np.r_[info, info]})
-        agg = long.groupby(["team", "map"]).sum()
+                             "lan": np.r_[m.is_lan, m.is_lan], "g": np.r_[w * r, -w * r], "h": np.r_[info, info]})
         prior = cfg.prior_rounds * 0.25
+        agg = long.groupby(["team", "map"])[["g", "h"]].sum()
         self.offset = (agg.g / (agg.h + prior)).to_dict()
+        agg = long.groupby(["team", "lan"])[["g", "h"]].sum()
+        self.lan_offset = (agg.g / (agg.h + prior)).to_dict()
+
+    def lan_gap(self, gap: float, team_a: int, team_b: int, is_lan: int) -> float:
+        """The skill gap plus each team's residual in this setting (LAN or online)."""
+        return gap + self.lan_offset.get((team_a, is_lan), 0.0) - self.lan_offset.get((team_b, is_lan), 0.0)
 
     def series_price(self, gap: float, team_a: int, team_b: int) -> float:
         """Average of the two veto orders (either side banning first)."""
