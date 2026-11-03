@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
+from xgboost import XGBClassifier
 
 from gnomepy_research.sessions.cs2_comp.bundle import load
 from gnomepy_research.sessions.cs2_comp.g08.data import Inputs
@@ -47,19 +48,43 @@ def ci(d):
     return [float(d.mean()), float(np.percentile(b, 2.5)), float(np.percentile(b, 97.5))]
 
 
+def _residual_features(F: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Antisymmetric (flip sign with the teams) and symmetric descriptors for the boosted residual layer."""
+    anti = np.column_stack([logit(F.series_veto), (F.form_a - F.form_b), (F.cohesion_a - F.cohesion_b), (F.unknown_a - F.unknown_b),
+                            (F.var_a - F.var_b), np.log1p(F.maps90_a) - np.log1p(F.maps90_b),
+                            np.log1p(F.idle_a) - np.log1p(F.idle_b), (F.lowmaps_a - F.lowmaps_b)]).astype(float)
+    sym = np.column_stack([F.var_a + F.var_b, F.lan, F.tier, np.log1p(np.minimum(F.maps90_a, F.maps90_b)),
+                           F.unknown_a + F.unknown_b, F.cohesion_a + F.cohesion_b]).astype(float)
+    return anti, sym
+
+
 def evaluate(inputs, targets, market, cfg, cols):
     Q = _queries(inputs, targets)
     F = Q.merge(run(inputs.maps, Q, cfg), on="qid")
     F["y"] = F.match_id.map(inputs.series.set_index("match_id").y)
+    boost = cols[-1] == "boost"
+    cols = [c for c in cols if c != "boost"]
     X = layer_features(F, cols)
+    A, S = _residual_features(F)
     weeks = sorted(set(F.cutoff[~F.target & (F.cutoff >= PRE_START) & (F.cutoff < targets.week_cutoff.min())]) | set(targets.week_cutoff))
     p = np.full(len(F), np.nan)
     for w in weeks:
         w = pd.Timestamp(w)
         tr = (~F.target & (F.known < w) & (F.cutoff >= w - pd.Timedelta(days=540))).to_numpy()
         te = (F.cutoff == w).to_numpy() & (F.target | (w < targets.week_cutoff.min())).to_numpy()
-        m = LogisticRegression(fit_intercept=False).fit(np.vstack([X[tr], -X[tr]]), np.r_[F.y.values[tr], 1 - F.y.values[tr]])
+        yt = np.r_[F.y.values[tr], 1 - F.y.values[tr]]
+        m = LogisticRegression(fit_intercept=False).fit(np.vstack([X[tr], -X[tr]]), yt)
         p[te] = m.predict_proba(X[te])[:, 1]
+        if boost:
+            z_tr = np.r_[X[tr] @ m.coef_[0], -(X[tr] @ m.coef_[0])]
+            D = np.vstack([np.hstack([A[tr], S[tr]]), np.hstack([-A[tr], S[tr]])])
+            b = XGBClassifier(n_estimators=150, max_depth=3, learning_rate=0.03, subsample=0.8, colsample_bytree=0.8,
+                              min_child_weight=20, random_state=0, n_jobs=2)
+            b.fit(D, yt, base_margin=z_tr)
+            z = X[te] @ m.coef_[0]
+            pa = b.predict_proba(np.hstack([A[te], S[te]]), base_margin=z)[:, 1]
+            pb = b.predict_proba(np.hstack([-A[te], S[te]]), base_margin=-z)[:, 1]
+            p[te] = 0.5 * (pa + 1 - pb)
     F["q"] = p
     pre = F[~F.target & F.q.notna() & F.y.notna()]
     T = F[F.target][["match_id", "q", "y"]].merge(market, on="match_id")
