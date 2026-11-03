@@ -13,6 +13,9 @@ from gnomepy_research.sessions.cs2_comp import bundle
 HALF_LIFE_DAYS = 300.0
 WINDOW_DAYS = 730
 C_RIDGE = 0.3
+ROUNDS_MIN = 16
+BINARY_ROUNDS = 19.0
+ROUND_INFLATION = 8.0
 
 
 class MatchmakingTable:
@@ -35,12 +38,12 @@ class MatchmakingTable:
         self.levels = mean
         self.linked = linked[["match_id", "faction", "hltv_id"]]
         matches = pd.read_parquet(f"{data_dir}/faceit/history_matches.parquet",
-                                  columns=["match_id", "finished_at", "winner", "teams_size", "game_mode"])
+                                  columns=["match_id", "finished_at", "winner", "teams_size", "game_mode", "score_faction1", "score_faction2"])
         self.matches = matches[(matches.teams_size == 5) & matches.winner.isin(["faction1", "faction2"])
                                & matches.game_mode.isin(["5v5", "5v5 League"])]
 
     def fit(self, cutoff: pd.Timestamp, c: float = C_RIDGE, half_life: float = HALF_LIFE_DAYS,
-            window_days: int = WINDOW_DAYS) -> tuple[dict[int, float], float]:
+            window_days: int = WINDOW_DAYS, rounds: bool = False) -> tuple[dict[int, float], float]:
         end = int(cutoff.tz_localize("UTC").timestamp()) if cutoff.tzinfo is None else int(cutoff.timestamp())
         start = end - window_days * 86400
         m = self.matches[(self.matches.finished_at < end) & (self.matches.finished_at >= start)]
@@ -55,8 +58,17 @@ class MatchmakingTable:
         X = sp.csr_matrix((sign, (midx[lk.match_id].to_numpy(), lk.hltv_id.map(pidx).to_numpy())), shape=(len(m), len(players)))
         X = sp.hstack([X, sp.csr_matrix(diff[:, None])]).tocsr()
         age = (end - m.finished_at.to_numpy()) / 86400
+        decay = 0.5 ** (age / half_life)
         clf = LogisticRegression(C=c, fit_intercept=True, solver="lbfgs", max_iter=200)
-        clf.fit(X, (m.winner == "faction1").to_numpy(), sample_weight=0.5 ** (age / half_life))
+        if rounds:
+            s1, s2 = m.score_faction1.to_numpy(), m.score_faction2.to_numpy()
+            by_rounds = np.isfinite(s1) & np.isfinite(s2) & (s1 + s2 >= ROUNDS_MIN)
+            win1 = (m.winner == "faction1").to_numpy()
+            w1 = np.where(by_rounds, s1, np.where(win1, BINARY_ROUNDS, 0.0)) / ROUND_INFLATION
+            w2 = np.where(by_rounds, s2, np.where(win1, 0.0, BINARY_ROUNDS)) / ROUND_INFLATION
+            clf.fit(sp.vstack([X, X]), np.r_[np.ones(len(m)), np.zeros(len(m))], sample_weight=np.r_[w1 * decay, w2 * decay])
+        else:
+            clf.fit(X, (m.winner == "faction1").to_numpy(), sample_weight=decay)
         return dict(zip(players, clf.coef_[0][:-1])), float(clf.coef_[0][-1])
 
     def activity(self, cutoff: pd.Timestamp, days: int = 30) -> dict[int, int]:
