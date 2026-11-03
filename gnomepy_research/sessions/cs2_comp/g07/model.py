@@ -40,6 +40,10 @@ class Config:
     tau2: float = 0.0004        # player random walk per day
     newcomer: float = -0.03     # newcomer offset relative to known teammates
     newcomer_faceit: float | None = None  # the same on FACEIT maps (None: as on HLTV)
+    # A five with no known player starts at its division's running mean plus new_team_offset, with variance
+    # new_team_var (None: v_cap).
+    new_team_offset: float = 0.0
+    new_team_var: float | None = None
     tv0: float = 0.02           # team offset prior variance
     ttau2: float = 0.0001       # team offset random walk per day
     w_hltv: float = 0.5         # likelihood tempering per map source
@@ -139,8 +143,8 @@ class Filter:
                 m = sum(wi * mus[i] for wi, i in zip(w, known)) / sum(w) + off
                 v = cfg.v0 + 1.0 / sum(w)
             else:
-                m = self.div_mean.get(div, 0.0)
-                v = cfg.v_cap
+                m = self.div_mean.get(div, 0.0) + cfg.new_team_offset
+                v = cfg.v_cap if cfg.new_team_var is None else cfg.new_team_var
             for i in unknown:
                 mus[i], vs[i] = m, v
         return mus, vs, len(unknown)
