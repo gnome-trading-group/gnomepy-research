@@ -9,9 +9,10 @@ target is priced with its announced five from that state. The market path up to 
 measurement (`market.py`), and a small logistic layer, refitted at each cutoff on every market-joined series played
 before it, combines the two.
 
-The scored submission uses the repo's PlayerSkillConfig with FACEIT maps at full weight and nothing else switched on.
-`fit.py` grids on pre-dev HLTV map log loss found a better candidate (division newcomer offsets -0.5/-0.2/+0.1,
-ratings at gamma 0.3, lam 0: see the README) that was not scored before the session ended; CANDIDATE holds it.
+The skill constants in SKILL (division newcomer offsets, the rating measurement, no extra weight on the best player,
+and a wider newcomer prior, more process noise and less round overdispersion than the repo's HLTV-only fit) were
+chosen by one-step-ahead HLTV map log loss on Jan 2025 - Mar 2026 (`fit.py` grids on Batch), all before the first
+target week. FACEIT maps enter at full weight. The repo's PlayerSkillConfig supplies the rest.
 """
 from __future__ import annotations
 
@@ -30,9 +31,8 @@ from gnomepy_research.sessions.cs2_comp.g16.layer import predict as layer_predic
 from gnomepy_research.sessions.cs2_comp.g16.market import path_features
 from gnomepy_research.sessions.cs2_comp.g16.skill import SkillConfig, weekly_rows
 
-SKILL = make_config({"faceit_weight": 1.0})
-CANDIDATE = make_config({"off_low": -0.5, "off_mid": -0.2, "off_high": 0.1, "lam": 0.0, "rating_gamma": 0.3, "rating_sd": 0.31,
-                         "faceit_weight": 1.0})
+SKILL = make_config({"off_low": -0.5, "off_mid": -0.2, "off_high": 0.2, "lam": 0.0, "rating_gamma": 0.6, "rating_sd": 0.31,
+                     "rho": 0.005, "tau": 0.012, "sigma0": 0.3, "faceit_weight": 1.0})
 SPEC = Spec(columns=("zm", "dz", "zs"), prior_mean={"zm": 1.0}, prior_precision=4.0)
 SPEC_NO_MARKET = Spec(columns=("zs",), prior_mean={"zs": 1.0}, prior_precision=4.0)
 # Rows of a market-joined series only train the layer once the market has had enough prints to mean anything.
