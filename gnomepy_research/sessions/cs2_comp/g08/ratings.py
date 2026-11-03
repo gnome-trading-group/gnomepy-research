@@ -25,18 +25,32 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
+
 FIVE = 5
 
 
 @dataclass(frozen=True)
 class RatingConfig:
-    prior_var: float = 0.30
-    drift_per_day: float = 0.0006
+    prior_var: float = 1.0
+    drift_per_day: float = 0.0001
     round_weight: float = 0.35
-    faceit_weight: float = 0.5
-    new_offset: float = -0.15
+    faceit_weight: float = 1.0
+    new_offset: float = -0.5
     form_half_life_maps: float = 6.0
-    lan_bonus: float = 0.0
+    # A team effect on top of its five (what stays with the organisation when players change) and a per-player LAN
+    # offset (some players are better or worse on stage than online). Zero prior variance turns either off.
+    team_var: float = 0.0
+    team_drift_per_day: float = 0.0001
+    lan_var: float = 0.0
+    # A past series' kickoff price, mapped to the round-logit gap scale (logit(price) / market_scale), is a noisy
+    # measurement of the two fives' gap with variance market_var. Zero market_var leaves prices out.
+    market_var: float = 0.0
+    market_scale: float = 4.0
+    # Per (team, map) offsets: how much better a team is on one map than its five's skill says. A bo3 is then priced
+    # through a simulated veto (each side removes its worst maps and picks its best) instead of one gap for all maps.
+    map_var: float = 0.0
+    map_drift_per_day: float = 0.0002
 
 
 def regulation(score_a: np.ndarray, score_b: np.ndarray, overtime: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -46,47 +60,78 @@ def regulation(score_a: np.ndarray, score_b: np.ndarray, overtime: np.ndarray) -
 
 
 class SkillState:
+    """Gaussian beliefs keyed by (kind, id): "p" player skill, "t" team effect, "l" player LAN offset."""
+
     def __init__(self, cfg: RatingConfig):
         self.cfg = cfg
-        self.mu: dict[int, float] = {}
-        self.var: dict[int, float] = {}
-        self.seen: dict[int, float] = {}
+        self.mu: dict[tuple, float] = {}
+        self.var: dict[tuple, float] = {}
+        self.seen: dict[tuple, float] = {}
         self.maps: dict[int, int] = defaultdict(int)
         self.team_form: dict[int, float] = defaultdict(float)
         self.team_days: dict[int, deque] = defaultdict(lambda: deque(maxlen=400))
         self.team_fives: dict[int, deque] = defaultdict(lambda: deque(maxlen=60))
 
-    def _prior(self, p: int, mates: list[int]) -> tuple[float, float]:
-        known = [self.mu[m] for m in mates if m in self.mu]
-        base = float(np.mean(known)) if len(known) >= 2 else 0.0
-        return base + self.cfg.new_offset, self.cfg.prior_var
+    def _prior(self, key: tuple, mates: list[int]) -> tuple[float, float]:
+        cfg = self.cfg
+        if key[0] == "t":
+            return 0.0, cfg.team_var
+        if key[0] == "l":
+            return 0.0, cfg.lan_var
+        if key[0] == "m":
+            return 0.0, cfg.map_var
+        known = [self.mu[("p", m)] for m in mates if ("p", m) in self.mu]
+        if len(known) >= 2:
+            return float(np.mean(known)) + cfg.new_offset, cfg.prior_var
+        # Ratings are zero-sum, so a wholly new five entering at zero sits at the population's mean.
+        return 0.0, cfg.prior_var
 
-    def belief(self, p: int, day: float, mates: list[int]) -> tuple[float, float, bool]:
-        if p in self.mu:
-            v = self.var[p] + self.cfg.drift_per_day * max(day - self.seen[p], 0.0)
-            return self.mu[p], min(v, self.cfg.prior_var * 2), True
-        m, v = self._prior(p, mates)
+    def belief(self, key: tuple, day: float, mates: list[int]) -> tuple[float, float, bool]:
+        cfg = self.cfg
+        if key in self.mu:
+            if key[0] == "t":
+                drift, cap = cfg.team_drift_per_day, cfg.team_var
+            elif key[0] == "l":
+                drift, cap = 0.0, cfg.lan_var
+            elif key[0] == "m":
+                drift, cap = cfg.map_drift_per_day, cfg.map_var
+            else:
+                drift, cap = cfg.drift_per_day, cfg.prior_var * 2
+            v = self.var[key] + drift * max(day - self.seen[key], 0.0)
+            return self.mu[key], min(v, cap), True
+        m, v = self._prior(key, mates)
         return m, v, False
 
+    def _entries(self, five: list[int], team: int, lan: int, map_name: str | None = None) -> list[tuple[tuple, float]]:
+        e = [(("p", p), 1.0 / FIVE) for p in five]
+        if self.cfg.map_var > 0 and team >= 0 and map_name:
+            e.append((("m", team, map_name), 1.0))
+        if self.cfg.team_var > 0 and team >= 0:
+            e.append((("t", team), 1.0))
+        if self.cfg.lan_var > 0 and lan:
+            e += [(("l", p), 1.0 / FIVE) for p in five]
+        return e
+
     def update(self, five_a: list[int], five_b: list[int], rounds_a: float, rounds: float, day: float, weight: float,
-               team_a: int, team_b: int, lan: int) -> None:
+               team_a: int, team_b: int, lan: int, map_name: str | None = None) -> None:
         cfg = self.cfg
-        ba = [self.belief(p, day, five_a) for p in five_a]
-        bb = [self.belief(p, day, five_b) for p in five_b]
-        d = np.mean([b[0] for b in ba]) - np.mean([b[0] for b in bb])
-        s = (sum(b[1] for b in ba) + sum(b[1] for b in bb)) / FIVE ** 2
+        ea = self._entries(five_a, team_a, lan, map_name)
+        eb = [(k, -c) for k, c in self._entries(five_b, team_b, lan, map_name)]
+        entries = ea + eb
+        bel = [self.belief(k, day, five_a if c > 0 else five_b) for k, c in entries]
+        d = sum(c * b[0] for (_, c), b in zip(entries, bel))
+        s = sum(c * c * b[1] for (_, c), b in zip(entries, bel))
         pr = 1.0 / (1.0 + np.exp(-d))
         w = cfg.round_weight * weight
         g = w * (rounds_a - rounds * pr)
         info = w * rounds * pr * (1 - pr)
         denom = 1.0 + info * s
-        for sign, five, bel in ((1.0, five_a, ba), (-1.0, five_b, bb)):
-            for p, (m, v, _) in zip(five, bel):
-                k = v / FIVE / denom
-                self.mu[p] = m + sign * k * g
-                self.var[p] = max(v - (v / FIVE) ** 2 * info / denom, 1e-4)
-                self.seen[p] = day
-                self.maps[p] += 1
+        for (k, c), (m, v, _) in zip(entries, bel):
+            self.mu[k] = m + v * c * g / denom
+            self.var[k] = max(v - (v * c) ** 2 * info / denom, 1e-5)
+            self.seen[k] = day
+        for p in five_a + five_b:
+            self.maps[p] += 1
         if rounds > 0:
             share = (rounds_a + 0.5) / (rounds + 1.0)
             resid = np.log(share / (1 - share)) - d
@@ -99,17 +144,34 @@ class SkillState:
                 self.team_days[team].append(day)
                 self.team_fives[team].append((day, frozenset(five)))
 
+    def observe_gap(self, five_a: list[int], five_b: list[int], z: float, day: float, team_a: int, team_b: int,
+                    lan: int) -> None:
+        """A linear-Gaussian measurement z ~ N(gap, market_var) of the two fives' gap."""
+        entries = self._entries(five_a, team_a, lan) + [(k, -c) for k, c in self._entries(five_b, team_b, lan)]
+        bel = [self.belief(k, day, five_a if c > 0 else five_b) for k, c in entries]
+        d = sum(c * b[0] for (_, c), b in zip(entries, bel))
+        s = sum(c * c * b[1] for (_, c), b in zip(entries, bel)) + self.cfg.market_var
+        for (k, c), (m, v, _) in zip(entries, bel):
+            self.mu[k] = m + v * c * (z - d) / s
+            self.var[k] = max(v - (v * c) ** 2 / s, 1e-5)
+            self.seen[k] = day
+
+    def map_offsets(self, team: int, pool: list[str], day: float) -> np.ndarray:
+        return np.array([self.belief(("m", team, m), day, [])[0] for m in pool])
+
     def five_features(self, five: list[int] | None, team: int, day: float) -> dict:
         if not five:
             five = []
             last = self.team_fives.get(team)
             if last:
                 five = list(last[-1][1])
-        bel = [self.belief(p, day, five) for p in five]
+        bel = [self.belief(("p", p), day, five) for p in five]
+        team_mu = self.belief(("t", team), day, five)[0] if self.cfg.team_var > 0 else 0.0
         if not bel:
-            return {"mu": self.cfg.new_offset, "var": self.cfg.prior_var, "unknown": FIVE, "lowmaps": FIVE, "cohesion": 0.0,
-                    "maps90": 0, "idle": 365.0, "form": 0.0, "sd_mu": 0.0}
+            return {"mu": 0.0, "var": self.cfg.prior_var, "unknown": FIVE, "lowmaps": FIVE, "cohesion": 0.0,
+                    "maps90": 0, "idle": 365.0, "form": 0.0, "sd_mu": 0.0, "teff": team_mu, "lanoff": 0.0}
         mus = np.array([b[0] for b in bel])
+        lan_mu = float(np.mean([self.belief(("l", p), day, five)[0] for p in five])) if self.cfg.lan_var > 0 else 0.0
         days = np.array(self.team_days.get(team, []))
         fives = self.team_fives.get(team, [])
         fset = set(five)
@@ -119,7 +181,42 @@ class SkillState:
                 "unknown": int(sum(not b[2] for b in bel)), "lowmaps": int(sum(self.maps.get(p, 0) < 10 for p in five)),
                 "cohesion": coh, "maps90": int(((day - days) <= 90).sum()) if len(days) else 0,
                 "idle": float(day - days[-1]) if len(days) else 365.0, "form": float(self.team_form.get(team, 0.0)),
-                "sd_mu": float(mus.std())}
+                "sd_mu": float(mus.std()), "teff": float(team_mu), "lanoff": lan_mu}
+
+
+POOL_DAYS = 90
+POOL_MIN_SHARE = 0.05
+
+
+def active_pool(recent: list[str]) -> list[str]:
+    """The maps that made up at least POOL_MIN_SHARE of HLTV maps over the last POOL_DAYS."""
+    if not recent:
+        return []
+    names, counts = np.unique(np.array(recent, dtype=object).astype(str), return_counts=True)
+    return sorted(names[counts >= POOL_MIN_SHARE * len(recent)].tolist())
+
+
+def bo3_price(p: np.ndarray) -> float:
+    return float(p[0] * p[0] * (3 - 2 * p[0]))
+
+
+def veto_price(p: np.ndarray) -> float:
+    """P(A wins a bo3) when A bans its worst map, B bans A's best, A picks its best, B picks A's worst, the two
+    remaining bans follow the same rule and the last map left is the decider."""
+    left = list(range(len(p)))
+    if len(left) < 3:
+        return bo3_price(np.full(1, float(np.mean(p))))
+    order = []
+    for step in ("ban_a", "ban_b", "pick_a", "pick_b", "ban_a", "ban_b"):
+        if len(left) <= 1:
+            break
+        i = min(left, key=lambda k: p[k]) if step in ("ban_a", "pick_b") else max(left, key=lambda k: p[k])
+        left.remove(i)
+        if step.startswith("pick"):
+            order.append(i)
+    p1, p2 = p[order[0]], p[order[1]]
+    p3 = float(np.mean(p[left])) if left else 0.5 * (p1 + p2)
+    return float(p1 * p2 + p1 * (1 - p2) * p3 + (1 - p1) * p2 * p3)
 
 
 def _days(ts: pd.Series | np.ndarray) -> np.ndarray:
@@ -127,10 +224,18 @@ def _days(ts: pd.Series | np.ndarray) -> np.ndarray:
 
 
 def run(maps: pd.DataFrame, queries: pd.DataFrame, cfg: RatingConfig) -> pd.DataFrame:
-    """maps: match_id, known, source, five_a, five_b, rounds_a, rounds, team_a, team_b, is_lan (any order).
+    """maps: match_id, known, source, five_a, five_b, rounds_a, rounds, team_a, team_b, is_lan (any order); rows with
+    source "market" carry a past series' kickoff price p_a instead of rounds and are measurements of the gap.
     queries: qid, cutoff, team_a, team_b, five_a, five_b (fives may be None).
     Returns one feature row per query, read from the state holding every map known before the query's cutoff."""
-    maps = maps.sort_values(["known", "match_id"], kind="stable").reset_index(drop=True)
+    if not cfg.market_var:
+        maps = maps[maps.source != "market"]
+    # A series' price was known before its own maps were played.
+    order = (maps.source != "market").astype(int)
+    maps = maps.assign(_o=order).sort_values(["known", "_o", "match_id"], kind="stable").reset_index(drop=True)
+    is_mkt = (maps.source == "market").to_numpy()
+    z = (np.log(np.clip(maps.p_a.to_numpy(float), 0.02, 0.98)) - np.log(1 - np.clip(maps.p_a.to_numpy(float), 0.02, 0.98))) / cfg.market_scale \
+        if "p_a" in maps else np.zeros(len(maps))
     mk = maps.known.to_numpy()
     mday = _days(maps.known)
     fa, fb = maps.five_a.to_numpy(), maps.five_b.to_numpy()
@@ -138,20 +243,38 @@ def run(maps: pd.DataFrame, queries: pd.DataFrame, cfg: RatingConfig) -> pd.Data
     wt = np.where(maps.source.to_numpy() == "faceit", cfg.faceit_weight, 1.0)
     ta, tb = maps.team_a.to_numpy(np.int64), maps.team_b.to_numpy(np.int64)
     lan = maps.is_lan.to_numpy(int)
+    mname = maps.map_name.to_numpy() if "map_name" in maps else np.full(len(maps), None)
+    hltv = (maps.source == "hltv").to_numpy()
     state = SkillState(cfg)
+    recent_maps: deque = deque()
     out = []
     i = 0
     for cutoff, qs in queries.groupby("cutoff", sort=True):
         c64 = np.datetime64(pd.Timestamp(cutoff))
         stop = np.searchsorted(mk, c64, side="left")
         for j in range(i, stop):
-            state.update(list(fa[j]), list(fb[j]), ra[j], n[j], mday[j], wt[j], ta[j], tb[j], lan[j])
+            if is_mkt[j]:
+                state.observe_gap(list(fa[j]), list(fb[j]), z[j], mday[j], ta[j], tb[j], lan[j])
+                continue
+            state.update(list(fa[j]), list(fb[j]), ra[j], n[j], mday[j], wt[j], ta[j], tb[j], lan[j], mname[j])
+            if hltv[j]:
+                recent_maps.append((mday[j], mname[j]))
         i = stop
         cday = _days(np.array([c64]))[0]
+        while recent_maps and cday - recent_maps[0][0] > POOL_DAYS:
+            recent_maps.popleft()
+        pool = active_pool([m for _, m in recent_maps])
         for q in qs.itertuples(index=False):
             r = {"qid": q.qid}
             for side, team, five in (("a", q.team_a, q.five_a), ("b", q.team_b, q.five_b)):
                 f = state.five_features(None if five is None or len(five) == 0 else [int(x) for x in five], int(team), cday)
                 r.update({f"{k}_{side}": v for k, v in f.items()})
+            gap = r["mu_a"] - r["mu_b"]
+            r["series_flat"] = bo3_price(np.full(1, regulation_map_win(np.array([gap]))[0]))
+            if cfg.map_var > 0 and pool:
+                off = state.map_offsets(int(q.team_a), pool, cday) - state.map_offsets(int(q.team_b), pool, cday)
+                r["series_veto"] = veto_price(regulation_map_win(gap + off))
+            else:
+                r["series_veto"] = r["series_flat"]
             out.append(r)
     return pd.DataFrame(out)

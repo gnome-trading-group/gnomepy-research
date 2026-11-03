@@ -13,6 +13,7 @@ import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.bundle import load
+from gnomepy_research.sessions.cs2_comp.g08.market import path_features
 from gnomepy_research.sessions.cs2_comp.g08.ratings import FIVE, regulation
 
 UNRANKED = 300.0
@@ -40,7 +41,7 @@ def _five(v, mapper=None):
 
 
 class Inputs:
-    def __init__(self, data_dir: str | Path, until: pd.Timestamp, faceit: bool = False):
+    def __init__(self, data_dir: str | Path, until: pd.Timestamp, faceit: bool = False, market: bool = False):
         self.data_dir = Path(data_dir)
         self.until = pd.Timestamp(until)
         h = load(self.data_dir, "hltv/cs2_match_history", self.until)
@@ -51,6 +52,8 @@ class Inputs:
         parts = [self._hltv_maps(h)]
         if faceit:
             parts.append(self._faceit_maps())
+        if market:
+            parts.append(self._market_rows())
         self.maps = pd.concat(parts, ignore_index=True)
         rk = load(self.data_dir, "hltv/cs2_team_rankings", self.until, ["date", "team_id", "rank"])
         rk = rk.assign(date=naive(rk["date"])).sort_values("date")
@@ -81,7 +84,7 @@ class Inputs:
         ra, n = regulation(h.team_a_score.to_numpy(int), h.team_b_score.to_numpy(int), np.zeros(len(h), bool))
         return pd.DataFrame({"match_id": h.match_id.astype(str).to_numpy(), "known": h.known.to_numpy(),
                              "five_a": [x for x, k in zip(fa, ok) if k], "five_b": [x for x, k in zip(fb, ok) if k],
-                             "rounds_a": ra, "rounds": n, "source": "hltv",
+                             "rounds_a": ra, "rounds": n, "source": "hltv", "map_name": h.map_name.to_numpy(),
                              "team_a": h.team_a_id.astype(np.int64).to_numpy(), "team_b": h.team_b_id.astype(np.int64).to_numpy(),
                              "is_lan": h.is_lan.fillna(0).astype(int).to_numpy()})
 
@@ -114,9 +117,25 @@ class Inputs:
         ra, n = regulation(fh.team_a_score.to_numpy(int), fh.team_b_score.to_numpy(int), ot)
         return pd.DataFrame({"match_id": fh.match_id.astype(str).to_numpy(), "known": fh.known.to_numpy(),
                              "five_a": [x for x, k in zip(fa, ok) if k], "five_b": [x for x, k in zip(fb, ok) if k],
-                             "rounds_a": ra, "rounds": n, "source": "faceit",
+                             "rounds_a": ra, "rounds": n, "source": "faceit", "map_name": fh.map_name.to_numpy(),
                              "team_a": fh.faction1_hltv_team.fillna(-1).astype(np.int64).to_numpy(),
                              "team_b": fh.faction2_hltv_team.fillna(-1).astype(np.int64).to_numpy(), "is_lan": 0})
+
+    def _market_rows(self) -> pd.DataFrame:
+        """Past series' kickoff prices as gap measurements on the fives the series announced. A row counts once the
+        series is known on HLTV (after kickoff), the same gate as its maps."""
+        paths = load(self.data_dir, "market/series_paths", self.until)
+        f = path_features(paths)
+        f = f[f.m0.notna()]
+        s = self.series.set_index("match_id")
+        f = f[f.match_id.isin(s.index)]
+        s = s.loc[f.match_id]
+        ok = np.array([a is not None and b is not None for a, b in zip(s.five_a, s.five_b)])
+        s, f = s[ok], f[ok]
+        return pd.DataFrame({"match_id": s.index.astype(str).to_numpy(), "known": s.known.to_numpy(),
+                             "five_a": list(s.five_a), "five_b": list(s.five_b), "rounds_a": np.nan, "rounds": np.nan,
+                             "source": "market", "team_a": s.team_a.to_numpy(np.int64), "team_b": s.team_b.to_numpy(np.int64),
+                             "is_lan": s.is_lan.fillna(0).astype(int).to_numpy(), "p_a": f.m0.to_numpy(float)})
 
     def rank(self, team: int, day: pd.Timestamp, max_age_days: int = 120) -> float:
         h = self.rankings.get(int(team))
