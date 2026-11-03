@@ -8,8 +8,9 @@ Build, check and (with --send) queue the direct_launch triggers that start the C
         --model e11 --strategy <id> [--hold-strategy <id>] --research-commit "$(git rev-parse HEAD)" \\
         [--start ISO --end ISO] [--include-late] [--send]
 
-The slate is the weekly model file (game_id and one column per model, from the live overlay pipeline), with kickoffs
-and CFBD team names from the week's C2 predictions. The model column chosen is frozen into each session's trigger as
+The slate is the weekly model file (game_id and one column per model, from the live overlay pipeline), with CFBD team
+names from the week's C2 predictions and kickoffs from CFBD's cfb_games as of launch: the C2 file's can be placeholders
+set before a time was announced, and sessions keep their trigger's kickoffs. --only-games relaunches some games alone. The model column chosen is frozen into each session's trigger as
 the game's p_home. Kalshi's markets are matched, oriented, resolved and cross-checked as launch.py does. A game with
 fewer than 66 hours to kickoff at launch is left out: its 72-hour decision time is more than the 6 hours late the
 strategy allows. With --include-late such a game is traded anyway, marked off_protocol (the strategy decides it at its
@@ -33,6 +34,7 @@ from pathlib import Path
 
 import boto3
 import pandas as pd
+from gnomepy.data import DatasetStore
 from gnomepy.registry import RegistryClient
 
 from gnomepy_research.sessions.cfb_pregame import launch
@@ -64,6 +66,15 @@ def load_slate(slate_csv: str | Path, games_parquet: str | Path, model: str) -> 
     out["kickoff"] = pd.to_datetime(out["kickoff"], utc=True)
     out = out.dropna(subset=["kickoff", "home_team", "away_team", "p_home"])
     return out[["game_id", "kickoff", "home_team", "away_team", "p_home", *QB_COLUMNS]].reset_index(drop=True)
+
+
+def cfbd_kickoffs(slate: pd.DataFrame, cfb_games: pd.DataFrame) -> tuple[pd.DataFrame, list[tuple]]:
+    """The slate with CFBD's kickoffs where CFBD lists the game, and (game_id, old, new) for each that changed."""
+    known = cfb_games.drop_duplicates("game_id", keep="last").set_index("game_id")["kickoff"]
+    known = pd.to_datetime(known, utc=True)
+    new = slate["game_id"].map(known).fillna(slate["kickoff"])
+    changed = [(int(g), old, k) for g, old, k in zip(slate["game_id"], slate["kickoff"], new) if old != k]
+    return slate.assign(kickoff=new), changed
 
 
 def triggers(legs: pd.DataFrame, slate: pd.DataFrame, *, strategy_ids: dict[str, int], research_commit: str, model: str,
@@ -119,6 +130,7 @@ def main() -> None:
     ap.add_argument("--contracts", type=float, default=1.0)
     ap.add_argument("--min-gap", type=float, default=0.05)
     ap.add_argument("--max-games", type=int, default=MAX_GAMES)
+    ap.add_argument("--only-games", type=int, nargs="+", help="launch only these game ids")
     ap.add_argument("--min-qb-p", type=float, default=MIN_QB_P, help="least p_start for either assumed starter")
     ap.add_argument("--include-late", action="store_true",
                     help="trade games past their decision window too, flagged off_protocol")
@@ -126,6 +138,11 @@ def main() -> None:
     a = ap.parse_args()
     now = pd.Timestamp(datetime.now(timezone.utc))
     slate = load_slate(Path(a.slate).expanduser(), Path(a.games).expanduser(), a.model)
+    slate, moved = cfbd_kickoffs(slate, DatasetStore().load("cfb_games")[["game_id", "kickoff"]])
+    for game_id, old, new in moved:
+        print(f"kickoff from CFBD: {game_id} {old.isoformat()} -> {new.isoformat()}")
+    if a.only_games:
+        slate = slate[slate["game_id"].isin(a.only_games)]
     if a.start:
         slate = slate[slate["kickoff"] >= pd.Timestamp(a.start)]
     if a.end:

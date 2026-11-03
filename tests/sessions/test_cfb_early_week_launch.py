@@ -105,3 +105,13 @@ def test_the_hold_variant_launches_as_its_own_strategy_on_the_same_games(tmp_pat
     assert by["hold"]["strategy_id"] == 13 and by["hold"]["strategy_args"]["hold_to_settlement"] is True
     assert "hold_to_settlement" not in by["sell"]["strategy_args"]
     assert by["hold"]["strategy_args"]["games"] == by["sell"]["strategy_args"]["games"]
+
+
+def test_cfbd_kickoffs_replace_the_c2_files_and_changes_are_reported(tmp_path):
+    slate = lew.load_slate(*_slate(tmp_path), "e11")
+    cfbd = pd.DataFrame({"game_id": [1, 2], "kickoff": [SAT + pd.Timedelta(hours=7), SAT + pd.Timedelta(hours=3)]})
+    fixed, changed = lew.cfbd_kickoffs(slate, cfbd)
+    k = fixed.set_index("game_id")["kickoff"]
+    assert k[1] == SAT + pd.Timedelta(hours=7) and k[2] == SAT + pd.Timedelta(hours=3), "CFBD's time wins"
+    assert k[3] == SAT, "a game CFBD doesn't list keeps the C2 file's"
+    assert changed == [(1, SAT, SAT + pd.Timedelta(hours=7))]
