@@ -82,7 +82,7 @@ class MapModel:
         self.lan_offset = (agg.g / (agg.h + prior)).to_dict()
         self.prior = prior
         self.residuals = pd.DataFrame({"team_a": m.team_a.to_numpy(), "team_b": m.team_b.to_numpy(), "age": age, "r": r,
-                                       "info": n * p * (1 - p), "w": w})
+                                       "fisher": n * p * (1 - p), "w": w})
 
     def lan_gap(self, gap: float, team_a: int, team_b: int, is_lan: int) -> float:
         """The skill gap plus each team's residual in this setting (LAN or online)."""

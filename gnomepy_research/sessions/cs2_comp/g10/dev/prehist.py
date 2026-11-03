@@ -31,11 +31,11 @@ def team_offsets(mm: MapModel, form_half_life_days: float = 21.0) -> dict[str, d
     """Team residuals over the whole window, over the last few weeks, and per pair of teams (head to head)."""
     x = mm.residuals
     a, b = x.team_a.to_numpy(), x.team_b.to_numpy()
-    wr, wi = (x.w * x.r).to_numpy(), (x.w * x.info).to_numpy()
+    wr, wi = (x.w * x.r).to_numpy(), (x.w * x.fisher).to_numpy()
     out = {"team": _shrunk(np.r_[a, b], np.r_[wr, -wr], np.r_[wi, wi], mm.prior)}
     recent = (x.age <= 3 * form_half_life_days).to_numpy()
     wf = 0.5 ** (x.age.to_numpy()[recent] / form_half_life_days)
-    fr, fi = wf * x.r.to_numpy()[recent], wf * x.info.to_numpy()[recent]
+    fr, fi = wf * x.r.to_numpy()[recent], wf * x.fisher.to_numpy()[recent]
     out["form"] = _shrunk(np.r_[a[recent], b[recent]], np.r_[fr, -fr], np.r_[fi, fi], mm.prior)
     lo, hi = np.minimum(a, b), np.maximum(a, b)
     sign = np.where(a == lo, 1.0, -1.0)
