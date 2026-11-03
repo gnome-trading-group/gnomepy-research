@@ -6,11 +6,14 @@ import os
 from pathlib import Path
 
 import pandas as pd
+from threadpoolctl import threadpool_limits
 
 from gnomepy_research.sessions.cs2_comp.g10.rows import build
 
 
 def main() -> None:
+    # Batch containers see every host core but get a share of them; one BLAS thread per process avoids thrashing.
+    threadpool_limits(1)
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True)
     ap.add_argument("--targets", required=True)
