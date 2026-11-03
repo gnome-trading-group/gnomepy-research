@@ -50,9 +50,8 @@ class Config:
     # With FACEIT on, False keeps FACEIT to the skill prior (levels) and fits on HLTV maps only.
     faceit_maps: bool = False
     community_seed: int = 0
-    # Window and prior sd of the communities' recent-form offsets (0 days turns them off).
-    scene_days: int = 0
-    scene_sd: float = 0.1
+    # Price a player the fit never saw with his known teammates' community effects.
+    unseen_community: bool = False
 
 
 def player_graph(ia: np.ndarray, ib: np.ndarray, w: np.ndarray, P: int) -> sp.csr_matrix:
@@ -103,7 +102,7 @@ class GraphFit:
     levels: dict = field(default_factory=dict)
     resolutions: int = 1
     membership: sp.csr_matrix | None = None
-    scene: np.ndarray | None = None
+    unseen_community: bool = False
     info: dict = field(default_factory=dict)
 
     @classmethod
@@ -136,19 +135,13 @@ class GraphFit:
         prec = np.full(P, 1.0 / cfg.sigma ** 2)
         L, yr, wr = _rating_rows(f, ia, ib, w, P, cfg)
         kappa = (cfg.rating_gamma / cfg.rating_sd) ** 2
-        # Scene form: each community's round-logit offset on recent maps only, on top of its players' skills.
-        recent = (age < cfg.scene_days).astype(float) if cfg.scene_days else np.zeros(M)
-        R = (sp.diags(recent) @ A @ C).tocsr()
-        Rt = R.T.tocsr()
-        NR = NC if cfg.scene_days else 0
-        inv_scene = 1.0 / cfg.scene_sd ** 2
 
         def split(theta):
-            return theta[:P], theta[P:P + K], theta[P + K:P + K + NC], theta[P + K + NC:]
+            return theta[:P], theta[P:P + K], theta[P + K:]
 
         def objective(theta):
-            s, g, c, cr = split(theta)
-            d = A @ s + (R @ cr if NR else 0.0)
+            s, g, c = split(theta)
+            d = A @ s
             r = s - Xs @ g - C @ c
             pr_ = prec * r
             obj = -(w * (ra * d - n * np.logaddexp(0.0, d))).sum() + 0.5 * (r @ pr_) + 0.5e-2 * (g @ g) \
@@ -160,29 +153,23 @@ class GraphFit:
                 grad_s -= kappa * (L.T @ (wr * e))
             grad_g = -(Xs.T @ pr_) + 1e-2 * g
             grad_c = -(C.T @ pr_) + inv_tau * c
-            grad_r = -(Rt @ (w * (ra - n * expit(d)))) + inv_scene * cr if NR else np.zeros(0)
-            if NR:
-                obj += 0.5 * inv_scene * (cr @ cr)
-            return obj, np.concatenate([grad_s, grad_g, grad_c, grad_r])
+            return obj, np.concatenate([grad_s, grad_g, grad_c])
 
         def hessp(theta, v):
-            s_, _, _, cr_ = split(theta)
-            pr = expit(A @ s_ + (R @ cr_ if NR else 0.0))
-            vs, vg, vc, vr = split(v)
+            pr = expit(A @ theta[:P])
+            vs, vg, vc = split(v)
             pr_ = prec * (vs - Xs @ vg - C @ vc)
-            dv = w * n * pr * (1 - pr) * (A @ vs + (R @ vr if NR else 0.0))
-            hs = At @ dv + pr_
+            hs = At @ (w * n * pr * (1 - pr) * (A @ vs)) + pr_
             if kappa:
                 hs += kappa * (L.T @ (wr * (L @ vs)))
             hg = -(Xs.T @ pr_) + 1e-2 * vg
             hc = -(C.T @ pr_) + inv_tau * vc
-            hr = Rt @ dv + inv_scene * vr if NR else np.zeros(0)
-            return np.concatenate([hs, hg, hc, hr])
+            return np.concatenate([hs, hg, hc])
 
-        res = minimize(objective, np.zeros(P + K + NC + NR), jac=True, hessp=hessp, method="trust-krylov",
+        res = minimize(objective, np.zeros(P + K + NC), jac=True, hessp=hessp, method="trust-krylov",
                        options={"maxiter": 1000, "gtol": 1e-6})
-        s, g, c, cr = split(res.x)
-        pr = expit(A @ s + (R @ cr if NR else 0.0))
+        s, g, c = split(res.x)
+        pr = expit(A @ s)
         Pm = sp.diags(prec)
         n_theta = P + K + NC
         Hss = At @ sp.diags(w * n * pr * (1 - pr)) @ A + Pm
@@ -191,7 +178,7 @@ class GraphFit:
         H = sp.bmat([[Hss, -Pm @ Xs, -Pm @ C],
                      [-(Pm @ Xs).T, Xs.T @ Pm @ Xs + 1e-2 * sp.eye(K), Xs.T @ Pm @ C],
                      [-(Pm @ C).T, C.T @ Pm @ Xs, C.T @ Pm @ C + inv_tau * sp.eye(NC)]]).tocsc()
-        lu = splu(H) if cfg.laplace and not NR else None
+        lu = splu(H) if cfg.laplace else None
         played = np.bincount(np.concatenate([ia.ravel(), ib.ravel()]), minlength=P)
         offsets, pool = map_offsets(f, w, ra, n, pr, cutoff, cfg)
         levels = {}
@@ -199,7 +186,7 @@ class GraphFit:
             lv = inputs.levels[inputs.levels.known < cutoff]
             levels = {int(u): float(x) for u, x in lv.groupby("uid")["level"].last().items()}
         return cls(cutoff, players, s, played, comm, g, c, cfg.sigma, cfg.tau, lu, n_theta, X0, offsets, pool, levels,
-                   len(cfg.communities), C if NR else None, cr,
+                   len(cfg.communities), C, cfg.unseen_community,
                    {"maps": M, "players": P, "iters": int(res.nit), "gnorm": float(np.abs(res.jac).max())})
 
     def _vec(self, five: tuple[int, ...] | None, rank: float, sign: float, v: np.ndarray) -> tuple[float, float, int, list]:
@@ -214,6 +201,11 @@ class GraphFit:
             v[g_start:g_start + K] += sign * base
             return float(self.gamma @ base), unknown_var, FIVE, []
         vals, extra, thin, comms = [], 0.0, 0, []
+        known_idx = [i for i in np.searchsorted(self.players, five) if i < P and self.players[i] in five]
+        team_comm = None
+        if self.unseen_community and known_idx and self.membership is not None:
+            # A player the fit never saw joins his known teammates' scenes.
+            team_comm = np.asarray(self.membership[known_idx].mean(axis=0)).ravel()
         for p in five:
             i = np.searchsorted(self.players, p)
             if i < P and self.players[i] == p:
@@ -227,7 +219,11 @@ class GraphFit:
                 level = self.levels.get(int(p))
                 if level is not None and K > 4:
                     xu[3:5] = [1.0, level - 8.0]
-                vals.append(float(self.gamma @ xu))
+                prior = float(self.gamma @ xu)
+                if team_comm is not None:
+                    prior += float(team_comm @ self.c)
+                    v[self.n_theta - len(self.c):] += sign * team_comm / FIVE
+                vals.append(prior)
                 v[g_start:g_start + K] += sign * xu / FIVE
                 extra += unknown_var / FIVE ** 2
                 thin += 1
@@ -238,11 +234,6 @@ class GraphFit:
         ma, ea, ta, ca = self._vec(five_a, rank_a, 1.0, v)
         mb, eb, tb, cb = self._vec(five_b, rank_b, -1.0, v)
         var = float(v @ self.lu.solve(v)) + ea + eb if self.lu is not None else float("nan")
-        if self.membership is not None:
-            # v holds +-1/5 per known player of each five, so v' C is the five-mean community difference.
-            P = len(self.players)
-            scene_shift = float((self.membership.T @ v[:P]) @ self.scene)
-            ma += scene_shift
         dom_a = max(set(ca), key=ca.count) if ca else -1
         dom_b = max(set(cb), key=cb.count) if cb else -1
         known = sum(1 for m in self.pool for t in (team_a, team_b) if (t, m) in self.map_offset)
