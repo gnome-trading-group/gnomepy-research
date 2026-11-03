@@ -11,6 +11,7 @@ and a small logistic layer, refitted at each cutoff on every market-joined serie
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import numpy as np
@@ -87,10 +88,13 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", required=True)
     ap.add_argument("--targets", required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", default=os.path.join(os.environ["OUTPUT_DIR"], "predictions.parquet") if "OUTPUT_DIR" in os.environ else None,
+                    help="output parquet (on Batch: $OUTPUT_DIR/predictions.parquet)")
     ap.add_argument("--weeks", help="comma-separated week_cutoff dates to predict (default: all)")
     ap.add_argument("--rows", help="directory to also save the training and target rows in")
     a = ap.parse_args()
+    if a.out is None:
+        ap.error("--out is required")
     targets = pd.read_parquet(a.targets)
     targets["week_cutoff"] = naive(targets.week_cutoff)
     if a.weeks:
