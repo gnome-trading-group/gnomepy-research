@@ -107,6 +107,7 @@ class Engine:
         self.teams: dict[int, TeamState] = {}
         self.elo: dict[int, Belief] = {}
         self.pskill: dict[int, Belief] = {}
+        self.h2h: dict[tuple[int, int], list[tuple[float, float]]] = {}
         self.pool_weight: dict[str, float] = {}
         self.pool_time: float = -1.0
         self.moves = inputs.moves
@@ -256,6 +257,18 @@ class Engine:
             t.fives[five] = t.fives.get(five, 0) + 1
         if is_hltv and map_name:
             self._pool_add(map_name, now)
+        if is_hltv:
+            key = (min(team_a, team_b), max(team_a, team_b))
+            won = 1.0 if self._rounds_a[i] * 2 > self._rounds[i] else -1.0
+            self.h2h.setdefault(key, []).append((now, won if team_a == key[0] else -won))
+
+    def head_to_head(self, team_a: int, team_b: int, now: float, days: float = 365.0) -> tuple[float, int]:
+        """Shrunk map-win margin of A over B in their last year of meetings, and how many maps that is."""
+        key = (min(team_a, team_b), max(team_a, team_b))
+        past = [r for t, r in self.h2h.get(key, ()) if now - t <= days * DAY]
+        n = len(past)
+        margin = sum(past) if team_a == key[0] else -sum(past)
+        return margin / (n + 4.0), n
 
     def _pool_add(self, map_name: str, now: float) -> None:
         if self.pool_time >= 0 and now > self.pool_time:
@@ -345,7 +358,8 @@ class Engine:
         var_d = a["skill_var"] + b["skill_var"] + a["off_var"] + b["off_var"]
         pool = self.pool()
         veto = self._veto(d, a["map_offsets"], b["map_offsets"], pool, now)
-        out = {"d_player": d_player, "d_team": d_team, "sd_d": math.sqrt(var_d),
+        h2h, h2h_n = self.head_to_head(team_a, team_b, now)
+        out = {"d_player": d_player, "d_team": d_team, "sd_d": math.sqrt(var_d), "h2h": h2h, "h2h_n": h2h_n,
                "z_series": float(np.log(bo3(map_win(d)) / (1 - bo3(map_win(d))))),
                "z_veto": veto, "pool_n": len(pool), "d_elo": d_elo, "sd_elo": math.sqrt(va + vb),
                "z_elo": float(np.log(pe / (1 - pe))), "adj_a": adj_a, "adj_b": adj_b}

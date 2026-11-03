@@ -94,6 +94,7 @@ def _columns(rows: pd.DataFrame) -> dict[str, np.ndarray]:
         "rank": np.log(rows.rank_b.to_numpy(float)) - np.log(rows.rank_a.to_numpy(float)),
         "z_lan": z * rows.is_lan.to_numpy(float),
         "new_lan": (rows.new_a - rows.new_b).to_numpy(float) * rows.is_lan.to_numpy(float),
+        "h2h": rows.h2h.to_numpy(float) if "h2h" in rows else np.zeros(len(rows)),
     })
     return cols
 
