@@ -232,7 +232,8 @@ def path_features(paths: pd.DataFrame) -> pd.DataFrame:
                      "drift24": lp[last] - at(24.0), "drift6": lp[last] - at(6.0), "drift1": lp[last] - at(1.0),
                      "flat_half": float((pa == 0.5).mean()), "vol6": float(np.sqrt(np.mean(dl * dl))),
                      "prints_1h": int((lead <= 1.0).sum())})
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=["match_id", "kickoff", "m0", "m_any", "lead_last_h", "n_prints", "span_h", "drift24",
+                                       "drift6", "drift1", "flat_half", "vol6", "prints_1h"])
 
 
 def _market(data_dir: Path, until: pd.Timestamp) -> pd.DataFrame:
