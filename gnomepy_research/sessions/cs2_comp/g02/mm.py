@@ -38,15 +38,18 @@ class MatchmakingTable:
         self.levels = mean
         self.linked = linked[["match_id", "faction", "hltv_id"]]
         matches = pd.read_parquet(f"{data_dir}/faceit/history_matches.parquet",
-                                  columns=["match_id", "finished_at", "winner", "teams_size", "game_mode", "score_faction1", "score_faction2"])
+                                  columns=["match_id", "finished_at", "winner", "teams_size", "game_mode", "score_faction1", "score_faction2", "competition_type"])
         self.matches = matches[(matches.teams_size == 5) & matches.winner.isin(["faction1", "faction2"])
                                & matches.game_mode.isin(["5v5", "5v5 League"])]
 
     def fit(self, cutoff: pd.Timestamp, c: float = C_RIDGE, half_life: float = HALF_LIFE_DAYS,
-            window_days: int = WINDOW_DAYS, rounds: bool = False) -> tuple[dict[int, float], float]:
+            window_days: int = WINDOW_DAYS, rounds: bool = False,
+            competition_types: tuple[str, ...] | None = None) -> tuple[dict[int, float], float]:
         end = int(cutoff.tz_localize("UTC").timestamp()) if cutoff.tzinfo is None else int(cutoff.timestamp())
         start = end - window_days * 86400
         m = self.matches[(self.matches.finished_at < end) & (self.matches.finished_at >= start)]
+        if competition_types:
+            m = m[m.competition_type.isin(competition_types)]
         lk = self.linked[self.linked.match_id.isin(m.match_id)]
         m = m[m.match_id.isin(lk.match_id)].reset_index(drop=True)
         lv = self.levels.reindex(m.match_id)

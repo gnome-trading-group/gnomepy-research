@@ -19,13 +19,15 @@ def main() -> None:
     ap.add_argument("--half-life", type=float, default=300.0)
     ap.add_argument("--window", type=int, default=730)
     ap.add_argument("--rounds", action="store_true")
+    ap.add_argument("--types", nargs="*")
     ap.add_argument("--tag", default="base")
     ap.add_argument("--out", default=os.environ.get("OUTPUT_DIR", "."))
     args = ap.parse_args()
     cutoffs = sorted(pd.read_parquet(args.targets).week_cutoff.unique())
     table = MatchmakingTable(args.data)
     for i in args.weeks if args.weeks else range(len(cutoffs)):
-        ratings, level_coef = table.fit(pd.Timestamp(cutoffs[i]), args.c, args.half_life, args.window, args.rounds)
+        ratings, level_coef = table.fit(pd.Timestamp(cutoffs[i]), args.c, args.half_life, args.window, args.rounds,
+                                        tuple(args.types) if args.types else None)
         df = pd.DataFrame({"player_id": list(ratings), "mm": list(ratings.values())})
         df["level_coef"] = level_coef
         act = table.activity(pd.Timestamp(cutoffs[i]))
