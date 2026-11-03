@@ -43,7 +43,7 @@ def make_config(values: dict) -> SkillConfig:
             offsets.update({d: values[g] for d in divs})
     return SkillConfig(replace(PlayerSkillConfig(), **{k: v for k, v in values.items() if k in FILTER_PARAMS}),
                        values.get("faceit_weight", 1.0), values.get("rating_gamma", 0.0), values.get("rating_sd", 0.31), offsets,
-                       values.get("team_sigma0", 0.0))
+                       values.get("team_sigma0", 0.0), values.get("level_coef", 0.0))
 
 
 def map_loss(inputs: Inputs, cfg: SkillConfig, score_from: pd.Timestamp, won_a: np.ndarray) -> float:
@@ -81,7 +81,7 @@ def main() -> None:
     inputs = Inputs(a.data, pd.Timestamp(a.until))
     base = PlayerSkillConfig()
     values = {"sigma0": base.sigma0, "tau": base.tau, "rho": base.rho, "lam": base.lam, "faceit_weight": 1.0,
-              "off_low": 0.0, "off_mid": 0.0, "off_high": 0.0, "rating_gamma": 0.0, "rating_sd": 0.31, "team_sigma0": 0.0}
+              "off_low": 0.0, "off_mid": 0.0, "off_high": 0.0, "rating_gamma": 0.0, "rating_sd": 0.31, "team_sigma0": 0.0, "level_coef": 0.0}
     values.update(json.loads(a.init))
     params = [k for k in a.params.split(",") if k]
     won = inputs.maps.won_a.to_numpy(float)

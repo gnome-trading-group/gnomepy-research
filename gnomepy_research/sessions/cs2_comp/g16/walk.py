@@ -34,6 +34,10 @@ SPECS = {
     "chem": Spec(columns=("zm", "dz", "zs", "chem"), prior_mean={"zm": 1.0}),
     "unknown": Spec(columns=("zm", "dz", "zs", "unknown"), prior_mean={"zm": 1.0}),
     "kitchen": Spec(columns=("zm", "dz", "zs", "new", "standins", "mom", "zs_lan", "chem"), prior_mean={"zm": 1.0}),
+    "resid": Spec(columns=("zm", "dz", "zs", "resid"), prior_mean={"zm": 1.0}),
+    "h2h": Spec(columns=("zm", "dz", "zs", "h2h"), prior_mean={"zm": 1.0}),
+    "pool": Spec(columns=("zm", "dz", "zs", "pool"), prior_mean={"zm": 1.0}),
+    "context": Spec(columns=("zm", "dz", "zs", "resid", "h2h", "pool"), prior_mean={"zm": 1.0}),
 }
 
 

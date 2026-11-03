@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.bundle import load, target_paths
+from gnomepy_research.sessions.cs2_comp.g16.context import context_rows
 from gnomepy_research.sessions.cs2_comp.g16.data import Inputs, naive, target_rows
 from gnomepy_research.sessions.cs2_comp.g16.fit import make_config
 from gnomepy_research.sessions.cs2_comp.g16.layer import Spec, design, fit
@@ -45,7 +46,15 @@ def training_rows(inputs: Inputs, skill: SkillConfig = SKILL, verbose: bool = Fa
     feats = path_features(paths)
     s = inputs.series[(inputs.series.bo_type == 3) & inputs.series.match_id.isin(feats.match_id)]
     rows = weekly_rows(inputs, s, skill, verbose=verbose)
-    return s.merge(rows, on=["match_id", "week_cutoff"]).merge(feats, on="match_id")
+    train = s.merge(rows, on=["match_id", "week_cutoff"]).merge(feats, on="match_id")
+    return train.merge(context_rows(inputs, train, market_rows(train)), on=["match_id", "week_cutoff"])
+
+
+def market_rows(train: pd.DataFrame) -> pd.DataFrame:
+    """The market-joined series with an outcome, as the context pass consumes them."""
+    m = train[train.twap.notna() & (train.n_active >= MIN_ACTIVE_PRINTS)]
+    return pd.DataFrame({"match_id": m.match_id.to_numpy(), "time": m.time.to_numpy(), "team_a": m.team_a.to_numpy(),
+                         "team_b": m.team_b.to_numpy(), "y": m.y.to_numpy(float), "price": m.twap.to_numpy(float)})
 
 
 def price(data_dir: str | Path, targets: pd.DataFrame, spec: Spec = SPEC, skill: SkillConfig = SKILL, verbose: bool = False,
@@ -55,6 +64,7 @@ def price(data_dir: str | Path, targets: pd.DataFrame, spec: Spec = SPEC, skill:
     train = training_rows(inputs, skill, verbose)
     tr = t.merge(weekly_rows(inputs, t, skill, verbose=verbose), on=["match_id", "week_cutoff"])
     tr = tr.merge(path_features(target_paths(data_dir, t.match_id)), on="match_id", how="left")
+    tr = tr.merge(context_rows(inputs, tr, market_rows(train)), on=["match_id", "week_cutoff"])
     if rows_dir is not None:
         Path(rows_dir).mkdir(parents=True, exist_ok=True)
         train.drop(columns=["lineup_a", "lineup_b"]).to_parquet(Path(rows_dir) / "train.parquet", index=False)

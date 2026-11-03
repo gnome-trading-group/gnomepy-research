@@ -32,6 +32,7 @@ class SkillConfig:
     rating_sd: float = 0.31
     division_offsets: dict = field(default_factory=dict)
     team_sigma0: float = 0.0
+    level_coef: float = 0.0
 
 
 def bo3(p: np.ndarray) -> np.ndarray:
@@ -39,7 +40,8 @@ def bo3(p: np.ndarray) -> np.ndarray:
 
 
 def make_filter(inputs: Inputs, cfg: SkillConfig) -> SkillFilter:
-    return SkillFilter(cfg.filter, inputs.rankings, cfg.rating_gamma, cfg.rating_sd, cfg.division_offsets, cfg.team_sigma0)
+    return SkillFilter(cfg.filter, inputs.rankings, cfg.rating_gamma, cfg.rating_sd, cfg.division_offsets, cfg.team_sigma0,
+                       inputs.levels, cfg.level_coef)
 
 
 def map_arrays(inputs: Inputs, cfg: SkillConfig) -> dict:

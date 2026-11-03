@@ -41,7 +41,10 @@ def design(rows: pd.DataFrame, spec: Spec) -> np.ndarray:
             "zm_sd": zm * gs, "new": (rows.new_a - rows.new_b).to_numpy(float), "zs_new": zs * (rows.new_a + rows.new_b).to_numpy(float),
             "dz_liq": (zl - zm) * liq, "zl": zl, "standins": (rows.standins_a - rows.standins_b).to_numpy(float),
             "mom": zm - logit(rows.p_open), "zs_lan": zs * lan, "zm_lan": zm * lan,
-            "chem": (rows.chem_a - rows.chem_b).to_numpy(float), "unknown": (rows.known_b - rows.known_a).to_numpy(float)}
+            "chem": (rows.chem_a - rows.chem_b).to_numpy(float), "unknown": (rows.known_b - rows.known_a).to_numpy(float),
+            "resid": rows.resid.to_numpy(float) if "resid" in rows else np.zeros(len(rows)),
+            "h2h": rows.h2h.to_numpy(float) if "h2h" in rows else np.zeros(len(rows)),
+            "pool": rows.pool.to_numpy(float) if "pool" in rows else np.zeros(len(rows))}
     X = np.column_stack([cols[c] for c in spec.columns])
     if spec.intercept:
         X = np.column_stack([X, np.ones(len(rows))])
