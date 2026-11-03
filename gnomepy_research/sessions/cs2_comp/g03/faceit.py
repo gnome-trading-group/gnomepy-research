@@ -21,7 +21,6 @@ def faceit_frames(data_dir, cutoff):
                     ["match_id", "faction", "hltv_id", "map_name", "kills", "deaths", "map_position_in_series"])
     s = s[~s.match_id.isin(whole)]
     s = s[[(a, b) not in per_map for a, b in zip(s.match_id, s.map_name)]]
-    sizes = s.groupby(["match_id", "map_position_in_series", "faction"]).hltv_id.transform("size")
     full = s.groupby(["match_id", "map_position_in_series", "faction"]).kills.transform("size") == 5
     s = s[full & s.hltv_id.notna() & (s.kills + s.deaths > 0)]
     s = s.merge(m, on="match_id")
@@ -30,11 +29,11 @@ def faceit_frames(data_dir, cutoff):
     r = bundle.load(data_dir, "faceit/faceit_rosters", cutoff, ["match_id", "hltv_id", "skill_level", "played"])
     r = r[r.hltv_id.notna() & r.skill_level.notna()].merge(m, on="match_id")
     r["d"] = pd.to_datetime(r.finished_at, unit="s")
-    return s[["hltv_id", "d", "score"]], r[["hltv_id", "d", "skill_level"]]
+    return s[["hltv_id", "d", "score"]], r[["hltv_id", "d", "skill_level", "match_id"]]
 
 
 def rolling(stats: pd.DataFrame, lvl: pd.DataFrame, weeks):
-    lvl = lvl.sort_values("d")
+    lvl = lvl.sort_values(["d", "match_id"], kind="stable")
     out = {}
     for w in weeks:
         win = stats[(stats.d < w) & (stats.d >= w - pd.Timedelta(days=WINDOW_DAYS))]

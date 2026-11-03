@@ -9,8 +9,9 @@ import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp import bundle
-from gnomepy_research.sessions.cs2_comp.g03 import bt, faceit
+from gnomepy_research.sessions.cs2_comp.g03 import bt, covs as covs_mod, faceit
 
+COV_SPECS = ("hr", "hr_long", "fs", "cnt_h", "cnt_f")
 PLAYER_K = 6.0
 TEAM_K = 24.0
 SCALE = 400.0 / math.log(10)
@@ -79,7 +80,8 @@ class State:
         self.last_lineup = {}
         self.last_t = {}
         self.h2h = defaultdict(lambda: [0, 0])
-        self.lineup_hist = defaultdict(list)
+        self.five = defaultdict(list)
+        self.four = defaultdict(list)
 
     def side(self, team, lineup, now, ratings, fc, standins, skills):
         lu = _ids(lineup)
@@ -102,6 +104,9 @@ class State:
         mwr = (sum(w * won for w, (_, won) in zip(wts, recent)) + 3 * 0.5) / (sum(wts) + 3)
         ser = list(self.t_series[team])
         swr = (sum(v for _, v in ser) + 2 * 0.5) / (len(ser) + 2)
+        key5 = frozenset(lu)
+        five_n = float(sum((now - d).days <= 180 for d in self.five.get(key5, ())))
+        four_n = max([sum((now - d).days <= 180 for d in self.four.get(key5 - {p}, ())) for p in lu] or [0])
         last = self.last_lineup.get(team, [])
         overlap = len(set(lu) & set(last)) if last else -1
         since = (now - self.last_t[team]).days if team in self.last_t else 400
@@ -114,7 +119,7 @@ class State:
             "mwr": mwr, "n90": float(len(recent)), "swr": swr,
             "fs_mean": float(np.mean(fs)), "fs_min": float(np.min(fs)), "f_cov": fcov,
             "lvl_mean": float(np.mean(lv)) if lv else 0.0, "lvl_n": float(len(lv)),
-            "standin": float(standins),
+            "standin": float(standins), "five_n": math.log1p(five_n), "four_n": math.log1p(four_n),
             "bt_h": float(np.sum(bh)), "bt_f": float(np.sum(bf)), "bt_f_min": float(np.min(bf)),
             "bt_s": float(np.sum(bs)), "bt_unseen": float(sum(p not in sk_f for p in lu)),
             "overlap": float(overlap), "since": float(since), "n_stand": float(len(lu) - sum(n >= 5 for n in pns)),
@@ -147,6 +152,11 @@ class State:
         won = float(row.team_a_won)
         self.t_maps[a].append((now, won))
         self.t_maps[b].append((now, 1 - won))
+        for lu in (la, lb):
+            s5 = frozenset(lu)
+            self.five[s5].append(now)
+            for p in lu:
+                self.four[s5 - {p}].append(now)
         self.last_lineup[a], self.last_lineup[b] = la, lb
         self.last_t[a] = self.last_t[b] = now
 
@@ -165,9 +175,11 @@ def build(data_dir, targets: pd.DataFrame, cutoff: pd.Timestamp) -> pd.DataFrame
     ser_all = ser
     all_weeks = sorted(set(ser.week) | set(tgt.week))
     ratings = rolling_player_rating(stats, all_weeks)
-    bt_h = bt.weekly_skills(data_dir, cutoff, h, all_weeks, False)
-    bt_f = bt.weekly_skills(data_dir, cutoff, h, all_weeks, True)
-    bt_s = bt.weekly_skills(data_dir, cutoff, h, all_weeks, True, bt.Params(window_days=365, half_life_days=120.0, c_ridge=0.3))
+    fit_weeks = [w for w in all_weeks if w >= bt.FIRST_FIT]
+    cov_by_week = covs_mod.build(data_dir, cutoff, fit_weeks, stats, list(COV_SPECS))
+    bt_h = bt.weekly_skills(data_dir, cutoff, h, all_weeks, False, covs=cov_by_week)
+    bt_f = bt.weekly_skills(data_dir, cutoff, h, all_weeks, True, covs=cov_by_week)
+    bt_s = bt.weekly_skills(data_dir, cutoff, h, all_weeks, True, bt.Params(window_days=365, half_life_days=120.0, c_ridge=0.3), covs=cov_by_week)
     fst, flv = faceit.faceit_frames(data_dir, cutoff)
     fcs = faceit.rolling(fst, flv, all_weeks)
     lu = bundle.load(data_dir, "hltv/cs2_match_lineups", cutoff, ["match_id", "match_date", "team_id", "is_standin"])
