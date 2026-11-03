@@ -44,12 +44,15 @@ class MatchmakingTable:
 
     def fit(self, cutoff: pd.Timestamp, c: float = C_RIDGE, half_life: float = HALF_LIFE_DAYS,
             window_days: int = WINDOW_DAYS, rounds: bool = False,
-            competition_types: tuple[str, ...] | None = None) -> tuple[dict[int, float], float]:
+            competition_types: tuple[str, ...] | None = None, min_level: float = 0.0) -> tuple[dict[int, float], float]:
         end = int(cutoff.tz_localize("UTC").timestamp()) if cutoff.tzinfo is None else int(cutoff.timestamp())
         start = end - window_days * 86400
         m = self.matches[(self.matches.finished_at < end) & (self.matches.finished_at >= start)]
         if competition_types:
             m = m[m.competition_type.isin(competition_types)]
+        if min_level:
+            lv0 = self.levels.reindex(m.match_id)
+            m = m[(lv0.mean(axis=1) >= min_level).to_numpy()]
         lk = self.linked[self.linked.match_id.isin(m.match_id)]
         m = m[m.match_id.isin(lk.match_id)].reset_index(drop=True)
         lv = self.levels.reindex(m.match_id)
