@@ -46,6 +46,8 @@ class RaterConfig:
     r_sd: float = 0.6
     g_var0: float = 0.8
     g_team_var0: float = 0.0
+    map_var0: float = 0.05
+    map_slope: float = 4.0
     fr_gamma: float = 0.3
     fr_sd: float = 0.4
     g_hltv_step: float = 1.0
@@ -175,6 +177,61 @@ class GaussPlayer:
         return float(mu.mean()) + tm, float(var.mean())
 
 
+def _bo3(p1, p2, p3):
+    return p1 * p2 + (p1 * (1 - p2) + (1 - p1) * p2) * p3
+
+
+class MapOffsets:
+    """Team-by-map offsets on top of the player model's gap, and a bo3 priced through a greedy veto: each side bans
+    its worst map and picks its best, the decider is what is left. Returns the logit change against pricing every
+    map at the plain gap."""
+
+    def __init__(self, var0: float, slope: float):
+        self.var0, self.slope = var0, slope
+        self.mu: dict[tuple, float] = {}
+        self.var: dict[tuple, float] = {}
+        self.recent: list[tuple[float, str]] = []
+
+    def update(self, team_a: int, team_b: int, name: str, gap: float, rounds_a: float, rounds: float, now: float) -> None:
+        ka, kb = (team_a, name), (team_b, name)
+        oa, ob = self.mu.get(ka, 0.0), self.mu.get(kb, 0.0)
+        va, vb = self.var.get(ka, self.var0), self.var.get(kb, self.var0)
+        p = 1.0 / (1.0 + np.exp(-(gap + oa - ob)))
+        h = rounds * p * (1 - p)
+        g = rounds_a - rounds * p
+        den = 1.0 + (va + vb) * h
+        self.mu[ka], self.mu[kb] = oa + va * g / den, ob - vb * g / den
+        self.var[ka], self.var[kb] = va - va * va * h / den, vb - vb * vb * h / den
+        self.recent.append((now, name))
+
+    def pool(self, now: float) -> list[str]:
+        counts: dict[str, int] = {}
+        for t, n in reversed(self.recent):
+            if now - t > 90:
+                break
+            counts[n] = counts.get(n, 0) + 1
+        return sorted(counts, key=lambda n: (-counts[n], n))[:7]
+
+    def adjust(self, team_a: int, team_b: int, gap: float, pool: list[str]) -> float:
+        if len(pool) < 7:
+            return 0.0
+        base = 1.0 / (1.0 + np.exp(-self.slope * gap))
+        p = {n: 1.0 / (1.0 + np.exp(-self.slope * (gap + self.mu.get((team_a, n), 0.0) - self.mu.get((team_b, n), 0.0))))
+             for n in pool}
+        left = list(pool)
+        left.remove(min(left, key=lambda n: (p[n], n)))
+        left.remove(max(left, key=lambda n: (p[n], n)))
+        pick_a = max(left, key=lambda n: (p[n], n))
+        left.remove(pick_a)
+        pick_b = min(left, key=lambda n: (p[n], n))
+        left.remove(pick_b)
+        left.remove(min(left, key=lambda n: (p[n], n)))
+        left.remove(max(left, key=lambda n: (p[n], n)))
+        s = _bo3(p[pick_a], p[pick_b], p[left[0]])
+        s0 = _bo3(base, base, base)
+        return float(np.log(s / (1 - s)) - np.log(s0 / (1 - s0)))
+
+
 class Replay:
     def __init__(self, inputs: Inputs, cfg: RaterConfig = RaterConfig()):
         self.inp, self.cfg = inputs, cfg
@@ -186,6 +243,7 @@ class Replay:
         self.player = PlayerElo(cfg.player_k, cfg.player_k_new, cfg.player_init)
         self.joint = PlayerElo(cfg.player_k, cfg.player_k_new, cfg.player_init)
         self.gauss = GaussPlayer(cfg.g_var0, cfg.g_tau2, cfg.g_init, cfg.g_fill_drop, cfg.g_team_var0)
+        self.maps = MapOffsets(cfg.map_var0, cfg.map_slope)
         self.gauss_h = GaussPlayer(cfg.g_var0, cfg.g_tau2, cfg.g_init, cfg.g_fill_drop)
         self.rating: dict[int, float] = {}
         self.rating_n: dict[int, int] = {}
@@ -255,6 +313,10 @@ class Replay:
     def _apply_hltv(self, r) -> None:
         c = self.cfg
         a, b = int(r.team_a), int(r.team_b)
+        now = _days(r.time)
+        if c.map_var0 > 0 and isinstance(r.map_name, str):
+            gap = self.gauss.price(r.five_a, now, a)[0] - self.gauss.price(r.five_b, now, b)[0]
+            self.maps.update(a, b, r.map_name, gap, r.rounds_a, r.rounds, now)
         ra, rb = self.team.get(a, c.team_init), self.team.get(b, c.team_init)
         g = r.won_a - 1.0 / (1.0 + np.exp(-(ra - rb)))
         for t, v, sign in ((a, ra, 1.0), (b, rb, -1.0)):
@@ -340,10 +402,12 @@ class Replay:
             g = by_week.get(c)
             if g is None:
                 continue
+            pool = self.maps.pool(_days(c))
             for r in g.itertuples(index=False):
                 rec = r._asdict()
                 for side, team, five in (("a", int(r.team_a), r.five_a), ("b", int(r.team_b), r.five_b)):
                     for k, v in self._side(team, five, c).items():
                         rec[f"{k}_{side}"] = v
+                rec["map_adj"] = self.maps.adjust(int(r.team_a), int(r.team_b), rec["gauss_a"] - rec["gauss_b"], pool)
                 out.append(rec)
         return pd.DataFrame(out)

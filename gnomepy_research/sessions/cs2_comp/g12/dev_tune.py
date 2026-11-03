@@ -40,7 +40,7 @@ def main():
         cfg = dataclasses.replace(RaterConfig(), **over)
         p = Replay(inp, cfg).run(rows)
         res = {k: round(score(p, c), 5) for k, c in
-               {"gauss": ["gauss"], "gauss_u": ["gauss", "gauss_unc"], "gauss_h": ["gauss_h"], "joint": ["joint_elo"],
+               {"gauss": ["gauss"], "gauss_map": ["gauss", "map_adj"], "gauss_u": ["gauss", "gauss_unc"], "gauss_h": ["gauss_h"], "joint": ["joint_elo"],
                 "player": ["player_elo"], "team": ["team_elo"]}.items()}
         print(json.dumps(over), res, f"{time.time() - t0:.0f}s", flush=True)
 

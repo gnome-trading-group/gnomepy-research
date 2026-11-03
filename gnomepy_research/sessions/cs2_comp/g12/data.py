@@ -122,7 +122,7 @@ def load_hltv(data_dir: Path, until: pd.Timestamp) -> tuple[pd.DataFrame, pd.Dat
         "match_id": mid, "time": m.time.to_numpy(), "known": m.known.to_numpy(),
         "team_a": m.team_a_id.astype(np.int64).to_numpy(), "team_b": m.team_b_id.astype(np.int64).to_numpy(),
         "won_a": (sa > sb).astype(float), "rounds_a": np.where(ot, 12, sa), "rounds": np.where(ot, 24, sa + sb),
-        "is_lan": m.is_lan.fillna(0).to_numpy(int), "bo_type": m.bo_type.to_numpy(int),
+        "is_lan": m.is_lan.fillna(0).to_numpy(int), "bo_type": m.bo_type.to_numpy(int), "map_name": m.map_name.to_numpy(),
         "five_a": fa, "five_b": fb,
         "rating_a": [[rating.get((x, n, p), np.nan) for p in f] for x, n, f in zip(mid, m.map_name, fa)],
         "rating_b": [[rating.get((x, n, p), np.nan) for p in f] for x, n, f in zip(mid, m.map_name, fb)],
