@@ -61,6 +61,9 @@ class Config:
     # region, not just the ten players in it. Zero r_v0 turns it off.
     r_v0: float = 0.0
     r_tau2: float = 0.0
+    # Nonzero: each player carries the region it has played most in, and a side's region term is the mean over its
+    # five, so mixed rosters and players who moved scenes keep their own region.
+    region_by_player: float = 0.0
     # Past kickoff prices as noisy measurements of the gap: the price is turned into the round-logit gap that would
     # give it, d_mkt ~ N(d, mkt_sd^2), at the kickoff of every earlier priced series. Zero turns it off.
     mkt_sd: float = 0.0
@@ -112,6 +115,7 @@ class Filter:
         self.rvar: dict[str, float] = {}
         self.rlast: dict[str, float] = {}
         self.team_regions: dict[int, dict[str, int]] = {}
+        self.player_regions: dict[int, dict[str, int]] = {}
         self.cursor = 0
 
     def _player(self, p: int, now: float) -> tuple[float, float]:
@@ -186,10 +190,31 @@ class Filter:
                 self.mu[p] = m + gam * c * v * innov
                 self.var[p] = v - gam * gam * c * c * v * v / s_obs
 
-    def _regions(self, ra: str, rb: str, now: float) -> tuple[float, float, float, float, bool]:
-        if not self.cfg.r_v0 or not ra or not rb or ra == rb:
-            return 0.0, 0.0, 0.0, 0.0, False
-        return (*self._region(ra, now), *self._region(rb, now), True)
+    def _player_region(self, p: int, team: int, map_region: str) -> str:
+        counts = self.player_regions.get(p)
+        if counts:
+            return max(sorted(counts), key=counts.get)
+        return self.region_of(team, map_region)
+
+    def _region_terms(self, five_a, five_b, team_a: int, team_b: int, map_region: str, now: float) -> list:
+        """(region, coefficient in d, mean, variance) for every region offset in play on a map."""
+        if not self.cfg.r_v0:
+            return []
+        coef: dict[str, float] = {}
+        if self.cfg.region_by_player:
+            for five, team, sign in ((five_a, team_a, 1.0), (five_b, team_b, -1.0)):
+                for p in five:
+                    r = self._player_region(p, team, map_region)
+                    if r:
+                        coef[r] = coef.get(r, 0.0) + sign / FIVE
+            if any(not self._player_region(p, t, map_region) for five, t in ((five_a, team_a), (five_b, team_b)) for p in five):
+                return []
+        else:
+            ra, rb = self.region_of(team_a, map_region), self.region_of(team_b, map_region)
+            if not ra or not rb or ra == rb:
+                return []
+            coef = {ra: 1.0, rb: -1.0}
+        return [(r, c, *self._region(r, now)) for r, c in sorted(coef.items()) if abs(c) > 1e-9]
 
     def update(self, five_a, five_b, team_a: int, team_b: int, rounds: float, rounds_a: float, src: int, div: str,
                now: float, rating_a=None, rating_b=None, map_region: str = "") -> None:
@@ -201,12 +226,13 @@ class Filter:
         mb, vb, _ = self.five(five_b, now, div)
         ua, uva = self._team(team_a, now)
         ub, uvb = self._team(team_b, now)
-        reg_a, reg_b = self.region_of(team_a, map_region), self.region_of(team_b, map_region)
-        rma, rva, rmb, rvb, cross = self._regions(reg_a, reg_b, now)
+        terms = self._region_terms(five_a, five_b, team_a, team_b, map_region, now)
+        rd = sum(c * m for _, c, m, _ in terms)
+        rv = sum(c * c * v for _, c, _, v in terms)
         scale = cfg.scale_faceit if src == 1 else 1.0
         w = cfg.w_faceit if src == 1 else cfg.w_hltv
-        d = scale * ((sum(ma) - sum(mb)) / FIVE + ua - ub + rma - rmb)
-        S = scale * scale * ((sum(va) + sum(vb)) / (FIVE * FIVE) + uva + uvb + rva + rvb)
+        d = scale * ((sum(ma) - sum(mb)) / FIVE + ua - ub + rd)
+        S = scale * scale * ((sum(va) + sum(vb)) / (FIVE * FIVE) + uva + uvb + rv)
         if market:
             h = 1.0 / (cfg.mkt_sd * cfg.mkt_sd)
             g = (rounds_a - d) * h
@@ -228,11 +254,10 @@ class Filter:
                 self.tmu[t] = u + sign * scale * uv * g * k
                 self.tvar[t] = uv - scale * scale * uv * uv * h * k
                 self.tlast[t] = now
-        if cross:
-            for r, rm, rv, sign in ((reg_a, rma, rva, 1.0), (reg_b, rmb, rvb, -1.0)):
-                self.rmu[r] = rm + sign * scale * rv * g * k
-                self.rvar[r] = rv - scale * scale * rv * rv * h * k
-                self.rlast[r] = now
+        for r, c, rm, rvar in terms:
+            self.rmu[r] = rm + c * scale * rvar * g * k
+            self.rvar[r] = rvar - c * c * scale * scale * rvar * rvar * h * k
+            self.rlast[r] = now
         if market:
             return
         if map_region:
@@ -240,6 +265,10 @@ class Filter:
                 if t >= 0:
                     c_t = self.team_regions.setdefault(t, {})
                     c_t[map_region] = c_t.get(map_region, 0) + 1
+            if cfg.region_by_player:
+                for p in (*five_a, *five_b):
+                    c_p = self.player_regions.setdefault(p, {})
+                    c_p[map_region] = c_p.get(map_region, 0) + 1
         w_r = cfg.w_rating_faceit if src else cfg.w_rating
         if cfg.rating_gamma and w_r:
             if rating_a is not None:
@@ -271,7 +300,7 @@ class Filter:
         nmaps = float(np.mean([self.n.get(p, 0) for p in five]))
         return sum(mus) / FIVE + u, sum(vs) / (FIVE * FIVE) + uv, unknown, nmaps
 
-    def region_gap(self, team_a: int, team_b: int, now: float) -> tuple[float, float]:
-        """Mean and variance of the region offset difference between two teams (zero within a region)."""
-        rma, rva, rmb, rvb, _ = self._regions(self.region_of(team_a, ""), self.region_of(team_b, ""), now)
-        return rma - rmb, rva + rvb
+    def region_gap(self, five_a, five_b, team_a: int, team_b: int, now: float) -> tuple[float, float]:
+        """Mean and variance of the region term of the gap between two sides (zero within a region)."""
+        terms = self._region_terms(five_a, five_b, team_a, team_b, "", now)
+        return sum(c * m for _, c, m, _ in terms), sum(c * c * v for _, c, _, v in terms)

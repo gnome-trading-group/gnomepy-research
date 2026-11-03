@@ -72,7 +72,8 @@ def price_rows(f: Filter, rows: pd.DataFrame, last_five: dict) -> pd.DataFrame:
             rec.update({f"mu_{side}": m, f"var_{side}": v, f"unk_{side}": unk, f"n_{side}": n, f"new_{side}": new})
         out.append(rec)
     out = pd.DataFrame(out)
-    reg = [f.region_gap(int(a), int(b), _days(t)) for a, b, t in zip(rows.team_a, rows.team_b, rows.time)]
+    reg = [f.region_gap(fa, fb, int(a), int(b), _days(t)) if fa is not None and fb is not None else (0.0, 0.0)
+           for fa, fb, a, b, t in zip(rows.five_a, rows.five_b, rows.team_a, rows.team_b, rows.time)]
     out["rgap"] = [r[0] for r in reg]
     out["rvar"] = [r[1] for r in reg]
     ok = out.mu_a.notna() & out.mu_b.notna()

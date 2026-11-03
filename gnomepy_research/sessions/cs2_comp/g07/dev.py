@@ -48,7 +48,7 @@ def online(inputs: Inputs, cfg: Config, series: pd.DataFrame) -> pd.DataFrame:
         now = float((np.datetime64(r.time) - EPOCH) / np.timedelta64(1, "D"))
         ma, va, ua, na = f.side(r.five_a, int(r.team_a), now)
         mb, vb, ub, nb = f.side(r.five_b, int(r.team_b), now)
-        rg, rv = f.region_gap(int(r.team_a), int(r.team_b), now)
+        rg, rv = f.region_gap(r.five_a, r.five_b, int(r.team_a), int(r.team_b), now)
         rows.append((r.match_id, r.time, r.y, r.is_lan, r.tier, ma - mb + rg, va + vb + rv, ua, ub, na, nb))
     out = pd.DataFrame(rows, columns=["match_id", "time", "y", "is_lan", "tier", "gap", "gvar", "unk_a", "unk_b", "n_a", "n_b"])
     out["q"] = bo3_price(out.gap.to_numpy(), out.gvar.to_numpy())
