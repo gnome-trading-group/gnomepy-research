@@ -158,7 +158,7 @@ class SkillFit:
         return float(sum(wt for lu, wt in self.team_history.get(team, ()) if len(lu & cur) >= 4))
 
     def newcomers(self, ids) -> float:
-        return float(sum(1 for p in ids if self.n_maps[self.index[p]] < NEW_MAPS if p in self.index) +
+        return float(sum(1 for p in ids if p in self.index and self.n_maps[self.index[p]] < NEW_MAPS) +
                      sum(1 for p in ids if p not in self.index))
 
     def cohesion_features(self, pa, pb, ta, tb) -> list[float]:
