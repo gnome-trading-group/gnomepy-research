@@ -27,12 +27,13 @@ def mm_rows(data_dir, until: pd.Timestamp) -> pd.DataFrame:
     link = load(data_dir, "faceit/hltv_faceit_map")
     secs = int(pd.Timestamp(until).tz_localize("UTC").timestamp())
     hm = pq.read_table(f"{data_dir}/faceit/history_matches.parquet",
-                       columns=["match_id", "teams_size", "winner", "finished_at", "score_faction1", "score_faction2"],
+                       columns=["match_id", "teams_size", "winner", "finished_at", "score_faction1", "score_faction2",
+                                "competition_type"],
                        filters=[("finished_at", "<", secs), ("teams_size", "=", 5)]).to_pandas()
     hm = hm[hm.winner.isin(["faction1", "faction2"])]
     hp = pq.read_table(f"{data_dir}/faceit/history_players.parquet", columns=["match_id", "faction", "faceit_id"],
                        filters=[("faceit_id", "in", list(link.faceit_id.astype(str).unique()))]).to_pandas()
-    hp = hp.merge(hm[["match_id", "winner", "finished_at", "score_faction1", "score_faction2"]], on="match_id")
+    hp = hp.merge(hm[["match_id", "winner", "finished_at", "score_faction1", "score_faction2", "competition_type"]], on="match_id")
     s1, s2 = pd.to_numeric(hp.score_faction1, errors="coerce"), pd.to_numeric(hp.score_faction2, errors="coerce")
     mine = np.where(hp.faction == "faction1", s1, s2)
     total = (s1 + s2).to_numpy(float)
@@ -41,13 +42,17 @@ def mm_rows(data_dir, until: pd.Timestamp) -> pd.DataFrame:
     return pd.DataFrame({"hltv_id": hp.faceit_id.map(f2h).to_numpy(np.int64),
                          "time": pd.to_datetime(hp.finished_at, unit="s").to_numpy(),
                          "win": (hp.winner == hp.faction).to_numpy(float),
-                         "rounds": np.where(ok, total, np.nan), "rounds_won": np.where(ok, mine, np.nan)}
+                         "rounds": np.where(ok, total, np.nan), "rounds_won": np.where(ok, mine, np.nan),
+                         "kind": hp.competition_type.to_numpy()}
                         ).sort_values("time", kind="stable").reset_index(drop=True)
 
 
-def player_form(rows: pd.DataFrame, cutoff: pd.Timestamp, cfg: MMConfig) -> pd.DataFrame:
-    """Per player: shrunken win residual (logit units) and the recency-weighted game count, from games before cutoff."""
+def player_form(rows: pd.DataFrame, cutoff: pd.Timestamp, cfg: MMConfig, kind: str | None = None) -> pd.DataFrame:
+    """Per player: shrunken win residual (logit units) and the recency-weighted game count, from games before cutoff
+    (of one competition type when `kind` is given)."""
     r = rows[(rows.time < cutoff) & (rows.time >= cutoff - pd.Timedelta(days=cfg.window_days))]
+    if kind is not None:
+        r = r[r.kind == kind]
     p = np.full(len(r), 0.5)
     w = 0.5 ** ((cutoff - r.time).dt.total_seconds().to_numpy() / 86400.0 / cfg.half_life_days)
     g = pd.DataFrame({"hltv_id": r.hltv_id.to_numpy(), "g": w * (r.win.to_numpy() - p), "h": w * p * (1 - p), "n": w})

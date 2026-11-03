@@ -14,7 +14,7 @@ from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.g10.mm import MMConfig, five_mean, mm_rows, player_form
 from gnomepy_research.sessions.cs2_comp.g10.rows import monday
 
-CONFIGS = {"mm": MMConfig(), "mm60": MMConfig(half_life_days=60.0, window_days=180)}
+CONFIGS = {"mm": MMConfig()}
 
 
 def main() -> None:
@@ -43,6 +43,11 @@ def main() -> None:
         for name, cfg in CONFIGS.items():
             form = player_form(rows, c, cfg)
             for col, short in (("form", name), ("activity", f"{name}act"), ("round_form", f"{name}r")):
+                rec[f"{short}_a"] = [five_mean(form, v, col) for v in wk.lineup_a]
+                rec[f"{short}_b"] = [five_mean(form, v, col) for v in wk.lineup_b]
+        for kind in ("matchmaking", "hub", "championship"):
+            form = player_form(rows, c, MMConfig(), kind)
+            for col, short in (("form", f"k{kind[:3]}"), ("activity", f"k{kind[:3]}act")):
                 rec[f"{short}_a"] = [five_mean(form, v, col) for v in wk.lineup_a]
                 rec[f"{short}_b"] = [five_mean(form, v, col) for v in wk.lineup_b]
         out.append(pd.DataFrame(rec))
