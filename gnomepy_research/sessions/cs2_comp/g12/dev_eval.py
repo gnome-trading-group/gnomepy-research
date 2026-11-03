@@ -106,15 +106,15 @@ def main():
     weeks = sorted(ev.week_cutoff.unique())
     mix = ("gauss", "gauss_unc", "gauss_h", "joint_elo", "team_elo", "log_points", "hltv_rating", "faceit_level",
            "unknown", "idle", "new", "sub", "standin", "form", "market_elo")
+    allseg = ("s_unknown", "s_new", "s_young", "s_still", "s_lan", "s_unranked", "s_var")
     variants = {
         "gauss": partial(Stack, use1=("gauss",), model_only=True),
-        "gauss_unc": partial(Stack, use1=("gauss", "gauss_unc"), model_only=True),
-        "gauss_extras": partial(Stack, use1=("gauss", "gx_f1", "gx_slow", "gx_fast"), model_only=True),
-        "gauss_inter": partial(Stack, use1=("gauss", "gauss_unc", "gauss_lan", "gauss_new", "gauss_weak", "gauss_idle"), model_only=True),
-        "gauss_extras_unc": partial(Stack, use1=("gauss", "gx_f1", "gx_slow", "gx_fast", "gauss_unc"), model_only=True),
-        "direct_gauss_drift": partial(Stack, use1=("gauss",), direct=("gauss",), market_terms=("drift",)),
-        "direct_gauss_young": partial(Stack, use1=("gauss",), direct=("gauss",), market_terms=("drift", "m_young", "m_still")),
-        "direct_gauss": partial(Stack, use1=("gauss",), direct=("gauss",)),
+        "seg_all": partial(Stack, use1=("gauss",), seg=allseg),
+        "seg_all_l2_20": partial(Stack, use1=("gauss",), seg=allseg, l2_seg=20.0),
+        "seg_all_l2_1": partial(Stack, use1=("gauss",), seg=allseg, l2_seg=1.0),
+        "seg_unk_new": partial(Stack, use1=("gauss",), seg=("s_unknown", "s_new")),
+        "seg_book": partial(Stack, use1=("gauss",), seg=("s_young", "s_still")),
+        "seg_all_extras": partial(Stack, use1=("gauss", "gx_f1", "gx_slow", "gx_fast"), seg=allseg),
     }
     for name, mk in variants.items():
         res = walk(p, weeks, mk, ev)

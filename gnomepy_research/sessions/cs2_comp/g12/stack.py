@@ -106,6 +106,21 @@ def market_terms(d: pd.DataFrame) -> pd.DataFrame:
                          "m_lan": lm * d.is_lan.to_numpy(float)}, index=d.index)
 
 
+def segments(d: pd.DataFrame) -> pd.DataFrame:
+    """Where the market is weakest relative to the player model: unknown or new players, young or still books, LAN,
+    unranked sides, uncertain ratings. Each is a multiplier on the model gap's weight."""
+    unk = (d.player_unknown_a + d.player_unknown_b).to_numpy(float)
+    return pd.DataFrame({
+        "s_unknown": np.minimum(unk, 3.0),
+        "s_new": np.minimum((d.new_players_a + d.new_players_b).to_numpy(float), 4.0) / 2.0,
+        "s_young": (d.age_h.to_numpy(float) < 12).astype(float),
+        "s_still": (d.changes.to_numpy(float) < 30).astype(float),
+        "s_lan": d.is_lan.to_numpy(float),
+        "s_unranked": ((d.rank_a.to_numpy(float) > 100) | (d.rank_b.to_numpy(float) > 100)).astype(float),
+        "s_var": (d.gauss_var_a + d.gauss_var_b).to_numpy(float),
+    }, index=d.index)
+
+
 @dataclass
 class Stack:
     l2_1: float = 3.0
@@ -118,6 +133,8 @@ class Stack:
     l2_d: float = 20.0
     market_terms: tuple = ()
     model_only: bool = False
+    seg: tuple = ()
+    l2_seg: float = 5.0
     b1: np.ndarray | None = None
     b2: np.ndarray | None = None
     b_fallback: np.ndarray | None = None
@@ -148,6 +165,14 @@ class Stack:
             pen = np.full(Xd.shape[1], self.l2_d)
             pen[0] = pen[-1] = 1e-3
             self.bd = fit_logistic(Xd / self.sd, y[has_m], pen)
+        if self.seg:
+            hm = h[has_m]
+            S = segments(hm)[list(self.seg)].to_numpy()
+            zm = z[has_m]
+            X = np.column_stack([logit(hm.m0.to_numpy(float)), zm, zm[:, None] * S, np.ones(len(hm))])
+            pen = np.full(X.shape[1], self.l2_seg)
+            pen[[0, 1, -1]] = 1e-3
+            self.bseg = fit_logistic(X, y[has_m], pen)
         self.n_train = (len(h), int(has_m.sum()))
         return self
 
@@ -162,6 +187,9 @@ class Stack:
 
     def predict(self, d: pd.DataFrame) -> np.ndarray:
         z = self.z(d)
+        if self.seg:
+            S = segments(d)[list(self.seg)].to_numpy()
+            return sigmoid(z * (self.bseg[1] + S @ self.bseg[2:-1]))
         if self.model_only:
             return sigmoid(z)
         has_m = d.m0.notna().to_numpy()
