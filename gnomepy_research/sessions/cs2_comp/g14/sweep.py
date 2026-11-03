@@ -33,8 +33,9 @@ def pre_dev_ll(rows: pd.DataFrame) -> dict:
     d = (r.d_player + r.d_team).to_numpy(float)
     q = bo3(map_win(d))
     qv = 1 / (1 + np.exp(-r.z_veto.to_numpy(float)))
+    qe = 1 / (1 + np.exp(-r.z_elo.to_numpy(float)))
     return {"n": int(len(r)), "ll_series": float(ll(q, r.y.to_numpy(float)).mean()),
-            "ll_veto": float(ll(qv, r.y.to_numpy(float)).mean())}
+            "ll_veto": float(ll(qv, r.y.to_numpy(float)).mean()), "ll_elo": float(ll(qe, r.y.to_numpy(float)).mean())}
 
 
 def main() -> None:

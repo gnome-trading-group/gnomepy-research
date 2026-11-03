@@ -17,8 +17,8 @@ import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g14.data import LOG_UNRANKED, logit
 
-MODEL_FEATURES = ("z_series", "veto_edge", "d_team", "z_sd", "z_thin", "form", "churn", "new", "idle", "together",
-                  "since_move", "sub", "rank", "z_lan", "new_lan")
+MODEL_FEATURES = ("z_fit", "z_fit_thin", "off_fit", "spread_fit", "z_elo", "z_series", "veto_edge", "z_thin", "form", "churn", "new",
+                  "idle", "together", "since_move", "sub", "rank", "z_lan", "new_lan")
 MARKET_FEATURES = ("z_model", "z_model_sd", "z_model_thin", "z_model_liq", "drift24", "drift6", "drift1", "liq", "flat")
 
 
@@ -56,9 +56,29 @@ def fit_ridge_logistic(X: np.ndarray, y: np.ndarray, w: np.ndarray, l2: float, o
     return beta
 
 
+def model_column(rows: pd.DataFrame, name: str) -> np.ndarray:
+    if name == "intercept":
+        return np.ones(len(rows))
+    return _columns(rows)[name]
+
+
 def model_design(rows: pd.DataFrame, features: tuple[str, ...]) -> np.ndarray:
+    cols = _columns(rows)
+    return np.column_stack([cols[f] for f in features] + [np.ones(len(rows))])
+
+
+def _columns(rows: pd.DataFrame) -> dict[str, np.ndarray]:
     z = rows.z_series.to_numpy(float)
-    cols = {
+    ze = rows.z_elo.to_numpy(float)
+    cols = {}
+    if "z_fit" in rows:
+        zf = rows.z_fit.to_numpy(float)
+        cols.update({"z_fit": zf, "z_fit_thin": zf * (rows.thin_fit_a + rows.thin_fit_b).to_numpy(float),
+                     "off_fit": rows.off_fit.to_numpy(float), "spread_fit": (rows.spread_fit_a - rows.spread_fit_b).to_numpy(float)})
+    cols.update({
+        "z_elo": ze,
+        "z_elo_sd": ze * (rows.sd_elo.to_numpy(float) - 0.2),
+        "adj": (rows.adj_a - rows.adj_b).to_numpy(float),
         "z_series": z,
         "veto_edge": (rows.z_veto - rows.z_series).to_numpy(float),
         "d_team": rows.d_team.to_numpy(float),
@@ -74,8 +94,8 @@ def model_design(rows: pd.DataFrame, features: tuple[str, ...]) -> np.ndarray:
         "rank": np.log(rows.rank_b.to_numpy(float)) - np.log(rows.rank_a.to_numpy(float)),
         "z_lan": z * rows.is_lan.to_numpy(float),
         "new_lan": (rows.new_a - rows.new_b).to_numpy(float) * rows.is_lan.to_numpy(float),
-    }
-    return np.column_stack([cols[f] for f in features] + [np.ones(len(rows))])
+    })
+    return cols
 
 
 def market_design(rows: pd.DataFrame, z_model: np.ndarray, features: tuple[str, ...]) -> np.ndarray:

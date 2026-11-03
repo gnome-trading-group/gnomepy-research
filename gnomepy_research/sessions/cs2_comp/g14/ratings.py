@@ -62,6 +62,18 @@ class RatingConfig:
     pool_half_life_days: float = 45.0
     pool_min_share: float = 0.03
     faceit: bool = True
+    # Team Elo: the team's strength as one belief (the sum a map identifies), moved by the skill difference when the
+    # five changes; player skills are the team strength plus the player's within-team HLTV rating deviation.
+    elo_var0: float = 0.03
+    elo_drift: float = 3e-4
+    elo_var_max: float = 0.08
+    elo_churn_widen: float = 0.5
+    pskill_var0: float = 0.04
+    pskill_drift: float = 1e-4
+    pskill_var_max: float = 0.08
+    rating_gamma: float = 0.5
+    rating_obs_var: float = 0.05
+    norating_obs_var: float = 0.4
 
 
 @dataclass
@@ -82,6 +94,7 @@ class TeamState:
     hltv_maps: int = 0
     by_map: dict[str, Belief] = field(default_factory=dict)
     fives: dict[tuple[int, ...], int] = field(default_factory=dict)
+    elo_five: tuple[int, ...] | None = None
 
 
 class Engine:
@@ -92,6 +105,8 @@ class Engine:
         self.cfg = cfg
         self.players: dict[int, Belief] = {}
         self.teams: dict[int, TeamState] = {}
+        self.elo: dict[int, Belief] = {}
+        self.pskill: dict[int, Belief] = {}
         self.pool_weight: dict[str, float] = {}
         self.pool_time: float = -1.0
         self.moves = inputs.moves
@@ -140,13 +155,59 @@ class Engine:
             return 0
         return FIVE - len(set(five) & set(t.last_five))
 
+    def _elo(self, tid: int, rank: float, now: float) -> Belief:
+        e = self.elo.get(tid)
+        if e is None:
+            prior = self.cfg.rank_intercept + self.cfg.rank_slope * (LOG_UNRANKED - math.log(max(rank, 1.0)))
+            e = Belief(prior, self.cfg.elo_var0, now)
+            self.elo[tid] = e
+            return e
+        e.var = min(e.var + self.cfg.elo_drift * max(0.0, now - e.last) / DAY, self.cfg.elo_var_max)
+        e.last = now
+        return e
+
+    def _skill_mean(self, five: tuple[int, ...], fallback: float) -> float:
+        return float(np.mean([self.pskill[p].mu if p in self.pskill else fallback for p in five]))
+
+    def _elo_lineup(self, t: TeamState, e: Belief, five: tuple[int, ...]) -> None:
+        if t.elo_five is None or five == t.elo_five:
+            t.elo_five = five
+            return
+        changed = FIVE - len(set(five) & set(t.elo_five))
+        e.mu += self._skill_mean(five, e.mu) - self._skill_mean(t.elo_five, e.mu)
+        e.var = min(e.var + self.cfg.elo_churn_widen * self.cfg.elo_var0 * changed / FIVE, self.cfg.elo_var_max)
+        t.elo_five = five
+
+    def _pskill_update(self, e: Belief, five: tuple[int, ...], ratings: tuple[float, ...], now: float) -> None:
+        cfg = self.cfg
+        rated = all(r == r for r in ratings)
+        mean_rating = sum(ratings) / FIVE if rated else 0.0
+        for p, r in zip(five, ratings):
+            b = self.pskill.get(p)
+            if b is None:
+                b = Belief(e.mu, cfg.pskill_var0, now)
+                self.pskill[p] = b
+            else:
+                b.var = min(b.var + cfg.pskill_drift * max(0.0, now - b.last) / DAY, cfg.pskill_var_max)
+                b.last = now
+            if rated:
+                target, ov = e.mu + cfg.rating_gamma * (r - mean_rating), cfg.rating_obs_var
+            else:
+                target, ov = e.mu, cfg.norating_obs_var
+            k = b.var / (b.var + ov)
+            b.mu += k * (target - b.mu)
+            b.var *= 1.0 - k
+            b.n += 1
+
     # --- the observation -------------------------------------------------------------------------------------------
 
     def observe(self, i: int) -> None:
         now = self._now[i]
         team_a, team_b = int(self._team_a[i]), int(self._team_b[i])
-        five_a = tuple(sorted(int(p) for p in self.inputs.five_a[i]))
-        five_b = tuple(sorted(int(p) for p in self.inputs.five_b[i]))
+        pairs_a = sorted(zip((int(p) for p in self.inputs.five_a[i]), self.inputs.rating_a[i]))
+        pairs_b = sorted(zip((int(p) for p in self.inputs.five_b[i]), self.inputs.rating_b[i]))
+        five_a, ratings_a = tuple(p for p, _ in pairs_a), tuple(float(r) for _, r in pairs_a)
+        five_b, ratings_b = tuple(p for p, _ in pairs_b), tuple(float(r) for _, r in pairs_b)
         map_name = self._map_name[i]
         is_hltv = self._source[i] == SOURCE_HLTV
         ta, tb = self._team(team_a, now), self._team(team_b, now)
@@ -161,6 +222,20 @@ class Engine:
         d = (sum(b.mu for b in pa) - sum(b.mu for b in pb)) / FIVE + ta.offset.mu - tb.offset.mu + ma.mu - mb.mu
         rho = self.cfg.rho_hltv if is_hltv else self.cfg.rho_faceit
         n_eff = self._rounds[i] * rho
+        ea, eb = self._elo(team_a, self._rank_a[i], now), self._elo(team_b, self._rank_b[i], now)
+        self._elo_lineup(ta, ea, five_a)
+        self._elo_lineup(tb, eb, five_b)
+        d_e = ea.mu - eb.mu
+        p_e = 1.0 / (1.0 + math.exp(-d_e))
+        info_e = n_eff * p_e * (1.0 - p_e)
+        resid_e = (self._rounds_a[i] * rho - n_eff * p_e) / info_e
+        s_e = 1.0 / info_e + ea.var + eb.var
+        ea.mu += ea.var / s_e * resid_e
+        eb.mu -= eb.var / s_e * resid_e
+        ea.var -= ea.var * ea.var / s_e
+        eb.var -= eb.var * eb.var / s_e
+        self._pskill_update(ea, five_a, ratings_a, now)
+        self._pskill_update(eb, five_b, ratings_b, now)
         p = 1.0 / (1.0 + math.exp(-d))
         info = n_eff * p * (1.0 - p)
         resid_d = (self._rounds_a[i] * rho - n_eff * p) / info
@@ -241,10 +316,29 @@ class Engine:
                 "hltv_maps": hltv_maps, "together": together, "since_move": min(since_move, 365.0),
                 "min_maps": min(nmaps), "map_offsets": (t.by_map if t is not None else {})}
 
+    def _side_elo(self, tid: int, five: tuple[int, ...], rank: float, now: float) -> tuple[float, float, float]:
+        cfg = self.cfg
+        e = self.elo.get(tid)
+        t = self.teams.get(tid)
+        if e is None:
+            prior = cfg.rank_intercept + cfg.rank_slope * (LOG_UNRANKED - math.log(max(rank, 1.0)))
+            return prior, cfg.elo_var0, 0.0
+        var = min(e.var + cfg.elo_drift * max(0.0, now - e.last) / DAY, cfg.elo_var_max)
+        adj = 0.0
+        if t is not None and t.elo_five is not None and five != t.elo_five:
+            changed = FIVE - len(set(five) & set(t.elo_five))
+            adj = self._skill_mean(five, e.mu) - self._skill_mean(t.elo_five, e.mu)
+            var = min(var + cfg.elo_churn_widen * cfg.elo_var0 * changed / FIVE, cfg.elo_var_max)
+        return e.mu + adj, var, adj
+
     def price(self, team_a: int, five_a: tuple[int, ...], team_b: int, five_b: tuple[int, ...],
               rank_a: float, rank_b: float, now: float) -> dict:
         a = self._side(team_a, five_a, rank_a, now)
         b = self._side(team_b, five_b, rank_b, now)
+        ea, va, adj_a = self._side_elo(team_a, five_a, rank_a, now)
+        eb, vb, adj_b = self._side_elo(team_b, five_b, rank_b, now)
+        d_elo = ea - eb
+        pe = bo3(map_win(d_elo))
         d_player = a["skill"] - b["skill"]
         d_team = a["off"] - b["off"]
         d = d_player + d_team
@@ -253,7 +347,8 @@ class Engine:
         veto = self._veto(d, a["map_offsets"], b["map_offsets"], pool, now)
         out = {"d_player": d_player, "d_team": d_team, "sd_d": math.sqrt(var_d),
                "z_series": float(np.log(bo3(map_win(d)) / (1 - bo3(map_win(d))))),
-               "z_veto": veto, "pool_n": len(pool)}
+               "z_veto": veto, "pool_n": len(pool), "d_elo": d_elo, "sd_elo": math.sqrt(va + vb),
+               "z_elo": float(np.log(pe / (1 - pe))), "adj_a": adj_a, "adj_b": adj_b}
         for k in ("churn", "new", "thin", "idle", "form", "maps", "hltv_maps", "together", "since_move", "min_maps"):
             out[f"{k}_a"], out[f"{k}_b"] = a[k], b[k]
         return out

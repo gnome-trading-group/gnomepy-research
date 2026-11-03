@@ -78,6 +78,8 @@ class Inputs:
     maps: pd.DataFrame          # one decisive map per row, sorted by (known, time, match_id, position)
     five_a: np.ndarray          # (N, 5) unified player ids, aligned with maps
     five_b: np.ndarray
+    rating_a: np.ndarray        # (N, 5) HLTV map ratings of the five, NaN where unknown
+    rating_b: np.ndarray
     series: pd.DataFrame        # HLTV bo3 series with an outcome, announced fives and stand-in counts
     rankings: dict[int, tuple[np.ndarray, np.ndarray]]
     moves: pd.DataFrame         # roster moves: event_date, team_id
@@ -94,7 +96,22 @@ class Inputs:
         return float(h[1][i])
 
 
-def _hltv_maps(data_dir: Path, until: pd.Timestamp) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, pd.DataFrame]:
+def _ratings(data_dir: Path, until: pd.Timestamp, h: pd.DataFrame, five_a: np.ndarray, five_b: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    st = load(data_dir, "hltv/cs2_player_map_stats", until, ["match_id", "match_date", "map_name", "player_id", "side", "rating"])
+    st = st[(st.side == "all") & st.rating.notna() & st.player_id.notna()]
+    rating = dict(zip(zip(st.match_id.astype(str), st.map_name, st.player_id.astype(np.int64)), st.rating.astype(float)))
+    mids, names = h.match_id.astype(str).to_numpy(), h.map_name.to_numpy()
+    out = []
+    for five in (five_a, five_b):
+        r = np.full(five.shape, np.nan)
+        for i in range(len(five)):
+            for j in range(FIVE):
+                r[i, j] = rating.get((mids[i], names[i], int(five[i, j])), np.nan)
+        out.append(r)
+    return out[0], out[1]
+
+
+def _hltv_maps(data_dir: Path, until: pd.Timestamp) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
     h = load(data_dir, "hltv/cs2_match_history", until)
     h = h[~showmatch_mask(h)].copy()
     h["time"] = naive(h.match_time.fillna(h.match_date))
@@ -106,6 +123,7 @@ def _hltv_maps(data_dir: Path, until: pd.Timestamp) -> tuple[pd.DataFrame, np.nd
     ok = ok_a & ok_b
     h, five_a, five_b = h[ok], five_a[ok], five_b[ok]
     ra, n = _regulation(h.team_a_score.to_numpy(int), h.team_b_score.to_numpy(int), np.zeros(len(h), bool))
+    rating_a, rating_b = _ratings(data_dir, until, h, five_a, five_b)
     frame = pd.DataFrame({
         "match_id": h.match_id.astype(str).to_numpy(), "time": h.time.to_numpy(), "known": h.known.to_numpy(),
         "position": h.map_position_in_series.fillna(0).to_numpy(int),
@@ -114,7 +132,7 @@ def _hltv_maps(data_dir: Path, until: pd.Timestamp) -> tuple[pd.DataFrame, np.nd
         "rounds": n, "rounds_a": ra, "source": SOURCE_HLTV, "division": "hltv", "map_name": h.map_name.fillna("").to_numpy(),
         "is_lan": h.is_lan.fillna(0).to_numpy(int), "tier": h.event_tier.fillna(0).to_numpy(int),
         "bo_type": h.bo_type.fillna(0).to_numpy(int)})
-    return frame, five_a, five_b, series
+    return frame, five_a, five_b, rating_a, rating_b, series
 
 
 def _series(h: pd.DataFrame) -> pd.DataFrame:
@@ -138,7 +156,7 @@ def _faceit_maps(data_dir: Path, until: pd.Timestamp, h2f: dict[int, str]) -> tu
               ["match_id", "finished_at", "has_stats", "competition_name", "faction1_hltv_team", "faction2_hltv_team",
                "faction1_id", "faction2_id"])
     fm["known"] = pd.to_datetime(fm.finished_at, unit="s")
-    link = load(data_dir, "faceit/faceit_hltv_series_link", until, ["faceit_match_id"])
+    link = load(data_dir, "faceit/faceit_hltv_series_link", until, ["faceit_match_id", "hltv_match_id"])
     fm = fm[fm.has_stats & ~fm.match_id.isin(set(link.faceit_match_id))]
     ex = load(data_dir, "faceit/faceit_exclusions", until)
     whole = set(ex.match_id[ex.map_name.isna()])
@@ -177,7 +195,7 @@ def _faceit_maps(data_dir: Path, until: pd.Timestamp, h2f: dict[int, str]) -> tu
 
 
 def _standins(data_dir: Path, until: pd.Timestamp, series: pd.DataFrame) -> pd.DataFrame:
-    lu = load(data_dir, "hltv/cs2_match_lineups", until, ["match_id", "team_id", "is_standin"]).dropna(subset=["team_id"])
+    lu = load(data_dir, "hltv/cs2_match_lineups", until, ["match_id", "match_date", "team_id", "is_standin"]).dropna(subset=["team_id"])
     st = lu.groupby(["match_id", "team_id"]).is_standin.sum()
     subs = {(int(m), int(t)): int(v) for (m, t), v in st.items()}
     series["sub_a"] = [subs.get((int(m), int(t)), 0) for m, t in zip(series.match_id, series.team_a)]
@@ -231,19 +249,22 @@ def load_inputs(data_dir: str | Path, until: pd.Timestamp, faceit: bool) -> Inpu
     until = pd.Timestamp(until)
     link = load(data_dir, "faceit/hltv_faceit_map")
     h2f = dict(zip(link.hltv_id.astype(np.int64), link.faceit_id))
-    frame, five_a, five_b, series = _hltv_maps(data_dir, until)
-    parts, fa, fb = [frame], [five_a], [five_b]
+    frame, five_a, five_b, rating_a, rating_b, series = _hltv_maps(data_dir, until)
+    parts, fa, fb, ra, rb = [frame], [five_a], [five_b], [rating_a], [rating_b]
     if faceit:
         f_frame, f_a, f_b = _faceit_maps(data_dir, until, h2f)
         parts.append(f_frame)
         fa.append(f_a)
         fb.append(f_b)
+        ra.append(np.full(f_a.shape, np.nan))
+        rb.append(np.full(f_b.shape, np.nan))
     maps = pd.concat(parts, ignore_index=True)
-    five_a = np.concatenate(fa)
-    five_b = np.concatenate(fb)
+    five_a, five_b = np.concatenate(fa), np.concatenate(fb)
+    rating_a, rating_b = np.concatenate(ra), np.concatenate(rb)
     order = np.lexsort((maps.position.to_numpy(), maps.match_id.astype(str).to_numpy(), maps.time.to_numpy(), maps.known.to_numpy()))
     maps = maps.iloc[order].reset_index(drop=True)
     five_a, five_b = five_a[order], five_b[order]
+    rating_a, rating_b = rating_a[order], rating_b[order]
     series = _standins(data_dir, until, series)
     series = series.sort_values(["time", "match_id"], kind="stable").reset_index(drop=True)
     rk = load(data_dir, "hltv/cs2_team_rankings", until, ["date", "team_id", "rank"])
@@ -255,7 +276,7 @@ def load_inputs(data_dir: str | Path, until: pd.Timestamp, faceit: bool) -> Inpu
                     pd.DataFrame({"event_date": naive(mv.event_date), "team_id": mv.from_team_id})])
     mv = mv[mv.team_id.fillna(0) > 0].astype({"team_id": np.int64}).sort_values("event_date").reset_index(drop=True)
     market = _market(data_dir, until)
-    return Inputs(maps, five_a, five_b, series, rankings, mv, market, h2f)
+    return Inputs(maps, five_a, five_b, rating_a, rating_b, series, rankings, mv, market, h2f)
 
 
 def target_market(data_dir: str | Path, match_ids) -> pd.DataFrame:

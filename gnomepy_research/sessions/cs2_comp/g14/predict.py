@@ -3,14 +3,17 @@ g14 predictions: P(team A wins the bo3) for every target series, from data known
 announced fives and its own price path up to kickoff.
 
     python -m gnomepy_research.sessions.cs2_comp.g14.predict --data <bundle> --targets <targets parquet> --out <parquet>
-        [--weeks 2026-04-06,2026-04-13] [--no-faceit] [--rows <dir>] [--model-only]
+        [--weeks 2026-04-06,2026-04-13] [--no-faceit] [--rows <dir>] [--train-rows <walk parquet>] [--fit '{...}']
 
-The rating pass is a forward walk in known order, so a week's prices depend only on rows known before its cutoff;
-the layers are refitted at each cutoff on the series known before it.
+Per distinct week_cutoff: the rating pass walks the maps known before it (online features: form, roster churn, map
+pool, idle time), the batch skill model is fitted on the window before it, and each target is priced with its
+announced fives. The layer weights below were fitted on walk-forward rows from monthly fits before the first dev
+cutoff (walk.py), so they are point-in-time for every target; --train-rows refits them instead, for development.
 """
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -18,9 +21,12 @@ import pandas as pd
 from gnomepy_research.sessions.cs2_comp.g14.layer import LayerConfig
 from gnomepy_research.sessions.cs2_comp.g14.pipeline import run
 from gnomepy_research.sessions.cs2_comp.g14.ratings import RatingConfig
+from gnomepy_research.sessions.cs2_comp.g14.skillfit import FitConfig
 
 RATING = RatingConfig()
+FIT = FitConfig()
 LAYER = LayerConfig()
+WEIGHTS: dict[str, float] | None = None
 
 
 def main() -> None:
@@ -32,6 +38,8 @@ def main() -> None:
     ap.add_argument("--no-faceit", dest="faceit", action="store_false")
     ap.add_argument("--model-only", action="store_true", help="write the model's own price, not the market-adjusted one")
     ap.add_argument("--rows", help="directory to also save the series and target rows in")
+    ap.add_argument("--train-rows", help="walk-forward rows to fit the layers on instead of the frozen weights")
+    ap.add_argument("--fit", default="{}", help="FitConfig overrides as JSON")
     a = ap.parse_args()
     targets = pd.read_parquet(a.targets)
     wc = pd.to_datetime(targets.week_cutoff)
@@ -39,7 +47,9 @@ def main() -> None:
     if a.weeks:
         targets = targets[targets.week_cutoff.isin(pd.to_datetime(a.weeks.split(",")))]
     rcfg = RatingConfig(**{**RATING.__dict__, "faceit": a.faceit})
-    res = run(a.data, targets, rcfg, LAYER, verbose=True)
+    fcfg = FitConfig(**{**FIT.__dict__, **json.loads(a.fit)})
+    train = pd.read_parquet(a.train_rows) if a.train_rows else None
+    res = run(a.data, targets, rcfg, LAYER, verbose=True, fcfg=fcfg, weights=None if train is not None else WEIGHTS, train_rows=train)
     if a.rows:
         Path(a.rows).mkdir(parents=True, exist_ok=True)
         res.series_rows.to_parquet(Path(a.rows) / "series_rows.parquet", index=False)
