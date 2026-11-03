@@ -11,6 +11,7 @@ from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 
 from gnomepy_research.sessions.cs2_comp import bundle
 from gnomepy_research.sessions.cs2_comp.g02 import rating
+from gnomepy_research.sessions.cs2_comp.g02.mm import MatchmakingTable
 
 C_RIDGE = 0.5
 HALF_LIFE_DAYS = 500.0
@@ -20,10 +21,12 @@ MAP_SCALE = 1.3
 MARKET_WINDOW = pd.Timedelta(minutes=30)
 # The blend is refit before every cutoff on earlier series, so no dev months leak into it. The rating-only slope is
 # larger than one because the rating price alone is under-confident.
-PRIOR_BLEND = (0.0, 1.0, 0.5)
+MM_C = 0.1
+PRIOR_BLEND = (0.0, 1.0, 0.5, 0.5)
 PRIOR_STRENGTH = 100.0
 TRAIN_WEEKS = 12
 RATING_ONLY_SLOPE = 1.8
+RATING_ONLY_MM = 0.5
 
 
 def logit(p):
@@ -66,6 +69,8 @@ class Fitter:
     def __init__(self, data_dir: str):
         self.data_dir = data_dir
         self._cache: dict[pd.Timestamp, tuple] = {}
+        self._mm: dict[pd.Timestamp, dict[int, float]] = {}
+        self._table: MatchmakingTable | None = None
 
     def at(self, cutoff: pd.Timestamp):
         if cutoff not in self._cache:
@@ -75,16 +80,24 @@ class Fitter:
             self._cache[cutoff] = (ratings, rank_coef, rating.current_ranks(self.data_dir, cutoff))
         return self._cache[cutoff]
 
+    def matchmaking_gap(self, cutoff: pd.Timestamp, row) -> float:
+        if cutoff not in self._mm:
+            if self._table is None:
+                self._table = MatchmakingTable(self.data_dir)
+            self._mm[cutoff] = self._table.fit(cutoff, MM_C)[0]
+        r = self._mm[cutoff]
+        return sum(r.get(p, 0.0) for p in row.team_a_lineup_ids) - sum(r.get(p, 0.0) for p in row.team_b_lineup_ids)
+
     def price(self, cutoff: pd.Timestamp, row) -> float:
         ratings, rank_coef, ranks = self.at(cutoff)
         return rating.price(ratings, rank_coef, list(row.team_a_lineup_ids), list(row.team_b_lineup_ids),
                             rating.rank_diff(ranks, row.team_a_id, row.team_b_id), MAP_SCALE)
 
 
-def fit_blend(lm: np.ndarray, lq: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """Logistic blend on (1, logit m0, logit rating), ridge-shrunk towards the prior weights."""
+def fit_blend(lm: np.ndarray, lq: np.ndarray, dmm: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Logistic blend on (1, logit m0, logit rating, matchmaking gap), ridge-shrunk towards the prior weights."""
     prior = np.array(PRIOR_BLEND)
-    X = np.c_[np.ones(len(y)), lm, lq]
+    X = np.c_[np.ones(len(y)), lm, lq, dmm]
 
     def nll(w):
         z = X @ w
@@ -98,13 +111,15 @@ def predict_week(fitter: Fitter, week: pd.DataFrame, cutoff: pd.Timestamp) -> pd
     weeks = sorted(train.week_cutoff.unique())[-TRAIN_WEEKS:]
     train = train[train.week_cutoff.isin(weeks)]
     lq_train = np.array([logit(fitter.price(pd.Timestamp(r.week_cutoff), r)) for r in train.itertuples()])
-    w = fit_blend(logit(train.m0.to_numpy()), lq_train, train.y.to_numpy(float))
+    dmm_train = np.array([fitter.matchmaking_gap(pd.Timestamp(r.week_cutoff), r) for r in train.itertuples()])
+    w = fit_blend(logit(train.m0.to_numpy()), lq_train, dmm_train, train.y.to_numpy(float))
     m0 = kickoff_prices(fitter.data_dir, week)
     q = []
     for x in week.itertuples():
         lq = logit(fitter.price(cutoff, x))
+        dmm = fitter.matchmaking_gap(cutoff, x)
         market = m0.get(x.match_id)
-        z = w[0] + w[1] * logit(market) + w[2] * lq if market is not None and np.isfinite(market) else RATING_ONLY_SLOPE * lq
+        z = w[0] + w[1] * logit(market) + w[2] * lq + w[3] * dmm if market is not None and np.isfinite(market) else RATING_ONLY_SLOPE * lq + RATING_ONLY_MM * dmm
         q.append(1 / (1 + np.exp(-z)))
     return pd.DataFrame({"match_id": week.match_id.to_numpy(), "q": q, "fit_cutoff": cutoff})
 

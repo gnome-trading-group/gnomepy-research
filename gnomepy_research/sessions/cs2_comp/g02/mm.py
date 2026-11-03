@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import scipy.sparse as sp
 from sklearn.linear_model import LogisticRegression
@@ -23,11 +21,16 @@ class MatchmakingTable:
     def __init__(self, data_dir: str):
         link = pd.read_parquet(f"{data_dir}/faceit/hltv_faceit_map.parquet")
         self.to_hltv = dict(zip(link.faceit_id, link.hltv_id.astype(int)))
-        players = pq.read_table(f"{data_dir}/faceit/history_players.parquet", columns=["match_id", "faction", "faceit_id", "skill_level"])
-        mean = players.group_by(["match_id", "faction"]).aggregate([("skill_level", "mean")]).to_pandas()
-        mean = mean.pivot(index="match_id", columns="faction", values="skill_level_mean")
-        linked = players.filter(pc.is_in(players["faceit_id"], value_set=pa.array(list(self.to_hltv)))).to_pandas()
-        del players
+        linked_ids = set(self.to_hltv)
+        sums, linked = [], []
+        for batch in pq.ParquetFile(f"{data_dir}/faceit/history_players.parquet").iter_batches(
+                batch_size=2_000_000, columns=["match_id", "faction", "faceit_id", "skill_level"]):
+            b = batch.to_pandas()
+            sums.append(b.groupby(["match_id", "faction"]).skill_level.agg(["sum", "count"]))
+            linked.append(b[b.faceit_id.isin(linked_ids)][["match_id", "faction", "faceit_id"]])
+        total = pd.concat(sums).groupby(level=[0, 1]).sum()
+        mean = (total["sum"] / total["count"]).unstack("faction")
+        linked = pd.concat(linked, ignore_index=True)
         linked["hltv_id"] = linked.faceit_id.map(self.to_hltv)
         self.levels = mean
         self.linked = linked[["match_id", "faction", "hltv_id"]]
