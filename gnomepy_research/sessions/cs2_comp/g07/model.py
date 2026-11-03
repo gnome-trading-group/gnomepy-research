@@ -39,6 +39,7 @@ class Config:
     v_cap: float = 0.30         # largest variance a player can drift back to
     tau2: float = 0.0004        # player random walk per day
     newcomer: float = -0.03     # newcomer offset relative to known teammates
+    newcomer_faceit: float | None = None  # the same on FACEIT maps (None: as on HLTV)
     tv0: float = 0.02           # team offset prior variance
     ttau2: float = 0.0001       # team offset random walk per day
     w_hltv: float = 0.5         # likelihood tempering per map source
@@ -55,6 +56,7 @@ class Config:
     rating_gamma: float = 0.0
     rating_sd: float = 0.3
     w_rating: float = 0.5
+    w_rating_faceit: float = 0.0  # the same measurement from FACEIT kills and damage per round; zero turns it off
 
 
 def map_win(d: np.ndarray) -> np.ndarray:
@@ -133,7 +135,8 @@ class Filter:
             known = [i for i in range(FIVE) if i not in unknown]
             if known:
                 w = [1.0 / (vs[i] + cfg.v0) for i in known]
-                m = sum(wi * mus[i] for wi, i in zip(w, known)) / sum(w) + cfg.newcomer
+                off = cfg.newcomer if div == "hltv" or cfg.newcomer_faceit is None else cfg.newcomer_faceit
+                m = sum(wi * mus[i] for wi, i in zip(w, known)) / sum(w) + off
                 v = cfg.v0 + 1.0 / sum(w)
             else:
                 m = self.div_mean.get(div, 0.0)
@@ -142,10 +145,10 @@ class Filter:
                 mus[i], vs[i] = m, v
         return mus, vs, len(unknown)
 
-    def _ratings(self, five, ratings) -> None:
+    def _ratings(self, five, ratings, w: float) -> None:
         """Sequential contrast updates: each player's rating minus the five's mean rating."""
         cfg = self.cfg
-        gam, w = cfg.rating_gamma, cfg.w_rating
+        gam = cfg.rating_gamma
         r_mean = sum(ratings) / FIVE
         noise = cfg.rating_sd * cfg.rating_sd / w
         for j in range(FIVE):
@@ -204,11 +207,12 @@ class Filter:
                 if t >= 0:
                     c_t = self.team_regions.setdefault(t, {})
                     c_t[map_region] = c_t.get(map_region, 0) + 1
-        if cfg.rating_gamma:
+        w_r = cfg.w_rating_faceit if src else cfg.w_rating
+        if cfg.rating_gamma and w_r:
             if rating_a is not None:
-                self._ratings(five_a, rating_a)
+                self._ratings(five_a, rating_a, w_r)
             if rating_b is not None:
-                self._ratings(five_b, rating_b)
+                self._ratings(five_b, rating_b, w_r)
         dm = self.div_mean.get(div, 0.0)
         self.div_mean[div] = dm + cfg.div_rate * ((sum(ma) + sum(mb)) / (2 * FIVE) - dm)
 

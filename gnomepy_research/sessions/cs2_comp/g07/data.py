@@ -186,12 +186,27 @@ class Inputs:
         fb = [f for f, k in zip(fb, ok) if k]
         ot = (fh.team_a_ot_score.fillna(0) + fh.team_b_ot_score.fillna(0) > 0).to_numpy()
         ra, n = _regulation(fh.team_a_score.to_numpy(int), fh.team_b_score.to_numpy(int), ot)
+        # A FACEIT map rating on the HLTV rating's scale (about 1.0 for an average player): half kills per round, half
+        # damage per round, each over its typical value.
+        st = load(d, "faceit/faceit_player_map_stats", self.until, ["match_id", "map_name", "faceit_id", "k_r_ratio", "adr"])
+        st = st.dropna(subset=["k_r_ratio", "adr"])
+        perf = dict(zip(zip(st.match_id, st.map_name, st.faceit_id),
+                        0.5 * st.k_r_ratio.astype(float) / 0.7 + 0.5 * st.adr.astype(float) / 80.0))
+
+        def ratings(col):
+            out = []
+            for mid, mp, ids in zip(fh.match_id, fh.map_name, col):
+                r = tuple(perf.get((mid, mp, f)) for f in ids)
+                out.append(None if any(x is None for x in r) else r)
+            return out
+
         return pd.DataFrame({
             "match_id": fh.match_id.to_numpy(), "pos": fh.map_position_in_series.to_numpy(),
             "time": naive(fh.match_time.fillna(fh.match_date)).to_numpy(), "known": fh.known.to_numpy(),
             "team_a": fh.faction1_hltv_team.fillna(-1).astype(np.int64).to_numpy(),
             "team_b": fh.faction2_hltv_team.fillna(-1).astype(np.int64).to_numpy(),
-            "five_a": fa, "five_b": fb, "rating_a": None, "rating_b": None, "rounds": n, "rounds_a": ra, "src": 1,
+            "five_a": fa, "five_b": fb, "rating_a": ratings(fh.team_a_faceit_ids), "rating_b": ratings(fh.team_b_faceit_ids),
+            "rounds": n, "rounds_a": ra, "src": 1,
             "div": [division(c) for c in fh.competition_name], "lan": 0, "tier": -1,
             "region": [_FACEIT_REGIONS.get(r, "") for r in fh.region]})
 

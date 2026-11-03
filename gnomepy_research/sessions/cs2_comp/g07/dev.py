@@ -114,7 +114,7 @@ def load_inputs(data: str, cache: str | None) -> Inputs:
 def parse_config(text: str | None) -> Config:
     if not text:
         return Config()
-    kw = {k: float(v) for k, v in (p.split("=") for p in text.split(","))}
+    kw = {k: (None if v == "none" else float(v)) for k, v in (p.split("=") for p in text.split(","))}
     return dataclasses.replace(Config(), **kw)
 
 
