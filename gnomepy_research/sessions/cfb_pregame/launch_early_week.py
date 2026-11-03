@@ -5,7 +5,8 @@ Build, check and (with --send) queue the direct_launch triggers that start the C
     AWS_PROFILE=AWSAdministratorAccess-241533121172 REGISTRY_API_KEY_ID=<CloudFormation export RegistryApiKeyId> \\
     poetry run python -m gnomepy_research.sessions.cfb_pregame.launch_early_week \\
         --slate ~/cfb-live-data/<week>/week<N>_e11_e15.csv --games ~/cfb-live-data/<week>/preds_C2.parquet \\
-        --model e11 --strategy <id> --research-commit "$(git rev-parse HEAD)" [--start ISO --end ISO] [--send]
+        --model e11 --strategy <id> [--hold-strategy <id>] --research-commit "$(git rev-parse HEAD)" \\
+        [--start ISO --end ISO] [--include-late] [--send]
 
 The slate is the weekly model file (game_id and one column per model, from the live overlay pipeline), with kickoffs
 and CFBD team names from the week's C2 predictions. The model column chosen is frozen into each session's trigger as
@@ -16,6 +17,9 @@ first look and flags its decision row), as long as more than 7 hours remain (ent
 at most --max-games games each (the registry's heartbeat limit). A game whose assumed starter on either side is less
 than --min-qb-p likely to start, in the QB status snapshot the week's C2 run used, is left out: the model prices one
 QB, and its price is frozen at launch.
+
+--strategy launches the pre-registered variant (sell before kickoff); --hold-strategy also launches the exploratory
+hold-to-settlement variant on the same games, as its own registry strategy.
 
 Without --send nothing leaves this machine but reads. With --send each trigger goes onto the launcher's launch queue.
 Paper mode only.
@@ -41,6 +45,7 @@ ENTRY_CLOSE = pd.Timedelta(hours=6)
 MIN_ENTRY = pd.Timedelta(hours=1)
 MAX_GAMES = 15
 MIN_QB_P = 0.6
+VARIANTS = {"sell": {}, "hold": {"hold_to_settlement": True}}
 QB_COLUMNS = ["home_qb_p", "away_qb_p"]
 
 
@@ -61,10 +66,11 @@ def load_slate(slate_csv: str | Path, games_parquet: str | Path, model: str) -> 
     return out[["game_id", "kickoff", "home_team", "away_team", "p_home", *QB_COLUMNS]].reset_index(drop=True)
 
 
-def triggers(legs: pd.DataFrame, slate: pd.DataFrame, *, strategy_id: int, research_commit: str, model: str,
+def triggers(legs: pd.DataFrame, slate: pd.DataFrame, *, strategy_ids: dict[str, int], research_commit: str, model: str,
              now: pd.Timestamp, max_games: int, args: dict, include_late: bool = False,
              min_qb_p: float = MIN_QB_P) -> tuple[list[dict], list[launch.Drop]]:
-    """The direct_launch triggers for the legs' games, in kickoff order and at most max_games to a session, and the
+    """The direct_launch triggers, one set per variant in strategy_ids, for the legs' games, in kickoff order and at
+    most max_games to a session, and the
     games left out: those with an uncertain starter, and those whose decision window has closed or, with include_late
     (which trades those off_protocol), with too little of their entry window left."""
     s = slate.set_index("game_id")
@@ -90,12 +96,13 @@ def triggers(legs: pd.DataFrame, slate: pd.DataFrame, *, strategy_id: int, resea
     for start in range(0, len(every), max_games):
         games = every[start:start + max_games]
         deadline = (max(pd.Timestamp(g["kickoff"]) for g in games) - ENTRY_CLOSE).isoformat()
-        out.append({"venue": "kalshi", "variant": "early_week", "deadline": deadline, "data": {
-            "strategy_id": int(strategy_id), "strategy_type": "python", "strategy_class": STRATEGY_CLASS,
-            "mode": "paper", "research_commit": research_commit, "instance_type": launch.INSTANCE,
-            "listings": [lid for g in games for lid in (g["listing_home"], g["listing_away"])],
-            "strategy_args": {"games": games, "model": model, **args},
-        }})
+        for variant, strategy_id in strategy_ids.items():
+            out.append({"venue": "kalshi", "variant": variant, "deadline": deadline, "data": {
+                "strategy_id": int(strategy_id), "strategy_type": "python", "strategy_class": STRATEGY_CLASS,
+                "mode": "paper", "research_commit": research_commit, "instance_type": launch.INSTANCE,
+                "listings": [lid for g in games for lid in (g["listing_home"], g["listing_away"])],
+                "strategy_args": {"games": games, "model": model, **args, **VARIANTS[variant]},
+            }})
     return out, drops
 
 
@@ -104,7 +111,8 @@ def main() -> None:
     ap.add_argument("--slate", required=True, help="the weekly model file (game_id plus one column per model)")
     ap.add_argument("--games", required=True, help="the week's C2 predictions parquet (kickoffs, CFBD team names)")
     ap.add_argument("--model", default="e11", help="the slate column to trade on (e11, or e11+e15 for the overlay)")
-    ap.add_argument("--strategy", type=int, required=True, help="the registry strategy id")
+    ap.add_argument("--strategy", type=int, required=True, help="the registry strategy id (sell before kickoff)")
+    ap.add_argument("--hold-strategy", type=int, help="the registry strategy id of the hold-to-settlement variant")
     ap.add_argument("--research-commit", required=True)
     ap.add_argument("--start", help="only games kicking off at or after this time")
     ap.add_argument("--end", help="only games kicking off before this time")
@@ -127,13 +135,14 @@ def main() -> None:
                  if not (legs["game_id"] == g).any()]
     resolved, missing = launch.resolve(legs, RegistryClient())
     checked, flagged = launch.cross_check(resolved, launch.leg_mids(resolved), slate)
-    out, closed = triggers(checked, slate, strategy_id=a.strategy, research_commit=a.research_commit, model=a.model,
+    ids = {"sell": a.strategy, **({"hold": a.hold_strategy} if a.hold_strategy is not None else {})}
+    out, closed = triggers(checked, slate, strategy_ids=ids, research_commit=a.research_commit, model=a.model,
                            now=now, max_games=a.max_games, args={"contracts": a.contracts, "min_gap": a.min_gap},
                            include_late=a.include_late, min_qb_p=a.min_qb_p)
 
     names = slate.set_index("game_id")
-    print(f"{len(slate)} games priced by {a.model}, {sum(len(t['data']['strategy_args']['games']) for t in out)} "
-          f"in {len(out)} sessions")
+    traded = {g["game_id"] for t in out for g in t["data"]["strategy_args"]["games"]}
+    print(f"{len(slate)} games priced by {a.model}, {len(traded)} traded, {len(out)} sessions ({', '.join(ids)})")
     print("left out:")
     for game_id, venue, reason in sorted(unmatched + missing + flagged + closed):
         g = names.loc[game_id]
@@ -145,7 +154,7 @@ def main() -> None:
             n = names.loc[g["game_id"]]
             print(f"  {g['game_id']} {n.away_team} at {n.home_team}, kickoff {g['kickoff']}")
     for t in out:
-        print(f"trigger: {len(t['data']['strategy_args']['games'])} games, deadline {t['deadline']}")
+        print(f"trigger {t['variant']}: {len(t['data']['strategy_args']['games'])} games, deadline {t['deadline']}")
     print(json.dumps([{"rule_type": launch.RULE_TYPE, "action": "launch", "deadline": t["deadline"], "data": t["data"]}
                       for t in out], indent=1))
     if a.send:

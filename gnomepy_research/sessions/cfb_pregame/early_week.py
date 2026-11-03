@@ -13,7 +13,10 @@ terms, a leg counting only when it is two-sided and at most max_spread wide. Whe
 post-only bid for `contracts` rests on the model's side at that listing's best bid, moved to the best bid every
 entry_repeg_hours. From entry_close_hours before kickoff an unfilled bid is cancelled and whatever is held is offered
 at the best ask, moved every exit_repeg_hours. Whatever is still held taker_exit_minutes before kickoff is sold into
-the best bid; what that sale leaves is held to settlement. The decision is made once per game and recorded
+the best bid; what that sale leaves is held to settlement. With hold_to_settlement (an exploratory variant on the same
+entries) nothing is offered: from entry_close_hours out an unfilled bid or remainder is cancelled and what was bought
+is kept to settlement, which skips the exit's costs and takes on the game's result. The decision is made once per game
+and recorded
 (cfb_early_week_decisions), as is every order sent (cfb_early_week_orders).
 
 A game the trigger marks off_protocol (launched after its decision window had closed, on the operator's call) is
@@ -99,6 +102,7 @@ class CFBEarlyWeek(Strategy):
         entry_repeg_hours, exit_repeg_hours: how often a resting bid or ask moves to the current best price.
         taker_exit_minutes: how long before kickoff whatever is held is sold into the bid.
         max_spread: widest leg that counts toward the decision's mid.
+        hold_to_settlement: keep what was bought to settlement instead of selling it before kickoff.
     """
 
     def __init__(
@@ -114,6 +118,7 @@ class CFBEarlyWeek(Strategy):
         exit_repeg_hours: float = 1.0,
         taker_exit_minutes: float = 5.0,
         max_spread: float = 0.06,
+        hold_to_settlement: bool = False,
     ):
         if contracts <= 0:
             raise ValueError(f"contracts must be positive, got {contracts}")
@@ -132,6 +137,7 @@ class CFBEarlyWeek(Strategy):
         self.exit_repeg_ns = int(exit_repeg_hours * HOUR_NS)
         self.final_ns = int(taker_exit_minutes * MINUTE_NS)
         self.max_spread = max_spread
+        self.hold_to_settlement = bool(hold_to_settlement)
         self._metrics_ready = False
 
         registry = RegistryClient()
@@ -255,6 +261,9 @@ class CFBEarlyWeek(Strategy):
             if shares <= 0:
                 game.phase = DONE
                 return self._cancel(now, game, leg)
+            if self.hold_to_settlement:
+                game.phase = DONE
+                return self._cancel(now, game, leg) if self._lots(leg, self.contracts - shares) > 0 else []
             game.phase, game.next_peg_ns = EXIT, now
         if game.phase == EXIT:
             if shares <= 0:

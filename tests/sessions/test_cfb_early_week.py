@@ -220,6 +220,27 @@ def test_a_sold_position_ends_the_game_without_a_taker_exit(make):
     assert _for(_both(s, 5 / 60), 101) == []
 
 
+def test_the_hold_variant_keeps_a_filled_entry_to_settlement(make):
+    s = make(games=(1,), p_home=(0.70,), hold_to_settlement=True)
+    _both(s, 72)
+    s.positions.set(101, 1.0)
+    assert _for(_both(s, 6), 101) == [], "no offer: the contract is kept"
+    assert s._control.exits == [("every game is done", False)], "the session ends without flattening"
+    assert [r["action"] for r in s.metrics.streams["cfb_early_week_orders"].rows] == [mod.BID]
+
+
+def test_the_hold_variant_cancels_an_unfilled_bid_and_any_unfilled_remainder(make):
+    s = make(games=(1,), p_home=(0.70,), hold_to_settlement=True)
+    _both(s, 72)
+    [o] = _for(_both(s, 6), 101)
+    assert o.bid_size == 0 and o.ask_size == 0 and o.take_size == 0
+    part = make(games=(1,), p_home=(0.70,), hold_to_settlement=True, contracts=2.0)
+    _both(part, 72)
+    part.positions.set(101, 1.0)
+    [o] = _for(_both(part, 6), 101)
+    assert o.bid_size == 0 and o.ask_size == 0, "the unfilled contract's bid is cancelled; the filled one is kept"
+
+
 def test_a_restart_with_a_position_picks_up_the_held_side(make):
     s = make(p_home=(0.50, 0.50))
     s.positions.set(102, 1.0)

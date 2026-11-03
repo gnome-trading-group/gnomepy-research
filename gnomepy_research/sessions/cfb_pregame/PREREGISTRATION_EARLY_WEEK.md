@@ -73,3 +73,17 @@ snapshot behind the week's C2 run (`--min-qb-p 0.6`). No snapshot (NaN) counts a
 prices one QB, and its price is frozen at launch.
 
 A live stand-aside on QB news during the hold is planned but not in these sessions.
+
+## Amendment, Nov 2, 2026 (the user's call, before any session ran): hold-to-settlement variant (exploratory)
+
+A second registry strategy runs the same rules with `hold_to_settlement` on the same games and the same frozen model
+prices. Nothing is offered before kickoff. From 6 h out an unfilled bid or remainder is cancelled, and what was bought
+settles with the game.
+
+**Why:** in the post hoc check on the A2b games (realistic fills, `a2_variants/variants.py`, not pre-registered),
+holding returned +1.85¢ (2025) and +1.70¢ (2026) per game, against −0.13¢ and −0.38¢ for selling before kickoff. It
+saves the forced taker exits, but it is not significant (t 0.8–1.0): each contract swings about ±50¢ on the result.
+
+**How it is reported:** as exploratory, next to the sell variant on the same games. Its P&L includes the game
+outcomes, so it needs far more games than the sell variant before it can mean anything. It is not an endpoint of this
+pre-registration.
