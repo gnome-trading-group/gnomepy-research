@@ -51,8 +51,6 @@ class Config:
     # With FACEIT on, False keeps FACEIT to the skill prior (levels) and fits on HLTV maps only.
     faceit_maps: bool = False
     community_seed: int = 0
-    # With FACEIT on and FACEIT maps out of the fit, find the communities on HLTV and FACEIT maps together.
-    faceit_graph: bool = False
     # Price a player the fit never saw with his known teammates' community effects.
     unseen_community: bool = True
 
@@ -129,20 +127,8 @@ class GraphFit:
         X0 = X0[:, np.r_[np.ones(min(5, X0.shape[1]), bool), X0[:, 5:].any(axis=0)]]
         K = X0.shape[1]
         Xs = sp.csr_matrix(X0)
-        if faceit and cfg.faceit_graph and not cfg.faceit_maps:
-            # Scenes are found on HLTV and FACEIT maps together (organised online leagues join the lower tiers), and
-            # each HLTV player keeps his label.
-            gm = inputs.maps(cutoff, cutoff - pd.Timedelta(days=cfg.window_days), True)
-            gp = np.unique(np.concatenate([gm.five_a.ravel(), gm.five_b.ravel()]))
-            gage = (cutoff - gm.frame.time).dt.total_seconds().to_numpy() / 86400.0
-            gw = 0.5 ** (gage / cfg.half_life_days) * np.where(gm.frame.source == "faceit", cfg.faceit_weight, 1.0)
-            GW = player_graph(np.searchsorted(gp, gm.five_a), np.searchsorted(gp, gm.five_b), gw, len(gp))
-            pos = np.searchsorted(gp, players)
-            levels = [communities(GW, k, cfg.community_seed)[pos] for k in cfg.communities]
-            levels = [np.unique(lv, return_inverse=True)[1] for lv in levels]
-        else:
-            W = player_graph(ia, ib, w, P)
-            levels = [communities(W, k, cfg.community_seed) for k in cfg.communities]
+        W = player_graph(ia, ib, w, P)
+        levels = [communities(W, k, cfg.community_seed) for k in cfg.communities]
         comm = levels[0]
         C = sp.hstack([sp.csr_matrix((np.ones(P), (np.arange(P), lv)), shape=(P, int(lv.max()) + 1)) for lv in levels]).tocsr()
         NC = C.shape[1]
