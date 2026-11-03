@@ -47,7 +47,7 @@ def make_filter(inputs: Inputs, cfg: SkillConfig) -> SkillFilter:
 def map_arrays(inputs: Inputs, cfg: SkillConfig) -> dict:
     maps = inputs.maps
     cols = {c: maps[c].to_numpy() for c in ("known", "day", "team_a", "team_b", "five_a", "five_b", "rounds_a", "rounds_b",
-                                            "rating_a", "rating_b", "division", "source")}
+                                            "rating_a", "rating_b", "division", "source", "level_a", "level_b")}
     cols["weight"] = np.where(cols["source"] == "faceit", cfg.faceit_weight, 1.0)
     cols["division"] = np.where(cols["source"] == "faceit", cols["division"], None)
     return cols
@@ -59,7 +59,7 @@ def observe(f: SkillFilter, cols: dict, i: int, cfg: SkillConfig) -> None:
         return
     day = pd.Timestamp(cols["day"][i])
     f.observe(day, int(cols["team_a"][i]), int(cols["team_b"][i]), cols["five_a"][i], cols["five_b"][i],
-              w * int(cols["rounds_a"][i]), w * int(cols["rounds_b"][i]), cols["division"][i])
+              w * int(cols["rounds_a"][i]), w * int(cols["rounds_b"][i]), cols["division"][i], cols["level_a"][i], cols["level_b"][i])
     if cfg.rating_gamma:
         for side in ("a", "b"):
             if cols[f"rating_{side}"][i] is not None:

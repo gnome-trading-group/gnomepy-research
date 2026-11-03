@@ -68,7 +68,7 @@ def regulation(score_a: np.ndarray, score_b: np.ndarray, overtime: np.ndarray) -
 
 
 MAP_COLUMNS = ["match_id", "time", "day", "known", "team_a", "team_b", "five_a", "five_b", "rounds_a", "rounds_b", "pos", "source",
-               "division", "rating_a", "rating_b", "won_a", "map_name"]
+               "division", "rating_a", "rating_b", "won_a", "map_name", "level_a", "level_b"]
 
 
 class Inputs:
@@ -116,7 +116,8 @@ class Inputs:
                              "five_a": d.five_a.to_numpy(), "five_b": d.five_b.to_numpy(), "rounds_a": ra, "rounds_b": rb,
                              "pos": d.map_position_in_series.fillna(0).to_numpy(int), "source": "hltv", "division": "hltv",
                              "rating_a": rated(d.five_a, d.match_id, d.map_name), "rating_b": rated(d.five_b, d.match_id, d.map_name),
-                             "won_a": (d.team_a_score > d.team_b_score).to_numpy(float), "map_name": d.map_name.to_numpy()})[MAP_COLUMNS]
+                             "won_a": (d.team_a_score > d.team_b_score).to_numpy(float), "map_name": d.map_name.to_numpy(),
+                             "level_a": None, "level_b": None})[MAP_COLUMNS]
 
     def _uid(self):
         link = load(self.data_dir, "faceit/hltv_faceit_map")
@@ -161,6 +162,13 @@ class Inputs:
         fh["five_a"] = fh.team_a_faceit_ids.map(lambda v: five(v, uid))
         fh["five_b"] = fh.team_b_faceit_ids.map(lambda v: five(v, uid))
         fh = fh[fh.five_a.notna() & fh.five_b.notna()]
+        ro = load(d, "faceit/faceit_rosters", self.until, ["match_id", "faceit_id", "played", "skill_level"])
+        ro = ro[ro.played & ro.skill_level.notna()]
+        level_of = dict(zip(zip(ro.match_id, ro.faceit_id), ro.skill_level.astype(float)))
+
+        def levels(mids, ids):
+            return [np.array([level_of.get((m, f), np.nan) for f in v], float) for m, v in zip(mids, ids)]
+
         ot = (fh.team_a_ot_score.fillna(0) + fh.team_b_ot_score.fillna(0) > 0).to_numpy()
         ra, rb = regulation(fh.team_a_score.to_numpy(int), fh.team_b_score.to_numpy(int), ot)
         time = naive(fh.match_time).fillna(naive(fh.match_date))
@@ -171,7 +179,8 @@ class Inputs:
                              "five_a": fh.five_a.to_numpy(), "five_b": fh.five_b.to_numpy(), "rounds_a": ra, "rounds_b": rb,
                              "pos": fh.map_position_in_series.fillna(0).to_numpy(int), "source": "faceit",
                              "division": [division(c) for c in fh.competition_name], "rating_a": None, "rating_b": None,
-                             "won_a": (fh.team_a_score > fh.team_b_score).to_numpy(float), "map_name": None})[MAP_COLUMNS]
+                             "won_a": (fh.team_a_score > fh.team_b_score).to_numpy(float), "map_name": None,
+                             "level_a": levels(fh.match_id, fh.team_a_faceit_ids), "level_b": levels(fh.match_id, fh.team_b_faceit_ids)})[MAP_COLUMNS]
 
     def _series(self, h: pd.DataFrame) -> pd.DataFrame:
         g = h.groupby("match_id")

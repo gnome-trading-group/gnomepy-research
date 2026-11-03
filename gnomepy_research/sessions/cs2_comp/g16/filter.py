@@ -11,8 +11,9 @@ Division-dependent newcomer priors. Each player gets a fifth of a map's informat
 its newcomers' prior for many maps. FACEIT brings most newcomers, from ESEA Entry to Advanced, and the competition's
 division is the best guess at their level before any map is played.
 
-A FACEIT skill level for newcomers: the player's latest level known before the day, times a coefficient, shifts the
-newcomer prior; levels run 1-10 and 8 is the reference. Only the prior of a never-seen player uses it.
+A FACEIT skill level for newcomers: the level on the roster of the FACEIT match being observed (known with the match
+itself), else the player's latest level known before the day, times a coefficient, shifts the newcomer prior; levels
+run 1-10 and 8 is the reference. Only the prior of a never-seen player uses it.
 
 A team effect (as in TrueSkill 2): one more Gaussian state per HLTV team, entering its lineup with weight one beside
 the five players, so a team can be more or less than the sum of its players. The rounds only ever see the sum, so
@@ -49,10 +50,14 @@ class SkillFilter(PlayerSkillFilter):
         self.levels = levels or {}
         self.level_coef = level_coef
         self._division: str | None = None
+        self._map_levels: dict = {}
 
     def _level_shift(self, player: int, day: pd.Timestamp) -> float:
         if not self.level_coef:
             return 0.0
+        now = self._map_levels.get(player)
+        if now is not None and not math.isnan(now):
+            return self.level_coef * (now - LEVEL_REFERENCE)
         rec = self.levels.get(player)
         if rec is None:
             return 0.0
@@ -82,12 +87,15 @@ class SkillFilter(PlayerSkillFilter):
         return lu
 
     def observe(self, day: pd.Timestamp, team_a: int, team_b: int, five_a: tuple[int, ...], five_b: tuple[int, ...],
-                rounds_a: float, rounds_b: float, division: str | None) -> None:
+                rounds_a: float, rounds_b: float, division: str | None, level_a=None, level_b=None) -> None:
         self._division = division
+        if level_a is not None and level_b is not None:
+            self._map_levels = dict(zip(five_a + five_b, np.concatenate([level_a, level_b]).tolist()))
         try:
             self.observe_map(day, team_a, team_b, five_a, five_b, rounds_a, rounds_b)
         finally:
             self._division = None
+            self._map_levels = {}
 
     def observe_ratings(self, day: pd.Timestamp, team_id: int, players: tuple[int, ...], ratings: np.ndarray) -> None:
         if not self.rating_gamma or len(players) != FIVE or len(set(players)) != FIVE:
