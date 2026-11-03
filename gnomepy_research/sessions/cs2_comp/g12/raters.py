@@ -35,8 +35,6 @@ class RaterConfig:
     r_sd: float = 0.8
     fr_gamma: float = 0.3       # the same for the FACEIT stat proxy of the rating
     fr_sd: float = 0.3
-    # More HLTV per-player stats as measurements of the same within-five deviation: (column, gamma, sd).
-    channels: tuple = ()
 
 
 # Name and overrides of each rater; "gauss" is the best pre-dev setting, the others are near it.
@@ -48,11 +46,6 @@ RATERS = (
     ("gx_fast", {"tau2": 2e-4}),
     ("gx_slow", {"tau2": 0.0, "var0": 0.5}),
 )
-
-
-def _tuples(over: dict) -> dict:
-    """JSON overrides carry channels as lists; the frozen config wants tuples."""
-    return {k: tuple(tuple(x) for x in v) if k == "channels" else v for k, v in over.items()}
 
 
 def _days(t) -> float:
@@ -122,7 +115,7 @@ class GaussPlayer:
 class Replay:
     def __init__(self, inputs: Inputs, raters=RATERS):
         self.inp = inputs
-        self.raters = [(name, GaussPlayer(dataclasses.replace(RaterConfig(), **_tuples(over)))) for name, over in raters]
+        self.raters = [(name, GaussPlayer(dataclasses.replace(RaterConfig(), **over))) for name, over in raters]
         self._maps = list(inputs.maps.itertuples(index=False))
         self._fmaps = list(inputs.faceit_maps.itertuples(index=False)) if inputs.faceit_maps is not None else []
         self._hi = self._fi = 0
@@ -137,9 +130,6 @@ class Replay:
                 if c.r_gamma > 0:
                     gm.rate(r.five_a, r.rating_a, c.r_gamma, c.r_sd)
                     gm.rate(r.five_b, r.rating_b, c.r_gamma, c.r_sd)
-                for col, gamma, sd in c.channels:
-                    gm.rate(r.five_a, getattr(r, f"{col}_a"), gamma, sd)
-                    gm.rate(r.five_b, getattr(r, f"{col}_b"), gamma, sd)
             self._hi += 1
         while self._fi < len(self._fmaps) and self._fmaps[self._fi].known < cutoff:
             r = self._fmaps[self._fi]

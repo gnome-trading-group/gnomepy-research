@@ -73,16 +73,10 @@ class Inputs:
     faceit_maps: pd.DataFrame | None    # one FACEIT organised map per row, sorted by when it became known
 
 
-HLTV_STATS = ("rating", "round_swing_pct", "adr", "kast")
-
-
-def _player_stats(data_dir: Path, until: pd.Timestamp) -> dict[str, dict]:
-    """Per stat: (match, map, player) -> the player's value on that map, all sides together."""
-    st = load(data_dir, "hltv/cs2_player_map_stats", until,
-              ["match_id", "match_date", "map_name", "player_id", "side", *HLTV_STATS])
-    st = st[(st.side == "all") & st.player_id.notna()]
-    keys = list(zip(st.match_id.astype(np.int64), st.map_name, st.player_id.astype(np.int64)))
-    return {c: {k: v for k, v in zip(keys, st[c].astype(float)) if np.isfinite(v)} for c in HLTV_STATS}
+def _ratings(data_dir: Path, until: pd.Timestamp) -> dict:
+    st = load(data_dir, "hltv/cs2_player_map_stats", until, ["match_id", "match_date", "map_name", "player_id", "side", "rating"])
+    st = st[(st.side == "all") & st.rating.notna() & st.player_id.notna()]
+    return dict(zip(zip(st.match_id.astype(np.int64), st.map_name, st.player_id.astype(np.int64)), st.rating.astype(float)))
 
 
 def load_hltv(data_dir: Path, until: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -106,7 +100,7 @@ def load_hltv(data_dir: Path, until: pd.Timestamp) -> tuple[pd.DataFrame, pd.Dat
     s = s.astype({"team_a": np.int64, "team_b": np.int64, "match_id": np.int64})
 
     m = h[(h.team_a_score != h.team_b_score)].copy()
-    stats = _player_stats(data_dir, until)
+    rating = _ratings(data_dir, until)
     fa = [five_tuple(v) for v in m.team_a_player_ids]
     fb = [five_tuple(v) for v in m.team_b_player_ids]
     ok = np.array([a is not None and b is not None for a, b in zip(fa, fb)])
@@ -122,11 +116,9 @@ def load_hltv(data_dir: Path, until: pd.Timestamp) -> tuple[pd.DataFrame, pd.Dat
         "won_a": (sa > sb).astype(float), "rounds_a": np.where(ot, 12, sa), "rounds": np.where(ot, 24, sa + sb),
         "is_lan": m.is_lan.fillna(0).to_numpy(int), "bo_type": m.bo_type.to_numpy(int), "map_name": m.map_name.to_numpy(),
         "five_a": fa, "five_b": fb,
+        "rating_a": [[rating.get((x, n, p), np.nan) for p in f] for x, n, f in zip(mid, m.map_name, fa)],
+        "rating_b": [[rating.get((x, n, p), np.nan) for p in f] for x, n, f in zip(mid, m.map_name, fb)],
     })
-    for c, vals in stats.items():
-        name = "rating" if c == "rating" else c
-        maps[f"{name}_a"] = [[vals.get((x, n, p), np.nan) for p in f] for x, n, f in zip(mid, m.map_name, fa)]
-        maps[f"{name}_b"] = [[vals.get((x, n, p), np.nan) for p in f] for x, n, f in zip(mid, m.map_name, fb)]
     maps = maps.sort_values(["known", "time", "match_id"], kind="stable")
     return maps.reset_index(drop=True), s
 
