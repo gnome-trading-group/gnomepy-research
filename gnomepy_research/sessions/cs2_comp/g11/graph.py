@@ -51,7 +51,7 @@ class Config:
     faceit_maps: bool = False
     community_seed: int = 0
     # Price a player the fit never saw with his known teammates' community effects.
-    unseen_community: bool = False
+    unseen_community: bool = True
 
 
 def player_graph(ia: np.ndarray, ib: np.ndarray, w: np.ndarray, P: int) -> sp.csr_matrix:
