@@ -4,11 +4,14 @@ announced fives and its own price path up to kickoff.
 
     python -m gnomepy_research.sessions.cs2_comp.g14.predict --data <bundle> --targets <targets parquet> --out <parquet>
         [--weeks 2026-04-06,2026-04-13] [--no-faceit] [--rows <dir>] [--train-rows <walk parquet>] [--fit '{...}']
+        [--market-layer]
 
-Per distinct week_cutoff: the rating pass walks the maps known before it (online features: form, roster churn, map
-pool, idle time), the batch skill model is fitted on the window before it, and each target is priced with its
-announced fives. The layer weights below were fitted on walk-forward rows from monthly fits before the first dev
-cutoff (walk.py), so they are point-in-time for every target; --train-rows refits them instead, for development.
+Per distinct week_cutoff: the rating pass walks the maps known before it (online features: roster churn, stand-ins,
+head-to-head), the batch skill model is fitted on the window before it, and each target is priced with its announced
+fives. The layer weights below were fitted on walk-forward rows from monthly fits before the first dev cutoff
+(walk.py), so they are point-in-time for every target; --train-rows refits them instead, for development. The
+market layer (a per-week logistic adjustment on the kickoff price) is off by default: on dev its weekly refits were
+too noisy to help the pooled score.
 """
 from __future__ import annotations
 
@@ -40,7 +43,7 @@ def main() -> None:
     ap.add_argument("--rows", help="directory to also save the series and target rows in")
     ap.add_argument("--train-rows", help="walk-forward rows to fit the layers on instead of the frozen weights")
     ap.add_argument("--fit", default="{}", help="FitConfig overrides as JSON")
-    ap.add_argument("--no-market-layer", dest="market_layer", action="store_false")
+    ap.add_argument("--market-layer", action="store_true", help="also fit the per-week market layer (off: the model's own price)")
     a = ap.parse_args()
     targets = pd.read_parquet(a.targets)
     wc = pd.to_datetime(targets.week_cutoff)
