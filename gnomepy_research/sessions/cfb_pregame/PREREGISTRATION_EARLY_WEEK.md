@@ -65,3 +65,11 @@ time to fill. The 72-hour signal was never measured at these horizons; A2 tested
 - Off-protocol games are reported apart.
 - The endpoints above use only the protocol games (`off_protocol = 0`).
 - Pooled numbers, if shown, are labelled as including off-protocol games.
+
+## Amendment, Nov 2, 2026 (the user's call, before any session ran): uncertain-QB filter
+
+A game is left out at launch when either team's assumed starter is less than 60% likely to start in the QB status
+snapshot behind the week's C2 run (`--min-qb-p 0.6`). No snapshot (NaN) counts as no doubt. The reason: the model
+prices one QB, and its price is frozen at launch.
+
+A live stand-aside on QB news during the hold is planned but not in these sessions.

@@ -18,7 +18,8 @@ def _slate(tmp_path, model="e11"):
                   "e15": [0.6, 0.6, 0.6], "e11+e15": [0.71, 0.72, 0.73]}).to_csv(path, index=False)
     games = tmp_path / "preds_C2.parquet"
     pd.DataFrame({"game_id": [1, 2, 3, 4], "kickoff": [SAT, SAT + pd.Timedelta(hours=3), SAT, SAT],
-                  "home_team": ["A", "B", "C", "D"], "away_team": ["X", "Y", "Z", "W"]}).to_parquet(games)
+                  "home_team": ["A", "B", "C", "D"], "away_team": ["X", "Y", "Z", "W"],
+                  "home_qb_p": [0.9, 0.95, 0.9, 0.9], "away_qb_p": [0.8, float("nan"), 0.9, 0.9]}).to_parquet(games)
     return path, games
 
 
@@ -83,3 +84,13 @@ def test_with_include_late_closed_windows_trade_flagged_off_protocol_until_seven
                               now=SAT - pd.Timedelta(hours=6.5), max_games=15, args={}, include_late=True)
     assert [g["game_id"] for t in out for g in t["data"]["strategy_args"]["games"]] == [2]
     assert sorted(d[0] for d in drops) == [1, 3] and all("entry window" in d[2] for d in drops)
+
+
+def test_a_game_with_an_uncertain_starter_is_left_out(tmp_path):
+    slate = lew.load_slate(*_slate(tmp_path), "e11")
+    assert slate.set_index("game_id").loc[1, "away_qb_p"] == 0.8, "the starters' p_start come from the C2 run"
+    slate.loc[slate["game_id"] == 3, "away_qb_p"] = 0.55
+    out, drops = lew.triggers(_legs([1, 2, 3]), slate, strategy_id=12, research_commit="abc", model="e11", now=NOW,
+                              max_games=15, args={}, min_qb_p=0.6)
+    assert [g["game_id"] for g in out[0]["data"]["strategy_args"]["games"]] == [1, 2], "no snapshot (NaN) is no doubt"
+    assert drops == [(3, "kalshi", "uncertain QB: home 0.90, away 0.55")]

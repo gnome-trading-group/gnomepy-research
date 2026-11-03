@@ -13,7 +13,9 @@ the game's p_home. Kalshi's markets are matched, oriented, resolved and cross-ch
 fewer than 66 hours to kickoff at launch is left out: its 72-hour decision time is more than the 6 hours late the
 strategy allows. With --include-late such a game is traded anyway, marked off_protocol (the strategy decides it at its
 first look and flags its decision row), as long as more than 7 hours remain (entries close 6 hours out). Sessions hold
-at most --max-games games each (the registry's heartbeat limit).
+at most --max-games games each (the registry's heartbeat limit). A game whose assumed starter on either side is less
+than --min-qb-p likely to start, in the QB status snapshot the week's C2 run used, is left out: the model prices one
+QB, and its price is frozen at launch.
 
 Without --send nothing leaves this machine but reads. With --send each trigger goes onto the launcher's launch queue.
 Paper mode only.
@@ -38,30 +40,39 @@ MAX_LATE = pd.Timedelta(hours=6)
 ENTRY_CLOSE = pd.Timedelta(hours=6)
 MIN_ENTRY = pd.Timedelta(hours=1)
 MAX_GAMES = 15
+MIN_QB_P = 0.6
+QB_COLUMNS = ["home_qb_p", "away_qb_p"]
 
 
 def load_slate(slate_csv: str | Path, games_parquet: str | Path, model: str) -> pd.DataFrame:
-    """game_id, kickoff, home_team, away_team and p_home (the model's column) for each game the slate prices."""
+    """game_id, kickoff, home_team, away_team, p_home (the model's column) and each assumed starter's p_start (NaN when
+    the QB status service had no snapshot) for each game the slate prices."""
     slate = pd.read_csv(slate_csv)
     if model not in slate.columns:
         raise SystemExit(f"{slate_csv} has no column {model!r}; it has {list(slate.columns)}")
     games = pd.read_parquet(games_parquet)
     if "generated_at" in games.columns:
         games = games.sort_values("generated_at")
-    games = games.drop_duplicates("game_id", keep="last")[["game_id", "kickoff", "home_team", "away_team"]]
+    games = games.drop_duplicates("game_id", keep="last").reindex(
+        columns=["game_id", "kickoff", "home_team", "away_team", *QB_COLUMNS])
     out = slate[["game_id", model]].rename(columns={model: "p_home"}).merge(games, on="game_id")
     out["kickoff"] = pd.to_datetime(out["kickoff"], utc=True)
-    return out[["game_id", "kickoff", "home_team", "away_team", "p_home"]].dropna().reset_index(drop=True)
+    out = out.dropna(subset=["kickoff", "home_team", "away_team", "p_home"])
+    return out[["game_id", "kickoff", "home_team", "away_team", "p_home", *QB_COLUMNS]].reset_index(drop=True)
 
 
 def triggers(legs: pd.DataFrame, slate: pd.DataFrame, *, strategy_id: int, research_commit: str, model: str,
-             now: pd.Timestamp, max_games: int, args: dict,
-             include_late: bool = False) -> tuple[list[dict], list[launch.Drop]]:
+             now: pd.Timestamp, max_games: int, args: dict, include_late: bool = False,
+             min_qb_p: float = MIN_QB_P) -> tuple[list[dict], list[launch.Drop]]:
     """The direct_launch triggers for the legs' games, in kickoff order and at most max_games to a session, and the
-    games left out: those whose decision window has closed, or with include_late (which trades those off_protocol)
-    those with too little of their entry window left."""
+    games left out: those with an uncertain starter, and those whose decision window has closed or, with include_late
+    (which trades those off_protocol), with too little of their entry window left."""
     s = slate.set_index("game_id")
-    rows = legs.assign(kickoff=lambda d: d["game_id"].map(s["kickoff"]), p_home=lambda d: d["game_id"].map(s["p_home"]))
+    rows = legs.assign(**{c: legs["game_id"].map(s[c]) for c in ["kickoff", "p_home", *QB_COLUMNS]})
+    unsure = (rows["home_qb_p"] < min_qb_p) | (rows["away_qb_p"] < min_qb_p)
+    qb_drops = [(int(r.game_id), "kalshi", f"uncertain QB: home {r.home_qb_p:.2f}, away {r.away_qb_p:.2f}")
+                for r in rows[unsure].itertuples()]
+    rows = rows[~unsure]
     closed = rows["kickoff"] - DECIDE + MAX_LATE < now
     if include_late:
         out_of_time = rows["kickoff"] - ENTRY_CLOSE - MIN_ENTRY < now
@@ -70,6 +81,7 @@ def triggers(legs: pd.DataFrame, slate: pd.DataFrame, *, strategy_id: int, resea
     else:
         drops = [(int(g), "kalshi", "decision window closed") for g in rows.loc[closed, "game_id"]]
         rows = rows[~closed].assign(off_protocol=False)
+    drops = qb_drops + drops
     rows = rows.sort_values(["kickoff", "game_id"])
     every = [{"game_id": int(r.game_id), "listing_home": int(r.listing_home), "listing_away": int(r.listing_away),
               "kickoff": pd.Timestamp(r.kickoff).isoformat(), "p_home": float(r.p_home),
@@ -99,6 +111,7 @@ def main() -> None:
     ap.add_argument("--contracts", type=float, default=1.0)
     ap.add_argument("--min-gap", type=float, default=0.05)
     ap.add_argument("--max-games", type=int, default=MAX_GAMES)
+    ap.add_argument("--min-qb-p", type=float, default=MIN_QB_P, help="least p_start for either assumed starter")
     ap.add_argument("--include-late", action="store_true",
                     help="trade games past their decision window too, flagged off_protocol")
     ap.add_argument("--send", action="store_true", help="queue the triggers on the launcher's launch queue")
@@ -116,7 +129,7 @@ def main() -> None:
     checked, flagged = launch.cross_check(resolved, launch.leg_mids(resolved), slate)
     out, closed = triggers(checked, slate, strategy_id=a.strategy, research_commit=a.research_commit, model=a.model,
                            now=now, max_games=a.max_games, args={"contracts": a.contracts, "min_gap": a.min_gap},
-                           include_late=a.include_late)
+                           include_late=a.include_late, min_qb_p=a.min_qb_p)
 
     names = slate.set_index("game_id")
     print(f"{len(slate)} games priced by {a.model}, {sum(len(t['data']['strategy_args']['games']) for t in out)} "
