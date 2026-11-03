@@ -1,0 +1,20 @@
+"""What FACEIT history_matches holds beyond the organised matches: competition types and names by volume."""
+import pandas as pd
+
+d = pd.read_parquet("/work/in/comp/faceit/history_matches.parquet")
+fm = pd.read_parquet("/work/in/comp/faceit/faceit_matches.parquet", columns=["match_id"])
+d["in_org"] = d.match_id.isin(set(fm.match_id))
+print(d.dtypes)
+print(d.groupby(["competition_type", "in_org"]).size())
+print(d.game_mode.value_counts().head(10))
+print(d.teams_size.value_counts().head())
+print(d[~d.in_org].competition_name.value_counts().head(40))
+d["t"] = pd.to_datetime(d.finished_at, unit="s")
+print(d[~d.in_org].groupby(d.t.dt.to_period("Q")).size())
+p = pd.read_parquet("/work/in/comp/faceit/history_players.parquet", columns=["match_id", "faceit_id", "skill_level"])
+link = pd.read_parquet("/work/in/comp/faceit/hltv_faceit_map.parquet")
+p["linked"] = p.faceit_id.isin(set(link.faceit_id))
+g = p.groupby("match_id").linked.sum()
+print(g.describe())
+print((g >= 4).mean(), (g >= 6).mean())
+print(p.skill_level.value_counts().head(12))
