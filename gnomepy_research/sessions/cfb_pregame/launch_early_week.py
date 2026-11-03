@@ -147,7 +147,7 @@ def main() -> None:
     for game_id, venue, reason in sorted(unmatched + missing + flagged + closed):
         g = names.loc[game_id]
         print(f"  {game_id} {g.away_team} at {g.home_team}: {reason}")
-    late = [g for t in out for g in t["data"]["strategy_args"]["games"] if g["off_protocol"]]
+    late = list({g["game_id"]: g for t in out for g in t["data"]["strategy_args"]["games"] if g["off_protocol"]}.values())
     if late:
         print(f"OFF PROTOCOL: {len(late)} games decided after their 72-hour window (reported apart):")
         for g in late:
