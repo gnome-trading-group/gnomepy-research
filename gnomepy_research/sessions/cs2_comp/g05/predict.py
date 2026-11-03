@@ -17,11 +17,13 @@ prices averaged in logit space. Each layer's weights were fitted on the weekly w
 from __future__ import annotations
 
 import argparse
+import os
 import dataclasses
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from threadpoolctl import threadpool_limits
 from scipy.special import expit
 
 from gnomepy_research.sessions.cs2_comp.g05.data import Inputs
@@ -69,6 +71,8 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--weeks", help="comma-separated week_cutoff dates to predict (default: all)")
     a = ap.parse_args()
+    # BLAS sees every core of a Batch host, not the task's vCPUs; oversubscribed threads made one fit take minutes.
+    threadpool_limits(len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None)
     targets = prepare_targets(pd.read_parquet(a.targets))
     if a.weeks:
         targets = targets[targets.week_cutoff.isin(pd.to_datetime(a.weeks.split(",")))]

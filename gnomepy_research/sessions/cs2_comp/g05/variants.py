@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 
 import pandas as pd
+from threadpoolctl import threadpool_limits
 
 from gnomepy_research.sessions.cs2_comp.g05.data import Inputs
 from gnomepy_research.sessions.cs2_comp.g05.features import feature_rows
@@ -59,6 +60,8 @@ def main() -> None:
     ap.add_argument("--set", dest="sets", action="append", default=[])
     ap.add_argument("--out", default=os.environ.get("OUTPUT_DIR", "."))
     a = ap.parse_args()
+    # BLAS sees every core of a Batch host, not the task's vCPUs; oversubscribed threads made one fit take minutes.
+    threadpool_limits(len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None)
     cfg = config(a.sets)
     print(a.name, cfg, flush=True)
     out = Path(a.out)
