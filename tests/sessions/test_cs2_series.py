@@ -1,11 +1,11 @@
 """
-CS2Series: entry maths, the match feed's view of time, windows, lineups, budgets, restart safety.
+CS2Series: entry and sale maths, the match feed's view of time, windows, lineups, venues, budgets, rebalancing on a
+model change, restart safety.
 
-The strategy resolves listings through RegistryClient and loads its models in __init__, so the
-registry and the model loader are replaced with in-memory stand-ins (a blend that keeps only the
-pre-map price, unless a test says otherwise); the match feed reads real
-parquet extracts; positions and market data are plain objects with the engine's interface.
-Nothing here needs a JVM.
+The strategy resolves listings through RegistryClient and loads its model and blend in __init__, so the registry and
+the loader are replaced with in-memory stand-ins (a model that prices team A at 0.40, lower with a stand-in, and a
+blend that keeps only the model's price, unless a test says otherwise); the match feed reads real parquet extracts;
+positions and market data are plain objects with the engine's interface. Nothing here needs a JVM.
 """
 from __future__ import annotations
 
@@ -21,49 +21,57 @@ import pytest
 
 from gnomepy import OrderStatus, OrderType, Scales, Side
 from gnomepy.data import ArtifactRef
-from gnomepy_research.models.cs2.hltv.bayes_series import SeriesBlend
-from gnomepy_research.models.cs2.win_probability.series_pricing import price
+from gnomepy_research.models.cs2.e12.blend import MarketBlend
+from gnomepy_research.models.cs2.e12.model import E12Model
+from gnomepy_research.models.cs2.e12.skill import SkillFit
 from gnomepy_research.sessions.cs2_series import strategy as mod
 from gnomepy_research.sessions.cs2_series.decision import (
     Level,
-    choose_entry,
     cost_per_share,
     evaluate_side,
     kelly_shares,
     kelly_take,
     max_entry_price,
+    proceeds_per_share,
+    sell_down,
     taker_fee,
 )
 from gnomepy_research.sessions.cs2_series.match_feed import MatchFeed
 from tests.sessions.conftest import FakeFeeSchedule, FakeStreams, stream_of
 
 P, S = Scales.PRICE, Scales.SIZE
-HOUR = 3_600_000_000_000
+MINUTE = 60_000_000_000
+HOUR = 60 * MINUTE
 KICKOFF = pd.Timestamp("2026-10-05T18:00:00Z")
 K_NS = KICKOFF.value
-LISTINGS = {101: (5, 1101), 102: (5, 1102)}
+VENUES = {"polymarket": (101, 102), "kalshi": (201, 202), "polymarket_us": (301, 302)}
+LISTINGS = {101: (4, 1101), 102: (4, 1102), 201: (5, 1201), 202: (5, 1202), 301: (6, 1301), 302: (6, 1302)}
+LEGS = [{"venue": v, "listing_team_a": a, "listing_team_b": b} for v, (a, b) in VENUES.items()]
 LINEUP_A, LINEUP_B = [1, 2, 3, 4, 5], [6, 7, 8, 9, 10]
+# A stand-in on team A makes team B the favourite; one on team B makes team A it.
+STANDIN_A, STANDIN_B = [11, 2, 3, 4, 5], [12, 7, 8, 9, 10]
+FEE = 0.07
 
 
 # ---- decision maths ------------------------------------------------------------------
 
 def test_taker_fee_is_the_parametric_formula():
-    assert taker_fee(0.5, 0.07) == pytest.approx(0.0175)
-    assert taker_fee(0.9, 0.07) == pytest.approx(0.0063)
+    assert taker_fee(0.5, FEE) == pytest.approx(0.0175)
+    assert taker_fee(0.9, FEE) == pytest.approx(0.0063)
 
 
 def test_max_entry_price_leaves_exactly_the_threshold():
     for fair, edge in ((0.6, 0.05), (0.75, 0.10), (0.35, 0.03)):
-        cap = max_entry_price(fair, edge, 0.07)
-        assert fair - cap - taker_fee(cap, 0.07) == pytest.approx(edge, abs=1e-9)
+        cap = max_entry_price(fair, edge, FEE)
+        assert fair - cap - taker_fee(cap, FEE) == pytest.approx(edge, abs=1e-9)
 
 
 def test_max_entry_price_without_fee_is_fair_minus_edge():
     assert max_entry_price(0.6, 0.05, 0.0) == pytest.approx(0.55)
 
 
-def _side(fair, asks, fee_rate=0.07):
-    return evaluate_side(0, fair, asks, min_edge=0.05, fee_rate=fee_rate, tick=0.01)
+def _side(fair, asks, fee_rate=FEE):
+    return evaluate_side(fair, asks, min_edge=0.05, fee_rate=fee_rate, tick=0.01)
 
 
 def test_no_entry_when_best_ask_does_not_clear_the_threshold():
@@ -77,59 +85,28 @@ def test_the_entry_reaches_every_level_that_still_clears_the_threshold():
     assert e.limit_price == pytest.approx(0.63), "floored to the tick below the cap, however far above the best ask"
     assert [lv.price for lv in e.levels] == [0.40, 0.50, 0.63] and e.shares_available == pytest.approx(150)
     for lv in e.levels:
-        assert 0.70 - lv.price - taker_fee(lv.price, 0.07) >= 0.05 - 1e-12
+        assert 0.70 - lv.price - taker_fee(lv.price, FEE) >= 0.05 - 1e-12
 
 
 def test_the_threshold_price_cuts_the_book():
     e = _side(0.58, [Level(0.50, 50), Level(0.53, 50)])
-    assert e.limit_price <= max_entry_price(0.58, 0.05, 0.07)
+    assert e.limit_price <= max_entry_price(0.58, 0.05, FEE)
     assert e.shares_available == pytest.approx(50), "the 0.53 level is above the cap"
 
 
-def test_only_best_asks_inside_the_price_band_are_bought():
-    band = dict(min_edge=0.02, fee_rate=0.0, tick=0.01, min_price=0.20, max_price=0.90)
-    assert evaluate_side(0, 0.30, [Level(0.19, 100)], **band) is None, "a long shot under the floor"
-    assert evaluate_side(0, 0.30, [Level(0.20, 100)], **band) is not None, "the floor itself is in the band"
-    assert evaluate_side(0, 0.99, [Level(0.89, 100)], **band) is not None
-    assert evaluate_side(0, 0.99, [Level(0.90, 100)], **band) is None, "the top of the band is out"
-
-
-def test_no_share_is_bought_at_or_above_the_top_of_the_band():
-    e = evaluate_side(0, 0.99, [Level(0.88, 10), Level(0.89, 10), Level(0.90, 10), Level(0.91, 10)],
-                      min_edge=0.02, fee_rate=0.0, tick=0.01, min_price=0.20, max_price=0.90)
-    assert e.limit_price == pytest.approx(0.89) and [lv.price for lv in e.levels] == [0.88, 0.89]
-
-
-def test_choose_entry_applies_the_band_to_each_side():
-    e = choose_entry(0.20, [Level(0.10, 100)], [Level(0.75, 100)], min_edge=0.02, fee_rates=(0.0, 0.0), tick=0.01,
-                     min_price=0.20, max_price=0.90)
-    assert e.side == 1, "team A's 10c ask has the bigger edge but is under the floor"
-
-
-def test_choose_entry_buys_the_underpriced_side_and_respects_allowed_sides():
-    asks_a, asks_b = [Level(0.62, 100)], [Level(0.30, 100)]
-    e = choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.07, 0.07), tick=0.01)
-    assert e.side == 1 and e.fair == pytest.approx(0.40)
-    assert choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.07, 0.07), tick=0.01,
-                        allowed_sides=(0,)) is None
-
-
-def test_choose_entry_charges_each_side_its_own_listings_fee():
-    asks_a, asks_b = [Level(0.62, 100)], [Level(0.30, 100)]
-    e = choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.0, 0.07), tick=0.01)
-    assert e.edge_at_best == pytest.approx(0.40 - 0.30 - taker_fee(0.30, 0.07))
-    assert choose_entry(0.60, asks_a, asks_b, min_edge=0.05, fee_rates=(0.07, 0.5), tick=0.01) is None, \
-        "side B's 10c gross edge does not survive a 0.5 rate"
+def test_long_shots_and_favourites_are_bought_on_the_same_rule():
+    assert _side(0.20, [Level(0.10, 100)]) is not None
+    assert _side(0.99, [Level(0.93, 100)]) is not None
 
 
 def test_from_nothing_kelly_spends_the_fraction_for_a_contract_paying_one():
-    u = cost_per_share(0.40, 0.07)
+    u = cost_per_share(0.40, FEE)
     spent = kelly_shares(0.60, u, 1000.0, 0.0, 0.0) * u
     assert spent == pytest.approx(1000.0 * (0.60 - u) / (1 - u))
 
 
 def test_kelly_tops_up_to_the_same_holding_whatever_was_bought_on_the_way():
-    u = cost_per_share(0.40, 0.07)
+    u = cost_per_share(0.40, FEE)
     full = kelly_shares(0.60, u, 1000.0, 0.0, 0.0)
     part = full / 3
     assert kelly_shares(0.60, u, 1000.0, part, part * u) == pytest.approx(full - part)
@@ -138,22 +115,22 @@ def test_kelly_tops_up_to_the_same_holding_whatever_was_bought_on_the_way():
 
 
 def test_no_kelly_size_without_an_edge():
-    assert kelly_shares(0.40, cost_per_share(0.40, 0.07), 1000.0, 0.0, 0.0) < 0
+    assert kelly_shares(0.40, cost_per_share(0.40, FEE), 1000.0, 0.0, 0.0) < 0
 
 
 def test_a_take_stops_at_the_kelly_size_in_a_deep_book():
     e = _side(0.80, [Level(0.40, 10_000), Level(0.45, 10_000)])
-    take = kelly_take(e, 100.0, 0.0, 0.0, max_cost=1e9, fee_rate=0.07, lot=1.0)
-    u = cost_per_share(0.40, 0.07)
+    take = kelly_take(e, 100.0, 0.0, 0.0, max_cost=1e9, fee_rate=FEE, lot=1.0)
+    u = cost_per_share(0.40, FEE)
     assert take.limit_price == pytest.approx(0.40), "the best level alone holds the Kelly size"
     assert take.shares == pytest.approx(math.floor(kelly_shares(0.80, u, 100.0, 0.0, 0.0)))
 
 
 def test_a_take_walks_levels_each_at_its_own_price_and_fee_until_the_kelly_size():
     e = _side(0.80, [Level(0.40, 20), Level(0.45, 30), Level(0.50, 10_000)])
-    take = kelly_take(e, 100.0, 0.0, 0.0, max_cost=1e9, fee_rate=0.07, lot=1.0)
-    by_hand = 20 * cost_per_share(0.40, 0.07) + 30 * cost_per_share(0.45, 0.07)
-    u = cost_per_share(0.50, 0.07)
+    take = kelly_take(e, 100.0, 0.0, 0.0, max_cost=1e9, fee_rate=FEE, lot=1.0)
+    by_hand = 20 * cost_per_share(0.40, FEE) + 30 * cost_per_share(0.45, FEE)
+    u = cost_per_share(0.50, FEE)
     rest = math.floor(kelly_shares(0.80, u, 100.0, 50.0, by_hand))
     assert take.shares == pytest.approx(50 + rest)
     assert take.cost == pytest.approx(by_hand + rest * u) and take.limit_price == pytest.approx(0.50)
@@ -161,64 +138,80 @@ def test_a_take_walks_levels_each_at_its_own_price_and_fee_until_the_kelly_size(
 
 def test_a_take_stops_at_the_cap_before_the_kelly_size():
     e = _side(0.80, [Level(0.40, 10_000)])
-    take = kelly_take(e, 10_000.0, 0.0, 0.0, max_cost=50.0, fee_rate=0.07, lot=1.0)
-    assert 50.0 - cost_per_share(0.40, 0.07) < take.cost <= 50.0
+    take = kelly_take(e, 10_000.0, 0.0, 0.0, max_cost=50.0, fee_rate=FEE, lot=1.0)
+    assert 50.0 - cost_per_share(0.40, FEE) < take.cost <= 50.0
 
 
 def test_a_take_counts_what_is_already_held_against_the_cap_and_the_kelly_size():
     e = _side(0.80, [Level(0.40, 10_000)])
-    u = cost_per_share(0.40, 0.07)
-    assert kelly_take(e, 10_000.0, 100.0, 45.0, max_cost=50.0, fee_rate=0.07, lot=1.0).cost <= 5.0
+    u = cost_per_share(0.40, FEE)
+    assert kelly_take(e, 10_000.0, 100.0, 45.0, max_cost=50.0, fee_rate=FEE, lot=1.0).cost <= 5.0
     full = kelly_shares(0.80, u, 100.0, 0.0, 0.0)
-    assert kelly_take(e, 100.0, full, full * u, max_cost=1e9, fee_rate=0.07, lot=1.0).shares == 0.0
+    assert kelly_take(e, 100.0, full, full * u, max_cost=1e9, fee_rate=FEE, lot=1.0).shares == 0.0
 
 
 def test_a_take_is_whole_lots_and_stops_with_the_book():
     e = _side(0.80, [Level(0.40, 7.5)])
-    take = kelly_take(e, 10_000.0, 0.0, 0.0, max_cost=50.0, fee_rate=0.07, lot=2.0)
-    assert take.shares == pytest.approx(6.0) and take.cost == pytest.approx(6 * cost_per_share(0.40, 0.07))
+    take = kelly_take(e, 10_000.0, 0.0, 0.0, max_cost=50.0, fee_rate=FEE, lot=2.0)
+    assert take.shares == pytest.approx(6.0) and take.cost == pytest.approx(6 * cost_per_share(0.40, FEE))
+
+
+def _sale(fair, bids, held, lot=1.0):
+    return sell_down(fair, bids, held, min_edge=0.02, fee_rate=FEE, lot=lot)
+
+
+def test_no_sale_unless_the_best_bid_beats_holding_by_the_edge():
+    assert _sale(0.40, [Level(0.41, 100)], 50) is None, "0.41 less its fee is under 0.40 + 2c"
+    assert _sale(0.40, [Level(0.45, 100)], 50) is not None
+    assert _sale(0.40, [Level(0.45, 100)], 0) is None, "nothing held"
+    assert _sale(0.40, [], 50) is None
+
+
+def test_a_sale_takes_every_bid_that_beats_holding_and_no_more_than_is_held():
+    bids = [Level(0.47, 20), Level(0.45, 20), Level(0.43, 1000)]
+    s = _sale(0.40, bids, 100)
+    assert s.shares == pytest.approx(40) and s.limit_price == pytest.approx(0.45), "0.43 doesn't clear 2c after fee"
+    assert s.proceeds == pytest.approx(20 * proceeds_per_share(0.47, FEE) + 20 * proceeds_per_share(0.45, FEE))
+    assert s.edge_at_best == pytest.approx(proceeds_per_share(0.47, FEE) - 0.40)
+    held = _sale(0.40, bids, 25)
+    assert held.shares == pytest.approx(25) and held.limit_price == pytest.approx(0.45)
+
+
+def test_a_sale_is_whole_lots():
+    assert _sale(0.40, [Level(0.45, 100)], 7.5, lot=2.0).shares == pytest.approx(6.0)
+    assert _sale(0.40, [Level(0.45, 100)], 1.5, lot=2.0) is None
 
 
 # ---- the match's rows ----------------------------------------------------------------
 
-class _MapModel:
-    """Prices every map at the row's p_map, so a test sets the series price through it."""
+class _Model:
+    """Prices team A at 0.40 with its usual five, 0.25 with a stand-in, 0.60 when team B has one."""
 
-    feature_names = ["p_map"]
+    def __init__(self, cutoff=pd.Timestamp("2026-10-05") - pd.Timedelta(days=3)):
+        self.cutoff = cutoff
+        self.priced = []
 
-    def predict_batch(self, X):
-        return X[:, 0]
-
-
-def series_of(p_map: float) -> float:
-    return float(price(_MapModel(), pd.DataFrame([{"match_id": 7, "p_map": p_map}])).series.iloc[0])
-
-
-# A map price whose series price is about 0.40: team B looks underpriced against a 0.45 ask.
-LOW = 0.43
+    def price(self, team_a, five_a, team_b, five_b):
+        self.priced.append((team_a, tuple(five_a), team_b, tuple(five_b)))
+        if 11 in five_a:
+            return 0.25
+        return 0.60 if 12 in five_b else 0.40
 
 
-def _feature(at, p_map=LOW, lineup_a=LINEUP_A, match_id=7):
-    return {"match_id": match_id, "map_name": "", "generated_at": at, "p_map": p_map, "match_date": KICKOFF.normalize(),
-            "team_a_id": 1, "team_b_id": 2, "team_a_lineup_ids": lineup_a, "team_b_lineup_ids": LINEUP_B}
+MODEL_ONLY = MarketBlend(market=0.0, model=1.0, intercept=0.0)
 
 
-class _Posterior:
-    """Prices every series at a fixed P(team A); fitted as_of a date before KICKOFF unless a test says otherwise."""
-
-    def __init__(self, p=0.5, as_of=f"{KICKOFF - pd.Timedelta(days=3):%Y-%m-%d}"):
-        self.p, self.as_of = p, as_of
-
-    def price(self, *_):
-        return self.p
+def _models(model=None, blend=MODEL_ONLY):
+    return mod.Models(model or _Model(), blend, {"model": "m", "blend": "b"})
 
 
-def _models(posterior=None, blend=SeriesBlend(0.0, 1.0)):
-    return mod.Models(_MapModel(), posterior or _Posterior(), blend, {"premap": "m", "posterior": "p", "blend": "b"})
+def _feature(at, lineup_a=LINEUP_A, lineup_b=LINEUP_B, match_id=7, team_a_id=1):
+    return {"match_id": match_id, "map_name": "", "generated_at": at, "match_date": KICKOFF.normalize(),
+            "team_a_id": team_a_id, "team_b_id": 2, "team_a_lineup_ids": lineup_a, "team_b_lineup_ids": lineup_b}
 
 
-def _state(at, kickoff=KICKOFF, status="upcoming", venues=("polymarket",)):
-    markets = [{"venue": v, "market": "series", "listing_team_a": 101, "listing_team_b": 102} for v in venues]
+def _state(at, kickoff=KICKOFF, status="upcoming"):
+    markets = [{"venue": v, "market": "series", "listing_team_a": a, "listing_team_b": b} for v, (a, b) in VENUES.items()]
     return {"match_id": 7, "generated_at": at, "kickoff": kickoff, "status": status, "markets": json.dumps(markets)}
 
 
@@ -229,7 +222,7 @@ RUN_EVERY = pd.Timedelta(minutes=15)
 def _states(*changes, until=KICKOFF + pd.Timedelta(hours=6)):
     """A matches row every pipeline run from EARLY, as cs2_upcoming writes them; changes are
     (from_time, {"kickoff": ..., "status": ...}) applied from that run on."""
-    rows, current = [], {"kickoff": KICKOFF, "status": "upcoming", "venues": ("polymarket",)}
+    rows, current = [], {"kickoff": KICKOFF, "status": "upcoming"}
     pending = sorted(changes, key=lambda c: c[0])
     at = EARLY
     while at <= until:
@@ -248,47 +241,63 @@ def _write(tmp_path, features, states):
 
 
 def _pricer(calls):
+    model = _Model()
+
     def pricer(rows):
         calls.append(len(rows))
-        return price(_MapModel(), rows)["series"].tolist()
+        return [model.price(r.team_a_id, list(r.team_a_lineup_ids), r.team_b_id, list(r.team_b_lineup_ids))
+                for r in rows.itertuples()]
     return pricer
+
+
+def _before(minutes):
+    return KICKOFF - pd.Timedelta(minutes=minutes)
 
 
 def test_the_feed_is_point_in_time(tmp_path):
     t0 = KICKOFF - pd.Timedelta(hours=10)
-    f, m = _write(tmp_path, [_feature(t0, p_map=0.5), _feature(t0 + pd.Timedelta(hours=1), p_map=0.6)],
+    f, m = _write(tmp_path, [_feature(t0), _feature(t0 + pd.Timedelta(hours=1), lineup_a=STANDIN_A)],
                   [_state(t0), _state(t0 + pd.Timedelta(hours=2), kickoff=KICKOFF + pd.Timedelta(hours=2))])
     feed = MatchFeed(7, _pricer([]), f, m, reload_seconds=0)
     assert feed.quote(t0.value - 1) is None and feed.state(t0.value - 1) is None, "nothing before it was written"
-    assert feed.quote(t0.value).p_team_a == pytest.approx(series_of(0.5))
-    assert feed.quote((t0 + pd.Timedelta(hours=5)).value).p_team_a == pytest.approx(series_of(0.6))
+    assert feed.quote(t0.value).q == pytest.approx(0.40)
+    assert feed.quote((t0 + pd.Timedelta(hours=5)).value).q == pytest.approx(0.25)
     assert feed.state((t0 + pd.Timedelta(hours=1)).value).kickoff_ns == K_NS
     assert feed.state((t0 + pd.Timedelta(hours=3)).value).kickoff_ns == (KICKOFF + pd.Timedelta(hours=2)).value
 
 
 def test_the_feed_reads_only_its_match_and_carries_lineups(tmp_path):
-    f, m = _write(tmp_path, [_feature(EARLY, lineup_a=[]), _feature(EARLY, p_map=0.9, match_id=8)], [_state(EARLY)])
+    f, m = _write(tmp_path, [_feature(EARLY, lineup_a=[]), _feature(EARLY, lineup_a=STANDIN_A, match_id=8)],
+                  [_state(EARLY)])
     q = MatchFeed(7, _pricer([]), f, m, reload_seconds=0).quote(K_NS)
-    assert q.p_team_a == pytest.approx(series_of(LOW)) and not q.lineup_known
+    assert q.q == pytest.approx(0.40) and not q.lineup_known
     assert q.lineups == ((), tuple(LINEUP_B))
 
 
 def test_reload_prices_only_new_rows_and_survives_a_bad_read(tmp_path):
     calls = []
-    f, m = _write(tmp_path, [_feature(EARLY, p_map=0.5)], [_state(EARLY)])
+    f, m = _write(tmp_path, [_feature(EARLY)], [_state(EARLY)])
     feed = MatchFeed(7, _pricer(calls), f, m, reload_seconds=0.05)
     later = EARLY + pd.Timedelta(hours=1)
-    _write(tmp_path, [_feature(EARLY, p_map=0.5), _feature(later, p_map=0.6)], [_state(EARLY)])
+    _write(tmp_path, [_feature(EARLY), _feature(later, lineup_a=STANDIN_A)], [_state(EARLY)])
     deadline = time.monotonic() + 5
     while feed.quote(K_NS).at_ns != later.value and time.monotonic() < deadline:
         time.sleep(0.02)
-    assert feed.quote(K_NS).p_team_a == pytest.approx(series_of(0.6))
+    assert feed.quote(K_NS).q == pytest.approx(0.25)
     assert calls == [1, 1], "the first row is not priced again"
     (tmp_path / "features.parquet").write_bytes(b"not a parquet file")
     time.sleep(0.2)
     assert feed.quote(K_NS).at_ns == later.value, "a failed reload keeps the rows already held"
     # The reload thread outlives the test (it is a daemon, as in production); give it a readable file.
-    _write(tmp_path, [_feature(EARLY, p_map=0.5)], [_state(EARLY)])
+    _write(tmp_path, [_feature(EARLY)], [_state(EARLY)])
+
+
+def test_the_feed_rereads_faster_near_kickoff(tmp_path):
+    f, m = _write(tmp_path, [_feature(EARLY)], _states())
+    feed = MatchFeed(7, _pricer([]), f, m, reload_seconds=300, near_kickoff_reload_seconds=60, near_kickoff_seconds=3600)
+    assert feed.reload_interval(K_NS - 2 * HOUR) == 300
+    assert feed.reload_interval(K_NS - HOUR // 2) == 60
+    assert feed.reload_interval(K_NS + HOUR) == 60, "and after kickoff, until HLTV shows it live"
 
 
 # ---- strategy ------------------------------------------------------------------------
@@ -326,16 +335,21 @@ class _Pos:
 
 class _Positions:
     """Engine position view: filled quantity, average entry, fees in price units as the OMS keeps them, plus pending
-    orders."""
+    orders. A sale (negative shares) leaves the average entry where it was."""
 
-    def __init__(self):
+    def __init__(self, rates=None):
         self.filled: dict = {}
         self.pending: dict = {}
+        self.rates = rates or {}
 
-    def fill(self, key, shares, price, fee=0.0):
+    def fill(self, listing, shares, price, fee=0.0):
+        key = LISTINGS[listing]
         q, avg, fees = self.filled.get(key, (0, 0, 0.0))
-        nq = q + int(shares * S)
-        self.filled[key] = (nq, int((q * avg + int(shares * S) * int(price * P)) / nq), fees + fee * P)
+        add = round(shares * S)
+        nq = q + add
+        if add > 0:
+            avg = int((q * avg + add * int(price * P)) / nq)
+        self.filled[key] = (nq, avg if nq else 0, fees + fee * P)
 
     def get_position(self, exchange_id, security_id):
         f = self.filled.get((exchange_id, security_id))
@@ -346,11 +360,11 @@ class _Positions:
         return self.filled.get(key, (0, 0, 0.0))[0] + self.pending.get(key, 0)
 
     def fee_schedule(self, exchange_id, security_id):
-        return FakeFeeSchedule(taker=0.07, maker=0.0)
+        return FakeFeeSchedule(taker=self.rates.get(exchange_id, FEE), maker=0.0)
 
 
 class _Book:
-    def __init__(self, listing, asks, ts, bids=()):
+    def __init__(self, listing, asks, ts, bids):
         self.stream_id = stream_of(listing)
         self.event_timestamp = ts
         self._asks = asks
@@ -434,279 +448,359 @@ class _Metrics:
 
 @pytest.fixture
 def make(tmp_path):
-    def _make(features=None, states=None, spec=None, models=None, **kw):
+    def _make(features=None, states=None, spec=None, models=None, rates=None, **kw):
         f, m = _write(tmp_path, features or [_feature(EARLY)], states or _states())
-        r = tmp_path / "rankings.parquet"
-        pd.DataFrame({"date": [KICKOFF - pd.Timedelta(days=7)] * 2, "team_id": [1, 2], "rank": [5, 9]}).to_parquet(r)
         with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry(spec or _Spec())), \
                 patch.object(mod, "load_models", lambda *paths: models or _models()):
             kw.setdefault("bankroll_usd", 10_000.0)
-            strat = mod.CS2Series(match_id=7, listing_team_a=101, listing_team_b=102, reload_minutes=0,
-                                  features_source=f, matches_source=m, rankings_source=str(r), **kw)
-        strat._position_view = _Positions()
+            kw.setdefault("legs", LEGS)
+            strat = mod.CS2Series(match_id=7, reload_minutes=0, features_source=f, matches_source=m, **kw)
+        strat._position_view = _Positions(rates)
         strat._streams = FakeStreams(LISTINGS)
         strat._control = _Control()
         return strat
     return _make
 
 
-def _tick(strat, listing, asks, hours_before, bids=()):
-    return strat.on_market_data(_Book(listing, asks, K_NS - int(hours_before * HOUR), bids))
+def _tick(strat, listing, asks, minutes_before, bids=None):
+    """A book update; unless a test gives bids, the best bid sits 2c under the best ask, so the book has a mid."""
+    if bids is None:
+        bids = [(round(asks[0][0] - 0.02, 2), 1000)] if asks else []
+    return strat.on_market_data(_Book(listing, asks, K_NS - int(minutes_before * MINUTE), bids))
 
 
-def test_buys_the_underpriced_team_with_an_ioc_limit(make):
-    out = _tick(make(), 102, [(0.45, 1000)], hours_before=6)
+def _done(strat, listing, status=OrderStatus.FILLED):
+    strat.on_execution_report(_Report(*LISTINGS[listing], status))
+
+
+def _key(order):
+    return order.exchange_id, order.security_id
+
+
+# Team A at 0.40 makes team B worth 0.60: its 0.50 ask clears 2c after the fee by about 8c.
+B_ASK = [(0.50, 1000)]
+
+
+def test_buys_the_underpriced_team_with_a_limit_at_the_deepest_level_it_costed(make):
+    out = _tick(make(), 102, B_ASK, 30)
     assert len(out) == 1
     o = out[0]
-    assert (o.exchange_id, o.security_id) == LISTINGS[102], "team B is underpriced, so buy team B's listing"
+    assert _key(o) == LISTINGS[102], "team B is underpriced, so buy team B's listing"
     assert o.take_side == Side.BID and o.take_order_type == OrderType.LIMIT
-    assert 0.45 * P <= o.take_limit_price <= 0.47 * P
+    assert o.take_limit_price == round(0.50 * P)
+
+
+def test_buys_on_the_venue_with_the_biggest_edge_after_its_own_fee(make):
+    s = make()
+    assert _tick(s, 202, [(0.48, 1000)], 90) == [], "outside the window: the book is only kept"
+    assert _key(_tick(s, 102, B_ASK, 30)[0]) == LISTINGS[202], "Kalshi's 0.48 beats Polymarket's 0.50"
+    expensive = make(rates={5: 0.5})
+    _tick(expensive, 202, [(0.48, 1000)], 90)
+    assert _key(_tick(expensive, 102, B_ASK, 30)[0]) == LISTINGS[102], "but not at a 0.5 fee rate"
+
+
+def test_the_stake_cap_counts_every_venue(make):
+    s = make(max_stake_usd=250.0)
+    s.positions.fill(102, shares=380, price=0.50, fee=380 * taker_fee(0.50, FEE))
+    o = _tick(s, 202, B_ASK, 30)[0]
+    assert _key(o) == LISTINGS[202]
+    committed = 380 * cost_per_share(0.50, FEE)
+    assert o.take_size / S * cost_per_share(0.50, FEE) <= 250.0 - committed + 1e-6
+    shares = o.take_size / S
+    s.positions.fill(202, shares=shares, price=0.50, fee=shares * taker_fee(0.50, FEE))
+    _done(s, 202)
+    assert _tick(s, 302, B_ASK, 29) == [], "the match's cap is spent, whichever venue is cheap"
+
+
+def test_never_buys_the_other_team_while_holding_one(make):
+    s = make()
+    s.positions.fill(102, shares=10, price=0.50)
+    assert _tick(s, 101, [(0.30, 1000)], 30) == [], "holding team B; team A now looks cheap - no hedge"
 
 
 def test_nothing_outside_the_entry_window(make):
     s = make()
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=13) == [], "the window opens 12h out"
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=3.01) != [], "and is open until the cutoff"
-    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=3) == [], "it closes 3h before kickoff"
+    assert _tick(s, 102, B_ASK, 61) == [], "the window opens an hour out"
+    assert _tick(s, 102, B_ASK, 59) != []
+    _done(s, 102, OrderStatus.CANCELED)
+    assert _tick(s, 102, B_ASK, 0) == [], "and closes at kickoff"
+    assert s._control.exits == [("match 7 reached its entry cutoff", False)]
 
 
 def test_the_window_follows_the_latest_kickoff(make):
-    s = make(states=_states((EARLY + pd.Timedelta(hours=1), {"kickoff": KICKOFF + pd.Timedelta(hours=3)})))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=1) != [], "past the first cutoff, 4h before the new kickoff"
+    s = make(states=_states((EARLY + pd.Timedelta(hours=1), {"kickoff": KICKOFF + pd.Timedelta(hours=1)})))
+    assert _tick(s, 102, B_ASK, 30) == [], "90 minutes before the new kickoff"
+    assert _tick(s, 102, B_ASK, -30) != [], "30 minutes before it"
     assert not s.is_exiting, "a delayed kickoff moves the cutoff"
-    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=-0.1) == [], "and closed at the new cutoff"
+    _done(s, 102, OrderStatus.CANCELED)
+    assert _tick(s, 102, B_ASK, -61) == []
     assert s._control.exits == [("match 7 reached its entry cutoff", False)]
 
 
 @pytest.mark.parametrize("status", ["live", "missing"])
 def test_the_session_ends_once_hltv_says_live_or_drops_the_match(make, status):
-    s = make(states=_states((KICKOFF - pd.Timedelta(hours=5), {"status": status})))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=6) != []
-    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=4.5) == []
+    s = make(states=_states((_before(20), {"status": status})))
+    assert _tick(s, 102, B_ASK, 30) != []
+    _done(s, 102, OrderStatus.CANCELED)
+    assert _tick(s, 102, B_ASK, 10) == []
     assert s._control.exits == [(f"match 7 is {status}", False)]
 
 
 @pytest.mark.parametrize("holding", [False, True])
-def test_the_session_ends_at_the_cutoff_keeping_whatever_it_holds(make, holding):
+def test_the_session_ends_at_kickoff_keeping_whatever_it_holds(make, holding):
     s = make()
     if holding:
-        s.positions.fill(LISTINGS[102], shares=10, price=0.45)
-    _tick(s, 102, [(0.95, 1000)], hours_before=3.5)
+        s.positions.fill(102, shares=10, price=0.50)
+    _tick(s, 102, [(0.95, 1000)], 1)
     assert not s.is_exiting
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=2.99) == []
+    assert _tick(s, 102, B_ASK, -0.1) == []
     assert s._control.exits == [("match 7 reached its entry cutoff", False)], "positions are kept, not flattened"
 
 
 def test_the_session_waits_for_an_order_in_flight_before_ending(make):
     s = make()
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=3.01) != []
-    _tick(s, 102, [(0.45, 1000)], hours_before=2.99)
-    assert not s.is_exiting, "an IOC still working"
-    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
-    _tick(s, 102, [(0.45, 1000)], hours_before=2.98)
+    assert _tick(s, 102, B_ASK, 0.1) != []
+    _tick(s, 102, B_ASK, -0.1)
+    assert not s.is_exiting, "an order still working"
+    _done(s, 102)
+    _tick(s, 102, B_ASK, -0.2)
     assert s._control.exits == [("match 7 reached its entry cutoff", False)]
 
 
-def test_the_session_ends_at_the_cutoff_even_on_stale_state(make):
-    s = make(states=_states(until=KICKOFF - pd.Timedelta(hours=8)))
-    _tick(s, 102, [(0.45, 1000)], hours_before=3.5)
+def test_the_session_ends_at_kickoff_even_on_stale_state(make):
+    s = make(states=_states(until=KICKOFF - pd.Timedelta(hours=3)))
+    _tick(s, 102, B_ASK, 30)
     assert not s.is_exiting, "stale state stops trading"
-    _tick(s, 102, [(0.45, 1000)], hours_before=3)
+    _tick(s, 102, B_ASK, 0)
     assert s._control.exits == [("match 7 reached its entry cutoff", False)]
 
 
-@pytest.mark.parametrize("kw", [{"entry_cutoff_hours": 12.0}, {"min_price": 0.9, "max_price": 0.9}])
-def test_a_session_needs_a_window_and_a_band(make, kw):
+@pytest.mark.parametrize("kw", [
+    {"entry_cutoff_hours": 1.0},
+    {"bankroll_usd": 0.0},
+    {"legs": []},
+    {"legs": LEGS + LEGS[:1]},
+])
+def test_a_session_needs_a_window_a_bankroll_and_each_venue_once(make, kw):
     with pytest.raises(ValueError):
         make(**kw)
 
 
-def test_a_side_priced_outside_the_band_is_not_bought(make):
-    s = make()
-    assert _tick(s, 102, [(0.19, 1000)], hours_before=6) == [], "team B is cheap enough to clear the edge, but a long shot"
-
-
 def test_no_trading_on_stale_match_state(make):
-    s = make(states=_states(until=KICKOFF - pd.Timedelta(hours=6)))
-    for hours_before, trades in ((6, True), (5.75, True), (5.4, False)):
-        out = _tick(s, 102, [(0.45, 1000)], hours_before=hours_before)
-        assert (out != []) == trades, f"{hours_before}h before kickoff, the pipeline stalled 6h before"
-        s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
-
-
-def test_the_feed_rereads_faster_near_kickoff(tmp_path):
-    f, m = _write(tmp_path, [_feature(EARLY)], _states())
-    feed = MatchFeed(7, _pricer([]), f, m, reload_seconds=300, near_kickoff_reload_seconds=60, near_kickoff_seconds=3600)
-    assert feed.reload_interval(K_NS - 2 * HOUR) == 300
-    assert feed.reload_interval(K_NS - HOUR // 2) == 60
-    assert feed.reload_interval(K_NS + HOUR) == 60, "and after kickoff, until HLTV shows it live"
+    s = make(states=_states(until=_before(75)))
+    assert _tick(s, 102, B_ASK, 50) != [], "the newest state is 25 minutes old"
+    _done(s, 102, OrderStatus.CANCELED)
+    assert _tick(s, 102, B_ASK, 40) == [], "35 minutes old: the pipeline has stalled"
 
 
 def test_no_trade_before_the_first_features_row(make):
-    s = make(features=[_feature(KICKOFF - pd.Timedelta(hours=5))])
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=6) == [], "a replay must not trade on a future row"
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=4.9) != []
+    s = make(features=[_feature(_before(20))])
+    assert _tick(s, 102, B_ASK, 30) == [], "a replay must not trade on a future row"
+    assert _tick(s, 102, B_ASK, 19) != []
 
 
 def test_no_trade_until_both_lineups_are_announced(make):
-    s = make(features=[_feature(EARLY, lineup_a=[]), _feature(KICKOFF - pd.Timedelta(hours=5))])
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=6) == []
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=4.9) != []
+    s = make(features=[_feature(EARLY, lineup_b=[]), _feature(_before(20))])
+    assert _tick(s, 102, B_ASK, 30) == []
+    assert _tick(s, 102, B_ASK, 19) != []
 
 
-def test_a_lineup_change_stops_top_ups(make):
-    changed = [9, 2, 3, 4, 5]
-    s = make(features=[_feature(EARLY), _feature(KICKOFF - pd.Timedelta(hours=4.5), lineup_a=changed)])
-    assert _tick(s, 102, [(0.45, 10)], hours_before=6)
-    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
-    s.positions.fill(LISTINGS[102], shares=10, price=0.45)
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=5) != [], "same lineups: topping up is fine"
-    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=4) == [], "a stand-in is news the model cannot price"
+def test_no_trade_without_a_team_id_to_price(make):
+    assert _tick(make(features=[_feature(EARLY, team_a_id=None)]), 102, B_ASK, 30) == []
 
 
-def test_a_lineup_change_before_any_fill_does_not_block_entry(make):
-    s = make(features=[_feature(EARLY), _feature(KICKOFF - pd.Timedelta(hours=4.5), lineup_a=[9, 2, 3, 4, 5])])
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=6)
-    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.CANCELED))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=4) != [], "nothing was bought on the old lineups"
+def test_the_model_prices_the_announced_fives_of_the_hltv_teams(make):
+    model = _Model()
+    make(models=_models(model), features=[_feature(EARLY, lineup_b=STANDIN_B)])
+    assert model.priced == [(1, tuple(LINEUP_A), 2, tuple(STANDIN_B))]
 
 
-def test_no_second_order_while_one_is_in_flight(make):
+def test_no_trade_without_a_two_sided_book_for_the_mid(make):
     s = make()
-    assert _tick(s, 102, [(0.45, 10)], hours_before=6)
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=5.9) == []
-    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=5.8), "a terminal report frees the market to top up"
+    assert _tick(s, 102, B_ASK, 30, bids=[]) == [], "no venue has a mid to blend with"
+    assert _tick(s, 102, B_ASK, 29) != []
 
 
-def test_the_stake_cap_is_respected_including_fees(make):
-    o = _tick(make(max_stake_usd=50.0), 102, [(0.45, 10_000)], hours_before=6)[0]
-    assert o.take_size / S * cost_per_share(o.take_limit_price / P, 0.07) <= 50.0 + 1e-6
+def test_the_mid_is_polymarket_internationals_else_the_tightest_elsewhere(make):
+    s = make()
+    _tick(s, 201, [(0.61, 10)], 90, bids=[(0.60, 10)])
+    _tick(s, 302, [(0.42, 10)], 90, bids=[(0.38, 10)])
+    assert s._mid_team_a() == pytest.approx(0.605), "Kalshi's team A book is the tightest"
+    _tick(s, 101, [(0.53, 10)], 90, bids=[(0.47, 10)])
+    assert s._mid_team_a() == pytest.approx(0.50), "Polymarket's, though wider: the blend was fitted on it"
+    _tick(s, 101, [(0.53, 10)], 90, bids=[])
+    _tick(s, 102, [(0.51, 10)], 90, bids=[(0.49, 10)])
+    assert s._mid_team_a() == pytest.approx(0.50), "Polymarket's team B book, where team A's is one-sided"
+    _tick(s, 102, [(0.51, 10)], 90, bids=[])
+    _tick(s, 201, [(0.61, 10)], 90, bids=[])
+    assert s._mid_team_a() == pytest.approx(0.60), "Polymarket US team B's, the only two-sided book left"
 
 
-def test_a_thin_book_is_walked_to_the_level_the_stake_needs_and_no_further(make):
-    asks = [(0.45, 20), (0.46, 20), (0.47, 10_000), (0.48, 10_000)]
-    o = _tick(make(max_stake_usd=50.0), 102, asks, hours_before=6)[0]
-    assert o.take_limit_price == round(0.47 * P), "40 shares at 0.45-0.46 leave most of the stake for 0.47"
-    shares = o.take_size / S
-    cost = 20 * cost_per_share(0.45, 0.07) + 20 * cost_per_share(0.46, 0.07) + (shares - 40) * cost_per_share(0.47, 0.07)
-    assert 50.0 - cost_per_share(0.47, 0.07) < cost <= 50.0 + 1e-9
+def test_the_market_mid_pulls_the_fair_price(make):
+    blend = MarketBlend(0.6123418580625587, 0.5130722002876456, 0.008852116804822632)
+    s = make(models=_models(blend=blend))
+    _tick(s, 101, [(0.51, 10)], 90, bids=[(0.49, 10)])
+    assert _tick(s, 102, B_ASK, 30, bids=[(0.48, 10)]) != [], "mid 0.50 and model 0.40: team B is worth about 0.55"
+    _done(s, 102, OrderStatus.CANCELED)
+    _tick(s, 101, [(0.66, 10)], 29, bids=[(0.64, 10)])
+    assert _tick(s, 102, B_ASK, 28, bids=[(0.48, 10)]) == [], "the market says team A at 0.65: team B is no bargain"
 
 
-def test_stake_already_spent_blocks_further_orders(make):
-    s = make(max_stake_usd=50.0)
-    s.positions.fill(LISTINGS[102], shares=105, price=0.45, fee=1.8)
-    assert _tick(s, 102, [(0.45, 10_000)], hours_before=6) == []
-
-
-FAIR_B = 1 - series_of(LOW)
-
-
-def _kelly_spend(bankroll, ask=0.45, fraction=0.5, venues=1):
-    u = cost_per_share(ask, 0.07)
-    return fraction * bankroll / venues * (FAIR_B - u) / (1 - u)
+@pytest.mark.parametrize("cutoff, trades", [
+    (pd.Timestamp("2026-09-28"), True),
+    (pd.Timestamp("2026-09-26"), False),
+    (pd.Timestamp("2026-10-06"), False),
+])
+def test_no_trading_on_a_stale_or_future_model(make, cutoff, trades):
+    s = make(models=_models(_Model(cutoff=cutoff)))
+    assert (_tick(s, 102, B_ASK, 30) != []) is trades
 
 
 def test_a_bankroll_too_small_for_the_cap_buys_the_kelly_size(make):
-    o = _tick(make(bankroll_usd=100.0, max_stake_usd=50.0), 102, [(0.45, 10_000)], hours_before=6)[0]
-    spend = o.take_size / S * cost_per_share(0.45, 0.07)
-    assert spend == pytest.approx(_kelly_spend(100.0), abs=cost_per_share(0.45, 0.07))
-    assert spend < 50.0, "the Kelly size, not the cap, set this order"
+    o = _tick(make(bankroll_usd=500.0), 102, [(0.50, 10_000)], 30)[0]
+    u = cost_per_share(0.50, FEE)
+    spend = o.take_size / S * u
+    assert spend == pytest.approx(0.5 * 500.0 * (0.60 - u) / (1 - u), abs=u)
+    assert spend < 250.0, "the Kelly size, not the cap, set this order"
 
 
 def test_the_kelly_fraction_scales_the_size(make):
-    half = _tick(make(bankroll_usd=100.0, kelly_fraction=0.5), 102, [(0.45, 10_000)], hours_before=6)[0]
-    full = _tick(make(bankroll_usd=100.0, kelly_fraction=1.0), 102, [(0.45, 10_000)], hours_before=6)[0]
+    half = _tick(make(bankroll_usd=500.0, kelly_fraction=0.5), 102, [(0.50, 10_000)], 30)[0]
+    full = _tick(make(bankroll_usd=500.0, kelly_fraction=1.0), 102, [(0.50, 10_000)], 30)[0]
     assert full.take_size == pytest.approx(2 * half.take_size, abs=S // 100)
 
 
-def test_the_bankroll_is_split_across_the_venues_with_a_series_market(make):
-    one = _tick(make(bankroll_usd=100.0), 102, [(0.45, 10_000)], hours_before=6)[0]
-    three = make(bankroll_usd=100.0, states=_states((EARLY, {"venues": ("polymarket", "kalshi", "polymarket_us")})))
-    o = _tick(three, 102, [(0.45, 10_000)], hours_before=6)[0]
-    assert o.take_size == pytest.approx(one.take_size / 3, abs=S // 100), "three sessions take the same view"
-
-
 def test_a_held_kelly_size_is_topped_up_only_when_the_price_improves(make):
-    s = make(bankroll_usd=100.0)
-    o = _tick(s, 102, [(0.45, 10_000)], hours_before=6)[0]
-    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
+    s = make(bankroll_usd=500.0)
+    o = _tick(s, 102, [(0.50, 10_000)], 30)[0]
     shares = o.take_size / S
-    s.positions.fill(LISTINGS[102], shares=shares, price=0.45, fee=shares * taker_fee(0.45, 0.07))
-    assert _tick(s, 102, [(0.45, 10_000)], hours_before=5) == [], "already at the Kelly size for this price"
-    top_up = _tick(s, 102, [(0.40, 10_000)], hours_before=4)
-    assert top_up, "a cheaper ask means a bigger edge and a bigger Kelly size"
-    spent = shares * cost_per_share(0.45, 0.07) + top_up[0].take_size / S * cost_per_share(0.40, 0.07)
-    assert spent < _kelly_spend(100.0, ask=0.40) + 1.0, "never past the Kelly size at the better price"
+    s.positions.fill(102, shares=shares, price=0.50, fee=shares * taker_fee(0.50, FEE))
+    _done(s, 102)
+    assert _tick(s, 102, [(0.50, 10_000)], 29) == [], "already at the Kelly size for this price"
+    assert _tick(s, 202, [(0.45, 10_000)], 28), "a cheaper ask anywhere means a bigger Kelly size"
 
 
 def test_a_thin_book_is_topped_up_to_the_kelly_size_once_it_deepens(make):
-    s = make(bankroll_usd=100.0)
-    o = _tick(s, 102, [(0.45, 5)], hours_before=6)[0]
+    s = make(bankroll_usd=500.0)
+    o = _tick(s, 102, [(0.50, 5)], 30)[0]
     assert o.take_size == 5 * S, "only 5 shares on offer, short of the Kelly size"
-    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
-    s.positions.fill(LISTINGS[102], shares=5, price=0.45, fee=5 * taker_fee(0.45, 0.07))
-    top_up = _tick(s, 102, [(0.45, 10_000)], hours_before=5.9)
-    assert top_up, "the fee paid on the first fill doesn't use up the stake"
-    spent = (5 + top_up[0].take_size / S) * cost_per_share(0.45, 0.07)
-    assert spent == pytest.approx(_kelly_spend(100.0), abs=cost_per_share(0.45, 0.07))
+    s.positions.fill(102, shares=5, price=0.50, fee=5 * taker_fee(0.50, FEE))
+    _done(s, 102)
+    top_up = _tick(s, 102, [(0.50, 10_000)], 29)
+    u = cost_per_share(0.50, FEE)
+    assert (5 + top_up[0].take_size / S) * u == pytest.approx(0.5 * 500.0 * (0.60 - u) / (1 - u), abs=u)
+
+
+def test_the_stake_cap_is_respected_including_fees(make):
+    o = _tick(make(max_stake_usd=50.0), 102, [(0.50, 10_000)], 30)[0]
+    assert o.take_size / S * cost_per_share(0.50, FEE) <= 50.0 + 1e-6
+
+
+def test_a_thin_book_is_walked_to_the_level_the_stake_needs_and_no_further(make):
+    asks = [(0.50, 20), (0.51, 20), (0.52, 10_000), (0.53, 10_000)]
+    o = _tick(make(max_stake_usd=50.0), 102, asks, 30)[0]
+    assert o.take_limit_price == round(0.52 * P), "40 shares at 0.50-0.51 leave most of the stake for 0.52"
 
 
 def test_edges_under_the_floor_are_not_bought(make):
-    s = make(min_edge=0.02)
-    ask = FAIR_B - 0.015 - taker_fee(FAIR_B - 0.015, 0.07)
-    assert _tick(s, 102, [(math.floor(ask * 100) / 100 + 0.01, 10_000)], hours_before=6) == []
-    assert _tick(s, 102, [(0.45, 10_000)], hours_before=6) != [], "the same session buys a bigger edge"
+    assert _tick(make(min_edge=0.02), 102, [(0.57, 1000)], 30) == [], "0.60 - 0.57 - fee is under 2c"
+    assert _tick(make(min_edge=0.02), 102, [(0.56, 1000)], 30) != []
 
 
-def test_a_session_needs_a_positive_bankroll(make):
-    with pytest.raises(ValueError, match="bankroll_usd"):
-        make(bankroll_usd=0.0)
+def test_no_second_order_on_any_venue_while_one_is_in_flight(make):
+    s = make()
+    assert _tick(s, 102, [(0.50, 10)], 30)
+    assert _tick(s, 202, B_ASK, 29) == []
+    _done(s, 102)
+    assert _tick(s, 202, B_ASK, 28), "a terminal report frees the match to top up"
 
 
-def test_never_buys_the_other_side_once_holding_one(make):
-    s = make(features=[_feature(EARLY, p_map=0.6)])
-    s.positions.fill(LISTINGS[102], shares=10, price=0.30)
-    assert _tick(s, 101, [(0.50, 1000)], hours_before=6) == [], "holding team B; team A now looks cheap - no hedge"
+def test_an_order_under_the_venues_minimum_size_is_not_sent(make):
+    s = make(spec=_Spec(min_size=5 * S))
+    assert _tick(s, 102, [(0.50, 4)], 30) == [], "only 4 shares at the price; the venue wants 5"
+    assert _tick(s, 102, [(0.50, 10)], 30) != []
 
 
-def test_adverse_move_stops_top_ups(make):
-    s = make(adverse_move=0.08)
-    s.positions.fill(LISTINGS[102], shares=10, price=0.45)
-    assert _tick(s, 102, [(0.36, 1000)], hours_before=6) == [], "price fell 9c below entry: likely news"
-    assert _tick(s, 102, [(0.44, 1000)], hours_before=6) != []
+def test_unknown_listing_data_is_ignored(make):
+    assert make().on_market_data(_Book(99999, [(0.01, 10)], K_NS - HOUR, [])) == [], "a stream of no listing it trades"
 
 
 def test_restart_reads_committed_money_from_positions(make):
     """A fresh instance must see an earlier session's fills and not buy them again."""
     first = make(max_stake_usd=50.0)
-    first.positions.fill(LISTINGS[102], shares=110, price=0.45, fee=1.9)
+    first.positions.fill(102, shares=97, price=0.50, fee=1.7)
     restarted = make(max_stake_usd=50.0)
     restarted._position_view = first.positions
-    assert _tick(restarted, 102, [(0.45, 10_000)], hours_before=6) == []
+    assert _tick(restarted, 102, B_ASK, 30) == []
 
 
-def test_restart_takes_the_lineups_it_finds_as_the_reference(make):
-    s = make(features=[_feature(EARLY), _feature(KICKOFF - pd.Timedelta(hours=4.5), lineup_a=[9, 2, 3, 4, 5])])
-    s.positions.fill(LISTINGS[102], shares=10, price=0.45)
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=6) != []
-    s.on_execution_report(_Report(*LISTINGS[102], OrderStatus.FILLED))
-    assert _tick(s, 102, [(0.45, 1000)], hours_before=4) == []
+# ---- rebalancing on a model change -----------------------------------------------------
+
+def _holding_b(make, features, shares=100, **kw):
+    """A session that bought team B 40 minutes out, at the model's price then."""
+    s = make(features=features, **kw)
+    assert _tick(s, 102, [(0.50, shares)], 40)
+    s.positions.fill(102, shares=shares, price=0.50, fee=shares * taker_fee(0.50, FEE))
+    _done(s, 102)
+    return s
 
 
-def test_an_order_under_the_venues_minimum_size_is_not_sent(make):
-    s = make(spec=_Spec(min_size=5 * S))
-    assert _tick(s, 102, [(0.45, 4)], hours_before=6) == [], "only 4 shares at the price; the venue wants 5"
-    assert _tick(s, 102, [(0.45, 10)], hours_before=6) != []
+def test_a_lineup_change_sells_into_bids_that_beat_holding(make):
+    """A stand-in on team B makes it worth 0.40: bids at 0.45 fetch more than that after the fee, 0.43 don't."""
+    s = _holding_b(make, [_feature(EARLY), _feature(_before(20), lineup_b=STANDIN_B)])
+    out = _tick(s, 102, [(0.47, 1000)], 10, bids=[(0.45, 60), (0.43, 1000)])
+    assert len(out) == 1
+    o = out[0]
+    assert _key(o) == LISTINGS[102] and o.take_side == Side.ASK and o.take_order_type == OrderType.LIMIT
+    assert o.take_size == 60 * S and o.take_limit_price == round(0.45 * P)
 
 
-def test_unknown_listing_data_is_ignored(make):
-    assert make().on_market_data(_Book(99999, [(0.01, 10)], K_NS - HOUR)) == [], "a stream of no listing it trades"
+def test_a_sale_never_sells_more_than_the_venue_holds(make):
+    s = _holding_b(make, [_feature(EARLY), _feature(_before(20), lineup_b=STANDIN_B)], shares=30)
+    o = _tick(s, 102, [(0.47, 1000)], 10, bids=[(0.45, 1000)])[0]
+    assert o.take_side == Side.ASK and o.take_size == 30 * S
 
+
+def test_a_lineup_change_keeps_the_position_when_no_bid_beats_holding(make):
+    s = _holding_b(make, [_feature(EARLY), _feature(_before(20), lineup_b=STANDIN_B)])
+    assert _tick(s, 102, [(0.43, 1000)], 10, bids=[(0.41, 1000)]) == [], "0.41 after the fee is worth less than 0.40"
+
+
+def test_a_market_move_alone_never_sells(make):
+    s = _holding_b(make, [_feature(EARLY)])
+    assert _tick(s, 102, [(0.72, 1000)], 10, bids=[(0.70, 1000)]) == [], "the model still says 0.60; only the market moved"
+
+
+def test_once_sold_out_the_other_team_is_bought(make):
+    s = _holding_b(make, [_feature(EARLY), _feature(_before(20), lineup_b=STANDIN_B)])
+    _tick(s, 102, [(0.47, 1000)], 12, bids=[(0.30, 1000)])
+    assert _tick(s, 101, [(0.50, 1000)], 12) == [], "team A is now worth 0.60, but team B is still held"
+    sale = _tick(s, 102, [(0.47, 1000)], 11, bids=[(0.45, 1000)])[0]
+    assert _key(sale) == LISTINGS[102] and sale.take_side == Side.ASK and sale.take_size == 100 * S
+    s.positions.fill(102, shares=-100, price=0.45, fee=100 * taker_fee(0.45, FEE))
+    _done(s, 102)
+    buy = _tick(s, 101, [(0.50, 1000)], 10)[0]
+    assert _key(buy) == LISTINGS[101] and buy.take_side == Side.BID
+
+
+def test_a_model_move_in_the_positions_favour_tops_it_up_and_becomes_the_new_reference(make):
+    s = _holding_b(make, [_feature(EARLY), _feature(_before(20), lineup_a=STANDIN_A)])
+    o = _tick(s, 102, [(0.70, 1000)], 10, bids=[(0.30, 1000)])[0]
+    assert o.take_side == Side.BID, "team B is now worth 0.75"
+    s.positions.fill(102, shares=o.take_size / S, price=0.70)
+    _done(s, 102)
+    assert _tick(s, 102, [(0.97, 1000)], 9, bids=[(0.95, 1000)]) == [], \
+        "bought at the new price: a market move alone doesn't sell it"
+
+
+def test_a_restarted_session_takes_the_model_price_it_finds_as_the_reference(make):
+    first = _holding_b(make, [_feature(EARLY), _feature(_before(20), lineup_b=STANDIN_B)])
+    restarted = make(features=[_feature(EARLY), _feature(_before(20), lineup_b=STANDIN_B)])
+    restarted._position_view = first.positions
+    assert _tick(restarted, 102, [(0.47, 1000)], 10, bids=[(0.45, 1000)]) == [], "a restart alone never sells"
+
+
+# ---- artifacts and metrics -------------------------------------------------------------
 
 def test_artifacts_are_fetched_at_the_version_they_resolved_to(monkeypatch):
     found = []
@@ -714,64 +808,66 @@ def test_artifacts_are_fetched_at_the_version_they_resolved_to(monkeypatch):
     class _Store:
         def find(self, query):
             found.append(query)
-            return ArtifactRef(query.artifact_type, query.name, "20261015T163515680176Z", "s3://b/model.json")
+            return ArtifactRef(query.artifact_type, query.name, "20261103T233431215199Z", "s3://b/e12.npz")
 
         def resolve(self, ref):
-            return "/tmp/model.json"
+            return "/tmp/e12.npz"
     monkeypatch.setattr(mod, "ArtifactStore", _Store)
     path, resolved = mod._fetch(mod.DEFAULT_MODEL + "@production")
-    assert str(path) == "/tmp/model.json" and found[0].alias == "production"
-    assert resolved == "artifact://xgboost_model/cs2_prematch_preveto:20261015T163515680176Z"
-    monkeypatch.setattr(mod, "resolve_artifact_path", lambda path: "/local/model.json")
-    assert mod._fetch("/local/model.json") == (mod.Path("/local/model.json"), "/local/model.json")
+    assert str(path) == "/tmp/e12.npz" and found[0].alias == "production"
+    assert resolved == "artifact://e12_model/cs2_series:20261103T233431215199Z"
+    monkeypatch.setattr(mod, "resolve_artifact_path", lambda path: "/local/e12.npz")
+    assert mod._fetch("/local/e12.npz") == (mod.Path("/local/e12.npz"), "/local/e12.npz")
 
 
-@pytest.mark.parametrize("as_of, trades", [
-    (KICKOFF - pd.Timedelta(days=3), True),
-    (KICKOFF - pd.Timedelta(days=20), False),
-    (KICKOFF + pd.Timedelta(days=1), False),
-])
-def test_no_trading_on_a_stale_or_future_posterior(make, as_of, trades):
-    s = make(models=_models(_Posterior(as_of=f"{as_of:%Y-%m-%d}")))
-    assert (_tick(s, 102, [(0.45, 1000)], hours_before=6) != []) is trades
+def test_the_model_and_blend_load_from_their_saved_files(tmp_path):
+    fit = SkillFit(np.arange(1, 11), np.zeros(10), np.full(10, 20), np.zeros(12), {"players": 10})
+    E12Model(pd.Timestamp("2026-11-02"), fit, fit, {}, {1: 0.1}, {}).save(tmp_path / "e12.npz")
+    MODEL_ONLY.save(tmp_path / "blend.json")
+    models = mod.load_models(str(tmp_path / "e12.npz"), str(tmp_path / "blend.json"))
+    assert models.model.cutoff == pd.Timestamp("2026-11-02") and models.blend == MODEL_ONLY
+    assert 0 < models.model.price(1, LINEUP_A, 2, LINEUP_B) < 1
 
 
-def test_the_bayesian_price_moves_the_blend(make):
-    """All weight on the Bayesian model, which says team A at 0.8: team A's 0.6 ask is now the cheap side."""
-    s = make(models=_models(_Posterior(p=0.8), blend=SeriesBlend(1.0, 0.0)))
-    out = _tick(s, 101, [(0.60, 1000)], hours_before=6)
-    assert len(out) == 1 and (out[0].exchange_id, out[0].security_id) == LISTINGS[101]
-
-
-def test_series_pricing_goes_through_the_map_model():
-    assert series_of(0.5) == pytest.approx(0.5)
-    assert series_of(LOW) < LOW < 0.5, "a BO3 is more lopsided than one map"
-    assert np.isclose(series_of(LOW), 0.40, atol=0.01)
+def _recording(make, **kw):
+    s = make(**kw)
+    s._metric_recorder = _Metrics()
+    s.register_metrics()
+    return s
 
 
 def test_each_order_records_the_decision_behind_it(make):
-    strat = make()
-    strat._metric_recorder = _Metrics()
-    strat.register_metrics()
-
-    out = _tick(strat, 102, [(0.45, 1000)], hours_before=6)
-
-    rows = strat.metrics.streams["cs2_series_orders"].rows
+    s = _recording(make)
+    out = _tick(s, 102, B_ASK, 30)
+    rows = s.metrics.streams["cs2_series_orders"].rows
     assert len(out) == len(rows) == 1
     row = rows[0]
-    assert row["timestamp"] == K_NS - 6 * HOUR
-    assert row["best_ask"] == pytest.approx(0.45)
+    assert row["timestamp"] == K_NS - 30 * MINUTE
+    assert (row["exchange_id"], row["listing_id"], row["team"], row["direction"]) == (4, 102, 1, 1)
+    assert row["q"] == pytest.approx(0.40) and row["fair"] == pytest.approx(0.60)
+    assert row["mid"] == pytest.approx(0.51), "team A's mid, from team B's book"
+    assert row["best_price"] == pytest.approx(0.50) and row["spread"] == pytest.approx(0.02)
     assert round(row["limit_price"] * P) == out[0].take_limit_price
-    assert 0 < row["edge_at_best"] < row["fair"] - row["best_ask"], "the edge is what's left after the taker fee"
-    assert row["shares"] > 0
+    assert 0 < row["edge_at_best"] < row["fair"] - row["best_price"], "the edge is what's left after the taker fee"
+    assert row["shares"] > 0 and row["usd"] == pytest.approx(row["shares"] * cost_per_share(0.50, FEE))
     assert row["kelly_bankroll"] == pytest.approx(0.5 * 10_000.0) and row["held_shares"] == 0.0
-    assert row["fair_xgb"] == pytest.approx(series_of(LOW)) and row["fair_bayes"] == pytest.approx(0.5)
-    assert math.isnan(row["spread"]), "no bid on the book"
 
 
-def test_the_order_row_records_the_spread_it_was_taken_at(make):
-    strat = make()
-    strat._metric_recorder = _Metrics()
-    strat.register_metrics()
-    _tick(strat, 102, [(0.45, 1000)], hours_before=6, bids=[(0.41, 50)])
-    assert strat.metrics.streams["cs2_series_orders"].rows[0]["spread"] == pytest.approx(0.04)
+def test_a_sale_is_recorded_with_its_proceeds(make):
+    s = _holding_b(make, [_feature(EARLY), _feature(_before(20), lineup_b=STANDIN_B)])
+    s._metric_recorder = _Metrics()
+    s.register_metrics()
+    _tick(s, 102, [(0.47, 1000)], 10, bids=[(0.45, 1000)])
+    row = s.metrics.streams["cs2_series_orders"].rows[0]
+    assert row["direction"] == -1 and row["fair"] == pytest.approx(0.40) and row["held_shares"] == 100.0
+    assert row["usd"] == pytest.approx(100 * proceeds_per_share(0.45, FEE))
+
+
+def test_each_new_model_price_is_recorded_once(make):
+    s = _recording(make, features=[_feature(EARLY), _feature(_before(20), lineup_b=STANDIN_B)])
+    for minutes in (90, 80, 15, 10):
+        _tick(s, 102, [(0.95, 10)], minutes)
+    rows = s.metrics.streams["cs2_series_model"].rows
+    assert [r["q"] for r in rows] == pytest.approx([0.40, 0.60])
+    assert rows[0]["lineups_hash"] != rows[1]["lineups_hash"] and rows[1]["lineup_known"] == 1
+    assert rows[1]["model_cutoff"] == pd.Timestamp("2026-10-02").value

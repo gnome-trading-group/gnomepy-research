@@ -1,6 +1,6 @@
 """
-What was known about one upcoming match at any moment: its HLTV state (kickoff, status) and its
-series price, from the rows the cs2_upcoming pipeline writes.
+What was known about one upcoming match at any moment: its HLTV state (kickoff, status), its
+announced lineups and the model's series price for them, from the rows the cs2_upcoming pipeline writes.
 
 Every lookup is as of an event time - the newest row generated at or before it - so a replay
 never trades on a row before it existed, and a live session sees each row from the moment the
@@ -15,7 +15,6 @@ replays against a fixed table.
 from __future__ import annotations
 
 import bisect
-import json
 import logging
 import threading
 import time
@@ -30,7 +29,6 @@ logger = logging.getLogger(__name__)
 
 FEATURES = "cs2_upcoming_features"
 MATCHES = "cs2_upcoming_matches"
-SERIES = "series"
 
 # Prices a batch of features rows: P(team A wins the series), one per row, in order.
 Pricer = Callable[[pd.DataFrame], Sequence[float]]
@@ -40,8 +38,8 @@ Lineups = tuple[tuple[int, ...], tuple[int, ...]]
 @dataclass(frozen=True)
 class Quote:
     at_ns: int
-    p_team_a: float
-    # Both lineups announced: player skill, which the model leans on, is blank until they are.
+    q: float  # the model's P(team A wins the series)
+    # Both lineups announced: until they are, the model prices the fives each team fielded last.
     lineup_known: bool
     lineups: Lineups
 
@@ -51,8 +49,6 @@ class MatchState:
     at_ns: int
     kickoff_ns: int
     status: str
-    # Venues with a series market for the match: a session on each takes the same view, so they share one bankroll.
-    series_venues: int = 1
 
 
 class Snapshot:
@@ -85,13 +81,7 @@ def _ns(ts) -> int:
     return pd.Timestamp(ts).value
 
 
-def _series_venues(markets) -> int:
-    if not isinstance(markets, str):
-        return 1
-    return max(1, len({leg["venue"] for leg in json.loads(markets) if leg.get("market") == SERIES}))
-
-
-def _ids(value) -> tuple[int, ...]:
+def lineup_ids(value) -> tuple[int, ...]:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return ()
     return tuple(int(x) for x in value)
@@ -140,7 +130,7 @@ class MatchFeed:
         features = read_rows(self._features_source, self._match_id)
         matches = read_rows(self._matches_source, self._match_id)
         return Snapshot(self._quotes(features), [
-            MatchState(_ns(r.generated_at), _ns(r.kickoff), r.status, _series_venues(getattr(r, "markets", None)))
+            MatchState(_ns(r.generated_at), _ns(r.kickoff), r.status)
             for r in matches.itertuples() if not pd.isna(r.kickoff)])
 
     def _quotes(self, features: pd.DataFrame) -> list[Quote]:
@@ -153,6 +143,6 @@ class MatchFeed:
             self._prices.update(zip((at[i] for i in fresh), (float(p) for p in prices)))
         quotes = []
         for t, r in zip(at, features.itertuples()):
-            lineups = (_ids(r.team_a_lineup_ids), _ids(r.team_b_lineup_ids))
+            lineups = (lineup_ids(r.team_a_lineup_ids), lineup_ids(r.team_b_lineup_ids))
             quotes.append(Quote(t, self._prices[t], all(lineups), lineups))
         return quotes

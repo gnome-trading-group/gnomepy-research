@@ -1,14 +1,10 @@
 """
-Pure entry logic for the CS2 series strategy: no engine, no registry, no JVM.
+Pure entry and exit logic for the CS2 series strategy: no engine, no registry, no JVM.
 
 On every venue each team's outcome is its own listing - a Polymarket token, a Kalshi
 team market, a Polymarket US long or short side - so taking a view on team B means
-buying team B's listing, never selling team A's. Each side is therefore priced off its
-own ask book, and an entry is only ever a taker buy.
-
-Only prices inside a band are bought. At the low end the model overrates long shots and at the high end it has
-no edge over a market that already agrees (Mar-Sep 2026 replays), so a side whose best ask is outside the band
-is skipped and no share is bought at or above its top.
+buying team B's listing, never selling team A's. Each listing is priced off its own book:
+buys walk its asks, sales of what it holds walk its bids.
 
 An entry may reach as deep into the ask book as the edge allows: every share it buys, at its own
 level's price and fee, still clears min_edge. How many it buys is the Kelly size: a share costing u
@@ -18,6 +14,10 @@ bankroll W and C already paid. Sizing against what is already held makes each to
 holding to the size the current price and book justify, never past it. Fees are the venues'
 rate * p * (1 - p) curve, charged on each fill at its own price; the venues' rounding (Polymarket to
 $0.00001 per fill, Kalshi up to $0.0001 per order) is left out.
+
+A sale is taken only where a share's proceeds after the fee beat its fair value by min_edge, the same margin a buy
+needs. At such a price the Kelly holding is none at all (a contract sold above what it is worth is better not held),
+so a sale takes every held share those bids can absorb.
 
 Prices here are plain probabilities in [0, 1] and sizes are shares; the strategy
 converts to the engine's scaled integers at the edge.
@@ -36,8 +36,7 @@ class Level:
 
 @dataclass(frozen=True)
 class Entry:
-    side: int            # 0 = team A's listing, 1 = team B's
-    fair: float          # probability this side wins
+    fair: float          # probability this listing's team wins
     best_ask: float
     edge_at_best: float  # fair - best_ask - fee(best_ask)
     limit_price: float   # highest price that still clears min_edge, on tick
@@ -53,6 +52,15 @@ class Take:
     shares: float
     limit_price: float   # the deepest level the shares reach: the order can't fill above what was costed
     cost: float          # what the shares cost at their levels, fees included
+
+
+@dataclass(frozen=True)
+class Sale:
+    shares: float
+    best_bid: float
+    edge_at_best: float  # best_bid - fee(best_bid) - fair
+    limit_price: float   # the lowest bid the shares reach: the order can't fill below what was priced
+    proceeds: float      # what the shares fetch at their levels, after fees
 
 
 def taker_fee(price: float, rate: float) -> float:
@@ -84,67 +92,31 @@ def _floor_to_tick(price: float, tick: float) -> float:
     return math.floor(price / tick + 1e-9) * tick
 
 
-def _tick_below(price: float, tick: float) -> float:
-    return (math.ceil(price / tick - 1e-9) - 1) * tick
+def _floor_to_lot(shares: float, lot: float) -> float:
+    return math.floor(shares / lot + 1e-9) * lot
 
 
-def evaluate_side(
-    side: int,
-    fair: float,
-    asks: list[Level],
-    *,
-    min_edge: float,
-    fee_rate: float,
-    tick: float,
-    min_price: float = 0.0,
-    max_price: float = 1.0,
-) -> Entry | None:
-    """
-    An entry on one side if its best ask clears min_edge after the fee and lies in [min_price, max_price), with
-    every ask that still clears it below max_price.
-    """
+def evaluate_side(fair: float, asks: list[Level], *, min_edge: float, fee_rate: float, tick: float) -> Entry | None:
+    """An entry on one listing if its best ask clears min_edge after the fee, with every ask that still clears it."""
     if not asks:
         return None
     best = asks[0].price
-    if best < min_price - 1e-12 or best > max_price - 1e-12:
-        return None
     edge_at_best = fair - best - taker_fee(best, fee_rate)
     if edge_at_best < min_edge:
         return None
-    limit = min(_floor_to_tick(max_entry_price(fair, min_edge, fee_rate), tick), _tick_below(max_price, tick))
+    limit = _floor_to_tick(max_entry_price(fair, min_edge, fee_rate), tick)
     if limit < best - 1e-12:
         return None
     levels = tuple(level for level in asks if level.price <= limit + 1e-12)
-    return Entry(side=side, fair=fair, best_ask=best, edge_at_best=edge_at_best, limit_price=limit, levels=levels)
-
-
-def choose_entry(
-    fair_team_a: float,
-    asks_team_a: list[Level],
-    asks_team_b: list[Level],
-    *,
-    min_edge: float,
-    fee_rates: tuple[float, float],
-    tick: float,
-    allowed_sides: tuple[int, ...] = (0, 1),
-    min_price: float = 0.0,
-    max_price: float = 1.0,
-) -> Entry | None:
-    """The better of the two sides, if either clears the threshold inside the price band; fee_rates are each side's
-    listing's taker rate."""
-    candidates = []
-    for side, fair, asks in ((0, fair_team_a, asks_team_a), (1, 1.0 - fair_team_a, asks_team_b)):
-        if side not in allowed_sides:
-            continue
-        entry = evaluate_side(side, fair, asks, min_edge=min_edge, fee_rate=fee_rates[side], tick=tick,
-                              min_price=min_price, max_price=max_price)
-        if entry is not None:
-            candidates.append(entry)
-    return max(candidates, key=lambda e: e.edge_at_best) if candidates else None
+    return Entry(fair=fair, best_ask=best, edge_at_best=edge_at_best, limit_price=limit, levels=levels)
 
 
 def cost_per_share(price: float, fee_rate: float) -> float:
     return price + taker_fee(price, fee_rate)
+
+
+def proceeds_per_share(price: float, fee_rate: float) -> float:
+    return price - taker_fee(price, fee_rate)
 
 
 def kelly_shares(p: float, unit: float, kelly_bankroll: float, held_shares: float, held_cost: float) -> float:
@@ -178,8 +150,7 @@ def kelly_take(entry: Entry, kelly_bankroll: float, held_shares: float, held_cos
         shares, n, cost = shares + take, n + take, cost + take * unit
         if take < level.size:
             break
-    shares = math.floor(shares / lot + 1e-9) * lot
-    return _cost(entry.levels, shares, fee_rate)
+    return _cost(entry.levels, _floor_to_lot(shares, lot), fee_rate)
 
 
 def _cost(levels: tuple[Level, ...], shares: float, fee_rate: float) -> Take:
@@ -192,3 +163,30 @@ def _cost(levels: tuple[Level, ...], shares: float, fee_rate: float) -> Take:
         left -= take
         limit = level.price
     return Take(shares=shares - max(left, 0.0), limit_price=limit, cost=cost)
+
+
+def sell_down(fair: float, bids: list[Level], held_shares: float, *, min_edge: float, fee_rate: float,
+              lot: float) -> Sale | None:
+    """
+    Sell held shares into every bid, best first, whose proceeds after the fee beat fair by min_edge; whole lots, never
+    more than is held. None when the best bid doesn't clear it or nothing is held.
+    """
+    if not bids or held_shares <= 0:
+        return None
+    best = bids[0].price
+    edge_at_best = proceeds_per_share(best, fee_rate) - fair
+    if edge_at_best < min_edge:
+        return None
+    levels = [level for level in bids if proceeds_per_share(level.price, fee_rate) - fair >= min_edge - 1e-12]
+    shares = _floor_to_lot(min(held_shares, sum(level.size for level in levels)), lot)
+    if shares <= 0:
+        return None
+    proceeds, left, limit = 0.0, shares, best
+    for level in levels:
+        if left <= 1e-12:
+            break
+        take = min(level.size, left)
+        proceeds += take * proceeds_per_share(level.price, fee_rate)
+        left -= take
+        limit = level.price
+    return Sale(shares=shares, best_bid=best, edge_at_best=edge_at_best, limit_price=limit, proceeds=proceeds)

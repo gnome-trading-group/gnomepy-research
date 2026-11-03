@@ -151,8 +151,7 @@ from `gnomepy_research/models/`; a live strategy is its session's `strategy.py`,
 `models/`, its own session, and the base-only `fees`/`listing` modules:
 
 ```
-models/cs2/hltv/             HLTV point-in-time features and priors; Bayesian series pricing (base-only)
-models/cs2/bayes/            Bayesian series model: data preparation and NUTS fitting
+models/cs2/hltv/             HLTV point-in-time features and priors (base-only)
 models/cs2/win_probability/  pre-map, round and series models
 models/cs2/prematch/         Polymarket market lookup, HLTV team identity
 models/cs2/e12/              e12-wide-mm series model: weekly fit (HLTV + FACEIT skills, matchmaking skill) saved as
@@ -177,7 +176,7 @@ whose strategies could be launched the same way.
 
 | Package | Class | Trades | Key args |
 |---|---|---|---|
-| `cs2_series` | `CS2Series` | Pre-match CS2 BO3 series winner, one session per HLTV match per venue (Polymarket Intl, Kalshi, PM US); IOC buys of the underpriced team after taker fee, held to settlement | `match_id`, `listing_team_a`, `listing_team_b` (set by the launcher), `bankroll_usd` (required), `min_edge`, `kelly_fraction`, `max_stake_usd`, `window_hours`, `entry_cutoff_hours`, `min_price`/`max_price`, `model_path`/`posterior_path`/`blend_path` (artifact URIs; unpinned = latest) |
+| `cs2_series` | `CS2Series` | CS2 BO3 series winner in the last hour before kickoff, one session per HLTV match holding every venue's listings (Polymarket Intl, Kalshi, PM US); e12-wide-mm blended with the market mid, Kelly-sized taker buys of the underpriced team, sold only when the model's price changes and a sale beats holding; held to settlement | `match_id`, `legs` (`[{venue, listing_team_a, listing_team_b}]`, set by the launcher), `bankroll_usd` (required), `min_edge`, `kelly_fraction`, `max_stake_usd` (per match), `window_hours`, `entry_cutoff_hours`, `max_model_age_days`, `model_path`/`blend_path` (artifact URIs; unpinned = latest) |
 | `cs2_win_probability` | `CS2WinProbability` | In-play CS2 map/match on Polymarket/Kalshi from GRID telemetry; maker quotes around model fair value | `listing_id_yes`, `listing_id_no`, `model_path`, `level`, `grid_api_key`/`grid_series_id` (live) or `fair_value_series_path` (backtest), `edge_threshold`, `max_position` |
 | `cfb_win_probability` | none | CFB pregame model work; `live/` is a parked drive-level simulator, not a strategy | - |
 | `cross_prediction_arb` | `CrossPredictionArb` | Cross- and intra-venue binary arb (Polymarket/Kalshi) | `outcomes` (list of `{pm, k}` listing pairs), `max_position`, `min_edge_cents`, `price_model` |
@@ -212,9 +211,9 @@ installs only what its code uses:
 
 - A package declares the extras its code needs in its `__init__.py`: `EXTRAS = ("xgboost",)`.
   The nearest enclosing package that declares EXTRAS decides for every module in it; code with
-  none runs on the base. Today: `models/cs2/win_probability` → xgboost, `models/cs2/bayes` and
-  `models/cfb/efficiency` → pymc, and the sessions that run them. `models/cs2/hltv`, `models/cs2/prematch`,
-  `models/cs2/e12` and `models/cfb/features` are base-only.
+  none runs on the base. Today: `models/cs2/win_probability` → xgboost, `models/cfb/efficiency` → pymc,
+  and the sessions that run them. `models/cs2/hltv`, `models/cs2/prematch`, `models/cs2/e12`,
+  `models/cfb/features` and the `cs2_series` session are base-only.
 - gnome-orchestrator's `start-session.sh` runs
   `python3 gnomepy_research/dependencies.py extras <strategy class>` and installs
   `gnomepy-research[<extras>]` pinned by `constraints.txt`.

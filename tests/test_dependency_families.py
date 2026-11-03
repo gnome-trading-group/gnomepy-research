@@ -142,7 +142,8 @@ def test_declared_extras_exist():
 
 
 def test_extras_come_from_the_nearest_package():
-    assert strategy_extras("gnomepy_research.sessions.cs2_series.strategy:CS2Series") == ("xgboost",)
+    assert strategy_extras("gnomepy_research.sessions.cs2_win_probability.strategy:CS2WinProbability") == ("xgboost", "websocket")
+    assert strategy_extras("gnomepy_research.sessions.cs2_series.strategy:CS2Series") == ()
     assert module_extras("gnomepy_research.models.cfb.efficiency.inference") == ("pymc",)
     assert module_extras("gnomepy_research.models.cfb.features.source") == ()
     assert strategy_extras("gnomepy_research.sessions.dutch_book_arb.strategy:DutchBookArb") == ()
