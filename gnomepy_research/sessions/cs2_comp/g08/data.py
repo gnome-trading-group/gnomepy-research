@@ -17,6 +17,10 @@ from gnomepy_research.sessions.cs2_comp.g08.market import path_features
 from gnomepy_research.sessions.cs2_comp.g08.ratings import FIVE, regulation
 
 UNRANKED = 300.0
+# HLTV map rating regressed on per-round kills, deaths and damage over every HLTV player-map (R^2 0.88; 0.85 without
+# damage), to put a rating on FACEIT maps, which only carry the raw stats.
+RATING_PROXY = (0.8166, -0.7721, 0.0068, 0.5627)
+RATING_PROXY_NO_ADR = (1.3731, -0.6923, 0.6342)
 
 
 def naive(s: pd.Series) -> pd.Series:
@@ -125,9 +129,29 @@ class Inputs:
         fh = fh[ok]
         ot = (fh.team_a_ot_score.fillna(0) + fh.team_b_ot_score.fillna(0) > 0).to_numpy()
         ra, n = regulation(fh.team_a_score.to_numpy(int), fh.team_b_score.to_numpy(int), ot)
+        st = load(d, "faceit/faceit_player_map_stats", self.until, ["match_id", "map_name", "faceit_id", "kills", "deaths", "adr"])
+        stats = dict(zip(zip(st.match_id, st.map_name, st.faceit_id), zip(st.kills.to_numpy(float), st.deaths.to_numpy(float), st.adr.to_numpy(float))))
+        total = (fh.team_a_score + fh.team_b_score).to_numpy(float)
+
+        def proxy(mid, name, ids, rounds):
+            out = np.full(FIVE, np.nan)
+            for j, f in enumerate(ids if ids is not None and len(ids) == FIVE else []):
+                k = stats.get((mid, name, f))
+                if k is None or rounds <= 0:
+                    continue
+                kpr, dpr = k[0] / rounds, k[1] / rounds
+                if np.isnan(k[2]):
+                    out[j] = RATING_PROXY_NO_ADR[0] * kpr + RATING_PROXY_NO_ADR[1] * dpr + RATING_PROXY_NO_ADR[2]
+                else:
+                    out[j] = RATING_PROXY[0] * kpr + RATING_PROXY[1] * dpr + RATING_PROXY[2] * k[2] + RATING_PROXY[3]
+            return out
+
+        rt_a = [proxy(m, nm, ids, r) for m, nm, ids, r in zip(fh.match_id, fh.map_name, fh.team_a_faceit_ids, total)]
+        rt_b = [proxy(m, nm, ids, r) for m, nm, ids, r in zip(fh.match_id, fh.map_name, fh.team_b_faceit_ids, total)]
         return pd.DataFrame({"match_id": fh.match_id.astype(str).to_numpy(), "known": fh.known.to_numpy(),
                              "five_a": [x for x, k in zip(fa, ok) if k], "five_b": [x for x, k in zip(fb, ok) if k],
                              "rounds_a": ra, "rounds": n, "source": "faceit", "map_name": fh.map_name.to_numpy(),
+                             "ratings_a": rt_a, "ratings_b": rt_b,
                              "team_a": fh.faction1_hltv_team.fillna(-1).astype(np.int64).to_numpy(),
                              "team_b": fh.faction2_hltv_team.fillna(-1).astype(np.int64).to_numpy(), "is_lan": 0})
 

@@ -55,6 +55,8 @@ class RatingConfig:
     # rating_p - mean(rating_five) ~ N(rating_gamma * (s_p - mean(s_five)), rating_sd^2). Zero rating_gamma turns it off.
     rating_gamma: float = 0.0
     rating_sd: float = 0.3
+    # FACEIT maps carry a rating proxy fitted on HLTV maps (kills, deaths and damage per round); zero leaves it out.
+    faceit_rating_sd: float = 0.0
 
 
 def regulation(score_a: np.ndarray, score_b: np.ndarray, overtime: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -148,7 +150,7 @@ class SkillState:
                 self.team_days[team].append(day)
                 self.team_fives[team].append((day, frozenset(five)))
 
-    def observe_ratings(self, five: list[int], ratings, day: float) -> None:
+    def observe_ratings(self, five: list[int], ratings, day: float, sd: float) -> None:
         """Sequential scalar Kalman updates, one per player, of the rating-deviation measurement."""
         cfg = self.cfg
         dev = np.asarray(ratings, float) - float(np.mean(ratings))
@@ -159,7 +161,7 @@ class SkillState:
             c *= cfg.rating_gamma
             bel = [self.belief(k, day, five) for k in keys]
             pred = sum(cj * b[0] for cj, b in zip(c, bel))
-            S = sum(cj * cj * b[1] for cj, b in zip(c, bel)) + cfg.rating_sd ** 2
+            S = sum(cj * cj * b[1] for cj, b in zip(c, bel)) + sd ** 2
             # Without cross-covariances the update would also move the five's mean; ratings only say who in the
             # five carries it, so the shift is taken back out.
             delta = np.array([v * cj * (dev[j] - pred) / S for cj, (_, v, _) in zip(c, bel)])
@@ -286,9 +288,11 @@ def run(maps: pd.DataFrame, queries: pd.DataFrame, cfg: RatingConfig) -> pd.Data
                 state.observe_gap(list(fa[j]), list(fb[j]), z[j], mday[j], ta[j], tb[j], lan[j])
                 continue
             state.update(list(fa[j]), list(fb[j]), ra[j], n[j], mday[j], wt[j], ta[j], tb[j], lan[j], mname[j])
-            for five, rt in ((fa[j], rt_a[j]), (fb[j], rt_b[j])):
-                if rt is not None and not np.isnan(rt).any():
-                    state.observe_ratings(list(five), rt, mday[j])
+            sd = cfg.rating_sd if hltv[j] else cfg.faceit_rating_sd
+            if sd > 0:
+                for five, rt in ((fa[j], rt_a[j]), (fb[j], rt_b[j])):
+                    if rt is not None and not np.isnan(rt).any():
+                        state.observe_ratings(list(five), rt, mday[j], sd)
             if hltv[j]:
                 recent_maps.append((mday[j], mname[j]))
         i = stop
