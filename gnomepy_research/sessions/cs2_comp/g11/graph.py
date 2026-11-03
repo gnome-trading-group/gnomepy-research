@@ -50,22 +50,33 @@ class Config:
     # With FACEIT on, False keeps FACEIT to the skill prior (levels) and fits on HLTV maps only.
     faceit_maps: bool = False
     community_seed: int = 0
+    # Weight of the graph-smoothness prior on skills (0 turns it off).
+    graph_lambda: float = 0.0
 
 
-def communities(ia: np.ndarray, ib: np.ndarray, w: np.ndarray, P: int, k: int, seed: int = 0) -> np.ndarray:
-    """Spectral communities of the player graph (teammates and opponents on a map are linked, by map weight)."""
-    if k <= 1 or P < 10 * k:
-        return np.zeros(P, dtype=int)
+def player_graph(ia: np.ndarray, ib: np.ndarray, w: np.ndarray, P: int) -> sp.csr_matrix:
+    """The player graph: teammates and opponents on a map are linked, by the map's weight."""
     ten = np.concatenate([ia, ib], axis=1)
     r = np.repeat(ten, 10, axis=1).ravel()
     c = np.tile(ten, (1, 10)).ravel()
-    ww = np.repeat(w, 100)
-    W = sp.csr_matrix((ww, (r, c)), shape=(P, P))
+    W = sp.csr_matrix((np.repeat(w, 100), (r, c)), shape=(P, P))
     W.setdiag(0)
     W.eliminate_zeros()
+    return W
+
+
+def normalized_adjacency(W: sp.csr_matrix) -> tuple[sp.csr_matrix, np.ndarray]:
     deg = np.asarray(W.sum(axis=1)).ravel()
     dinv = 1.0 / np.sqrt(np.maximum(deg, 1e-9))
-    N = sp.diags(dinv) @ W @ sp.diags(dinv)
+    return (sp.diags(dinv) @ W @ sp.diags(dinv)).tocsr(), dinv
+
+
+def communities(W: sp.csr_matrix, k: int, seed: int = 0) -> np.ndarray:
+    """Spectral communities of the player graph."""
+    P = W.shape[0]
+    if k <= 1 or P < 10 * k:
+        return np.zeros(P, dtype=int)
+    N, dinv = normalized_adjacency(W)
     vals, vecs = eigsh(N, k=k, which="LA", v0=np.full(P, 1.0 / np.sqrt(P)))
     emb = vecs * dinv[:, None]
     emb = emb / np.maximum(np.linalg.norm(emb, axis=1, keepdims=True), 1e-12)
@@ -113,7 +124,10 @@ class GraphFit:
         X0 = X0[:, np.r_[np.ones(min(5, X0.shape[1]), bool), X0[:, 5:].any(axis=0)]]
         K = X0.shape[1]
         Xs = sp.csr_matrix(X0)
-        levels = [communities(ia, ib, w, P, k, cfg.community_seed) for k in cfg.communities]
+        W = player_graph(ia, ib, w, P)
+        levels = [communities(W, k, cfg.community_seed) for k in cfg.communities]
+        # Graph-smoothness prior: lam * s' (I - D^-1/2 W D^-1/2) s pulls each player toward the players he meets.
+        G = (cfg.graph_lambda * (sp.eye(P) - normalized_adjacency(W)[0])).tocsr() if cfg.graph_lambda else None
         comm = levels[0]
         C = sp.hstack([sp.csr_matrix((np.ones(P), (np.arange(P), lv)), shape=(P, int(lv.max()) + 1)) for lv in levels]).tocsr()
         NC = C.shape[1]
@@ -133,6 +147,10 @@ class GraphFit:
             obj = -(w * (ra * d - n * np.logaddexp(0.0, d))).sum() + 0.5 * (r @ pr_) + 0.5e-2 * (g @ g) \
                 + 0.5 * inv_tau * (c @ c)
             grad_s = -(At @ (w * (ra - n * expit(d)))) + pr_
+            if G is not None:
+                gs = G @ s
+                obj += 0.5 * (s @ gs)
+                grad_s += gs
             if kappa:
                 e = yr - L @ s
                 obj += 0.5 * kappa * (wr * e * e).sum()
@@ -146,6 +164,8 @@ class GraphFit:
             vs, vg, vc = split(v)
             pr_ = prec * (vs - Xs @ vg - C @ vc)
             hs = At @ (w * n * pr * (1 - pr) * (A @ vs)) + pr_
+            if G is not None:
+                hs += G @ vs
             if kappa:
                 hs += kappa * (L.T @ (wr * (L @ vs)))
             hg = -(Xs.T @ pr_) + 1e-2 * vg
@@ -159,6 +179,8 @@ class GraphFit:
         Pm = sp.diags(prec)
         n_theta = P + K + NC
         Hss = At @ sp.diags(w * n * pr * (1 - pr)) @ A + Pm
+        if G is not None:
+            Hss = Hss + G
         if kappa:
             Hss = Hss + kappa * (L.T @ sp.diags(wr) @ L)
         H = sp.bmat([[Hss, -Pm @ Xs, -Pm @ C],
