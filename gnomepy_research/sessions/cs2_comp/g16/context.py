@@ -1,5 +1,7 @@
 """
-Per-series context a player-skill model cannot carry, each computed at the series' week cutoff from what was known:
+Per-series context a player-skill model cannot carry, each computed at the series' week cutoff from what was known.
+Tried as layer columns and dropped (none moved the dev walk-forward: the market already prices matchups and map
+pools); kept so the experiment can be rerun through `walk.py`'s resid/h2h/pool/context specs.
 
 - `resid`: how wrong the market has been about each team lately. Each team's past market-joined series contribute
   (won − market price); the shrunk running mean of A minus that of B.
