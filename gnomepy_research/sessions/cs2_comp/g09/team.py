@@ -4,8 +4,12 @@ rating's own pre-map residuals (result minus what the rating expected):
 
   form     recency-weighted residual over recent maps: is the team running above or below its rating
   mapadv   expected residual edge over the maps a greedy bo3 veto leaves, from each team's shrunk per-map residuals
+  cross    the two teams' home circuits differ: the region named most often in the events of each team's past year
+           (regional leagues and qualifiers name it). Ratings carried across circuits are overconfident.
 """
 from __future__ import annotations
+
+import re
 
 import numpy as np
 import pandas as pd
@@ -15,6 +19,18 @@ FORM_WINDOW_DAYS = 90.0
 MAP_WINDOW_DAYS = 180.0
 MAP_SHRINK = 6.0
 POOL_WINDOW_DAYS = 60.0
+REGION_WINDOW_DAYS = 365.0
+REGIONS = [(re.compile(p), r) for p, r in (
+    (r"\bEurope\b|\bEU\b", "EU"), (r"North America|\bNA\b", "NA"), (r"South America|\bSA\b|Brazil", "SA"),
+    (r"\bAsia\b|China", "AS"), (r"Oceania|Australia", "OC"), (r"MENA|Middle East", "ME"), (r"\bCIS\b", "CIS"),
+    (r"Africa", "AF"))]
+
+
+def event_region(name: str | None) -> str:
+    for pat, region in REGIONS:
+        if name and pat.search(name):
+            return region
+    return ""
 
 
 def _long(maps: pd.DataFrame, resid: np.ndarray) -> pd.DataFrame:
@@ -41,8 +57,24 @@ def _veto(diff: dict[str, float], pool: list[str]) -> float:
 
 
 def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> pd.DataFrame:
-    """rows: key, snap, team_a_id, team_b_id. Returns key, form_a, form_b, form (A minus B) and mapadv."""
+    """rows: key, snap, team_a_id, team_b_id. Returns key, form_a, form_b, form (A minus B), mapadv and cross."""
     lg = _long(maps, resid)
+    first = maps.drop_duplicates("match_id")
+    ev = pd.concat([pd.DataFrame({"time": first.time.to_numpy(), "team": first[c].to_numpy(),
+                                  "region": [event_region(n) for n in first.event_name]}) for c in ("team_a_id", "team_b_id")])
+    ev = ev[ev.region != ""].sort_values("time", kind="stable")
+    ev_by_team = {t: (g.time.to_numpy(), g.region.to_numpy()) for t, g in ev.groupby("team")}
+
+    def home(team, snap):
+        if team not in ev_by_team:
+            return ""
+        t, reg = ev_by_team[team]
+        sl = reg[np.searchsorted(t, snap - np.timedelta64(int(REGION_WINDOW_DAYS), "D")):np.searchsorted(t, snap)]
+        if len(sl) == 0:
+            return ""
+        names, counts = np.unique(sl, return_counts=True)
+        return str(names[np.argmax(counts)])
+
     times = lg.time.to_numpy()
     by_team = {t: g.index.to_numpy() for t, g in lg.groupby("team")}
     res_all = lg.res.to_numpy()
@@ -78,6 +110,8 @@ def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> 
             side_maps[side] = {str(map_names[c]): tot[c] / (cnt[c] + MAP_SHRINK) for c in np.flatnonzero(cnt)}
         diff = {m: side_maps["a"].get(m, 0.0) - side_maps["b"].get(m, 0.0) for m in pool}
         feats["mapadv"] = _veto(diff, pool)
+        ha, hb = home(r.team_a_id, snap), home(r.team_b_id, snap)
+        feats["cross"] = float(ha != "" and hb != "" and ha != hb)
         out.append(feats)
     f = pd.DataFrame(out)
     f["form"] = f.form_a - f.form_b

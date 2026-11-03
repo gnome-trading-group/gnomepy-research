@@ -5,6 +5,7 @@ fitted on every bo3 series of the last TRAIN_DAYS before the cutoff.
   zavg    mean over the rating variants of the bo3 price logit implied by each map-level rating gap
   form    A-minus-B recency-weighted residual against the main rating (team.py)
   mapadv  A's expected edge over the maps a greedy veto leaves (team.py)
+  zcross  zavg in series between teams from different home circuits (team.py), where the rating is overconfident
 
 The intercept carries HLTV's team-A ordering. The market is left out on purpose: the scorer pools q with the kickoff
 price itself, and every market feature tried (smoothed path, market-implied team ratings) added nothing once the
@@ -17,7 +18,7 @@ import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g09.core import bo3, logit
 
-FEATURES = ("zavg", "form", "mapadv")
+FEATURES = ("zavg", "form", "mapadv", "zcross")
 TRAIN_DAYS = 180.0
 L2 = 1.0
 
@@ -29,6 +30,7 @@ def _price_logit(gap: np.ndarray) -> np.ndarray:
 def design(rows: pd.DataFrame, features=FEATURES) -> np.ndarray:
     gaps = [rows.elo_gap.to_numpy(float)] + [rows[c].to_numpy(float) for c in rows.columns if c.startswith("elo_gap_")]
     cols = {"zavg": np.mean([_price_logit(g) for g in gaps], axis=0)}
+    cols["zcross"] = cols["zavg"] * rows.cross.to_numpy(float)
     return np.column_stack([cols[f] if f in cols else rows[f].to_numpy(float) for f in features] + [np.ones(len(rows))])
 
 
