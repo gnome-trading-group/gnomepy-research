@@ -1,15 +1,16 @@
 """
-g06: e12's player-skill price, corrected by the announced fives' FACEIT matchmaking form.
+g06: e12's player-skill price, corrected by the announced fives' FACEIT matchmaking skill.
 
     python -m gnomepy_research.sessions.cs2_comp.g06.predict --data <bundle> --targets <targets parquet> --out <parquet>
         [--weeks 2026-04-06,2026-04-13]
 
-    logit(q) = logit(e12) + GAMMA * (form_A - form_B)
+    logit(q) = logit(e12) + GAMMA * (mm_A - mm_B)
 
 e12 is refitted at each week_cutoff (HLTV and HLTV+FACEIT skill fits and its fixed logistic layer) and prices each side
-with its announced five. A five's form is the mean over its players of a shrunk, recency-weighted win rate in their own
-FACEIT matchmaking and hub games before the cutoff (`mm_form`). GAMMA is the form's weight relative to the skill price
-in a logistic regression on every HLTV bo3 series of Jan 2025 - Feb 2026, all of it before the first tune cutoff.
+with its announced five. mm is the five's mean skill in a fit on the FACEIT matchmaking, hub and championship games
+its players played before the cutoff (`mm_skill`). GAMMA is that difference's weight relative to the skill price in a
+logistic regression on every HLTV bo3 series of Jan 2025 - Feb 2026, all of it before the first tune cutoff; the fit's
+settings were chosen on those series too.
 
 q carries no market information: the harness pools it with the kickoff price, and pre-kickoff price paths added
 nothing once a skill price was pooled (see the README).
@@ -26,9 +27,9 @@ from scipy.special import expit
 from gnomepy_research.sessions.cs2_comp.g06.e12.data import Inputs
 from gnomepy_research.sessions.cs2_comp.g06.e12.predict import LAYER_FACEIT, LAYER_HLTV, design, rows
 from gnomepy_research.sessions.cs2_comp.g06.history import logit, naive
-from gnomepy_research.sessions.cs2_comp.g06.mm_form import MatchmakingForm
+from gnomepy_research.sessions.cs2_comp.g06.mm_skill import MatchmakingGames, five_diff
 
-GAMMA = 0.925
+GAMMA = 0.61
 
 
 def targets_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -65,10 +66,11 @@ def e12_rows(data_dir: str | Path, series: pd.DataFrame, faceit: bool = True) ->
 
 def predict(data_dir: str | Path, targets: pd.DataFrame) -> pd.DataFrame:
     e = e12_rows(data_dir, targets)
-    form = MatchmakingForm(data_dir, targets.week_cutoff.max())
+    games = MatchmakingGames(data_dir, targets.week_cutoff.max())
     d = targets[["match_id", "week_cutoff", "team_a_lineup_ids", "team_b_lineup_ids"]].merge(e, on="match_id")
-    d["form"] = form.diff(d.team_a_lineup_ids, d.team_b_lineup_ids, d.week_cutoff)
-    q = expit(logit(d.e12f) + GAMMA * d.form.to_numpy())
+    skills = {c: games.fit(pd.Timestamp(c)) for c in d.week_cutoff.unique()}
+    d["mm"] = [five_diff(skills[c], a, b) for a, b, c in zip(d.team_a_lineup_ids, d.team_b_lineup_ids, d.week_cutoff)]
+    q = expit(logit(d.e12f) + GAMMA * d.mm.to_numpy())
     return pd.DataFrame({"match_id": d.match_id.to_numpy(), "q": q, "fit_cutoff": d.week_cutoff.to_numpy()})
 
 
