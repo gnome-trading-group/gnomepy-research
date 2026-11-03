@@ -32,7 +32,8 @@ def main() -> None:
     hist = bundle.load(a.data, "hltv/cs2_match_history")
     maps = ratings.prepare_maps(hist)
     stats = skill.prepare_stats(bundle.load(a.data, "hltv/cs2_player_map_stats", columns=skill.STATS_COLUMNS))
-    fm = skill.prepare_faceit(bundle.load(a.data, "faceit/faceit_match_history"), bundle.load(a.data, "faceit/faceit_exclusions"))
+    fm = skill.prepare_faceit(bundle.load(a.data, "faceit/faceit_match_history"), bundle.load(a.data, "faceit/faceit_exclusions"),
+                              bundle.load(a.data, "faceit/faceit_matches", columns=["match_id", "finished_at"]))
     s = ratings.series_table(maps)
     s = s[(s.bo == 3) & s.y.notna() & (s.t >= FIRST_WEEK)].copy()
     s["week"] = ratings.monday(s.t)
@@ -50,9 +51,9 @@ def main() -> None:
             rows += [(r.t, r.y, *fit.diff(list(r.pa), list(r.pb))) for r in sub.itertuples()]
         d = pd.DataFrame(rows, columns=["t", "y"] + skill.FEATURES)
         tr = d.t < SPLIT
+        res = {"config": cfg, "seconds": time.time() - t0}
         clf = LogisticRegression(C=1, max_iter=1000).fit(d[skill.FEATURES][tr], d.y[tr])
-        res = {"config": cfg, "loss": float(log_loss(clf.predict_proba(d[skill.FEATURES][~tr])[:, 1], d.y[~tr])),
-               "seconds": time.time() - t0}
+        res["loss"] = float(log_loss(clf.predict_proba(d[skill.FEATURES][~tr])[:, 1], d.y[~tr]))
         print(res, flush=True)
         results.append(res)
     out = Path(a.out)

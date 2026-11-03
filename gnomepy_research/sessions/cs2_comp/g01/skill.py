@@ -31,7 +31,7 @@ def _ridge(X: sp.csr_matrix, y: np.ndarray, w: np.ndarray, lam: float, prior: np
     return sol
 
 
-def prepare_faceit(fm: pd.DataFrame, excl: pd.DataFrame) -> pd.DataFrame:
+def prepare_faceit(fm: pd.DataFrame, excl: pd.DataFrame, finished: pd.DataFrame) -> pd.DataFrame:
     whole = set(excl.loc[excl.map_name.isna(), "match_id"])
     per_map = set(zip(excl.match_id, excl.map_name))
     keep = ~fm.match_id.isin(whole) & ~pd.Series(list(zip(fm.match_id, fm.map_name)), index=fm.index).isin(per_map)
@@ -45,7 +45,9 @@ def prepare_faceit(fm: pd.DataFrame, excl: pd.DataFrame) -> pd.DataFrame:
     f["team_b_player_ids"] = [keys(h, x) for h, x in zip(f.team_b_player_ids, f.team_b_faceit_ids)]
     f = f[f.team_a_player_ids.map(len).eq(5) & f.team_b_player_ids.map(len).eq(5)]
     f["t"] = pd.to_datetime(f.match_time.fillna(f.match_date), utc=True).dt.tz_convert(None)
-    return f[["t", "team_a_player_ids", "team_b_player_ids", "team_a_score", "team_b_score"]].reset_index(drop=True)
+    f["known"] = f.match_id.map(finished.set_index("match_id").finished_at.map(lambda x: pd.Timestamp(x, unit="s")))
+    f = f.dropna(subset=["known"])
+    return f[["known", "t", "team_a_player_ids", "team_b_player_ids", "team_a_score", "team_b_score"]].reset_index(drop=True)
 
 
 def _window(maps: pd.DataFrame, cutoff: pd.Timestamp, halflife: float, window_days: float) -> tuple[pd.DataFrame, np.ndarray]:
@@ -55,14 +57,14 @@ def _window(maps: pd.DataFrame, cutoff: pd.Timestamp, halflife: float, window_da
 
 class SkillFit:
     def __init__(self, maps: pd.DataFrame, cutoff: pd.Timestamp, stats: pd.DataFrame | None = None,
-                 faceit: pd.DataFrame | None = None, faceit_weight: float = 0.5,
-                 halflife: float = 400.0, lam: float = 10.0, lam_rating: float = 10.0, gamma: float = 0.3,
-                 anchored: bool = True, window_days: float = 540.0):
+                 faceit: pd.DataFrame | None = None, faceit_weight: float = 2.0,
+                 halflife: float = 800.0, lam: float = 5.0, lam_rating: float = 3.0, gamma: float = 1.0,
+                 anchored: bool = True, window_days: float = 900.0):
         self.anchored = anchored
         m, w_h = _window(maps, cutoff, halflife, window_days)
         cols = ["team_a_player_ids", "team_b_player_ids", "team_a_score", "team_b_score"]
         if faceit is not None:
-            f, w_f = _window(faceit, cutoff, halflife, window_days)
+            f, w_f = _window(faceit[faceit.known < cutoff], cutoff, halflife, window_days)
             allm = pd.concat([m[cols], f[cols]], ignore_index=True)
             w = np.concatenate([w_h, faceit_weight * w_f])
         else:
@@ -89,29 +91,35 @@ class SkillFit:
         if stats is not None:
             self._fit_stats(m, stats, w_h, lam_rating, gamma)
 
-    def _fit_stats(self, m, stats, w_map, lam, gamma):
-        row_of = pd.Series(np.arange(len(m)), index=m.mapstatsid.values)
-        st = stats[stats.mapstatsid.isin(row_of.index) & stats.player_id.isin(self.index) & stats.rating.notna()]
-        r = row_of.loc[st.mapstatsid.values].values
-        lookup = np.vectorize(lambda p: self.index.get(p, -1))
-        opp_a = lookup(np.stack(m.team_b_player_ids.values))
-        opp_b = lookup(np.stack(m.team_a_player_ids.values))
-        opp = np.where(st.is_team_a.values.astype(bool)[:, None], opp_a[r], opp_b[r])
-        n = len(st)
-        own = st.player_id.map(self.index).values
+    def _design(self, own_keys, opp_lists, gamma):
+        lookup = np.vectorize(lambda p: self.index.get(p, -1), otypes=[int])
+        opp = lookup(np.array([list(o) for o in opp_lists], dtype=object))
+        n = len(own_keys)
+        own = np.fromiter((self.index.get(p, -1) for p in own_keys), int, count=n)
         rows = np.concatenate([np.arange(n), np.repeat(np.arange(n), 5)])
         cols = np.concatenate([own, opp.ravel()])
         vals = np.concatenate([np.ones(n), np.full(5 * n, -gamma / 5.0)])
-        ok_opp = cols >= 0
-        X = sp.csr_matrix((vals[ok_opp], (rows[ok_opp], cols[ok_opp])), shape=(n, len(self.index)))
-        w = w_map[r]
-        for name in STAT_TARGETS:
+        ok = cols >= 0
+        return sp.csr_matrix((vals[ok], (rows[ok], cols[ok])), shape=(n, len(self.index)))
+
+    def _solve_targets(self, X, st, w, names, lam):
+        for name in names:
             y = st[name].values.astype(float)
             ok = np.isfinite(y)
             mu = np.average(y[ok], weights=w[ok])
             sd = np.sqrt(np.average((y[ok] - mu) ** 2, weights=w[ok]))
             yy = np.where(ok, (y - (ANCHOR.get(name, mu) if self.anchored else mu)) / sd, 0.0)
             self.stat_skill[name] = _ridge(X, yy, w * ok, lam)
+
+    def _fit_stats(self, m, stats, w_map, lam, gamma):
+        row_of = pd.Series(np.arange(len(m)), index=m.mapstatsid.values)
+        st = stats[stats.mapstatsid.isin(row_of.index) & stats.player_id.isin(self.index) & stats.rating.notna()]
+        r = row_of.loc[st.mapstatsid.values].values
+        opp_a = np.stack(m.team_b_player_ids.values)[r]
+        opp_b = np.stack(m.team_a_player_ids.values)[r]
+        opp = np.where(st.is_team_a.values.astype(bool)[:, None], opp_a, opp_b)
+        X = self._design(st.player_id.values, list(opp), gamma)
+        self._solve_targets(X, st, w_map[r], STAT_TARGETS, lam)
 
     def lineup(self, ids) -> tuple[float, float]:
         s = [self.margin_skill[self.index[p]] if p in self.index else 0.0 for p in ids]

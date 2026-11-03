@@ -36,11 +36,11 @@ def kickoff_prices(paths: pd.DataFrame) -> pd.Series:
 _FITS: dict[pd.Timestamp, skill.SkillFit] = {}
 
 
-def skill_features(maps: pd.DataFrame, stats: pd.DataFrame, queries: pd.DataFrame) -> np.ndarray:
+def skill_features(maps: pd.DataFrame, stats: pd.DataFrame, faceit: pd.DataFrame, queries: pd.DataFrame) -> np.ndarray:
     out = np.zeros((len(queries), len(skill.FEATURES)))
     for week, idx in queries.groupby("week").indices.items():
         if week not in _FITS:
-            _FITS[week] = skill.SkillFit(maps, week, stats)
+            _FITS[week] = skill.SkillFit(maps, week, stats, faceit=faceit)
         fit = _FITS[week]
         for i in idx:
             out[i] = fit.diff(list(queries.pa.iloc[i]), list(queries.pb.iloc[i]))
@@ -83,7 +83,10 @@ def predict_week(data_dir: str, week: pd.Timestamp, targets: pd.DataFrame) -> pd
     stats = bundle.load(data_dir, "hltv/cs2_player_map_stats", before=week,
                         columns=skill.STATS_COLUMNS + ["match_date"])
     stats = skill.prepare_stats(stats)
-    sk = skill_features(maps, stats, allq[["week", "pa", "pb"]].reset_index(drop=True))
+    faceit = skill.prepare_faceit(bundle.load(data_dir, "faceit/faceit_match_history", before=week),
+                                  bundle.load(data_dir, "faceit/faceit_exclusions", before=week),
+                                  bundle.load(data_dir, "faceit/faceit_matches", before=week, columns=["match_id", "finished_at"]))
+    sk = skill_features(maps, stats, faceit, allq[["week", "pa", "pb"]].reset_index(drop=True))
     X = stage1_matrix(sk)
     nh = len(hq)
     Xh, Xt = X[:nh], X[nh:]
