@@ -16,7 +16,7 @@ import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g09.core import UNRANKED, bo3, logit
 
-FEATURES = ("ze", "ze_h")
+FEATURES = ("zavg", "form", "mapadv")
 TRAIN_DAYS = 365.0
 L2 = 1.0
 
@@ -38,10 +38,18 @@ def design(rows: pd.DataFrame, features=FEATURES) -> np.ndarray:
     cols = {"z0": z0, "d3": d3, "ze": ze, "rk": rk, "nomkt": no, "nomkt_ze": no * ze, "nomkt_rk": no * rk,
             "liq_d3": d3 * liq, "liq_z0": z0 * liq, "liq_ze": ze * liq, "thin": thin, "thin_z0": thin * z0,
             "thin_ze": thin * ze, "lan_ze": lan * ze, "lan_z0": lan * z0}
+    variants = [ze]
     for c in rows.columns:
         if c.startswith("elo_gap_"):
             pc = 1 / (1 + np.exp(-rows[c].to_numpy(float)))
             cols["ze_" + c[len("elo_gap_"):]] = logit(bo3(pc))
+            variants.append(cols["ze_" + c[len("elo_gap_"):]])
+    cols["zavg"] = np.mean(variants, axis=0)
+    mm = np.fmin(rows.minmaps_a.to_numpy(float), rows.minmaps_b.to_numpy(float))
+    cols["zavg_mm"] = cols["zavg"] * np.exp(-mm / 30.0)
+    cols["zavg_known"] = cols["zavg"] * (10.0 - rows.known_a.to_numpy(float) - rows.known_b.to_numpy(float))
+    cols["zavg_thin"] = cols["zavg"] * thin
+    cols["zavg_lan"] = cols["zavg"] * lan
     return np.column_stack([cols[f] if f in cols else rows[f].to_numpy(float) for f in features] + [np.ones(len(rows))])
 
 

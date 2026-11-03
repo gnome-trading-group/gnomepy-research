@@ -18,9 +18,15 @@ import pandas as pd
 from gnomepy_research.sessions.cs2_comp.g09.core import EloConfig, build_rows, naive
 from gnomepy_research.sessions.cs2_comp.g09.layer import fit_predict
 
-# Tuned by tune_elo.py on HLTV bo3 series from Jun 2025 to Mar 2026, before the first dev cutoff.
+# Three ratings averaged, all tuned by tune_elo.py on HLTV bo3 series from Jun 2025 to Mar 2026 (before the first dev
+# cutoff): HLTV maps only; HLTV and FACEIT maps; and the same fully re-tuned. The full re-tune scores best on the
+# tuning window but not on Polymarket series, so no single one is trusted.
 MAIN_ELO = EloConfig(k_faceit=1.0, faceit_stats=True)
-EXTRA_ELO = {"h": EloConfig()}
+EXTRA_ELO = {
+    "h": EloConfig(),
+    "t": EloConfig(k_new=1.6072, n_settle=48.0, new_gap=1.16, rank_scale=3.35, margin=0.9, k_faceit=0.4444, faceit_offset=1.5,
+                   ind_weight=13.5, ind_alpha=0.0029333, faceit_stats=True),
+}
 
 
 def predict(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
