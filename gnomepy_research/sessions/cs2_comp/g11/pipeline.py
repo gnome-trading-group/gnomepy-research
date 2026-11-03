@@ -84,7 +84,8 @@ def price_rows(inputs: Inputs, fit: GraphFit, lineups: Lineups, standins: Standi
             fives[side], ranks[side] = five, inputs.rank(team, cutoff)
             rec.update({f"new_{side}": new, f"idle_{side}": st["days_idle"], f"rank_{side}": ranks[side],
                         f"standin_{side}": standins.share(team, cutoff)})
-        rec.update(fit.gap(fives["a"], ranks["a"], fives["b"], ranks["b"], int(r.team_a), int(r.team_b)))
+        rec.update(fit.gap(fives["a"], ranks["a"], fives["b"], ranks["b"], int(r.team_a), int(r.team_b),
+                           int(rec.get("is_lan") or 0)))
         if short is not None:
             sg = short.gap(fives["a"], ranks["a"], fives["b"], ranks["b"])
             rec.update({"gap_short": sg["gap"], "gap_short_var": sg["gap_var"]})
@@ -105,14 +106,15 @@ def build(data_dir: str, targets: pd.DataFrame, cfg: Config, faceit: bool, histo
     mk["week"] = mk.kickoff.map(monday)
     ser = inputs.series.rename(columns={"time": "series_time"})
     ser["match_id"] = ser.match_id.astype(np.int64)
-    hist = mk.merge(ser[["match_id", "team_a", "team_b", "lineup_a", "lineup_b", "sub_a", "sub_b", "y", "known"]], on="match_id")
+    hist = mk.merge(ser[["match_id", "team_a", "team_b", "lineup_a", "lineup_b", "sub_a", "sub_b", "y", "known", "is_lan"]],
+                    on="match_id")
     hist = hist[hist.kickoff < until]
     tm = market_summary(target_paths(data_dir, targets.match_id))
     t = targets.rename(columns={"team_a_id": "team_a", "team_b_id": "team_b", "team_a_lineup_ids": "lineup_a",
                                 "team_b_lineup_ids": "lineup_b"})
     t["sub_a"] = [0 if v is None else len(v) for v in targets.team_a_standin_ids]
     t["sub_b"] = [0 if v is None else len(v) for v in targets.team_b_standin_ids]
-    t = t[["match_id", "team_a", "team_b", "lineup_a", "lineup_b", "sub_a", "sub_b", "week_cutoff"]].merge(
+    t = t[["match_id", "team_a", "team_b", "lineup_a", "lineup_b", "sub_a", "sub_b", "is_lan", "week_cutoff"]].merge(
         tm.drop(columns=["kickoff"]), on="match_id", how="left")
     target_weeks = sorted(pd.Timestamp(c) for c in t.week_cutoff.unique())
     weeks = set(target_weeks)

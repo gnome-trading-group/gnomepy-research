@@ -206,7 +206,7 @@ class GraphFit:
                 thin += 1
         return float(np.mean(vals)), extra, thin, comms
 
-    def gap(self, five_a, rank_a, five_b, rank_b, team_a: int = -1, team_b: int = -1) -> dict:
+    def gap(self, five_a, rank_a, five_b, rank_b, team_a: int = -1, team_b: int = -1, is_lan: int = 0) -> dict:
         n = self.lu.shape[0]
         v = np.zeros(n)
         ma, ea, ta, ca = self._vec(five_a, rank_a, 1.0, v)
@@ -228,6 +228,11 @@ class GraphFit:
                 for sd, o in self.map_offset.items()}
         out |= {f"q_uni_{int(round(sd * 100))}": uniform_price(ma - mb, team_a, team_b, o, self.pool)
                 for sd, o in self.map_offset.items()}
+        ctx = "lan" if is_lan else "online"
+        for sd, o in self.map_offset.items():
+            shift = o.get((team_a, ctx), 0.0) - o.get((team_b, ctx), 0.0)
+            out[f"q_ctx_{int(round(sd * 100))}"] = float(series_price(np.array([ma - mb + shift]))[0])
+            out[f"q_uctx_{int(round(sd * 100))}"] = uniform_price(ma - mb + shift, team_a, team_b, o, self.pool)
         out["pref_n_a"] = self.prefs.get(("n", team_a), 0.0)
         out["pref_n_b"] = self.prefs.get(("n", team_b), 0.0)
         return out | {"gap": ma - mb, "gap_players": gap_players, "gap_var": var, "pool_known": known, "thin_a": ta, "thin_b": tb, "comm_a": dom_a, "comm_b": dom_b,
@@ -249,6 +254,12 @@ def map_offsets(f: pd.DataFrame, w: np.ndarray, ra: np.ndarray, n: np.ndarray, p
     for sd in cfg.map_sds:
         b = g.res / (g.fisher + 1.0 / sd ** 2)
         offsets[sd] = {(int(t), m): float(v) for (t, m), v in b.items()}
+    lan = np.concatenate([f.is_lan.to_numpy(int), f.is_lan.to_numpy(int)])
+    d["ctx"] = np.where(lan[team >= 0] > 0, "lan", "online")
+    gc = d.groupby(["team", "ctx"])[["res", "fisher"]].sum()
+    for sd in cfg.map_sds:
+        b = gc.res / (gc.fisher + 1.0 / sd ** 2)
+        offsets[sd] |= {(int(t), m): float(v) for (t, m), v in b.items()}
     recent = f[(f.time >= cutoff - pd.Timedelta(days=cfg.pool_days)) & (f.source == "hltv")]
     counts = recent.map_name.value_counts()
     pool = tuple(sorted(counts.index[:7]))
