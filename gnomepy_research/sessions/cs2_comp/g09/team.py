@@ -56,9 +56,9 @@ def _veto(diff: dict[str, float], pool: list[str]) -> float:
     return (diff.get(pick_a, 0.0) + diff.get(pick_b, 0.0) + 0.5 * diff.get(left[0], 0.0)) / 2.5
 
 
-def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> pd.DataFrame:
-    """rows: key, snap, team_a_id, team_b_id. Returns key, form_a, form_b, form (A minus B), mapadv and cross."""
-    lg = _long(maps, resid)
+def home_circuits(maps: pd.DataFrame):
+    """A function (team, time) -> the region named most often in the team's events of the year before time ("" when
+    none is named)."""
     first = maps.drop_duplicates("match_id")
     ev = pd.concat([pd.DataFrame({"time": first.time.to_numpy(), "team": first[c].to_numpy(),
                                   "region": [event_region(n) for n in first.event_name]}) for c in ("team_a_id", "team_b_id")])
@@ -75,6 +75,13 @@ def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> 
         names, counts = np.unique(sl, return_counts=True)
         return str(names[np.argmax(counts)])
 
+    return home
+
+
+def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> pd.DataFrame:
+    """rows: key, snap, team_a_id, team_b_id. Returns key, form_a, form_b, form (A minus B), mapadv and cross."""
+    lg = _long(maps, resid)
+    home = home_circuits(maps)
     times = lg.time.to_numpy()
     by_team = {t: g.index.to_numpy() for t, g in lg.groupby("team")}
     res_all = lg.res.to_numpy()
