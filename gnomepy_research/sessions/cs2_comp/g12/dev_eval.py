@@ -8,6 +8,7 @@ market and e12 (e12's dev predictions come from run_e12 on Batch). Each rater is
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 
@@ -15,7 +16,8 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g12.data import load_hltv, load_target_market, naive
-from gnomepy_research.sessions.cs2_comp.g12.predict import COLS, panel
+from gnomepy_research.sessions.cs2_comp.g12.predict import panel
+from gnomepy_research.sessions.cs2_comp.g12.raters import RATERS
 from gnomepy_research.sessions.cs2_comp.g12.stack import Stack, fit_logistic, logit, sigmoid
 
 
@@ -55,10 +57,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="/work/in/comp")
     ap.add_argument("--e12")
+    ap.add_argument("--raters", help="json list of (name, RaterConfig overrides) to evaluate instead of the model's")
+    ap.add_argument("--faceit", type=int, default=1)
     a = ap.parse_args()
+    raters = tuple((n, o) for n, o in json.loads(a.raters)) if a.raters else RATERS
+    cols = tuple(n for n, _ in raters)
     t = pd.read_parquet(Path(a.data) / "targets_tune.parquet")
     t["week_cutoff"] = naive(t.week_cutoff)
-    p = panel(a.data, t)
+    p = panel(a.data, t, bool(a.faceit), raters)
     out = os.environ.get("OUTPUT_DIR")
     if out:
         p.to_parquet(Path(out) / "panel.parquet", index=False)
@@ -69,11 +75,11 @@ def main():
         e12 = pd.concat([pd.read_parquet(f) for f in sorted(Path(a.e12).glob("*.parquet"))])
         ev = ev.merge(e12[["match_id", "q"]].rename(columns={"q": "e12"}), on="match_id", how="left")
     ev = ev[ev.m0.notna() & ev.y.notna()].reset_index(drop=True)
-    for name, cols in [("stack", COLS)] + [(c, (c,)) for c in COLS]:
+    for name, use in [("stack", cols)] + [(c, (c,)) for c in cols]:
         q = np.empty(len(ev))
         for w in sorted(ev.week_cutoff.unique()):
             m = (ev.week_cutoff == w).to_numpy()
-            q[m] = Stack(cols).fit(hist, pd.Timestamp(w)).predict(ev[m])
+            q[m] = Stack(use).fit(hist, pd.Timestamp(w)).predict(ev[m])
         report(name, ev, q)
 
 
