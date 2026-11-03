@@ -11,6 +11,7 @@ cutoff and combines the target's kickoff price with its graph price.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import numpy as np
@@ -20,10 +21,10 @@ from gnomepy_research.sessions.cs2_comp.g11.graph import Config
 from gnomepy_research.sessions.cs2_comp.g11.layer import features, fit_logistic
 from gnomepy_research.sessions.cs2_comp.g11.pipeline import WEEK, build
 
-CONFIG = Config()
+CONFIG = Config(communities=(32,), laplace=False)
 SHORT = None
 FACEIT = False
-HISTORY_WEEKS = 26
+HISTORY_WEEKS = 40
 COLUMNS = ["zm", "zr", "one"]
 L2 = 1.0
 
@@ -53,7 +54,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", required=True)
     ap.add_argument("--targets", required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", help="output parquet (default: predictions.parquet in $OUTPUT_DIR, for Batch)")
     ap.add_argument("--weeks", help="comma-separated week_cutoff dates to predict (default: all)")
     ap.add_argument("--rows", help="directory to also save the feature rows in")
     a = ap.parse_args()
@@ -62,10 +63,12 @@ def main() -> None:
     targets["week_cutoff"] = wc.dt.tz_convert(None) if wc.dt.tz is not None else wc
     if a.weeks:
         targets = targets[targets.week_cutoff.isin(pd.to_datetime(a.weeks.split(",")))]
-    out = predict(a.data, targets, verbose=True, rows_dir=a.rows)
-    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(a.out, index=False)
-    print(f"wrote {len(out)} predictions to {a.out}")
+    out_path = Path(a.out) if a.out else Path(os.environ["OUTPUT_DIR"]) / "predictions.parquet"
+    rows = a.rows if a.rows or a.out else out_path.parent / "rows"
+    out = predict(a.data, targets, verbose=True, rows_dir=rows)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(out_path, index=False)
+    print(f"wrote {len(out)} predictions to {out_path}")
 
 
 if __name__ == "__main__":
