@@ -213,6 +213,8 @@ class SkillState:
                 "sd_mu": float(mus.std()), "teff": float(team_mu), "lanoff": lan_mu}
 
 
+GH_X, GH_W = np.polynomial.hermite_e.hermegauss(7)
+GH_W = GH_W / GH_W.sum()
 POOL_DAYS = 90
 POOL_MIN_SHARE = 0.05
 
@@ -309,8 +311,13 @@ def run(maps: pd.DataFrame, queries: pd.DataFrame, cfg: RatingConfig) -> pd.Data
             r["series_flat"] = bo3_price(np.full(1, regulation_map_win(np.array([gap]))[0]))
             if cfg.map_var > 0 and pool:
                 off = state.map_offsets(int(q.team_a), pool, cday) - state.map_offsets(int(q.team_b), pool, cday)
-                r["series_veto"] = veto_price(regulation_map_win(gap + off))
             else:
-                r["series_veto"] = r["series_flat"]
+                off = np.zeros(1)
+            r["series_veto"] = veto_price(regulation_map_win(gap + off)) if len(off) >= 3 else r["series_flat"]
+            # The same price averaged over the state's own uncertainty about the gap: unsure gaps pull toward 0.5.
+            sd_gap = np.sqrt((r["var_a"] + r["var_b"]) / FIVE)
+            r["series_unc"] = float(sum(w * (veto_price(regulation_map_win(gap + sd_gap * x + off)) if len(off) >= 3
+                                             else bo3_price(regulation_map_win(np.array([gap + sd_gap * x]))))
+                                        for x, w in zip(GH_X, GH_W)))
             out.append(r)
     return pd.DataFrame(out)
