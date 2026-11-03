@@ -4,9 +4,14 @@ g16 predictions: P(team A wins the bo3) for every target series.
     python -m gnomepy_research.sessions.cs2_comp.g16.predict --data <bundle> --targets <targets parquet> --out <parquet>
         [--weeks 2026-04-06,2026-04-13] [--rows <dir>]
 
-Per distinct week_cutoff: the player-skill filter has read every HLTV map before the cutoff; each target is priced
-with its announced five from that state. The market path up to kickoff is read as a noisy measurement (`market.py`),
-and a small logistic layer, refitted at each cutoff on every market-joined series played before it, combines the two.
+Per distinct week_cutoff: the player-skill filter has read every HLTV and FACEIT map known before the cutoff; each
+target is priced with its announced five from that state. The market path up to kickoff is read as a noisy
+measurement (`market.py`), and a small logistic layer, refitted at each cutoff on every market-joined series played
+before it, combines the two.
+
+The scored submission uses the repo's PlayerSkillConfig with FACEIT maps at full weight and nothing else switched on.
+`fit.py` grids on pre-dev HLTV map log loss found a better candidate (division newcomer offsets -0.5/-0.2/+0.1,
+ratings at gamma 0.3, lam 0: see the README) that was not scored before the session ended; CANDIDATE holds it.
 """
 from __future__ import annotations
 
@@ -19,12 +24,15 @@ import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.bundle import load, target_paths
 from gnomepy_research.sessions.cs2_comp.g16.data import Inputs, naive, target_rows
+from gnomepy_research.sessions.cs2_comp.g16.fit import make_config
 from gnomepy_research.sessions.cs2_comp.g16.layer import Spec, design, fit
 from gnomepy_research.sessions.cs2_comp.g16.layer import predict as layer_predict
 from gnomepy_research.sessions.cs2_comp.g16.market import path_features
 from gnomepy_research.sessions.cs2_comp.g16.skill import SkillConfig, weekly_rows
 
-SKILL = SkillConfig(faceit_weight=1.0)
+SKILL = make_config({"faceit_weight": 1.0})
+CANDIDATE = make_config({"off_low": -0.5, "off_mid": -0.2, "off_high": 0.1, "lam": 0.0, "rating_gamma": 0.3, "rating_sd": 0.31,
+                         "faceit_weight": 1.0})
 SPEC = Spec(columns=("zm", "dz", "zs"), prior_mean={"zm": 1.0}, prior_precision=4.0)
 SPEC_NO_MARKET = Spec(columns=("zs",), prior_mean={"zs": 1.0}, prior_precision=4.0)
 # Rows of a market-joined series only train the layer once the market has had enough prints to mean anything.
