@@ -26,7 +26,7 @@ def enumerate_pairings(outcomes: list[OutcomeLeg]) -> list[VenuePairing]:
     outcome_listings = [[(i, lst) for lst in o.listings] for i, o in enumerate(outcomes)]
     pairings = []
     for combo in product(*outcome_listings):
-        if len({lst[0] for _, lst in combo}) < 2:
+        if len({lst.exchange_id for _, lst in combo}) < 2:
             continue
         pairings.append(VenuePairing(index=len(pairings), legs=list(combo)))
     return pairings
@@ -45,9 +45,8 @@ class ContractGroup:
         self.pairings = enumerate_pairings(self.outcomes)
 
 
-def discover_group(event_ids: list[int], registry: RegistryClient) -> ContractGroup:
-    rels = registry.get_contract_relationships(relationship_type="EQUIVALENT")
-    graph = RelationshipGraph(rels)
+def discover_group(event_ids: list[int], registry: RegistryClient, allow_flagged: bool = False) -> ContractGroup:
+    graph = RelationshipGraph.load(registry, event_ids, allow_flagged=allow_flagged)
 
     groups: list[ContractGroup] = []
     seen_listing_sets: set[frozenset] = set()
@@ -69,9 +68,7 @@ def discover_group(event_ids: list[int], registry: RegistryClient) -> ContractGr
                 for eq_sid in equivalent_sids
                 for lst in registry.get_listing(security_id=eq_sid)
             ]
-            all_listings = list(
-                {(lst.exchange_id, lst.security_id) for lst in source_listings + equiv_listings}
-            )
+            all_listings = list({Listing.from_registry(lst) for lst in source_listings + equiv_listings})
             if len(all_listings) >= 2:
                 outcomes.append(OutcomeLeg(contract.outcome_label, all_listings))
 

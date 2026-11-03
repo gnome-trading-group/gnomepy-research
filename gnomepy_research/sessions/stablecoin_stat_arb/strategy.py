@@ -4,9 +4,14 @@ import math
 from collections import deque
 
 from gnomepy import ExecutionReport, Intent, OrderType, Side, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 
-Listing = tuple[int, int]
+from gnomepy_research.listing import Listing
+
+
+def _rank(listing: Listing) -> tuple[int, int]:
+    """The order pairs are keyed and spreads signed in: by venue ids, as when listings were (exchange, security)."""
+    return listing.exchange_id, listing.security_id
 
 
 class _TimedSpreadEWMA:
@@ -82,6 +87,7 @@ class StablecoinStatArb(Strategy):
         self.entry_fill_timeout_ns = entry_fill_timeout_ns
 
         self._listings: list[Listing] = []
+        self._listing_by_id: dict[int, Listing] = {}
         self._best_bid: dict[Listing, int] = {}
         self._best_ask: dict[Listing, int] = {}
         self._last_update_ts: dict[Listing, int] = {}
@@ -135,23 +141,27 @@ class StablecoinStatArb(Strategy):
         return self._processing_time_ns
 
     def _net_qty(self, listing: Listing) -> int:
-        pos = self.positions.get_position(*listing)
+        pos = self.positions.get_position(listing.exchange_id, listing.security_id)
         return pos.net_quantity if pos is not None else 0
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
         bid = data.bid_price(0)
         ask = data.ask_price(0)
         if bid <= 0 or ask <= 0:
             return []
 
-        listing: Listing = (data.exchange_id, data.security_id)
+        listing_id = self.streams.listing_id(data.stream_id)
+        if listing_id is None:
+            return []
+        listing = self._listing_by_id.get(listing_id)
+        if listing is None:
+            listing = self._listing_by_id[listing_id] = Listing.from_streams(self.streams, listing_id)
         timestamp = data.event_timestamp
 
         if listing not in self._best_bid:
             self._listings.append(listing)
             for other in self._listings[:-1]:
-                key = listing if listing > other else other
-                key = (listing, other) if listing > other else (other, listing)
+                key = (listing, other) if _rank(listing) > _rank(other) else (other, listing)
                 if key not in self._ewma:
                     self._ewma[key] = _TimedSpreadEWMA(
                         halflife_seconds=self.halflife_seconds,
@@ -191,11 +201,11 @@ class StablecoinStatArb(Strategy):
         return (mid_b - mid_a) / avg_mid * 10_000
 
     def _ewma_key(self, lst_a: Listing, lst_b: Listing) -> tuple[Listing, Listing]:
-        return (lst_a, lst_b) if lst_a > lst_b else (lst_b, lst_a)
+        return (lst_a, lst_b) if _rank(lst_a) > _rank(lst_b) else (lst_b, lst_a)
 
     def _signed_spread(self, lst_a: Listing, lst_b: Listing) -> float:
         spread = self._spread_bps(lst_a, lst_b)
-        if lst_a > lst_b:
+        if _rank(lst_a) > _rank(lst_b):
             spread = -spread
         return spread
 
@@ -244,23 +254,23 @@ class StablecoinStatArb(Strategy):
                 intents = []
                 if qty_to_sell > 0:
                     intents.append(Intent(
-                        exchange_id=long_lst[0], security_id=long_lst[1],
+                        exchange_id=long_lst.exchange_id, security_id=long_lst.security_id,
                         bid_price=0, bid_size=0, ask_price=0, ask_size=0,
                     ))
-                    intents.append(self._take_qty(*long_lst, Side.ASK, qty_to_sell))
+                    intents.append(self._take_qty(long_lst.exchange_id, long_lst.security_id, Side.ASK, qty_to_sell))
                 if qty_to_buy > 0:
                     intents.append(Intent(
-                        exchange_id=short_lst[0], security_id=short_lst[1],
+                        exchange_id=short_lst.exchange_id, security_id=short_lst.security_id,
                         bid_price=0, bid_size=0, ask_price=0, ask_size=0,
                     ))
-                    intents.append(self._take_qty(*short_lst, Side.BID, qty_to_buy))
+                    intents.append(self._take_qty(short_lst.exchange_id, short_lst.security_id, Side.BID, qty_to_buy))
                 return intents
 
             intents = []
             if qty_to_sell > 0:
                 intents.append(Intent(
-                    exchange_id=long_lst[0],
-                    security_id=long_lst[1],
+                    exchange_id=long_lst.exchange_id,
+                    security_id=long_lst.security_id,
                     bid_price=0,
                     bid_size=0,
                     ask_price=self._best_ask[long_lst],
@@ -268,8 +278,8 @@ class StablecoinStatArb(Strategy):
                 ))
             if qty_to_buy > 0:
                 intents.append(Intent(
-                    exchange_id=short_lst[0],
-                    security_id=short_lst[1],
+                    exchange_id=short_lst.exchange_id,
+                    security_id=short_lst.security_id,
                     bid_price=self._best_bid[short_lst],
                     bid_size=qty_to_buy,
                     ask_price=0,
@@ -296,8 +306,8 @@ class StablecoinStatArb(Strategy):
                 self._closing = False
                 self._stop_close_issued = False
                 return self._close(long_lst, short_lst, pos_long, pos_short)
-            eff_long = self.positions.get_effective_quantity(*long_lst) or 0
-            eff_short = self.positions.get_effective_quantity(*short_lst) or 0
+            eff_long = self.positions.get_effective_quantity(long_lst.exchange_id, long_lst.security_id) or 0
+            eff_short = self.positions.get_effective_quantity(short_lst.exchange_id, short_lst.security_id) or 0
             long_inflight = pos_long != 0 and abs(eff_long) < abs(pos_long) * 0.5
             short_inflight = pos_short != 0 and abs(eff_short) < abs(pos_short) * 0.5
             if not long_inflight and not short_inflight:
@@ -371,8 +381,8 @@ class StablecoinStatArb(Strategy):
                     if abs_z >= peak_z:
                         continue
 
-                eff_a = self.positions.get_effective_quantity(*lst_a) or 0
-                eff_b = self.positions.get_effective_quantity(*lst_b) or 0
+                eff_a = self.positions.get_effective_quantity(lst_a.exchange_id, lst_a.security_id) or 0
+                eff_b = self.positions.get_effective_quantity(lst_b.exchange_id, lst_b.security_id) or 0
                 net_a = self._net_qty(lst_a)
                 net_b = self._net_qty(lst_b)
                 if (
@@ -384,8 +394,8 @@ class StablecoinStatArb(Strategy):
                 if abs(spread) < self.min_spread_bps:
                     continue
 
-                larger = lst_a if lst_a > lst_b else lst_b
-                smaller = lst_b if lst_a > lst_b else lst_a
+                larger = lst_a if _rank(lst_a) > _rank(lst_b) else lst_b
+                smaller = lst_b if _rank(lst_a) > _rank(lst_b) else lst_a
 
                 if z > self.entry_z and abs_z > best_z:
                     best_z = abs_z
@@ -415,16 +425,16 @@ class StablecoinStatArb(Strategy):
                 self._entering = True
                 return [
                     Intent(
-                        exchange_id=best_long[0],
-                        security_id=best_long[1],
+                        exchange_id=best_long.exchange_id,
+                        security_id=best_long.security_id,
                         bid_price=0,
                         bid_size=0,
                         ask_price=self._best_ask[best_long],
                         ask_size=self.size,
                     ),
                     Intent(
-                        exchange_id=best_short[0],
-                        security_id=best_short[1],
+                        exchange_id=best_short.exchange_id,
+                        security_id=best_short.security_id,
                         bid_price=self._best_bid[best_short],
                         bid_size=self.size,
                         ask_price=0,
@@ -433,8 +443,8 @@ class StablecoinStatArb(Strategy):
                 ]
 
             return [
-                self._take(*best_long, Side.ASK),
-                self._take(*best_short, Side.BID),
+                self._take(best_long.exchange_id, best_long.security_id, Side.ASK),
+                self._take(best_short.exchange_id, best_short.security_id, Side.BID),
             ]
 
         return []
@@ -462,13 +472,13 @@ class StablecoinStatArb(Strategy):
     ) -> list[Intent]:
         intents = []
         if pos_long < 0:
-            intents.append(self._take_qty(*long_lst, Side.BID, abs(pos_long)))
+            intents.append(self._take_qty(long_lst.exchange_id, long_lst.security_id, Side.BID, abs(pos_long)))
         elif pos_long > 0:
-            intents.append(self._take_qty(*long_lst, Side.ASK, abs(pos_long)))
+            intents.append(self._take_qty(long_lst.exchange_id, long_lst.security_id, Side.ASK, abs(pos_long)))
         if pos_short < 0:
-            intents.append(self._take_qty(*short_lst, Side.BID, abs(pos_short)))
+            intents.append(self._take_qty(short_lst.exchange_id, short_lst.security_id, Side.BID, abs(pos_short)))
         elif pos_short > 0:
-            intents.append(self._take_qty(*short_lst, Side.ASK, abs(pos_short)))
+            intents.append(self._take_qty(short_lst.exchange_id, short_lst.security_id, Side.ASK, abs(pos_short)))
         return intents
 
     def _close_maker(
@@ -478,8 +488,8 @@ class StablecoinStatArb(Strategy):
         if pos_long < 0:
             # Closing short: post bid to buy back
             intents.append(Intent(
-                exchange_id=long_lst[0],
-                security_id=long_lst[1],
+                exchange_id=long_lst.exchange_id,
+                security_id=long_lst.security_id,
                 bid_price=self._best_bid[long_lst],
                 bid_size=abs(pos_long),
                 ask_price=0,
@@ -488,8 +498,8 @@ class StablecoinStatArb(Strategy):
         elif pos_long > 0:
             # Closing long: post ask to sell
             intents.append(Intent(
-                exchange_id=long_lst[0],
-                security_id=long_lst[1],
+                exchange_id=long_lst.exchange_id,
+                security_id=long_lst.security_id,
                 bid_price=0,
                 bid_size=0,
                 ask_price=self._best_ask[long_lst],
@@ -497,8 +507,8 @@ class StablecoinStatArb(Strategy):
             ))
         if pos_short < 0:
             intents.append(Intent(
-                exchange_id=short_lst[0],
-                security_id=short_lst[1],
+                exchange_id=short_lst.exchange_id,
+                security_id=short_lst.security_id,
                 bid_price=self._best_bid[short_lst],
                 bid_size=abs(pos_short),
                 ask_price=0,
@@ -506,8 +516,8 @@ class StablecoinStatArb(Strategy):
             ))
         elif pos_short > 0:
             intents.append(Intent(
-                exchange_id=short_lst[0],
-                security_id=short_lst[1],
+                exchange_id=short_lst.exchange_id,
+                security_id=short_lst.security_id,
                 bid_price=0,
                 bid_size=0,
                 ask_price=self._best_ask[short_lst],
@@ -517,9 +527,9 @@ class StablecoinStatArb(Strategy):
 
     def _cancel_passives(self, long_lst: Listing, short_lst: Listing) -> list[Intent]:
         return [
-            Intent(exchange_id=long_lst[0], security_id=long_lst[1],
+            Intent(exchange_id=long_lst.exchange_id, security_id=long_lst.security_id,
                    bid_price=0, bid_size=0, ask_price=0, ask_size=0),
-            Intent(exchange_id=short_lst[0], security_id=short_lst[1],
+            Intent(exchange_id=short_lst.exchange_id, security_id=short_lst.security_id,
                    bid_price=0, bid_size=0, ask_price=0, ask_size=0),
         ]
 
@@ -529,8 +539,8 @@ class StablecoinStatArb(Strategy):
         intents = []
         if pos_long != 0:
             side = Side.BID if pos_long < 0 else Side.ASK
-            intents.append(self._take_qty(*long_lst, side, abs(pos_long)))
+            intents.append(self._take_qty(long_lst.exchange_id, long_lst.security_id, side, abs(pos_long)))
         if pos_short != 0:
             side = Side.BID if pos_short < 0 else Side.ASK
-            intents.append(self._take_qty(*short_lst, side, abs(pos_short)))
+            intents.append(self._take_qty(short_lst.exchange_id, short_lst.security_id, side, abs(pos_short)))
         return intents

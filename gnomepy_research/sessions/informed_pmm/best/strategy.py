@@ -19,7 +19,7 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
 from gnomepy import ExecutionReport, Intent, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 from gnomepy.registry import RegistryClient
 
 from gnomepy_research.fees import registry_fee_rates
@@ -71,12 +71,12 @@ class InformedPredictionMarketMaker(Strategy):
         ref_listings = registry.get_listing(listing_id=ref_listing_id)
         if not ref_listings:
             raise ValueError(f"No listing found for ref_listing_id={ref_listing_id}")
-        self._ref_eid: int = ref_listings[0].exchange_id
-        self._ref_sid: int = ref_listings[0].security_id
+        self._ref_listing_id: int = ref_listing_id
 
         quote_listings = registry.get_listing(listing_id=quote_listing_id)
         if not quote_listings:
             raise ValueError(f"No listing found for quote_listing_id={quote_listing_id}")
+        self._quote_listing_id: int = quote_listing_id
         self._quote_eid: int = quote_listings[0].exchange_id
         self._quote_sid: int = quote_listings[0].security_id
 
@@ -139,15 +139,16 @@ class InformedPredictionMarketMaker(Strategy):
         q = float(np.clip(position, -self._params.Q, self._params.Q))
         return int(np.argmin(np.abs(self._q_levels - q)))
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
         try:
             return self._on_market_data_impl(data)
         except Exception:
             traceback.print_exc()
             raise
 
-    def _on_market_data_impl(self, data: Schema) -> list[Intent]:
-        if data.exchange_id == self._ref_eid and data.security_id == self._ref_sid:
+    def _on_market_data_impl(self, data: StreamRecord) -> list[Intent]:
+        listing_id = self.streams.listing_id(data.stream_id)
+        if listing_id == self._ref_listing_id:
             self._ref_fv.update(data.event_timestamp, data)
             if self._ref_fv.is_ready():
                 smoothed = self._ref_fv.value() / PRICE_SCALE
@@ -157,7 +158,7 @@ class InformedPredictionMarketMaker(Strategy):
                 self._ref_last_ts = data.event_timestamp
             return []
 
-        if data.exchange_id != self._quote_eid or data.security_id != self._quote_sid:
+        if listing_id != self._quote_listing_id:
             return []
 
         ts = data.event_timestamp
@@ -204,7 +205,7 @@ class InformedPredictionMarketMaker(Strategy):
         vals = self._interp(pts)
         v_here = vals[0]
 
-        _, maker_fee_rate = self._fee_rates((self._quote_eid, self._quote_sid))
+        _, maker_fee_rate = self._fee_rates(self._quote_listing_id)
         fee_shift = maker_fee_rate * p * (1.0 - p) * PRICE_SCALE
         tick = self._tick_size
 

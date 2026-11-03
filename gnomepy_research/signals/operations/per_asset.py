@@ -14,25 +14,21 @@ T = TypeVar("T", int, float)
 
 
 class _PerAsset(Signal[T], Generic[T]):
-    """Filters update() calls by security_id (and optionally exchange_id),
-    forwarding only matching ticks to the wrapped signal.
+    """Filters update() calls to one stream (a listing's book), forwarding only its ticks to the wrapped signal.
 
-    Use to build cross-asset signals via composition:
+    Use to build cross-asset signals via composition, with each listing's stream from the strategy's directory:
 
-        btc_micro = PerAsset(MicropriceFairValue(), security_id=1)
-        eth_micro = PerAsset(MicropriceFairValue(), security_id=2)
+        btc_micro = PerAsset(MicropriceFairValue(), stream_id=self.streams.stream_id(btc_listing_id))
+        eth_micro = PerAsset(MicropriceFairValue(), stream_id=self.streams.stream_id(eth_listing_id))
         spread = btc_micro - eth_micro
     """
 
-    def __init__(self, signal: Signal[T], security_id: int, exchange_id: int | None = None):
+    def __init__(self, signal: Signal[T], stream_id: int):
         self.signal = signal
-        self.security_id = security_id
-        self.exchange_id = exchange_id
+        self.stream_id = stream_id
 
     def update(self, timestamp: int, data: Mbp10Schema) -> None:
-        if data.security_id != self.security_id:
-            return
-        if self.exchange_id is not None and data.exchange_id != self.exchange_id:
+        if data.stream_id != self.stream_id:
             return
         self.signal.update(timestamp, data)
 
@@ -68,20 +64,18 @@ class _PerAssetMarketState(_PerAsset[float], MarketStateSignal):
         return self.signal.value()
 
 
-def PerAsset(signal: Signal, security_id: int, exchange_id: int | None = None) -> Signal:
-    """Wrap a signal so it only processes ticks matching security_id /
-    exchange_id. Preserves the wrapped signal's type.
-    """
+def PerAsset(signal: Signal, stream_id: int) -> Signal:
+    """Wrap a signal so it only processes one stream's ticks. Preserves the wrapped signal's type."""
     if isinstance(signal, FairValueSignal):
-        return _PerAssetFairValue(signal, security_id, exchange_id)
+        return _PerAssetFairValue(signal, stream_id)
     if isinstance(signal, VolatilitySignal):
-        return _PerAssetVolatility(signal, security_id, exchange_id)
+        return _PerAssetVolatility(signal, stream_id)
     if isinstance(signal, FlowSignal):
-        return _PerAssetFlow(signal, security_id, exchange_id)
+        return _PerAssetFlow(signal, stream_id)
     if isinstance(signal, BookSignal):
-        return _PerAssetBook(signal, security_id, exchange_id)
+        return _PerAssetBook(signal, stream_id)
     if isinstance(signal, MarketStateSignal):
-        return _PerAssetMarketState(signal, security_id, exchange_id)
+        return _PerAssetMarketState(signal, stream_id)
     raise TypeError(
         f"Cannot wrap {type(signal).__name__}. "
         "Expected FairValueSignal, VolatilitySignal, FlowSignal, BookSignal, or MarketStateSignal."

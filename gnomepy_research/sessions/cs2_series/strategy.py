@@ -47,7 +47,7 @@ import pandas as pd
 
 from gnomepy import ExecutionReport, Intent, OrderStatus, OrderType, Scales, Side, Strategy
 from gnomepy.data import ArtifactQuery, ArtifactStore, DatasetStore, resolve_artifact_path
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 from gnomepy.registry import RegistryClient
 
 from gnomepy_research.fees import registry_fee_rates
@@ -200,7 +200,7 @@ class CS2Series(Strategy):
 
         registry = RegistryClient()
         self._legs = (self._resolve(registry, listing_team_a), self._resolve(registry, listing_team_b))
-        self._side_of = {(leg.exchange_id, leg.security_id): side for side, leg in enumerate(self._legs)}
+        self._side_of = {leg.listing_id: side for side, leg in enumerate(self._legs)}
 
         models = load_models(model_path, posterior_path, blend_path)
         logger.info("match %d: pricing with %s", self.match_id, models.versions)
@@ -255,7 +255,7 @@ class CS2Series(Strategy):
 
     def _taker_rate(self, leg: _Leg) -> float:
         """The leg's taker rate in the registry; the fee per share is rate * p * (1 - p)."""
-        return self._fee_rates((leg.exchange_id, leg.security_id))[0]
+        return self._fee_rates(leg.listing_id)[0]
 
     # ---- state read from the engine's positions --------------------------------------
 
@@ -270,8 +270,8 @@ class CS2Series(Strategy):
 
     # ---- engine callbacks ----------------------------------------------------------------
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
-        side = self._side_of.get((data.exchange_id, data.security_id))
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        side = self._side_of.get(self.streams.listing_id(data.stream_id))
         if side is None:
             return []
         self._legs[side].asks = [Level(data.ask_price(i) / PRICE_SCALE, data.ask_size(i) / SIZE_SCALE)
@@ -347,7 +347,7 @@ class CS2Series(Strategy):
         return quote.lineups == self._entry_lineups
 
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
-        side = self._side_of.get((report.exchange_id, report.security_id))
+        side = self._side_of.get(self.streams.listing_id_for(report.exchange_id, report.security_id))
         if side is not None and report.order_status in TERMINAL:
             self._legs[side].in_flight = False
         return []

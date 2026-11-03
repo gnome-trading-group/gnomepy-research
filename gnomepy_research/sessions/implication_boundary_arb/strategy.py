@@ -4,14 +4,14 @@ from dataclasses import dataclass
 from enum import IntEnum
 
 from gnomepy import ExecutionReport, Intent, OrderType, Side, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 from gnomepy.registry import RegistryClient, RelationshipGraph
 
 from gnomepy_research.fees import registry_fee_rates
+from gnomepy_research.listing import Listing
 
 PRICE_SCALE = 1_000_000_000
 
-Listing = tuple[int, int]  # (exchange_id, security_id)
 
 
 class State(IntEnum):
@@ -27,42 +27,31 @@ class ImpliesPair:
     a_yes_sid: int
     b_yes_sid: int
     a_no_sid: int
-    confidence: float
 
 
-def _build_pairs(event_ids: list[int], min_confidence: float) -> tuple[list[ImpliesPair], list[int]]:
+def _build_pairs(event_ids: list[int], allow_flagged: bool) -> tuple[list[ImpliesPair], list[int]]:
     client = RegistryClient()
-
-    # Fetch all securities across all events
-    all_sids: set[int] = set()
-    for event_id in event_ids:
-        for ec in client.get_event_contracts(event_id=event_id):
-            all_sids.add(ec.security_id)
-
-    # Fetch all relationships touching any of these securities, dedup by relationship_id
-    seen_rel_ids: set[int] = set()
-    all_rels = []
-    for sid in all_sids:
-        for rel in client.get_contract_relationships(security_id=sid):
-            if rel.relationship_id not in seen_rel_ids:
-                seen_rel_ids.add(rel.relationship_id)
-                # Only keep relationships where both sides are in our event set
-                if rel.security_id_a in all_sids and rel.security_id_b in all_sids:
-                    all_rels.append(rel)
-
-    graph = RelationshipGraph(all_rels)
+    graph = RelationshipGraph.load(client, event_ids, allow_flagged=allow_flagged)
+    all_sids = graph.get_event_securities()
 
     pairs: list[ImpliesPair] = []
-    for a_sid, b_sid, confidence in graph.get_implies_pairs(min_confidence=min_confidence):
-        complements = graph.get_complement(a_sid)
-        if not complements:
+    seen_legs: set[frozenset[int]] = set()
+    for a_sid, b_sid in graph.get_implies_pairs():
+        if a_sid not in all_sids or b_sid not in all_sids:
             continue
+        a_no_sid = graph.get_complement(a_sid)
+        if a_no_sid is None:
+            continue
+        # A -> B and its contrapositive not-B -> not-A are both stored, and both are the trade "B yes + A no".
+        legs = frozenset((b_sid, a_no_sid))
+        if legs in seen_legs:
+            continue
+        seen_legs.add(legs)
         pairs.append(ImpliesPair(
             index=len(pairs),
             a_yes_sid=a_sid,
             b_yes_sid=b_sid,
-            a_no_sid=complements[0],
-            confidence=confidence,
+            a_no_sid=a_no_sid,
         ))
 
     # Fetch all listing_ids for all securities so the runner can subscribe
@@ -80,7 +69,7 @@ class ImplicationBoundaryArb(Strategy):
         event_ids: list[int],
         size: int = 1_000_000,
         min_edge_bps: float = 10.0,
-        min_implies_confidence: float = 0.95,
+        allow_flagged: bool = False,
         stale_threshold_ns: int = 2_000_000_000,
         imbalance_timeout_ns: int = 30_000_000_000,
         cooldown_ns: int = 500_000_000,
@@ -96,10 +85,11 @@ class ImplicationBoundaryArb(Strategy):
         self.max_open_pairs = max_open_pairs
         self._processing_time_ns = processing_time_ns
 
-        self._pairs, self.listing_ids = _build_pairs(event_ids, min_implies_confidence)
+        self._pairs, self.listing_ids = _build_pairs(event_ids, allow_flagged)
 
         # sid -> list of Listing (populated as market data arrives)
         self._sid_to_listings: dict[int, list[Listing]] = {}
+        self._by_id: dict[int, Listing] = {}
 
         self._best_ask: dict[Listing, int] = {}
         self._best_ask_size: dict[Listing, int] = {}
@@ -155,7 +145,7 @@ class ImplicationBoundaryArb(Strategy):
         return self._processing_time_ns
 
     def _net_qty(self, listing: Listing) -> int:
-        pos = self.positions.get_position(*listing)
+        pos = self.positions.get_position(listing.exchange_id, listing.security_id)
         return pos.net_quantity if pos is not None else 0
 
     def _best_ask_for_sid(self, sid: int, timestamp: int) -> tuple[int, int, Listing | None]:
@@ -184,7 +174,8 @@ class ImplicationBoundaryArb(Strategy):
         p_b = ask_b / PRICE_SCALE
         p_a = ask_a / PRICE_SCALE
         cost = p_b + p_a
-        fee = self._fee_rates(lst_b)[0] * p_b * (1.0 - p_b) + self._fee_rates(lst_a)[0] * p_a * (1.0 - p_a)
+        fee = (self._fee_rates(lst_b.listing_id)[0] * p_b * (1.0 - p_b)
+               + self._fee_rates(lst_a.listing_id)[0] * p_a * (1.0 - p_a))
         edge_bps = (1.0 - cost - fee) * 10_000
 
         return cost, edge_bps, lst_b, lst_a
@@ -192,12 +183,18 @@ class ImplicationBoundaryArb(Strategy):
     def _open_pair_count(self) -> int:
         return sum(1 for s in self._state.values() if s != State.FLAT)
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
-        sid = data.security_id
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        listing_id = self.streams.listing_id(data.stream_id)
+        if listing_id is None:
+            return []
+        listing = self._by_id.get(listing_id)
+        if listing is None:
+            listing = Listing.from_streams(self.streams, listing_id)
+            self._by_id[listing_id] = listing
+        sid = listing.security_id
         if sid not in self._watched_sids:
             return []
 
-        listing: Listing = (data.exchange_id, sid)
         timestamp = data.event_timestamp
 
         if sid not in self._sid_to_listings:
@@ -256,17 +253,17 @@ class ImplicationBoundaryArb(Strategy):
 
         return [
             Intent(
-                exchange_id=lst_b[0],
-                security_id=lst_b[1],
+                exchange_id=lst_b.exchange_id,
+                security_id=lst_b.security_id,
                 take_side=Side.BID,
-                take_size=self.positions.compliant_size(lst_b[0], lst_b[1], trade_size, self._best_ask[lst_b]),
+                take_size=self.positions.compliant_size(lst_b.exchange_id, lst_b.security_id, trade_size, self._best_ask[lst_b]),
                 take_order_type=OrderType.MARKET,
             ),
             Intent(
-                exchange_id=lst_a[0],
-                security_id=lst_a[1],
+                exchange_id=lst_a.exchange_id,
+                security_id=lst_a.security_id,
                 take_side=Side.BID,
-                take_size=self.positions.compliant_size(lst_a[0], lst_a[1], trade_size, self._best_ask[lst_a]),
+                take_size=self.positions.compliant_size(lst_a.exchange_id, lst_a.security_id, trade_size, self._best_ask[lst_a]),
                 take_order_type=OrderType.MARKET,
             ),
         ]
@@ -337,8 +334,8 @@ class ImplicationBoundaryArb(Strategy):
             qty = self._net_qty(lst)
             if qty > 0:
                 intents.append(Intent(
-                    exchange_id=lst[0],
-                    security_id=lst[1],
+                    exchange_id=lst.exchange_id,
+                    security_id=lst.security_id,
                     take_side=Side.ASK,
                     take_size=qty,
                     take_order_type=OrderType.MARKET,

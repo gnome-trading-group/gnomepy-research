@@ -3,9 +3,14 @@ from __future__ import annotations
 import math
 
 from gnomepy import ExecutionReport, Intent, OrderType, Side, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 
-Listing = tuple[int, int]
+from gnomepy_research.listing import Listing
+
+
+def _above(a: Listing, b: Listing) -> bool:
+    """Orders a pair by venue (exchange, then security), which fixes the sign of their spread."""
+    return (a.exchange_id, a.security_id) > (b.exchange_id, b.security_id)
 
 
 class _SpreadEWMA:
@@ -69,6 +74,7 @@ class NExchangeArb(Strategy):
         self._processing_time_ns = processing_time_ns
 
         self._listings: list[Listing] = []
+        self._by_id: dict[int, Listing] = {}
         self._best_bid: dict[Listing, int] = {}
         self._best_ask: dict[Listing, int] = {}
         self._last_update_ts: dict[Listing, int] = {}
@@ -115,22 +121,28 @@ class NExchangeArb(Strategy):
         return self._processing_time_ns
 
     def _net_qty(self, listing: Listing) -> int:
-        pos = self.positions.get_position(*listing)
+        pos = self.positions.get_position(listing.exchange_id, listing.security_id)
         return pos.net_quantity if pos is not None else 0
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        listing_id = self.streams.listing_id(data.stream_id)
+        if listing_id is None:
+            return []
         bid = data.bid_price(0)
         ask = data.ask_price(0)
         if bid <= 0 or ask <= 0:
             return []
 
-        listing: Listing = (data.exchange_id, data.security_id)
+        listing = self._by_id.get(listing_id)
+        if listing is None:
+            listing = Listing.from_streams(self.streams, listing_id)
+            self._by_id[listing_id] = listing
         timestamp = data.event_timestamp
 
         if listing not in self._best_bid:
             self._listings.append(listing)
             for other in self._listings[:-1]:
-                key = (listing, other) if listing > other else (other, listing)
+                key = (listing, other) if _above(listing, other) else (other, listing)
                 if key not in self._ewma:
                     self._ewma[key] = _SpreadEWMA(
                         alpha=self.ewma_alpha, warmup=self.ewma_warmup
@@ -167,12 +179,12 @@ class NExchangeArb(Strategy):
         return (mid_b - mid_a) / avg_mid * 10_000
 
     def _ewma_key(self, lst_a: Listing, lst_b: Listing) -> tuple[Listing, Listing]:
-        return (lst_a, lst_b) if lst_a > lst_b else (lst_b, lst_a)
+        return (lst_a, lst_b) if _above(lst_a, lst_b) else (lst_b, lst_a)
 
     def _signed_spread(self, lst_a: Listing, lst_b: Listing) -> float:
         # Canonical spread: (mid_larger - mid_smaller), always from larger listing's perspective
         spread = self._spread_bps(lst_a, lst_b)
-        if lst_a > lst_b:
+        if _above(lst_a, lst_b):
             spread = -spread
         return spread
 
@@ -215,8 +227,8 @@ class NExchangeArb(Strategy):
                 self._closing = False
                 return []
             # Only retry if no inflight close orders (avoids ring buffer overflow)
-            eff_long = self.positions.get_effective_quantity(*long_lst) or 0
-            eff_short = self.positions.get_effective_quantity(*short_lst) or 0
+            eff_long = self.positions.get_effective_quantity(long_lst.exchange_id, long_lst.security_id) or 0
+            eff_short = self.positions.get_effective_quantity(short_lst.exchange_id, short_lst.security_id) or 0
             long_inflight = pos_long != 0 and abs(eff_long) < abs(pos_long) * 0.5
             short_inflight = pos_short != 0 and abs(eff_short) < abs(pos_short) * 0.5
             if not long_inflight and not short_inflight:
@@ -262,7 +274,7 @@ class NExchangeArb(Strategy):
         live = [lst for lst in self._listings if lst not in stale]
         for i, lst_a in enumerate(live):
             for lst_b in live[i + 1:]:
-                if self.same_exchange_only and lst_a[0] != lst_b[0]:
+                if self.same_exchange_only and lst_a.exchange_id != lst_b.exchange_id:
                     continue
 
                 key = self._ewma_key(lst_a, lst_b)
@@ -279,8 +291,8 @@ class NExchangeArb(Strategy):
                 # Zombie close: large net, near-zero effective (pending sell absorbs net).
                 # Zombie open: zero net (unfilled), large effective (pending buy).
                 # max() catches either: at least one of net/effective is large for any zombie.
-                eff_a = self.positions.get_effective_quantity(*lst_a) or 0
-                eff_b = self.positions.get_effective_quantity(*lst_b) or 0
+                eff_a = self.positions.get_effective_quantity(lst_a.exchange_id, lst_a.security_id) or 0
+                eff_b = self.positions.get_effective_quantity(lst_b.exchange_id, lst_b.security_id) or 0
                 net_a = self._net_qty(lst_a)
                 net_b = self._net_qty(lst_b)
                 if (
@@ -289,8 +301,8 @@ class NExchangeArb(Strategy):
                 ):
                     continue
 
-                larger = lst_a if lst_a > lst_b else lst_b
-                smaller = lst_b if lst_a > lst_b else lst_a
+                larger = lst_a if _above(lst_a, lst_b) else lst_b
+                smaller = lst_b if _above(lst_a, lst_b) else lst_a
 
                 if z > self.entry_z and z > best_z:
                     if abs(spread) >= self.min_spread_bps:
@@ -314,28 +326,27 @@ class NExchangeArb(Strategy):
             self._closing = False
             self._entry_ts = timestamp
             return [
-                self._take(*best_long, Side.ASK),
-                self._take(*best_short, Side.BID),
+                self._take(best_long, Side.ASK),
+                self._take(best_short, Side.BID),
             ]
 
         return []
 
-    def _take(self, exchange_id: int, security_id: int, side: Side) -> Intent:
-        listing: Listing = (exchange_id, security_id)
+    def _take(self, listing: Listing, side: Side) -> Intent:
         price = self._best_ask[listing] if side == Side.ASK else self._best_bid[listing]
-        size = self.positions.compliant_size(exchange_id, security_id, self.size, price)
+        size = self.positions.compliant_size(listing.exchange_id, listing.security_id, self.size, price)
         return Intent(
-            exchange_id=exchange_id,
-            security_id=security_id,
+            exchange_id=listing.exchange_id,
+            security_id=listing.security_id,
             take_side=side,
             take_size=size,
             take_order_type=OrderType.MARKET,
         )
 
-    def _take_qty(self, exchange_id: int, security_id: int, side: Side, qty: int) -> Intent:
+    def _take_qty(self, listing: Listing, side: Side, qty: int) -> Intent:
         return Intent(
-            exchange_id=exchange_id,
-            security_id=security_id,
+            exchange_id=listing.exchange_id,
+            security_id=listing.security_id,
             take_side=side,
             take_size=qty,
             take_order_type=OrderType.MARKET,
@@ -346,13 +357,13 @@ class NExchangeArb(Strategy):
     ) -> list[Intent]:
         intents = []
         if pos_long < 0:
-            intents.append(self._take_qty(*long_lst, Side.BID, abs(pos_long)))
+            intents.append(self._take_qty(long_lst, Side.BID, abs(pos_long)))
         elif pos_long > 0:
-            intents.append(self._take_qty(*long_lst, Side.ASK, abs(pos_long)))
+            intents.append(self._take_qty(long_lst, Side.ASK, abs(pos_long)))
         if pos_short < 0:
-            intents.append(self._take_qty(*short_lst, Side.BID, abs(pos_short)))
+            intents.append(self._take_qty(short_lst, Side.BID, abs(pos_short)))
         elif pos_short > 0:
-            intents.append(self._take_qty(*short_lst, Side.ASK, abs(pos_short)))
+            intents.append(self._take_qty(short_lst, Side.ASK, abs(pos_short)))
         return intents
 
     def _unwind(
@@ -361,8 +372,8 @@ class NExchangeArb(Strategy):
         intents = []
         if pos_long != 0:
             side = Side.BID if pos_long < 0 else Side.ASK
-            intents.append(self._take_qty(*long_lst, side, abs(pos_long)))
+            intents.append(self._take_qty(long_lst, side, abs(pos_long)))
         if pos_short != 0:
             side = Side.BID if pos_short < 0 else Side.ASK
-            intents.append(self._take_qty(*short_lst, side, abs(pos_short)))
+            intents.append(self._take_qty(short_lst, side, abs(pos_short)))
         return intents

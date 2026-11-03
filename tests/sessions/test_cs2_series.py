@@ -35,7 +35,7 @@ from gnomepy_research.sessions.cs2_series.decision import (
     taker_fee,
 )
 from gnomepy_research.sessions.cs2_series.match_feed import MatchFeed
-from tests.sessions.conftest import FakeFeeSchedule
+from tests.sessions.conftest import FakeFeeSchedule, FakeStreams, stream_of
 
 P, S = Scales.PRICE, Scales.SIZE
 HOUR = 3_600_000_000_000
@@ -350,8 +350,8 @@ class _Positions:
 
 
 class _Book:
-    def __init__(self, key, asks, ts, bids=()):
-        self.exchange_id, self.security_id = key
+    def __init__(self, listing, asks, ts, bids=()):
+        self.stream_id = stream_of(listing)
         self.event_timestamp = ts
         self._asks = asks
         self._bids = bids
@@ -444,13 +444,14 @@ def make(tmp_path):
             strat = mod.CS2Series(match_id=7, listing_team_a=101, listing_team_b=102, reload_minutes=0,
                                   features_source=f, matches_source=m, rankings_source=str(r), **kw)
         strat._position_view = _Positions()
+        strat._streams = FakeStreams(LISTINGS)
         strat._control = _Control()
         return strat
     return _make
 
 
 def _tick(strat, listing, asks, hours_before, bids=()):
-    return strat.on_market_data(_Book(LISTINGS[listing], asks, K_NS - int(hours_before * HOUR), bids))
+    return strat.on_market_data(_Book(listing, asks, K_NS - int(hours_before * HOUR), bids))
 
 
 def test_buys_the_underpriced_team_with_an_ioc_limit(make):
@@ -704,7 +705,7 @@ def test_an_order_under_the_venues_minimum_size_is_not_sent(make):
 
 
 def test_unknown_listing_data_is_ignored(make):
-    assert make().on_market_data(_Book((5, 99999), [(0.01, 10)], K_NS - HOUR)) == []
+    assert make().on_market_data(_Book(99999, [(0.01, 10)], K_NS - HOUR)) == [], "a stream of no listing it trades"
 
 
 def test_artifacts_are_fetched_at_the_version_they_resolved_to(monkeypatch):

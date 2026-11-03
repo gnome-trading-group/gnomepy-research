@@ -75,6 +75,9 @@ class PlayerSkillConfig:
     new_player_maps: int = 20
 
 
+TIE_TOLERANCE = 1e-9
+
+
 def regulation_map_win(d: np.ndarray) -> np.ndarray:
     """P(win a regulation-24 map) for each round-logit gap in d (any shape); 12-12 counts as a coin flip."""
     d = np.asarray(d, dtype=float)
@@ -148,7 +151,11 @@ class PlayerSkillFilter:
 
     def _weights(self, mus: list[float]) -> list[float]:
         n = len(mus)
-        best = int(np.argmax(mus))
+        # Teammates who debut together start level, and their skills then differ only in the last bits of rounding,
+        # which differ between machines. A raw argmax would let those bits pick the leader, and each such pick
+        # changes the update and spreads to every later opponent, so near-ties go to the first listed player.
+        top = max(mus)
+        best = next(i for i, m in enumerate(mus) if m >= top - TIE_TOLERANCE)
         return [1 / n + self.cfg.lam * ((1.0 if i == best else 0.0) - 1 / n) for i in range(n)]
 
     def _block(self, players: list[int], variances: list[float]) -> np.ndarray:

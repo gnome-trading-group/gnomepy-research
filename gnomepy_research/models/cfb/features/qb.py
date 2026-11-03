@@ -28,8 +28,12 @@ def roster_keys(rosters: pd.DataFrame) -> pd.DataFrame:
     last = rosters["last_name"].fillna("").str.lower().str.replace(_SUFFIX_RE, "", regex=True).str.split().str[-1]
     key = rosters["first_name"].fillna("").str[:1].str.lower() + "." + last.fillna("")
     out = rosters.assign(passer_key=key).dropna(subset=["team_id"])
-    # Two same-initial same-surname players on one roster can't be told apart; leave them unlinked.
-    out = out.drop_duplicates(["season", "team_id", "passer_key"], keep=False)
+    # Same-initial same-surname players on one roster: the passer is the one quarterback among them (Oregon 2025's
+    # Dante and Dakorien Moore); with no quarterback or several, they can't be told apart and stay unlinked.
+    slot = ["season", "team_id", "passer_key"]
+    shared = out.duplicated(slot, keep=False)
+    qbs = out[shared & (out["position"] == "QB")].drop_duplicates(slot, keep=False)
+    out = pd.concat([out[~shared], qbs])
     return out[["season", "team_id", "passer_key", "player_id"]].assign(team_id=lambda d: d["team_id"].astype("int64"))
 
 

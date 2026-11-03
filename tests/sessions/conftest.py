@@ -36,6 +36,68 @@ class _Listing:
     security_id: int
 
 
+# A listing's book stream id in the fakes below: distinct from every listing id, so a mix-up can't pass.
+STREAM_OFFSET = 1_000_000
+
+
+def stream_of(listing_id: int) -> int:
+    return STREAM_OFFSET + listing_id
+
+
+@dataclass(frozen=True)
+class _Id:
+    value: int
+
+    def exchangeId(self) -> int:
+        return self.value
+
+    def securityId(self) -> int:
+        return self.value
+
+
+@dataclass(frozen=True)
+class _JavaListing:
+    """The registry's Java Listing, as gnomepy's StreamDirectory.listing returns it."""
+
+    listing_id: int
+    exchange_id: int
+    security_id: int
+
+    def listingId(self) -> int:
+        return self.listing_id
+
+    def exchange(self) -> _Id:
+        return _Id(self.exchange_id)
+
+    def security(self) -> _Id:
+        return _Id(self.security_id)
+
+
+class FakeStreams:
+    """Stands in for gnomepy's StreamDirectory over listings {listing_id: (exchange_id, security_id)}; each listing's
+    book stream is stream_of(listing_id)."""
+
+    def __init__(self, listings: dict[int, tuple[int, int]]):
+        self._listings = dict(listings)
+
+    def listing_id(self, stream_id: int) -> int | None:
+        listing_id = stream_id - STREAM_OFFSET
+        return listing_id if listing_id in self._listings else None
+
+    def listing_id_for(self, exchange_id: int, security_id: int) -> int | None:
+        for listing_id, venue in self._listings.items():
+            if venue == (exchange_id, security_id):
+                return listing_id
+        return None
+
+    def stream_id(self, listing_id: int) -> int | None:
+        return stream_of(listing_id) if listing_id in self._listings else None
+
+    def listing(self, listing_id: int) -> _JavaListing | None:
+        venue = self._listings.get(listing_id)
+        return _JavaListing(listing_id, *venue) if venue else None
+
+
 @dataclass
 class _Spec:
     min_notional: int
@@ -95,6 +157,7 @@ def make_strategy():
         with patch.object(mod, "RegistryClient", lambda *a, **k: registry or _FakeRegistry()):
             strategy = mod.CrossPredictionArb(outcomes=outcomes, **defaults)
         strategy._position_view = FakePositions()
+        strategy._streams = FakeStreams(LISTINGS)
         return strategy
     return _make
 
@@ -136,6 +199,9 @@ class FakePositions:
         return FakeFeeSchedule(*rates) if rates is not None else None
 
     def set(self, listing, qty):
+        """``listing`` is a venue tuple or a Listing record, which the engine knows by its venue ids too."""
+        if hasattr(listing, "exchange_id"):
+            listing = (listing.exchange_id, listing.security_id)
         self._pos[listing] = qty
 
     def get_position(self, exchange_id, security_id):

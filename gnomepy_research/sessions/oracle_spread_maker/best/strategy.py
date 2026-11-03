@@ -5,7 +5,7 @@ from collections import deque
 from datetime import datetime, timezone
 
 from gnomepy import ExecutionReport, Intent, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 from gnomepy.registry import RegistryClient
 
 from gnomepy_research.signals.fair_value.microprice import MicropriceFairValue
@@ -52,12 +52,12 @@ class OracleSpreadMaker(Strategy):
         ref_listings = registry.get_listing(listing_id=ref_listing_id)
         if not ref_listings:
             raise ValueError(f"No listing found for ref_listing_id={ref_listing_id}")
-        self._ref_eid: int = ref_listings[0].exchange_id
-        self._ref_sid: int = ref_listings[0].security_id
+        self._ref_listing_id: int = ref_listing_id
 
         quote_listings = registry.get_listing(listing_id=quote_listing_id)
         if not quote_listings:
             raise ValueError(f"No listing found for quote_listing_id={quote_listing_id}")
+        self._quote_listing_id: int = quote_listing_id
         self._quote_eid: int = quote_listings[0].exchange_id
         self._yes_sid: int = quote_listings[0].security_id
 
@@ -144,10 +144,11 @@ class OracleSpreadMaker(Strategy):
         variance = sum((r - mean) ** 2 for r in self._poly_returns) / n
         return math.sqrt(max(variance, 0.0))
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
         ts = data.event_timestamp
+        listing_id = self.streams.listing_id(data.stream_id)
 
-        if data.exchange_id == self._ref_eid and data.security_id == self._ref_sid:
+        if listing_id == self._ref_listing_id:
             self._ref_fv.update(ts, data)
             if self._ref_fv.is_ready():
                 raw = self._ref_fv.value() / PRICE_SCALE
@@ -161,7 +162,7 @@ class OracleSpreadMaker(Strategy):
                 self._ref_last_ts = ts
             return []
 
-        if data.exchange_id != self._quote_eid or data.security_id != self._yes_sid:
+        if listing_id != self._quote_listing_id:
             return []
 
         if data.bid_price(0) > 0 and data.ask_price(0) > 0:

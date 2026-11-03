@@ -4,7 +4,7 @@ strategy:
     event_ids: [101, 102]
     size: 1000000
     min_edge_bps: 10.0
-    min_implies_confidence: 0.95
+    allow_flagged: false
     stale_threshold_ns: 2000000000
     imbalance_timeout_ns: 30000000000
     cooldown_ns: 500000000

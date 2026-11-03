@@ -18,11 +18,15 @@ from gnomepy_research.sessions.cross_prediction_arb.strategy import (
     Phase,
 )
 from gnomepy_research.sessions.cross_prediction_arb__multi import strategy as multi
-from tests.sessions.conftest import FakePositions, _FakeRegistry
+from tests.sessions.conftest import LISTINGS, FakePositions, FakeStreams, _FakeRegistry
 
 PRICE_SCALE = Scales.PRICE
 SIZE_SCALE = Scales.SIZE
 CENT = PRICE_SCALE // 100
+
+
+def _venue(listing):
+    return listing.exchange_id, listing.security_id
 
 
 def _fill_book(strategy, listing, bid, ask, size=10_000 * SIZE_SCALE):
@@ -71,8 +75,9 @@ class TestDivergenceGuard:
 
 class TestRegistryFees:
     def test_each_listing_pays_its_own_schedules_rates(self, strategy):
-        pm_leg, k_leg = sorted(strategy._pairings[0].legs)
-        strategy._position_view = FakePositions(fee_rates={pm_leg[0]: (0.03, 0.0), k_leg[0]: (0.07, 0.0175)})
+        pm_leg, k_leg = sorted(strategy._pairings[0].legs, key=lambda lg: lg.exchange_id)
+        strategy._position_view = FakePositions(
+            fee_rates={pm_leg.exchange_id: (0.03, 0.0), k_leg.exchange_id: (0.07, 0.0175)})
         half = PRICE_SCALE // 2
         assert strategy._taker_fee(pm_leg, half) == pytest.approx(0.03 * 0.25)
         assert strategy._taker_fee(k_leg, half) == pytest.approx(0.07 * 0.25)
@@ -118,7 +123,7 @@ class TestTickQuantization:
         whole-cent. The strategy must not emit prices the exchange cannot accept."""
         kalshi_leg = next(
             lg for lg in strategy._pairings[0].legs
-            if strategy._exchange_id_to_label.get(lg[0]) == "k"
+            if strategy._exchange_id_to_label.get(lg.exchange_id) == "k"
         )
         for raw in (43 * CENT + 1, 43 * CENT + CENT // 2, 79 * CENT + 7):
             q = strategy._quantize_price(kalshi_leg, raw)
@@ -128,7 +133,7 @@ class TestTickQuantization:
     def test_polymarket_prices_land_on_whole_cents(self, strategy):
         pm_leg = next(
             lg for lg in strategy._pairings[0].legs
-            if strategy._exchange_id_to_label.get(lg[0]) == "pm"
+            if strategy._exchange_id_to_label.get(lg.exchange_id) == "pm"
         )
         assert strategy._quantize_price(pm_leg, 52 * CENT + 3) % CENT == 0
 
@@ -163,18 +168,18 @@ class TestChaseCeiling:
     def test_ceiling_charges_the_unfilled_legs_maker_fee(self, strategy):
         ps = self._pairing_state(strategy, 0.52)
         unfilled = ps.legs[1].listing
-        strategy._position_view = FakePositions(fee_rates={unfilled[0]: (0.07, 0.0)})
+        strategy._position_view = FakePositions(fee_rates={unfilled.exchange_id: (0.07, 0.0)})
         free = strategy._compute_chase_ceiling(ps)
-        strategy._position_view = FakePositions(fee_rates={unfilled[0]: (0.07, 0.04)})
+        strategy._position_view = FakePositions(fee_rates={unfilled.exchange_id: (0.07, 0.04)})
         assert strategy._compute_chase_ceiling(ps) == free - int(0.04 / 4 * PRICE_SCALE)
 
     def test_a_maker_rebate_does_not_raise_the_ceiling(self, strategy):
         """The rebate shrinks to nothing at the edges of the price range, so it cannot be counted on."""
         ps = self._pairing_state(strategy, 0.52)
         unfilled = ps.legs[1].listing
-        strategy._position_view = FakePositions(fee_rates={unfilled[0]: (0.07, 0.0)})
+        strategy._position_view = FakePositions(fee_rates={unfilled.exchange_id: (0.07, 0.0)})
         free = strategy._compute_chase_ceiling(ps)
-        strategy._position_view = FakePositions(fee_rates={unfilled[0]: (0.07, -0.0125)})
+        strategy._position_view = FakePositions(fee_rates={unfilled.exchange_id: (0.07, -0.0125)})
         assert strategy._compute_chase_ceiling(ps) == free
 
     def test_ceiling_splits_across_multiple_unfilled_legs(self, make_strategy):
@@ -276,7 +281,7 @@ class TestBaseQty:
         ps.phase = Phase.ENTERING
 
         strategy._check_fill_transitions(ps, 1_000)
-        held = [positions.get_effective_quantity(*lg.listing) for lg in ps.legs]
+        held = [positions.get_effective_quantity(*_venue(lg.listing)) for lg in ps.legs]
         if ps.phase == Phase.SCANNING:
             assert len(set(held)) == 1, (
                 f"returned to SCANNING with imbalanced legs {[h / SIZE_SCALE for h in held]}c "
@@ -438,6 +443,7 @@ def _multi(**kwargs):
             dutch_book_labels=["pm"], taker_labels=[], **kwargs,
         )
     s._position_view = FakePositions()
+    s._streams = FakeStreams(LISTINGS)
     return s
 
 
@@ -515,6 +521,7 @@ def _three_way(**kwargs):
             dutch_book_labels=["pm"], taker_labels=[], **kwargs,
         )
     s._position_view = FakePositions()
+    s._streams = FakeStreams(LISTINGS)
     return s
 
 
@@ -552,7 +559,7 @@ class TestTakerCompletion:
         out = s._taker_completion(ps, 2 * SEC)
         assert len(out) == 1
         it = out[0]
-        assert (it.exchange_id, it.security_id) == stuck.listing
+        assert (it.exchange_id, it.security_id) == _venue(stuck.listing)
         assert it.take_size == 100 * SIZE_SCALE
         assert it.take_limit_price == int(0.14 * PRICE_SCALE)
         assert it.bid_size == 0, "a fully-covered take leaves nothing resting"
@@ -644,7 +651,7 @@ class TestClosingRetryKeepsHedgedSets:
             _fill_book(s, lg, 0.20, 0.22)
         out = s._on_closing(ps, 10 * SEC)
         sold = {(i.exchange_id, i.security_id): i.take_size for i in out if i.take_size}
-        assert sold == {ps.pairing.legs[0]: 714 * SIZE_SCALE, ps.pairing.legs[2]: 714 * SIZE_SCALE}
+        assert sold == {_venue(ps.pairing.legs[0]): 714 * SIZE_SCALE, _venue(ps.pairing.legs[2]): 714 * SIZE_SCALE}
 
 
 # ---------------------------------------------------------------------------
@@ -670,14 +677,14 @@ class TestLeadWithIlliquid:
         for lg in legs[:2]:
             s._sell_flow[lg] = (6_000.0, SEC)   # 10 c/s over the 600s window
         out = s._on_scanning(ps, SEC)
-        assert [(i.exchange_id, i.security_id) for i in out] == [legs[2]]
+        assert [(i.exchange_id, i.security_id) for i in out] == [_venue(legs[2])]
         assert [lg.posted for lg in ps.legs] == [False, False, True]
 
     def test_ties_go_to_the_cheapest_leg(self):
         s = _three_way(lead_with_illiquid=True, min_contract_price=0.03)
         ps = _scannable(s, bids=(0.30, 0.10, 0.50))
         out = s._on_scanning(ps, SEC)
-        assert [(i.exchange_id, i.security_id) for i in out] == [s._pairings[0].legs[1]]
+        assert [(i.exchange_id, i.security_id) for i in out] == [_venue(s._pairings[0].legs[1])]
 
     def test_default_posts_every_leg(self):
         s = _three_way(min_contract_price=0.03)
@@ -700,13 +707,13 @@ class TestLeadWithIlliquid:
         _scannable(s)
         ps = self._lead_filled(s)
         first = s._post_deferred_legs(ps, 2 * SEC)
-        assert [(i.exchange_id, i.security_id) for i in first] == [ps.pairing.legs[1]], (
+        assert [(i.exchange_id, i.security_id) for i in first] == [_venue(ps.pairing.legs[1])], (
             "no flow anywhere, so the cheaper of the two held legs goes next")
         assert first[0].bid_size == 100 * SIZE_SCALE and first[0].post_only
         assert s._post_deferred_legs(ps, 3 * SEC) == [], "wait for it to fill"
         ps.legs[1].record_fill(int(0.30 * PRICE_SCALE), 100 * SIZE_SCALE)
         second = s._post_deferred_legs(ps, 4 * SEC)
-        assert [(i.exchange_id, i.security_id) for i in second] == [ps.pairing.legs[0]]
+        assert [(i.exchange_id, i.security_id) for i in second] == [_venue(ps.pairing.legs[0])]
         assert all(lg.posted for lg in ps.legs)
 
     def test_partial_lead_holds_the_rest_back(self):

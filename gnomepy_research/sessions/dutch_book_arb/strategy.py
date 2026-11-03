@@ -3,14 +3,14 @@ from __future__ import annotations
 from enum import IntEnum
 
 from gnomepy import ExecutionReport, Intent, OrderType, Side, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 
 from gnomepy_research.fees import registry_fee_rates
+from gnomepy_research.listing import Listing
 
 PRICE_SCALE = 1_000_000_000
 SIZE_SCALE = 1_000_000
 
-Listing = tuple[int, int]  # (exchange_id, security_id)
 
 
 class State(IntEnum):
@@ -40,6 +40,7 @@ class DutchBookArb(Strategy):
 
         self._listings: list[Listing] = []
         self._listing_set: set[Listing] = set()
+        self._by_id: dict[int, Listing] = {}
         self._best_ask: dict[Listing, int] = {}
         self._best_ask_size: dict[Listing, int] = {}
         self._last_update_ts: dict[Listing, int] = {}
@@ -85,7 +86,7 @@ class DutchBookArb(Strategy):
         return self._processing_time_ns
 
     def _net_qty(self, listing: Listing) -> int:
-        pos = self.positions.get_position(*listing)
+        pos = self.positions.get_position(listing.exchange_id, listing.security_id)
         return pos.net_quantity if pos is not None else 0
 
     def _compute_edge(self) -> tuple[float, float]:
@@ -95,7 +96,7 @@ class DutchBookArb(Strategy):
         for lst in self._listings:
             p = self._best_ask[lst] / PRICE_SCALE
             sum_asks += p
-            taker_rate, _ = self._fee_rates(lst)
+            taker_rate, _ = self._fee_rates(lst.listing_id)
             total_fee += taker_rate * p * (1.0 - p)
         edge_bps = (1.0 - sum_asks - total_fee) * 10_000
         return sum_asks, edge_bps
@@ -110,11 +111,16 @@ class DutchBookArb(Strategy):
                 return False
         return True
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
-        listing: Listing = (data.exchange_id, data.security_id)
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        listing_id = self.streams.listing_id(data.stream_id)
+        if listing_id is None:
+            return []
         timestamp = data.event_timestamp
 
-        if listing not in self._listing_set:
+        listing = self._by_id.get(listing_id)
+        if listing is None:
+            listing = Listing.from_streams(self.streams, listing_id)
+            self._by_id[listing_id] = listing
             self._listings.append(listing)
             self._listing_set.add(listing)
 
@@ -164,11 +170,11 @@ class DutchBookArb(Strategy):
 
         return [
             Intent(
-                exchange_id=lst[0],
-                security_id=lst[1],
+                exchange_id=lst.exchange_id,
+                security_id=lst.security_id,
                 take_side=Side.BID,
                 take_size=self.positions.compliant_size(
-                    lst[0], lst[1], trade_size, self._best_ask[lst]
+                    lst.exchange_id, lst.security_id, trade_size, self._best_ask[lst]
                 ),
                 take_order_type=OrderType.MARKET,
             )
@@ -221,8 +227,8 @@ class DutchBookArb(Strategy):
             if qty > 0:
                 intents.append(
                     Intent(
-                        exchange_id=lst[0],
-                        security_id=lst[1],
+                        exchange_id=lst.exchange_id,
+                        security_id=lst.security_id,
                         take_side=Side.ASK,
                         take_size=qty,
                         take_order_type=OrderType.MARKET,

@@ -19,7 +19,7 @@ Usage::
 from __future__ import annotations
 
 from gnomepy import ExecutionReport, Intent, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 
 from gnomepy_research.signals import (
     FairValueSignal,
@@ -46,6 +46,7 @@ class MarketMaker(Strategy):
     ):
         self.exchange_id = exchange_id
         self.security_id = security_id
+        self._listing_id: int | None = None
         self.size = size
         self.max_position = max_position
         self.gamma = gamma
@@ -73,8 +74,10 @@ class MarketMaker(Strategy):
     def simulate_processing_time(self) -> int:
         return self._processing_time_ns
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
-        if data.security_id != self.security_id or data.exchange_id != self.exchange_id:
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        if self._listing_id is None:
+            self._listing_id = self.streams.listing_id_for(self.exchange_id, self.security_id)
+        if self._listing_id is None or self.streams.listing_id(data.stream_id) != self._listing_id:
             return []
 
         timestamp = data.event_timestamp

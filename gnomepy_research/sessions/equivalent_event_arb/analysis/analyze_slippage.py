@@ -28,10 +28,9 @@ def load_backtest(output_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.Data
     return fills, orders, market
 
 
-def get_book_at(market: pd.DataFrame, exchange_id: int, security_id: int, ts: pd.Timestamp) -> pd.Series | None:
+def get_book_at(market: pd.DataFrame, listing_id: int, ts: pd.Timestamp) -> pd.Series | None:
     """Return the most recent book snapshot at or before ts for the given listing."""
-    mask = (market["exchange_id"] == exchange_id) & (market["security_id"] == security_id)
-    sub = market.loc[mask]
+    sub = market.loc[market["listing_id"] == listing_id]
     idx = sub.index.searchsorted(ts, side="right") - 1
     if idx < 0:
         return None
@@ -101,7 +100,7 @@ def analyze(output_dir: Path) -> pd.DataFrame:
         is_taker = order["ack_timestamp"].year == 1970
 
         # Book snapshot at order submission
-        snap = get_book_at(market, eid, sid, ts)
+        snap = get_book_at(market, int(order["listing_id"]), ts)
         if snap is None:
             continue
 

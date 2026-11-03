@@ -64,7 +64,7 @@ def validate(output_dir: Path) -> None:
         ts = row["timestamp"]
         intent_bid = row["bid_price"]
 
-        mkt = market[(market["exchange_id"] == eid) & (market["security_id"] == sid)]
+        mkt = market[market["listing_id"] == int(row["listing_id"])]
         # Multiple events can share the same millisecond timestamp; intent bid must
         # match one of them (the triggering event, not necessarily first or last).
         mkt_exact = mkt[mkt.index == ts]["bid_price_0"]

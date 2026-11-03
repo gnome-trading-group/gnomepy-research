@@ -35,10 +35,21 @@ def srs_residuals(coaches: pd.DataFrame) -> pd.DataFrame:
     return c[["coach_id", "season", "resid", "games"]]
 
 
+def majority_coaches(coaches: pd.DataFrame, season: int) -> pd.Series:
+    """team_id -> the coach who led the most of the season's games (ties: the later hire)."""
+    c = coaches[coaches["season"] == season].dropna(subset=["team_id", "games"])
+    c = c.sort_values(["team_id", "games", "hire_date"], ascending=[True, False, False])
+    return c.drop_duplicates("team_id").set_index("team_id")["coach_id"]
+
+
 def coach_features(src: SourceData, season: int) -> pd.DataFrame:
     c = src.coaches
     start = c[c["season_start_coach"] & (c["season"] == season)].dropna(subset=["team_id"])
     prev_start = c[c["season_start_coach"] & (c["season"] == season - 1)].set_index("team_id")["coach_id"]
+    # CFBD's hire_date is a coach's first head-coaching hire anywhere, so last season's season-start pick can be a bowl
+    # or interim coach hired elsewhere years ago. Compare with the coach of most of last season's games instead: public
+    # at season start, since last season's results are.
+    prev = majority_coaches(c, season - 1).combine_first(prev_start)
     past = c[c["season"] < season]
     resid = srs_residuals(c)
 
@@ -57,7 +68,7 @@ def coach_features(src: SourceData, season: int) -> pd.DataFrame:
         rows.append({
             "team_id": int(r.team_id),
             "coach_id": r.coach_id,
-            "coach_new": bool(prev_start.get(r.team_id) != r.coach_id),
+            "coach_new": bool(prev.get(r.team_id) != r.coach_id),
             "coach_tenure": int(here["season"].nunique()),
             "coach_hc_seasons": int(mine["season"].nunique()),
             "coach_srs_resid": mean_resid * n / (n + COACH_SHRINK_SEASONS),

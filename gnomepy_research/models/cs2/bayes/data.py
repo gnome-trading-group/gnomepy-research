@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.bayes_series import LINEUP_SIZE, RankStrength, home_regions
+from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 
 DEBUT_GRACE_DAYS = 60
 
@@ -56,8 +57,8 @@ class FitData:
 
 
 def prepare_maps(history: pd.DataFrame, lineups: pd.DataFrame) -> pd.DataFrame:
-    """Decisive maps with both announced fives, regulation rounds and the month each was played in."""
-    h = history[history.team_a_score != history.team_b_score].copy()
+    """Decisive competitive maps with both announced fives, regulation rounds and the month each was played in."""
+    h = history[(history.team_a_score != history.team_b_score) & ~showmatch_mask(history)].copy()
     h["day"] = pd.to_datetime(h.match_date).dt.normalize()
     fives = {k: g.sort_values("slot").player_id.astype(int).tolist()[:LINEUP_SIZE]
              for k, g in lineups.groupby(["match_id", "team_id"])}

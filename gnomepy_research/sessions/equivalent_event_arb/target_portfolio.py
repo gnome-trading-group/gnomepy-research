@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from gnomepy import Intent, OrderType, Scales, Side, Strategy
 from gnomepy.java.backtest.orders import ExecutionReport
 from gnomepy.java.enums import ExecType
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 
 from gnomepy_research.listing import Listing
 
@@ -36,6 +36,7 @@ class TargetPortfolioStrategy(Strategy):
         self._max_staleness_ns = max_staleness_ns
         self._processing_time_ns = processing_time_ns
         self._tracked_listings = tracked_listings
+        self._listings: dict[int, Listing] = {listing.listing_id: listing for listing in tracked_listings}
         self._ask_book: dict[Listing, list[tuple[int, int]]] = {}
         self._bid_book: dict[Listing, list[tuple[int, int]]] = {}
         self._last_update_ts: dict[Listing, int] = {}
@@ -67,8 +68,18 @@ class TargetPortfolioStrategy(Strategy):
     def compute_target(self, timestamp: int) -> Target:
         raise NotImplementedError
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
-        listing: Listing = (data.exchange_id, data.security_id)
+    def _listing(self, listing_id: int) -> Listing:
+        listing = self._listings.get(listing_id)
+        if listing is None:
+            listing = Listing.from_streams(self.streams, listing_id)
+            self._listings[listing_id] = listing
+        return listing
+
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        listing_id = self.streams.listing_id(data.stream_id)
+        if listing_id is None:
+            return []
+        listing = self._listing(listing_id)
         timestamp = data.event_timestamp
 
         ask_levels: list[tuple[int, int]] = []
@@ -111,7 +122,7 @@ class TargetPortfolioStrategy(Strategy):
         for lst in active:
             entry = target.get(lst)
             if entry is None:
-                self._debug(timestamp, "INTENT_CANCEL", eid=lst[0], sid=lst[1])
+                self._debug(timestamp, "INTENT_CANCEL", eid=lst.exchange_id, sid=lst.security_id)
                 current_intents[lst] = self._cancel_intent(lst)
                 continue
 
@@ -119,50 +130,50 @@ class TargetPortfolioStrategy(Strategy):
             delta = entry.qty - actual
 
             if delta == 0:
-                self._debug(timestamp, "INTENT_CANCEL", eid=lst[0], sid=lst[1], reason="at_target")
+                self._debug(timestamp, "INTENT_CANCEL", eid=lst.exchange_id, sid=lst.security_id, reason="at_target")
                 current_intents[lst] = self._cancel_intent(lst)
                 continue
 
             if self._is_stale(lst, timestamp):
-                self._debug(timestamp, "INTENT_CANCEL", eid=lst[0], sid=lst[1], reason="stale")
+                self._debug(timestamp, "INTENT_CANCEL", eid=lst.exchange_id, sid=lst.security_id, reason="stale")
                 current_intents[lst] = self._cancel_intent(lst)
                 continue
 
             if entry.price > 0:
-                size = self.positions.compliant_size(lst[0], lst[1], abs(delta), entry.price)
+                size = self.positions.compliant_size(lst.exchange_id, lst.security_id, abs(delta), entry.price)
                 if delta > 0:
                     self._debug(
                         timestamp, "INTENT_MAKER",
-                        eid=lst[0], sid=lst[1],
+                        eid=lst.exchange_id, sid=lst.security_id,
                         bid_price=round(entry.price / Scales.PRICE, 4), bid_size=round(abs(delta) / Scales.SIZE, 4),
                     )
                     current_intents[lst] = Intent(
-                        exchange_id=lst[0], security_id=lst[1],
+                        exchange_id=lst.exchange_id, security_id=lst.security_id,
                         bid_price=entry.price, bid_size=size,
                         ask_price=0, ask_size=0,
                     )
                 else:
                     self._debug(
                         timestamp, "INTENT_MAKER",
-                        eid=lst[0], sid=lst[1],
+                        eid=lst.exchange_id, sid=lst.security_id,
                         ask_price=round(entry.price / Scales.PRICE, 4), ask_size=round(abs(delta) / Scales.SIZE, 4),
                     )
                     current_intents[lst] = Intent(
-                        exchange_id=lst[0], security_id=lst[1],
+                        exchange_id=lst.exchange_id, security_id=lst.security_id,
                         bid_price=0, bid_size=0,
                         ask_price=entry.price, ask_size=size,
                     )
             else:
                 effective = self._effective_qty(lst)
                 if effective != actual:
-                    self._debug(timestamp, "INTENT_CANCEL", eid=lst[0], sid=lst[1], reason="pending_effective")
+                    self._debug(timestamp, "INTENT_CANCEL", eid=lst.exchange_id, sid=lst.security_id, reason="pending_effective")
                     current_intents[lst] = self._cancel_intent(lst)
                     continue
                 take_side = Side.BID if delta > 0 else Side.ASK
                 price = self._estimate_fill_price(lst, abs(delta), buy=(delta > 0))
-                size = self.positions.compliant_size(lst[0], lst[1], abs(delta), price)
+                size = self.positions.compliant_size(lst.exchange_id, lst.security_id, abs(delta), price)
                 intent_kwargs: dict = dict(
-                    exchange_id=lst[0], security_id=lst[1],
+                    exchange_id=lst.exchange_id, security_id=lst.security_id,
                     take_side=take_side, take_size=size,
                     take_order_type=self._taker_order_type,
                 )
@@ -172,7 +183,7 @@ class TargetPortfolioStrategy(Strategy):
                     )
                 self._debug(
                     timestamp, "INTENT_TAKER",
-                    eid=lst[0], sid=lst[1], side=take_side.name,
+                    eid=lst.exchange_id, sid=lst.security_id, side=take_side.name,
                     qty=round(abs(delta) / Scales.SIZE, 4),
                     price=round(price / Scales.PRICE, 4),
                     order_type=self._taker_order_type.name,
@@ -253,7 +264,7 @@ class TargetPortfolioStrategy(Strategy):
         if any(targets[lst] > 0 and actuals[lst] > targets[lst] + Scales.SIZE for lst in listings):
             overfill_lst = next(l for l in listings if targets[l] > 0 and actuals[l] > targets[l] + Scales.SIZE)
             self._debug(timestamp, "PROTECTION_OVERFILL",
-                        eid=overfill_lst[0], sid=overfill_lst[1],
+                        eid=overfill_lst.exchange_id, sid=overfill_lst.security_id,
                         actual=actuals[overfill_lst], target=targets[overfill_lst])
             print(f"[{timestamp}] LEG_RISK overfill")
             unwind = self.on_imbalance_timeout(timestamp)
@@ -319,12 +330,12 @@ class TargetPortfolioStrategy(Strategy):
                 d = deltas[lst]
                 if d > 0 and not self._ask_book.get(lst):
                     self._debug(timestamp, "PROTECTION_DEPTH_GATE",
-                                eid=lst[0], sid=lst[1], side="ask", depth=0)
+                                eid=lst.exchange_id, sid=lst.security_id, side="ask", depth=0)
                     depth_ok = False
                     break
                 if d < 0 and not self._bid_book.get(lst):
                     self._debug(timestamp, "PROTECTION_DEPTH_GATE",
-                                eid=lst[0], sid=lst[1], side="bid", depth=0)
+                                eid=lst.exchange_id, sid=lst.security_id, side="bid", depth=0)
                     depth_ok = False
                     break
             if not depth_ok:
@@ -345,11 +356,11 @@ class TargetPortfolioStrategy(Strategy):
         return None
 
     def _net_qty(self, listing: Listing) -> int:
-        pos = self.positions.get_position(listing[0], listing[1])
+        pos = self.positions.get_position(listing.exchange_id, listing.security_id)
         return pos.net_quantity if pos is not None else 0
 
     def _effective_qty(self, listing: Listing) -> int:
-        return self.positions.get_effective_quantity(listing[0], listing[1])
+        return self.positions.get_effective_quantity(listing.exchange_id, listing.security_id)
 
     def _is_stale(self, listing: Listing, timestamp: int) -> bool:
         last = self._last_update_ts.get(listing, 0)
@@ -357,7 +368,7 @@ class TargetPortfolioStrategy(Strategy):
 
     def _cancel_intent(self, lst: Listing) -> Intent:
         return Intent(
-            exchange_id=lst[0], security_id=lst[1],
+            exchange_id=lst.exchange_id, security_id=lst.security_id,
             bid_price=0, bid_size=0, ask_price=0, ask_size=0,
         )
 
@@ -370,8 +381,10 @@ class TargetPortfolioStrategy(Strategy):
         if report.filled_qty <= 0:
             return []
 
-        lst: Listing = (report.exchange_id, report.security_id)
-        self._on_fill(lst, report)
+        listing_id = self.streams.listing_id_for(report.exchange_id, report.security_id)
+        if listing_id is None:
+            return []
+        self._on_fill(self._listing(listing_id), report)
 
         if self._unwinding is None:
             return []

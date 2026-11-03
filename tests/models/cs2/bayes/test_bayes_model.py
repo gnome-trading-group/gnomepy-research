@@ -32,7 +32,8 @@ def _world(n_teams=6, n_days=60, seed=0):
             sa, sb = (13, min(sb, 11)) if won_a > 12 else (min(sa, 11), 13)
             hist.append({"match_id": mid, "match_date": DAY0 + pd.Timedelta(days=day), "map_name": "de_nuke",
                          "team_a_id": a + 1, "team_b_id": b + 1, "team_a_score": sa, "team_b_score": sb,
-                         "team_a_won": int(sa > sb), "bo_type": 1, "event_name": "Test Europe Cup"})
+                         "team_a_won": int(sa > sb), "bo_type": 1, "event_name": "Test Europe Cup",
+                         "format": "Best of 1 (Online)"})
             for team, five in ((a + 1, fa), (b + 1, fb)):
                 mean = np.mean([skill[p] for p in five])
                 for slot, p in enumerate(five):
@@ -52,6 +53,16 @@ def test_overtime_counts_as_twelve_all_and_ties_are_dropped():
     assert maps.loc[999, "rounds_a"] == 12 and maps.loc[999, "rounds"] == 24
     assert 998 not in maps.index
     assert maps.loc[1, "rounds"] == maps.loc[1, "team_a_score"] + maps.loc[1, "team_b_score"]
+
+
+def test_showmatches_are_dropped():
+    hist, lineups, _, _ = _world(n_days=2)
+    hist = pd.concat([hist, hist.iloc[[0]].assign(match_id=997, event_name="Showmatch CS"),
+                      hist.iloc[[0]].assign(match_id=996, format="Best of 3 (LAN) * IEM Cologne legends showmatch")])
+    lineups = pd.concat([lineups, lineups[lineups.match_id == 1].assign(match_id=997),
+                         lineups[lineups.match_id == 1].assign(match_id=996)])
+    maps = prepare_maps(hist, lineups)
+    assert not maps.match_id.isin([996, 997]).any() and (maps.match_id == 1).any()
 
 
 def test_fit_window_excludes_its_end_and_ratings_center_within_team():

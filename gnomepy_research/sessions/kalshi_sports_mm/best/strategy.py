@@ -5,7 +5,7 @@ from collections import deque
 from datetime import datetime, timezone
 
 from gnomepy import ExecutionReport, Intent, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 from gnomepy.registry import RegistryClient
 
 from gnomepy_research.signals.fair_value.microprice import MicropriceFairValue
@@ -57,12 +57,13 @@ class KalshiSportsMM(Strategy):
         ref_listings = registry.get_listing(listing_id=ref_listing_id)
         if not ref_listings:
             raise ValueError(f"No listing for ref_listing_id={ref_listing_id}")
-        self._ref_eid: int = ref_listings[0].exchange_id
-        self._ref_sid: int = ref_listings[0].security_id
+        self._ref_listing_id: int = ref_listing_id
 
         a_listings = registry.get_listing(listing_id=team_a_listing_id)
         if not a_listings:
             raise ValueError(f"No listing for team_a_listing_id={team_a_listing_id}")
+        self._listing_a: int = team_a_listing_id
+        self._listing_b: int = team_b_listing_id
         self._kalshi_eid: int = a_listings[0].exchange_id
         self._sid_a: int = a_listings[0].security_id
 
@@ -150,10 +151,11 @@ class KalshiSportsMM(Strategy):
         variance = sum((r - mean) ** 2 for r in self._ref_returns) / n
         return math.sqrt(max(variance, 0.0))
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
         ts = data.event_timestamp
+        listing_id = self.streams.listing_id(data.stream_id)
 
-        if data.exchange_id == self._ref_eid and data.security_id == self._ref_sid:
+        if listing_id == self._ref_listing_id:
             self._ref_fv.update(ts, data)
             if self._ref_fv.is_ready():
                 raw = self._ref_fv.value() / PRICE_SCALE
@@ -167,12 +169,10 @@ class KalshiSportsMM(Strategy):
                 self._ref_last_ts = ts
             return []
 
-        if data.exchange_id != self._kalshi_eid:
-            return []
-        if data.security_id == self._sid_a:
+        if listing_id == self._listing_a:
             if data.bid_price(0) > 0 and data.ask_price(0) > 0:
                 self._kalshi_mid_a = (data.bid_price(0) + data.ask_price(0)) / (2.0 * PRICE_SCALE)
-        elif data.security_id == self._sid_b:
+        elif listing_id == self._listing_b:
             if data.bid_price(0) > 0 and data.ask_price(0) > 0:
                 self._kalshi_mid_b = (data.bid_price(0) + data.ask_price(0)) / (2.0 * PRICE_SCALE)
         else:

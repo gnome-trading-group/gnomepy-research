@@ -130,7 +130,6 @@ def main() -> None:
     listings = registry.get_listing(listing_id=args.listing_id)
     if not listings:
         raise ValueError(f'listing {args.listing_id} not found')
-    exchange_id = listings[0].exchange_id
     security_id = listings[0].security_id
 
     contracts = registry.get_event_contracts(security_id=security_id)
@@ -142,7 +141,7 @@ def main() -> None:
     resolution_ns = int(expiry_dt.timestamp() * 1e9)
 
     mkt = pd.read_parquet(args.market)
-    kalshi = mkt[(mkt.exchange_id == exchange_id) & (mkt.security_id == security_id)].copy()
+    kalshi = mkt[mkt.listing_id == args.listing_id].copy()
     if kalshi.empty:
         raise ValueError('no Kalshi data found in market parquet')
 
