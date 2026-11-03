@@ -4,9 +4,13 @@ g11 predictions: P(team A wins the bo3) for every target series, from data befor
     python -m gnomepy_research.sessions.cs2_comp.g11.predict --data <bundle> --targets <targets parquet> --out <parquet>
         [--weeks 2026-04-06,2026-04-13] [--rows <dir>]
 
-Per target week: the graph fit (graph.py) prices the target series, and every market series of the preceding
-HISTORY_WEEKS weeks at its own week cutoff; the market layer (layer.py) is refitted on those that finished before the
-cutoff and combines the target's kickoff price with its graph price.
+Per target week, one graph fit (graph.py) at the week cutoff prices each target with its announced fives: the gap
+in mean player skill (with community effects and FACEIT levels in the prior), shifted by each team's pool-average map
+offset, turned into a bo3 price.
+
+q is the model's own price, not blended with the market here. A walk-forward blend with the kickoff price, refitted
+weekly on the finished market series, scored worse under the scorer's pool (which refits the blend itself): its
+weights move from week to week, which a single pooled refit cannot undo.
 """
 from __future__ import annotations
 
@@ -14,45 +18,23 @@ import argparse
 import os
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g11.graph import Config
-from gnomepy_research.sessions.cs2_comp.g11.layer import features, fit_logistic
-from gnomepy_research.sessions.cs2_comp.g11.pipeline import WEEK, build
+from gnomepy_research.sessions.cs2_comp.g11.pipeline import build
 
 CONFIG = Config(communities=(32,), laplace=False, faceit_maps=False)
-SHORT = None
 FACEIT = True
-HISTORY_WEEKS = 40
-COLUMNS = ["zm", "zr", "one"]
-L2 = 1.0
-MIN_TRAIN = 100
+PRICE = "q_uni_10"
 
 
 def predict(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = False, rows_dir: str | Path | None = None) -> pd.DataFrame:
-    train, tgt = build(str(data_dir), targets, CONFIG, FACEIT, HISTORY_WEEKS, SHORT, verbose=verbose)
+    _, tgt = build(str(data_dir), targets, CONFIG, FACEIT, 0, verbose=verbose)
     if rows_dir is not None:
         Path(rows_dir).mkdir(parents=True, exist_ok=True)
-        train.to_parquet(Path(rows_dir) / "train.parquet", index=False)
         tgt.to_parquet(Path(rows_dir) / "targets.parquet", index=False)
-    Ftr = features(train)[COLUMNS].to_numpy()
-    Ftg = features(tgt)[COLUMNS].to_numpy()
-    y = train.y.to_numpy(float)
-    q = np.full(len(tgt), np.nan)
-    for c in sorted(tgt.week_cutoff.unique()):
-        c = pd.Timestamp(c)
-        use = ((train.known < c) & (train.kickoff >= c - HISTORY_WEEKS * WEEK) & train.m0.notna()).to_numpy()
-        if use.sum() >= MIN_TRAIN:
-            w = fit_logistic(Ftr[use], y[use], L2)
-        else:
-            # Too few finished market series to learn a blend from: an even blend of the two logits.
-            w = np.array([0.5, 0.5, 0.0])
-        sel = (tgt.week_cutoff == c).to_numpy()
-        q[sel] = 1 / (1 + np.exp(-Ftg[sel] @ w))
-        if verbose:
-            print(f"{c:%Y-%m-%d} layer on {int(use.sum())} series: " + " ".join(f"{k}={v:+.3f}" for k, v in zip(COLUMNS, w)), flush=True)
-    return pd.DataFrame({"match_id": tgt.match_id.to_numpy(), "q": q, "fit_cutoff": pd.to_datetime(tgt.week_cutoff).to_numpy()})
+    return pd.DataFrame({"match_id": tgt.match_id.to_numpy(), "q": tgt[PRICE].to_numpy(float),
+                         "fit_cutoff": pd.to_datetime(tgt.week_cutoff).to_numpy()})
 
 
 def main() -> None:
