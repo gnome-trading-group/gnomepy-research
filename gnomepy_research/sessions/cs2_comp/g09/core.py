@@ -145,7 +145,7 @@ def player_stats(data_dir: str | Path, cutoff: pd.Timestamp, cfg: EloConfig) -> 
 
 def combined_maps(maps: pd.DataFrame, faceit: pd.DataFrame | None) -> pd.DataFrame:
     cols = ["time", "team_a_player_ids", "team_b_player_ids", "team_a_score", "team_b_score", "team_a_won", "team_a_rank", "team_b_rank",
-            "mapstatsid"]
+            "mapstatsid", "is_lan"]
     h = maps[cols].assign(src="hltv", hidx=np.arange(len(maps)))
     if faceit is None or faceit.empty:
         return h
@@ -173,6 +173,8 @@ class EloConfig:
     faceit_stats: bool = False
     # FACEIT's entry, open and intermediate divisions, relative to its other competitions.
     k_faceit_low: float = 1.0
+    # LAN maps relative to online HLTV maps.
+    k_lan: float = 1.0
     # A fast component on top of the slow rating: reacts to the last few maps, then fades.
     k_fast: float = 0.0
     fast_decay: float = 0.1
@@ -237,13 +239,14 @@ def elo_pass(maps: pd.DataFrame, requests: pd.DataFrame, cfg: EloConfig = EloCon
     faceit = (maps.src == "faceit").to_numpy() if "src" in maps else np.zeros(len(maps), bool)
     msid = maps.mapstatsid.to_numpy() if "mapstatsid" in maps else np.full(len(maps), None)
     low = maps.low.fillna(False).to_numpy(bool) if "low" in maps else np.zeros(len(maps), bool)
+    lanm = maps.is_lan.fillna(0).to_numpy(float) > 0 if "is_lan" in maps else np.zeros(len(maps), bool)
     resid = np.full(len(maps), np.nan)
     for i in range(len(maps)):
         answer(times[i])
         A, B = fa[i], fb[i]
         if len(A) < 4 or len(B) < 4 or (faceit[i] and cfg.k_faceit <= 0):
             continue
-        kmult = (cfg.k_faceit * (cfg.k_faceit_low if low[i] else 1.0)) if faceit[i] else 1.0
+        kmult = (cfg.k_faceit * (cfg.k_faceit_low if low[i] else 1.0)) if faceit[i] else (cfg.k_lan if lanm[i] else 1.0)
         now = pd.Timestamp(times[i])
         for five, rank in ((A, rka[i]), (B, rkb[i])):
             new = [p for p in five if p not in rating]
