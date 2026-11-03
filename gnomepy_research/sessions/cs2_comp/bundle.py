@@ -2,8 +2,10 @@
 
 `load(data_dir, table, before)` returns the rows of one bundle table dated strictly before `before` (a naive UTC
 timestamp, normally a target's week_cutoff). Tables without a date of their own are cut through the FACEIT matches
-they belong to; every FACEIT table is cut by its match's finished_at. Using this for every read is the simplest way to
-stay point-in-time."""
+they belong to; every FACEIT table is cut by its match's finished_at; market price prints are cut by print time. Using
+this for every read is the simplest way to stay point-in-time.
+
+`target_paths(data_dir, match_ids)` returns the target series' own Polymarket price paths up to their kickoffs."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -26,6 +28,10 @@ DATE_COLUMN = {
 BY_FACEIT_MATCH = {"faceit/faceit_match_history", "faceit/faceit_lineups", "faceit/faceit_rosters",
                    "faceit/faceit_player_map_stats", "faceit/faceit_exclusions"}
 UNIX_SECONDS = {"faceit/faceit_matches": "finished_at", "faceit/history_matches": "finished_at"}
+# A price print is known once it has printed, so a series' path counts minute by minute, even for series not yet played
+# at the cutoff. A target's own path up to its kickoff is announced information, like its lineup: read it with
+# target_paths.
+PRINT_TIME = {"market/series_paths": "t"}
 
 
 def _naive(s: pd.Series) -> pd.Series:
@@ -42,6 +48,10 @@ def load(data_dir: str | Path, table: str, before: pd.Timestamp | None = None, c
     if table in UNIX_SECONDS:
         t = pq.read_table(path, columns=columns, filters=[(UNIX_SECONDS[table], "<", secs)])
         return t.to_pandas()
+    if table in PRINT_TIME:
+        d = pd.read_parquet(path)
+        d = d[_naive(d[PRINT_TIME[table]]) < before]
+        return d if columns is None else d[columns]
     if table in DATE_COLUMN:
         d = pd.read_parquet(path, columns=columns)
         d = d[_naive(d[DATE_COLUMN[table]]) < before]
@@ -63,3 +73,8 @@ def load(data_dir: str | Path, table: str, before: pd.Timestamp | None = None, c
         t = pq.read_table(path, columns=columns)
         return t.filter(pc.is_in(t["match_id"], value_set=ids)).to_pandas()
     raise KeyError(f"no point-in-time rule for {table}")
+
+
+def target_paths(data_dir: str | Path, match_ids) -> pd.DataFrame:
+    d = pd.read_parquet(Path(data_dir) / "market/target_paths.parquet")
+    return d[d.match_id.isin(set(match_ids))]
