@@ -6,10 +6,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from gnomepy_research.models.cs2.e12.blend import MarketBlend
 from gnomepy_research.models.cs2.e12.data import UNRANKED
 from gnomepy_research.models.cs2.e12.model import GAMMA, E12Model, TeamState
 from gnomepy_research.models.cs2.e12.skill import SkillFit
-from gnomepy_research.models.cs2.e12.tables import BundleTables, naive
+from gnomepy_research.models.cs2.e12.tables import BundleTables, DatasetTables, naive
 
 CUTOFF = pd.Timestamp("2026-05-04")
 TEAMS = {10: list(range(100, 105)), 20: list(range(200, 205)), 30: list(range(300, 305)), 40: list(range(400, 405))}
@@ -174,6 +175,32 @@ def test_bundle_tables_cut_by_time(tmp_path):
     assert set(t.load("faceit_rosters", CUTOFF).match_id) <= known
 
 
+
+class _Store:
+    """A DatasetStore stand-in over a bundle: each table under its dataset name, exclusions stored as the pipelines
+    store them (map_name "" for a whole series)."""
+
+    def __init__(self, root: Path):
+        self.files = {name: root / f"{BundleTables.PATHS[key]}.parquet" for key, name in DatasetTables.NAMES.items()}
+        self.files["faceit_history_players"] = root / "faceit/history_players.parquet"
+
+    def load(self, name, columns=None):
+        d = pd.read_parquet(self.files[name], columns=columns)
+        if name == "faceit_exclusions":
+            d["map_name"] = d.map_name.fillna("")
+        return d
+
+
+def test_dataset_tables_price_like_the_bundle(tmp_path):
+    root = _bundle(tmp_path)
+    ex = pd.DataFrame({"match_id": ["f1003", "f1004"], "map_name": [None, "Nuke"]})
+    ex.to_parquet(root / "faceit/faceit_exclusions.parquet", index=False)
+    from_bundle = E12Model.build(BundleTables(root), CUTOFF)
+    from_datasets = E12Model.build(DatasetTables(_Store(root)), CUTOFF)
+    for a, b in ((10, 20), (30, 40), (20, 40)):
+        assert from_datasets.price(a, TEAMS[a], b, TEAMS[b]) == from_bundle.price(a, TEAMS[a], b, TEAMS[b])
+    assert DatasetTables(_Store(root)).load("faceit_exclusions").map_name.isna().sum() == 1
+
 PARITY_BUNDLE = os.environ.get("E12_PARITY_BUNDLE")
 PARITY_REF = os.environ.get("E12_PARITY_REF")
 
@@ -190,3 +217,12 @@ def test_matches_the_validated_research_prices():
     wk = t[t.week_cutoff == week]
     q = np.array([m.price(r.team_a_id, r.team_a_lineup_ids, r.team_b_id, r.team_b_lineup_ids) for r in wk.itertuples()])
     assert np.abs(q - ref.reindex(wk.match_id).to_numpy()).max() < 1e-9
+
+
+def test_market_blend_matches_the_research_formula_and_round_trips(tmp_path):
+    b = MarketBlend(market=0.612, model=0.513, intercept=0.009)
+    z = 0.612 * np.log(0.6 / 0.4) + 0.513 * np.log(0.7 / 0.3) + 0.009
+    assert b.fair(0.6, 0.7) == pytest.approx(1 / (1 + np.exp(-z)), abs=1e-12)
+    assert b.fair(0.0, 0.5) == b.fair(1e-4, 0.5)
+    b.save(tmp_path / "blend.json")
+    assert MarketBlend.load(tmp_path / "blend.json") == b

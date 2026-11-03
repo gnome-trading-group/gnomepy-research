@@ -13,6 +13,7 @@ from typing import Protocol
 
 import pandas as pd
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 DATE_COLUMN = {"match_history": "match_date", "match_lineups": "match_date", "player_map_stats": "match_date",
@@ -87,3 +88,36 @@ class BundleTables:
         return pq.read_table(self.root / "faceit/history_players.parquet", columns=["match_id", "faction", "faceit_id"],
                              read_dictionary=["match_id", "faction", "faceit_id"])
 
+
+class DatasetTables:
+    """The production datasets, as gnome-pipelines publishes them; `store` is a gnomepy.data DatasetStore. Exclusions are
+    stored with map_name "" for a whole series (key columns can't be null) and read back as null, as the model expects."""
+
+    NAMES = {"match_history": "cs2_match_history", "match_lineups": "cs2_match_lineups",
+             "player_map_stats": "cs2_player_map_stats", "team_rankings": "cs2_team_rankings",
+             "hltv_faceit_map": "cs2_hltv_faceit_map", "faceit_matches": "faceit_matches",
+             "faceit_match_history": "faceit_match_history", "faceit_rosters": "faceit_rosters",
+             "faceit_exclusions": "faceit_exclusions", "faceit_history_matches": "faceit_history_matches"}
+
+    def __init__(self, store):
+        self.store = store
+
+    def load(self, name: str, before: pd.Timestamp | None = None, columns: list[str] | None = None) -> pd.DataFrame:
+        need = columns
+        if columns is not None:
+            extra = {"match_history": ["match_date", "match_time"]}.get(name, [DATE_COLUMN[name]] if name in DATE_COLUMN else [])
+            extra += ["finished_at"] if name in FINISHED_AT else ["match_id"] if name in BY_FACEIT_MATCH else []
+            need = list(dict.fromkeys(columns + extra))
+        d = self.store.load(self.NAMES[name], columns=need)
+        if name == "faceit_exclusions":
+            d["map_name"] = d.map_name.mask(d.map_name == "")
+        if before is not None:
+            before = pd.Timestamp(before)
+            known = set(self.load("faceit_matches", before, ["match_id"]).match_id) if name in BY_FACEIT_MATCH else None
+            d = cut(name, d, before, known)
+        return d if columns is None else d[columns]
+
+    def history_players(self) -> pa.Table:
+        d = self.store.load("faceit_history_players", columns=["match_id", "faction", "faceit_id"])
+        t = pa.Table.from_pandas(d[["match_id", "faction", "faceit_id"]], preserve_index=False)
+        return pa.table({c: pc.dictionary_encode(t[c]) for c in t.column_names})
