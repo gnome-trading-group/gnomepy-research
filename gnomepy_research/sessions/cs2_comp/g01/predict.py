@@ -33,17 +33,18 @@ def kickoff_prices(paths: pd.DataFrame) -> pd.Series:
     return last.p_a.where(fresh)
 
 
-_FITS: dict[pd.Timestamp, skill.SkillFit] = {}
+SKILL_KW: dict = {}
+_FITS: dict[pd.Timestamp, skill.MultiFit] = {}
 
 
 def skill_features(maps: pd.DataFrame, stats: pd.DataFrame, faceit: pd.DataFrame, queries: pd.DataFrame) -> np.ndarray:
     out = np.zeros((len(queries), len(skill.FEATURES)))
     for week, idx in queries.groupby("week").indices.items():
         if week not in _FITS:
-            _FITS[week] = skill.SkillFit(maps, week, stats, faceit=faceit)
+            _FITS[week] = skill.MultiFit(maps, week, stats, faceit=faceit, **SKILL_KW)
         fit = _FITS[week]
         for i in idx:
-            out[i] = fit.diff(list(queries.pa.iloc[i]), list(queries.pb.iloc[i]))
+            out[i] = fit.diff(list(queries.pa.iloc[i]), list(queries.pb.iloc[i]), queries.team_a_id.iloc[i], queries.team_b_id.iloc[i])
     return out
 
 
@@ -87,7 +88,7 @@ def predict_week(data_dir: str, week: pd.Timestamp, targets: pd.DataFrame, stage
     faceit = skill.prepare_faceit(bundle.load(data_dir, "faceit/faceit_match_history", before=week),
                                   bundle.load(data_dir, "faceit/faceit_exclusions", before=week),
                                   bundle.load(data_dir, "faceit/faceit_matches", before=week, columns=["match_id", "finished_at"]))
-    sk = skill_features(maps, stats, faceit, allq[["week", "pa", "pb"]].reset_index(drop=True))
+    sk = skill_features(maps, stats, faceit, allq[["week", "pa", "pb", "team_a_id", "team_b_id"]].reset_index(drop=True))
     X = stage1_matrix(sk)
     nh = len(hq)
     Xh, Xt = X[:nh], X[nh:]

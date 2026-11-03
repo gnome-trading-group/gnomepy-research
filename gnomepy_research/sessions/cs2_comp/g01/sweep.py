@@ -27,6 +27,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True)
     ap.add_argument("--configs", required=True, help="JSON list of SkillFit keyword dicts")
+    ap.add_argument("--dump", action="store_true")
     ap.add_argument("--out", default=os.environ.get("OUTPUT_DIR", "."))
     a = ap.parse_args()
     hist = bundle.load(a.data, "hltv/cs2_match_history")
@@ -37,6 +38,8 @@ def main() -> None:
     s = ratings.series_table(maps)
     s = s[(s.bo == 3) & s.y.notna() & (s.t >= FIRST_WEEK)].copy()
     s["week"] = ratings.monday(s.t)
+    dump = a.dump
+    Path(a.out).mkdir(parents=True, exist_ok=True)
     results = []
     for cfg in json.loads(a.configs):
         t0 = time.time()
@@ -48,14 +51,16 @@ def main() -> None:
             if sub.empty:
                 continue
             fit = skill.MultiFit(maps, w, stats, faceit=faceit, **kw)
-            rows += [(r.t, r.y, *fit.diff(list(r.pa), list(r.pb), r.team_a_id, r.team_b_id)) for r in sub.itertuples()]
-        d = pd.DataFrame(rows, columns=["t", "y"] + skill.FEATURES)
+            rows += [(r.t, r.y, r.match_id, r.lan, r.tier, *fit.diff(list(r.pa), list(r.pb), r.team_a_id, r.team_b_id)) for r in sub.itertuples()]
+        d = pd.DataFrame(rows, columns=["t", "y", "match_id", "lan", "tier"] + skill.FEATURES)
         tr = d.t < SPLIT
         res = {"config": cfg, "seconds": time.time() - t0}
         clf = LogisticRegression(C=1, max_iter=1000).fit(d[skill.FEATURES][tr], d.y[tr])
         res["loss"] = float(log_loss(clf.predict_proba(d[skill.FEATURES][~tr])[:, 1], d.y[~tr]))
         print(res, flush=True)
         results.append(res)
+        if dump:
+            d.to_parquet(Path(a.out) / f"features_{len(results)}.parquet")
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / f"sweep_{abs(hash(a.configs)) % 10**8}.json").write_text(json.dumps(results))
