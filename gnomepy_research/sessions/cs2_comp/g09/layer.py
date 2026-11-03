@@ -17,7 +17,7 @@ import pandas as pd
 from gnomepy_research.sessions.cs2_comp.g09.core import UNRANKED, bo3, logit
 
 FEATURES = ("zavg", "form", "mapadv")
-TRAIN_DAYS = 365.0
+TRAIN_DAYS = 180.0
 L2 = 1.0
 
 
@@ -50,6 +50,10 @@ def design(rows: pd.DataFrame, features=FEATURES) -> np.ndarray:
     cols["zavg_known"] = cols["zavg"] * (10.0 - rows.known_a.to_numpy(float) - rows.known_b.to_numpy(float))
     cols["zavg_thin"] = cols["zavg"] * thin
     cols["zavg_lan"] = cols["zavg"] * lan
+    cols["subd"] = rows.sub_a.to_numpy(float) - rows.sub_b.to_numpy(float)
+    for f in features:
+        if f.startswith("avg:"):
+            cols[f] = np.mean([cols[c] for c in f[4:].split(",")], axis=0)
     return np.column_stack([cols[f] if f in cols else rows[f].to_numpy(float) for f in features] + [np.ones(len(rows))])
 
 
