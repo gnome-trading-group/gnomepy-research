@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from functools import partial
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from gnomepy_research.sessions.cs2_comp.g12.predict import panel
 from gnomepy_research.sessions.cs2_comp.g12.stack import Stack, fit_logistic, logit, sigmoid, stage1_design
 
 DATA = "/Users/mprey/gnome-research-work/cs2/groundup/comp/data"
-WORK = "/Users/mprey/gnome-research-work/cs2/groundup/g12work/"
+WORK = os.environ.get("OUTPUT_DIR", "/Users/mprey/gnome-research-work/cs2/groundup/g12work") + "/"
 
 
 def ll(p, y):
