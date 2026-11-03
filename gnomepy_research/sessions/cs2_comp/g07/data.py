@@ -17,6 +17,7 @@ import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.bundle import load
+from gnomepy_research.sessions.cs2_comp.g07.model import gap_of_price
 
 FIVE = 5
 _DIVISION_RE = re.compile(r"(entry|open10|open|intermediate|main|advanced|premier|challenger|pro league)", re.I)
@@ -86,12 +87,14 @@ def _fives(col: pd.Series, mapper=None) -> tuple[list, np.ndarray]:
 class Inputs:
     """Every map and side table g07 reads, loaded once up to `until`."""
 
-    def __init__(self, data_dir: str | Path, until: pd.Timestamp, faceit: bool = True):
+    def __init__(self, data_dir: str | Path, until: pd.Timestamp, faceit: bool = True, market: bool = True):
         self.data_dir = Path(data_dir)
         self.until = pd.Timestamp(until)
         parts = [self._hltv()]
         if faceit:
             parts.append(self._faceit())
+        if market:
+            parts.append(self._market())
         m = pd.concat(parts, ignore_index=True)
         m["pos"] = m.pos.fillna(1).astype(int)
         self.maps = m.sort_values(["known", "time", "match_id", "pos"], kind="stable").reset_index(drop=True)
@@ -209,6 +212,30 @@ class Inputs:
             "rounds": n, "rounds_a": ra, "src": 1,
             "div": [division(c) for c in fh.competition_name], "lan": 0, "tier": -1,
             "region": [_FACEIT_REGIONS.get(r, "") for r in fh.region]})
+
+    def _market(self) -> pd.DataFrame:
+        """Every earlier priced series as a measurement row (src 2): rounds_a holds the gap its
+        kickoff price implies, and the fives are the ones HLTV lists for the series."""
+        p = load(self.data_dir, "market/series_paths", self.until)
+        p = p.assign(kickoff=naive(p.kickoff), t=naive(p.t))
+        p = p[p.t <= p.kickoff].sort_values(["match_id", "t"], kind="stable")
+        last = p.groupby("match_id").tail(1)
+        last = last[(last.kickoff - last.t) <= pd.Timedelta(minutes=30)]
+        last = last[last.kickoff < self.until]
+        s = self.series.assign(match_id=self.series.match_id.astype(np.int64)).set_index("match_id")
+        last = last[last.match_id.isin(s.index)]
+        rows = []
+        for mid, k, gap in zip(last.match_id, last.kickoff, gap_of_price(last.p_a.to_numpy())):
+            r = s.loc[mid]
+            fa, fb = r.lineup_a, r.lineup_b
+            if fa is None or fb is None or len(fa) != FIVE or len(fb) != FIVE or len(set(fa)) != FIVE or len(set(fb)) != FIVE:
+                continue
+            # Known once both the price and HLTV's listing of the series exist, which keeps a cut bundle in step.
+            rows.append({"match_id": str(mid), "pos": 0, "time": k, "known": max(k, r.time), "team_a": int(r.team_a), "team_b": int(r.team_b),
+                         "five_a": tuple(int(x) for x in fa), "five_b": tuple(int(x) for x in fb), "rating_a": None,
+                         "rating_b": None, "rounds": 0, "rounds_a": float(gap), "src": 2, "div": "hltv",
+                         "lan": 0, "tier": -1, "region": ""})
+        return pd.DataFrame(rows)
 
     def uid(self, faceit_id: str) -> int:
         h = self.f2h.get(faceit_id)

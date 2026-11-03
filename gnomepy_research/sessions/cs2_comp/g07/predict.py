@@ -26,13 +26,13 @@ from gnomepy_research.sessions.cs2_comp.g07.market import path_features
 from gnomepy_research.sessions.cs2_comp.g07.model import Config, Filter, bo3_price
 
 EPOCH = np.datetime64("2023-01-01")
-_BASE = dict(tau2=3e-05, ttau2=0.0, w_hltv=0.75, scale_faceit=1.0, rating_gamma=0.45, rating_sd=0.4, r_v0=0.02)
+_BASE = dict(tv0=0.001, ttau2=0.0, scale_faceit=1.0, rating_gamma=0.45, rating_sd=0.4, w_rating_faceit=0.25, r_v0=0.02,
+             new_team_offset=-0.3, mkt_sd=0.3)
 CONFIGS = [
-    Config(**_BASE, v0=0.2, v_cap=2.0, newcomer=-0.6, tv0=0.001, w_faceit=0.6, w_rating=0.15, w_rating_faceit=0.25, r_tau2=0.0),
-    Config(**_BASE, v0=0.1, v_cap=3.0, newcomer=-0.5, newcomer_faceit=-0.5, tv0=0.001, w_faceit=0.9, w_rating=0.25,
-           w_rating_faceit=0.15, r_tau2=3e-05),
-    Config(**_BASE, v0=0.2, v_cap=2.0, newcomer=-0.5, tv0=0.0025, w_faceit=0.6, w_rating=0.25, w_rating_faceit=0.4,
-           r_tau2=3e-05),
+    Config(**_BASE, v0=0.3, v_cap=2.0, tau2=2e-05, newcomer=-0.5, w_hltv=0.9, w_faceit=0.75, w_rating=0.15, r_tau2=0.0),
+    Config(**_BASE, v0=0.3, v_cap=2.0, tau2=2e-05, newcomer=-0.6, w_hltv=0.75, w_faceit=0.75, w_rating=0.1, r_tau2=0.0),
+    Config(**_BASE, v0=0.15, v_cap=1.4, tau2=3e-05, newcomer=-0.6, w_hltv=0.6, w_faceit=0.75, w_rating=0.1, r_tau2=3e-05,
+           new_team_var=0.6),
 ]
 WEEK = pd.Timedelta(days=7)
 

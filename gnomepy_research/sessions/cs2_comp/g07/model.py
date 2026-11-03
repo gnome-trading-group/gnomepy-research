@@ -57,6 +57,9 @@ class Config:
     # region, not just the ten players in it. Zero r_v0 turns it off.
     r_v0: float = 0.0
     r_tau2: float = 0.0
+    # Past kickoff prices as noisy measurements of the gap: logit-free, the price is turned into the round-logit gap
+    # that would give it, d_mkt ~ N(d, mkt_sd^2), at the kickoff of every earlier priced series. Zero turns it off.
+    mkt_sd: float = 0.0
     rating_gamma: float = 0.0
     rating_sd: float = 0.3
     w_rating: float = 0.5
@@ -68,6 +71,16 @@ def map_win(d: np.ndarray) -> np.ndarray:
     pi = 1 / (1 + np.exp(-d))
     pmf = binom.pmf(_ROUNDS.reshape((-1,) + (1,) * d.ndim), 24, pi[None])
     return pmf[13:].sum(axis=0) + 0.5 * pmf[12]
+
+
+_GAP_GRID = np.linspace(-6.0, 6.0, 2401)
+
+
+def gap_of_price(p: np.ndarray) -> np.ndarray:
+    """The round-logit gap whose bo3 price (no uncertainty) is p."""
+    grid_price = map_win(_GAP_GRID)
+    grid_price = grid_price * grid_price * (3 - 2 * grid_price)
+    return np.interp(np.clip(np.asarray(p, float), 0.01, 0.99), grid_price, _GAP_GRID)
 
 
 def bo3_price(mean: np.ndarray, var: np.ndarray) -> np.ndarray:
@@ -175,19 +188,26 @@ class Filter:
     def update(self, five_a, five_b, team_a: int, team_b: int, rounds: float, rounds_a: float, src: int, div: str,
                now: float, rating_a=None, rating_b=None, map_region: str = "") -> None:
         cfg = self.cfg
+        market = src == 2
+        if market and not cfg.mkt_sd:
+            return
         ma, va, _ = self.five(five_a, now, div)
         mb, vb, _ = self.five(five_b, now, div)
         ua, uva = self._team(team_a, now)
         ub, uvb = self._team(team_b, now)
         reg_a, reg_b = self.region_of(team_a, map_region), self.region_of(team_b, map_region)
         rma, rva, rmb, rvb, cross = self._regions(reg_a, reg_b, now)
-        scale = cfg.scale_faceit if src else 1.0
-        w = cfg.w_faceit if src else cfg.w_hltv
+        scale = cfg.scale_faceit if src == 1 else 1.0
+        w = cfg.w_faceit if src == 1 else cfg.w_hltv
         d = scale * ((sum(ma) - sum(mb)) / FIVE + ua - ub + rma - rmb)
         S = scale * scale * ((sum(va) + sum(vb)) / (FIVE * FIVE) + uva + uvb + rva + rvb)
-        pr = 1.0 / (1.0 + math.exp(-d))
-        g = w * (rounds_a - rounds * pr)
-        h = w * rounds * pr * (1 - pr)
+        if market:
+            h = 1.0 / (cfg.mkt_sd * cfg.mkt_sd)
+            g = (rounds_a - d) * h
+        else:
+            pr = 1.0 / (1.0 + math.exp(-d))
+            g = w * (rounds_a - rounds * pr)
+            h = w * rounds * pr * (1 - pr)
         k = 1.0 / (1.0 + S * h)
         c = scale / FIVE
         for five, mus, vs, sign in ((five_a, ma, va, 1.0), (five_b, mb, vb, -1.0)):
@@ -195,7 +215,8 @@ class Filter:
                 self.mu[p] = m + sign * c * v * g * k
                 self.var[p] = v - c * c * v * v * h * k
                 self.last[p] = now
-                self.n[p] = self.n.get(p, 0) + 1
+                if not market:
+                    self.n[p] = self.n.get(p, 0) + 1
         for t, u, uv, sign in ((team_a, ua, uva, 1.0), (team_b, ub, uvb, -1.0)):
             if t >= 0:
                 self.tmu[t] = u + sign * scale * uv * g * k
@@ -206,6 +227,8 @@ class Filter:
                 self.rmu[r] = rm + sign * scale * rv * g * k
                 self.rvar[r] = rv - scale * scale * rv * rv * h * k
                 self.rlast[r] = now
+        if market:
+            return
         if map_region:
             for t in (team_a, team_b):
                 if t >= 0:
