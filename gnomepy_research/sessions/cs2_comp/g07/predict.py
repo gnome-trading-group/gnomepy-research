@@ -7,9 +7,10 @@ One pass of the skill filter (`model.py`) runs over every map in the order the m
 the first priced series on, the filter stops at that Monday and prices (a) every market series kicking off that week,
 with the fives HLTV lists for it, and (b) the targets whose week_cutoff is that Monday, with their announced fives.
 
-The final price is a Bayesian logistic layer (`layer.py`) over the market's kickoff price, the shape of its path, and
-the filter's price with its uncertainty. For a target week it is fitted on the market series that kicked off before the
-cutoff and whose result was known by then, each priced at its own Monday, so the layer is point-in-time too."""
+Three filter configurations run side by side and their prices are averaged on the logit scale. The final price is a
+Bayesian logistic layer (`layer.py`) over the market's kickoff price and that filter price. For a target week it is
+fitted on the market series that kicked off before the cutoff and whose result was known by then, each priced at its
+own Monday, so the layer is point-in-time too."""
 from __future__ import annotations
 
 import argparse
@@ -34,7 +35,6 @@ CONFIGS = [
     Config(**_BASE, v0=0.15, v_cap=1.4, tau2=3e-05, newcomer=-0.6, w_hltv=0.6, w_faceit=0.75, w_rating=0.1, r_tau2=3e-05,
            new_team_var=0.6),
 ]
-WEEK = pd.Timedelta(days=7)
 
 
 def _five(v) -> tuple[int, ...] | None:

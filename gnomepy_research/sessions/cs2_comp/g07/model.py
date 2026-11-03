@@ -1,22 +1,28 @@
 """g07's skill model: a Bayesian filter over every map, in the order the maps became known.
 
-Each player p has a skill s_p ~ N(mu_p, var_p) on the round-logit scale, and each HLTV team t an offset u_t ~
-N(tmu_t, tvar_t) for what the five does together beyond its players. On a map,
+Each player p has a skill s_p ~ N(mu_p, var_p) on the round-logit scale, each HLTV team t an offset u_t for what the
+five does together beyond its players, and each region R (EU, NA, SA, ASIA, OCE, MENA, CIS, read from the event names
+a team plays in) an offset r_R. On a map,
 
-    d = mean(s_A) + u_A - mean(s_B) - u_B,     rounds_A ~ Binomial(n, sigmoid(scale_src * d))
+    d = mean(s_A) + u_A + r_A - mean(s_B) - u_B - r_B,     rounds_A ~ Binomial(n, sigmoid(scale_src * d))
 
 with the binomial likelihood tempered by w_src (rounds inside a map are not independent, and FACEIT rounds measure the
-same skill with more noise). Each map is one assumed-density update: the likelihood is expanded to second order at the
-prior mean of d and every state moves by its share of the prior variance of d (a diagonal Gaussian posterior, as in
-TrueSkill). Between maps every state random-walks: var grows by tau2 per day, capped at its prior variance.
+same skill with more noise). Region offsets only enter cross-region maps, so a cross-region result moves the whole
+region instead of only the ten players in it: the partial pooling that lets results travel between scenes that rarely
+meet. Each map is one assumed-density update: the likelihood is expanded to second order at the prior mean of d and
+every state moves by its share of the prior variance of d (a diagonal Gaussian posterior, as in TrueSkill). Between
+maps every state random-walks: var grows by tau2 per day, capped at its prior variance.
 
-Partial pooling: a player's first appearance draws its prior from the five it appears in. Its mean is the mean of the
-teammates the filter already knows (each shrunk by how well it is known) plus a newcomer offset, falling back to a
-running mean for the division the map belongs to (HLTV tier, FACEIT ESEA division) when no teammate is known; its
-variance is the within-team spread plus the uncertainty of that mean. A team offset starts at zero with variance tv0.
+Further measurements of the same states:
+- map ratings relative to teammates (HLTV rating; on FACEIT, kills and damage per round) say who in a five carries it;
+- past kickoff prices, turned into the gap they imply, are noisy measurements of d at the kickoff of every earlier
+  priced series.
 
-The posterior variance carries through to the price: a series is priced by integrating the bo3 win probability over
-d ~ N(D, S), so a five the filter barely knows is priced closer to a coin flip than its point estimate says."""
+Partial pooling of newcomers: a player's first appearance draws its prior from the five it appears in. Its mean is the
+mean of the teammates the filter already knows (each shrunk by how well it is known) plus a newcomer offset; a five
+with no known player starts at a running mean for its division (HLTV, FACEIT ESEA division) plus its own offset.
+
+A series is priced by integrating the bo3 win probability over d ~ N(D, S), the three maps sharing the gap."""
 from __future__ import annotations
 
 import math
@@ -50,16 +56,16 @@ class Config:
     w_faceit: float = 0.25
     scale_faceit: float = 1.0
     div_rate: float = 0.002     # how fast the division running means follow their players
-    # HLTV map ratings relative to teammates measure who in a five carries it: rating_p - mean(rating) ~
-    # N(rating_gamma * (s_p - mean(s)), rating_sd^2), tempered by w_rating. Zero rating_gamma turns it off.
     # Region offsets: every side carries its team's region offset (EU, NA, SA, ASIA, OCE, MENA, CIS, read from the
     # event names a team plays in), learned only from cross-region maps. A cross-region result then moves the whole
     # region, not just the ten players in it. Zero r_v0 turns it off.
     r_v0: float = 0.0
     r_tau2: float = 0.0
-    # Past kickoff prices as noisy measurements of the gap: logit-free, the price is turned into the round-logit gap
-    # that would give it, d_mkt ~ N(d, mkt_sd^2), at the kickoff of every earlier priced series. Zero turns it off.
+    # Past kickoff prices as noisy measurements of the gap: the price is turned into the round-logit gap that would
+    # give it, d_mkt ~ N(d, mkt_sd^2), at the kickoff of every earlier priced series. Zero turns it off.
     mkt_sd: float = 0.0
+    # HLTV map ratings relative to teammates measure who in a five carries it: rating_p - mean(rating) ~
+    # N(rating_gamma * (s_p - mean(s)), rating_sd^2), tempered by w_rating. Zero rating_gamma turns it off.
     rating_gamma: float = 0.0
     rating_sd: float = 0.3
     w_rating: float = 0.5
