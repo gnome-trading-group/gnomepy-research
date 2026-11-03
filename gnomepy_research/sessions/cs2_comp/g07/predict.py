@@ -21,13 +21,19 @@ import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.bundle import load, target_paths
 from gnomepy_research.sessions.cs2_comp.g07.data import FIVE, Inputs, naive
-from gnomepy_research.sessions.cs2_comp.g07.layer import fit_and_price
+from gnomepy_research.sessions.cs2_comp.g07.layer import fit_and_price, logit
 from gnomepy_research.sessions.cs2_comp.g07.market import path_features
 from gnomepy_research.sessions.cs2_comp.g07.model import Config, Filter, bo3_price
 
 EPOCH = np.datetime64("2023-01-01")
-CONFIGS = [Config(v0=0.1, v_cap=1.4, tau2=6e-05, newcomer=-0.3, tv0=0.005, ttau2=0.0, w_hltv=0.75, w_faceit=0.9,
-                  scale_faceit=1.0, rating_gamma=0.45, rating_sd=0.4, w_rating=0.25, r_v0=0.05, r_tau2=3e-05)]
+_BASE = dict(tau2=3e-05, ttau2=0.0, w_hltv=0.75, scale_faceit=1.0, rating_gamma=0.45, rating_sd=0.4, r_v0=0.02)
+CONFIGS = [
+    Config(**_BASE, v0=0.2, v_cap=2.0, newcomer=-0.6, tv0=0.001, w_faceit=0.6, w_rating=0.15, w_rating_faceit=0.25, r_tau2=0.0),
+    Config(**_BASE, v0=0.1, v_cap=3.0, newcomer=-0.5, newcomer_faceit=-0.5, tv0=0.001, w_faceit=0.9, w_rating=0.25,
+           w_rating_faceit=0.15, r_tau2=3e-05),
+    Config(**_BASE, v0=0.2, v_cap=2.0, newcomer=-0.5, tv0=0.0025, w_faceit=0.6, w_rating=0.25, w_rating_faceit=0.4,
+           r_tau2=3e-05),
+]
 WEEK = pd.Timedelta(days=7)
 
 
@@ -98,11 +104,17 @@ class LastFive:
 
 
 def _priced(filters: list[Filter], rows: pd.DataFrame, last: dict) -> pd.DataFrame:
-    """The first filter's full view of each side, plus gap, gvar and q_skill of every further filter (suffixed _1, ...)."""
+    """The first filter's full view of each side, every filter's price (q_skill_0, q_skill_1, ...), and q_skill, their
+    mean on the logit scale: the configurations differ in ways the development data could not tell apart, so the
+    ensemble hedges between them."""
     out = price_rows(filters[0], rows, last)
+    z = [logit(out.q_skill.to_numpy())]
+    out["q_skill_0"] = out.q_skill
     for i, f in enumerate(filters[1:], 1):
         r = price_rows(f, rows, last)
-        out[[f"gap_{i}", f"gvar_{i}", f"q_skill_{i}"]] = r[["gap", "gvar", "q_skill"]].to_numpy()
+        out[f"q_skill_{i}"] = r.q_skill.to_numpy()
+        z.append(logit(r.q_skill.to_numpy()))
+    out["q_skill"] = 1 / (1 + np.exp(-np.mean(z, axis=0)))
     return out
 
 
