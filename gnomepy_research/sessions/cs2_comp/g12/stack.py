@@ -55,6 +55,11 @@ def stage1_design(d: pd.DataFrame) -> pd.DataFrame:
     for c in d.columns:
         if c.startswith("gx_") and c.endswith("_a"):
             X[c[:-2]] = d[c] - d[c[:-2] + "_b"]
+    g = X["gauss"]
+    X["gauss_lan"] = g * d.is_lan.astype(float)
+    X["gauss_new"] = g * (d.new_players_a + d.new_players_b)
+    X["gauss_weak"] = g * ((d.rank_a > 100) | (d.rank_b > 100)).astype(float)
+    X["gauss_idle"] = g * np.log1p((d.idle_days_a + d.idle_days_b).clip(0, 730))
     X["map_adj"] = d.map_adj if "map_adj" in d else 0.0
     X["gauss_unc"] = X["gauss"] * (d.gauss_var_a + d.gauss_var_b)
     both_rt = d.hltv_rating_a.notna() & d.hltv_rating_b.notna()

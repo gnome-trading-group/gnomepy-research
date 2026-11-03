@@ -13,6 +13,7 @@ import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g12.data import load_hltv
 from gnomepy_research.sessions.cs2_comp.g12.predict import panel
+from gnomepy_research.sessions.cs2_comp.g12.raters import RaterConfig
 from gnomepy_research.sessions.cs2_comp.g12.stack import Stack, fit_logistic, logit, sigmoid, stage1_design
 
 DATA = "/Users/mprey/gnome-research-work/cs2/groundup/comp/data"
@@ -91,7 +92,9 @@ def main():
         E12 = pd.concat([pd.read_parquet(f) for f in e12])[["match_id", "q"]].rename(columns={"q": "e12"})
     if a.build:
         t = pd.read_parquet(DATA + "/targets_tune.parquet")
-        p = panel(DATA, t)
+        extra = (("gx_f1", {"g_faceit_step": 1.0, "g_faceit_scale": 1.0}), ("gx_slow", {"g_tau2": 0.0, "g_var0": 0.5}),
+                 ("gx_fast", {"g_tau2": 2e-4}))
+        p = panel(DATA, t, cfg=RaterConfig(extra=extra))
         p.to_parquet(a.panel)
     p = pd.read_parquet(a.panel)
     if a.period == "dev":
@@ -106,9 +109,12 @@ def main():
     variants = {
         "gauss": partial(Stack, use1=("gauss",), model_only=True),
         "gauss_unc": partial(Stack, use1=("gauss", "gauss_unc"), model_only=True),
-        "mix_model": partial(Stack, model_only=True),
-        "mix4_model": partial(Stack, use1=("gauss", "gauss_h", "team_elo", "log_points"), model_only=True),
-        "direct_mix_ctx": partial(Stack, direct=mix),
+        "gauss_extras": partial(Stack, use1=("gauss", "gx_f1", "gx_slow", "gx_fast"), model_only=True),
+        "gauss_inter": partial(Stack, use1=("gauss", "gauss_unc", "gauss_lan", "gauss_new", "gauss_weak", "gauss_idle"), model_only=True),
+        "gauss_extras_unc": partial(Stack, use1=("gauss", "gx_f1", "gx_slow", "gx_fast", "gauss_unc"), model_only=True),
+        "direct_gauss_drift": partial(Stack, use1=("gauss",), direct=("gauss",), market_terms=("drift",)),
+        "direct_gauss_young": partial(Stack, use1=("gauss",), direct=("gauss",), market_terms=("drift", "m_young", "m_still")),
+        "direct_gauss": partial(Stack, use1=("gauss",), direct=("gauss",)),
     }
     for name, mk in variants.items():
         res = walk(p, weeks, mk, ev)
