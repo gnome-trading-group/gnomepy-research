@@ -1,9 +1,10 @@
-"""Map-pool pricing: per (team, map) strength offsets on top of the player-skill gap, and a bo3 veto that lets each
-side ban its worst maps and pick its best.
+"""Team-level residuals on top of the player-skill gap: per (team, map) offsets priced through a bo3 veto that lets each
+side ban its worst maps and pick its best, and per (team, LAN or online) offsets for the setting of a series.
 
 The offsets are one shrunken Newton step from zero: each recent HLTV map a team played contributes its round residual
-against the skill fit's expectation, weighted by recency, and a prior precision pulls thinly played maps to zero. The
-active pool is the most played maps over the recent window."""
+against the skill fit's expectation, weighted by recency, and a prior precision pulls thinly played cells to zero. The
+active pool is the most played maps over the recent window. The per-map residuals are kept (`residuals`) so other
+groupings can be tried."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -45,7 +46,7 @@ def load_maps(data_dir, until: pd.Timestamp) -> pd.DataFrame:
                          "is_lan": h.is_lan.fillna(0).astype(int).to_numpy()})
 
 
-def _five_skill(fit, fives, ranks=None) -> np.ndarray:
+def _five_skill(fit, fives) -> np.ndarray:
     out = np.full(len(fives), np.nan)
     for i, five in enumerate(fives):
         if five is None or len(five) != 5:
