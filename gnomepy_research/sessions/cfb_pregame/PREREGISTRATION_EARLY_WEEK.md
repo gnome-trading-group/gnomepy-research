@@ -47,3 +47,21 @@ model the registry used.
 3. **Adverse selection:** the mid 1 h and 6 h after each entry fill.
 
 Nothing here is promoted to real money from these sessions alone.
+
+## Amendment, Nov 2, 2026 (the user's call, before any session ran): late games traded off protocol
+
+Week 10's Tuesday–Friday games, and any game launched with fewer than 66 h to kickoff, can be traded with
+`launch_early_week --include-late`. Such a game:
+- is marked `off_protocol` in its trigger;
+- is decided at its first usable look, however late, until its entry closes 6 h before kickoff;
+- has a decision row with `off_protocol = 1` and `hours_before`, the hours to kickoff when it was decided.
+
+Games with 7 h or less to kickoff at launch are still left out.
+
+**Why it breaks the strategy:** the market has had more time to take in what the model knows, and the bid has less
+time to fill. The 72-hour signal was never measured at these horizons; A2 tested only −72, −48 and −24 h.
+
+**How it is reported:**
+- Off-protocol games are reported apart.
+- The endpoints above use only the protocol games (`off_protocol = 0`).
+- Pooled numbers, if shown, are labelled as including off-protocol games.

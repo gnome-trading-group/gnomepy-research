@@ -67,9 +67,10 @@ class _Held:
 def make(monkeypatch):
     monkeypatch.setattr(mod, "Intent", _Intent)
 
-    def _make(p_home=(0.70, 0.50), games=(1, 2), missing=(), **kw):
+    def _make(p_home=(0.70, 0.50), games=(1, 2), missing=(), off_protocol=(), **kw):
         args = [{"game_id": g, "listing_home": GAMES[g][0], "listing_away": GAMES[g][1],
-                 "kickoff": GAMES[g][2].isoformat(), "p_home": p} for g, p in zip(games, p_home)]
+                 "kickoff": GAMES[g][2].isoformat(), "p_home": p, "off_protocol": g in off_protocol}
+                for g, p in zip(games, p_home)]
         with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry(missing)):
             strat = mod.CFBEarlyWeek(games=args, model="e11", **kw)
         strat._position_view = _Held()
@@ -146,6 +147,28 @@ def test_it_waits_for_a_usable_book_but_not_past_the_late_limit(make):
     assert _both(late, 65) == [], "seven hours late: left alone"
     [d] = [r for r in late.metrics.streams["cfb_early_week_decisions"].rows if r["game_id"] == 1]
     assert d["late"] == 1 and d["side"] == mod.NO_SIDE
+
+
+def test_an_off_protocol_game_decides_at_its_first_look_however_late_and_is_flagged(make):
+    s = make(off_protocol=(1,))
+    [o] = _for(_both(s, 30), 101)
+    assert o.bid_price == round(0.48 * P) and o.bid_size == S
+    [d] = [r for r in s.metrics.streams["cfb_early_week_decisions"].rows if r["game_id"] == 1]
+    assert d["off_protocol"] == 1 and d["late"] == 0 and d["hours_before"] == pytest.approx(30)
+
+
+def test_an_off_protocol_game_still_needs_its_entry_window(make):
+    s = make(off_protocol=(1,))
+    assert _for(_both(s, 5), 101) == []
+    [d] = [r for r in s.metrics.streams["cfb_early_week_decisions"].rows if r["game_id"] == 1]
+    assert d["late"] == 1 and d["off_protocol"] == 1
+
+
+def test_a_protocol_game_is_flagged_as_such(make):
+    s = make()
+    _both(s, 72)
+    [d] = [r for r in s.metrics.streams["cfb_early_week_decisions"].rows if r["game_id"] == 1]
+    assert d["off_protocol"] == 0 and d["hours_before"] == pytest.approx(72)
 
 
 def test_the_bid_moves_to_the_best_bid_every_six_hours_and_not_between(make):

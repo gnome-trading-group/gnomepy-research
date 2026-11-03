@@ -49,7 +49,8 @@ def test_triggers_hold_the_frozen_model_price_in_paper_mode(tmp_path):
     assert d["mode"] == "paper" and d["strategy_id"] == 12 and d["research_commit"] == "abc"
     assert d["listings"] == [101, 201, 103, 203, 102, 202], "kickoff order"
     g = d["strategy_args"]["games"][0]
-    assert g == {"game_id": 1, "listing_home": 101, "listing_away": 201, "kickoff": SAT.isoformat(), "p_home": 0.61}
+    assert g == {"game_id": 1, "listing_home": 101, "listing_away": 201, "kickoff": SAT.isoformat(), "p_home": 0.61,
+                 "off_protocol": False}
     assert d["strategy_args"]["model"] == "e11" and d["strategy_args"]["contracts"] == 1.0
     assert t["deadline"] == (SAT + pd.Timedelta(hours=3) - pd.Timedelta(hours=6)).isoformat()
 
@@ -68,3 +69,17 @@ def test_a_slate_splits_into_sessions_of_at_most_max_games(tmp_path):
     out, _ = lew.triggers(_legs([1, 2, 3]), slate, strategy_id=12, research_commit="abc", model="e11", now=NOW,
                           max_games=2, args={})
     assert [[g["game_id"] for g in t["data"]["strategy_args"]["games"]] for t in out] == [[1, 3], [2]]
+
+
+def test_with_include_late_closed_windows_trade_flagged_off_protocol_until_seven_hours_out(tmp_path):
+    slate = lew.load_slate(*_slate(tmp_path), "e11")
+    now = SAT - pd.Timedelta(hours=8)
+    out, drops = lew.triggers(_legs([1, 2, 3]), slate, strategy_id=12, research_commit="abc", model="e11", now=now,
+                              max_games=15, args={}, include_late=True)
+    games = {g["game_id"]: g for t in out for g in t["data"]["strategy_args"]["games"]}
+    assert sorted(games) == [1, 2, 3] and drops == []
+    assert all(g["off_protocol"] for g in games.values())
+    out, drops = lew.triggers(_legs([1, 2, 3]), slate, strategy_id=12, research_commit="abc", model="e11",
+                              now=SAT - pd.Timedelta(hours=6.5), max_games=15, args={}, include_late=True)
+    assert [g["game_id"] for t in out for g in t["data"]["strategy_args"]["games"]] == [2]
+    assert sorted(d[0] for d in drops) == [1, 3] and all("entry window" in d[2] for d in drops)

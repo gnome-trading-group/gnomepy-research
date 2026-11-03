@@ -16,6 +16,10 @@ at the best ask, moved every exit_repeg_hours. Whatever is still held taker_exit
 the best bid; what that sale leaves is held to settlement. The decision is made once per game and recorded
 (cfb_early_week_decisions), as is every order sent (cfb_early_week_orders).
 
+A game the trigger marks off_protocol (launched after its decision window had closed, on the operator's call) is
+decided at its first usable look however late, until its entry closes; its decision row says so and how many hours
+before kickoff it was made, so it can be reported apart from the pre-registered games.
+
 After a restart a held position marks its game's side and the game carries on from where the clock is. A game with
 nothing held whose decision time passed more than max_late_hours ago is left alone. Kickoffs are the trigger's.
 """
@@ -75,6 +79,7 @@ class _Game:
     legs: tuple[_Leg, _Leg]
     kickoff_ns: int
     p_home: float
+    off_protocol: bool = False
     phase: int = WAIT
     side: int = NO_SIDE
     next_peg_ns: int = 0
@@ -84,7 +89,7 @@ class CFBEarlyWeek(Strategy):
     """
     Args:
         games: the slate, [{"game_id", "listing_home", "listing_away", "kickoff": ISO, "p_home": the model's P(home),
-            frozen at launch}].
+            frozen at launch, "off_protocol": optional, decide however late}].
         model: the model behind p_home, for the record.
         contracts: contracts bought per game.
         min_gap: the least |model - market mid| at the decision time worth trading.
@@ -137,7 +142,7 @@ class CFBEarlyWeek(Strategy):
                 logger.warning("game %s: a listing isn't in the registry; not trading it", g["game_id"])
                 continue
             self._games[int(g["game_id"])] = _Game(int(g["game_id"]), legs, pd.Timestamp(g["kickoff"]).value,
-                                                   float(g["p_home"]))
+                                                   float(g["p_home"]), bool(g.get("off_protocol", False)))
         if not self._games:
             raise ValueError("no game on the slate has both listings in the registry")
         self._owner = {(leg.exchange_id, leg.security_id): (game.game_id, side)
@@ -158,9 +163,11 @@ class CFBEarlyWeek(Strategy):
 
     def register_metrics(self) -> None:
         decisions = self.metrics.create_stream("cfb_early_week_decisions")
-        self._d = {name: (decisions.add_long_column(name) if name in ("timestamp", "game_id", "side", "late")
+        self._d = {name: (decisions.add_long_column(name) if name in ("timestamp", "game_id", "side", "late",
+                                                                      "off_protocol")
                           else decisions.add_double_column(name))
-                   for name in ("timestamp", "game_id", "side", "late", "p_model", "market_mid", "gap")}
+                   for name in ("timestamp", "game_id", "side", "late", "off_protocol", "p_model", "market_mid", "gap",
+                                "hours_before")}
         decisions.freeze()
         orders = self.metrics.create_stream("cfb_early_week_orders")
         self._o = {name: (orders.add_long_column(name) if name in ("timestamp", "game_id", "side", "action")
@@ -218,7 +225,7 @@ class CFBEarlyWeek(Strategy):
         if game.phase == WAIT:
             if held is not None:
                 game.side, game.phase, game.next_peg_ns = held[0], ENTRY, now
-            elif now > decide_at + self.late_ns or now >= close_at:
+            elif (not game.off_protocol and now > decide_at + self.late_ns) or now >= close_at:
                 game.phase = DONE
                 self._decision(now, game, math.nan, late=True)
                 return []
@@ -298,9 +305,11 @@ class CFBEarlyWeek(Strategy):
         buf.set_long(c["game_id"], game.game_id)
         buf.set_long(c["side"], game.side)
         buf.set_long(c["late"], int(late))
+        buf.set_long(c["off_protocol"], int(game.off_protocol))
         buf.set_double(c["p_model"], game.p_home)
         buf.set_double(c["market_mid"], m)
         buf.set_double(c["gap"], game.p_home - m)
+        buf.set_double(c["hours_before"], (game.kickoff_ns - now) / HOUR_NS)
         buf.commit()
 
     def _order(self, now: int, game: _Game, leg: _Leg, action: int, price: float, shares: float, held: float) -> None:

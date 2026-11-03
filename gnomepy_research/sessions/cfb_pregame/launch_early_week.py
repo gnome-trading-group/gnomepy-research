@@ -11,7 +11,9 @@ The slate is the weekly model file (game_id and one column per model, from the l
 and CFBD team names from the week's C2 predictions. The model column chosen is frozen into each session's trigger as
 the game's p_home. Kalshi's markets are matched, oriented, resolved and cross-checked as launch.py does. A game with
 fewer than 66 hours to kickoff at launch is left out: its 72-hour decision time is more than the 6 hours late the
-strategy allows. Sessions hold at most --max-games games each (the registry's heartbeat limit).
+strategy allows. With --include-late such a game is traded anyway, marked off_protocol (the strategy decides it at its
+first look and flags its decision row), as long as more than 7 hours remain (entries close 6 hours out). Sessions hold
+at most --max-games games each (the registry's heartbeat limit).
 
 Without --send nothing leaves this machine but reads. With --send each trigger goes onto the launcher's launch queue.
 Paper mode only.
@@ -34,6 +36,7 @@ STRATEGY_CLASS = "gnomepy_research.sessions.cfb_pregame.early_week:CFBEarlyWeek"
 DECIDE = pd.Timedelta(hours=72)
 MAX_LATE = pd.Timedelta(hours=6)
 ENTRY_CLOSE = pd.Timedelta(hours=6)
+MIN_ENTRY = pd.Timedelta(hours=1)
 MAX_GAMES = 15
 
 
@@ -52,16 +55,25 @@ def load_slate(slate_csv: str | Path, games_parquet: str | Path, model: str) -> 
 
 
 def triggers(legs: pd.DataFrame, slate: pd.DataFrame, *, strategy_id: int, research_commit: str, model: str,
-             now: pd.Timestamp, max_games: int, args: dict) -> tuple[list[dict], list[launch.Drop]]:
+             now: pd.Timestamp, max_games: int, args: dict,
+             include_late: bool = False) -> tuple[list[dict], list[launch.Drop]]:
     """The direct_launch triggers for the legs' games, in kickoff order and at most max_games to a session, and the
-    games left out because their decision window has closed."""
+    games left out: those whose decision window has closed, or with include_late (which trades those off_protocol)
+    those with too little of their entry window left."""
     s = slate.set_index("game_id")
     rows = legs.assign(kickoff=lambda d: d["game_id"].map(s["kickoff"]), p_home=lambda d: d["game_id"].map(s["p_home"]))
     closed = rows["kickoff"] - DECIDE + MAX_LATE < now
-    drops = [(int(g), "kalshi", "decision window closed") for g in rows.loc[closed, "game_id"]]
-    rows = rows[~closed].sort_values(["kickoff", "game_id"])
+    if include_late:
+        out_of_time = rows["kickoff"] - ENTRY_CLOSE - MIN_ENTRY < now
+        drops = [(int(g), "kalshi", "entry window nearly closed") for g in rows.loc[out_of_time, "game_id"]]
+        rows = rows[~out_of_time].assign(off_protocol=closed[~out_of_time])
+    else:
+        drops = [(int(g), "kalshi", "decision window closed") for g in rows.loc[closed, "game_id"]]
+        rows = rows[~closed].assign(off_protocol=False)
+    rows = rows.sort_values(["kickoff", "game_id"])
     every = [{"game_id": int(r.game_id), "listing_home": int(r.listing_home), "listing_away": int(r.listing_away),
-              "kickoff": pd.Timestamp(r.kickoff).isoformat(), "p_home": float(r.p_home)} for r in rows.itertuples()]
+              "kickoff": pd.Timestamp(r.kickoff).isoformat(), "p_home": float(r.p_home),
+              "off_protocol": bool(r.off_protocol)} for r in rows.itertuples()]
     out = []
     for start in range(0, len(every), max_games):
         games = every[start:start + max_games]
@@ -87,6 +99,8 @@ def main() -> None:
     ap.add_argument("--contracts", type=float, default=1.0)
     ap.add_argument("--min-gap", type=float, default=0.05)
     ap.add_argument("--max-games", type=int, default=MAX_GAMES)
+    ap.add_argument("--include-late", action="store_true",
+                    help="trade games past their decision window too, flagged off_protocol")
     ap.add_argument("--send", action="store_true", help="queue the triggers on the launcher's launch queue")
     a = ap.parse_args()
     now = pd.Timestamp(datetime.now(timezone.utc))
@@ -101,7 +115,8 @@ def main() -> None:
     resolved, missing = launch.resolve(legs, RegistryClient())
     checked, flagged = launch.cross_check(resolved, launch.leg_mids(resolved), slate)
     out, closed = triggers(checked, slate, strategy_id=a.strategy, research_commit=a.research_commit, model=a.model,
-                           now=now, max_games=a.max_games, args={"contracts": a.contracts, "min_gap": a.min_gap})
+                           now=now, max_games=a.max_games, args={"contracts": a.contracts, "min_gap": a.min_gap},
+                           include_late=a.include_late)
 
     names = slate.set_index("game_id")
     print(f"{len(slate)} games priced by {a.model}, {sum(len(t['data']['strategy_args']['games']) for t in out)} "
@@ -110,6 +125,12 @@ def main() -> None:
     for game_id, venue, reason in sorted(unmatched + missing + flagged + closed):
         g = names.loc[game_id]
         print(f"  {game_id} {g.away_team} at {g.home_team}: {reason}")
+    late = [g for t in out for g in t["data"]["strategy_args"]["games"] if g["off_protocol"]]
+    if late:
+        print(f"OFF PROTOCOL: {len(late)} games decided after their 72-hour window (reported apart):")
+        for g in late:
+            n = names.loc[g["game_id"]]
+            print(f"  {g['game_id']} {n.away_team} at {n.home_team}, kickoff {g['kickoff']}")
     for t in out:
         print(f"trigger: {len(t['data']['strategy_args']['games'])} games, deadline {t['deadline']}")
     print(json.dumps([{"rule_type": launch.RULE_TYPE, "action": "launch", "deadline": t["deadline"], "data": t["data"]}
