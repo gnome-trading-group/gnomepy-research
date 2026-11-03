@@ -44,6 +44,8 @@ class Config:
     rating_sd: float = 0.31
     # Prior sd of a team's map-specific round-logit offset, and the window that sets the active map pool.
     map_sds: tuple = (0.1, 0.2, 0.3)
+    # Prior sd of a team's own round-logit effect beyond its players (zero turns team nodes off).
+    team_sd: float = 0.0
     pool_days: int = 60
 
 
@@ -77,11 +79,14 @@ class GraphFit:
     gamma: np.ndarray
     c: np.ndarray
     sigma: float
+    tau: float
     lu: object
     X: np.ndarray
     map_offset: dict = field(default_factory=dict)
     pool: tuple = ()
     prefs: dict = field(default_factory=dict)
+    team_eff: dict = field(default_factory=dict)
+    team_index: dict = field(default_factory=dict)
     info: dict = field(default_factory=dict)
 
     @classmethod
@@ -93,68 +98,84 @@ class GraphFit:
         ia = np.searchsorted(players, maps.five_a)
         ib = np.searchsorted(players, maps.five_b)
         rows = np.repeat(np.arange(M), FIVE)
-        A = (sp.csr_matrix((np.full(M * FIVE, 1.0 / FIVE), (rows, ia.ravel())), shape=(M, P))
-             - sp.csr_matrix((np.full(M * FIVE, 1.0 / FIVE), (rows, ib.ravel())), shape=(M, P))).tocsr()
+        team_a, team_b = f.team_a.to_numpy(), f.team_b.to_numpy()
+        teams = np.unique(np.concatenate([team_a, team_b]))
+        teams = teams[teams >= 0] if cfg.team_sd > 0 else teams[:0]
+        T = len(teams)
+        Q = P + T
+        ok_a = np.isin(team_a, teams)
+        ok_b = np.isin(team_b, teams)
+        A = (sp.csr_matrix((np.full(M * FIVE, 1.0 / FIVE), (rows, ia.ravel())), shape=(M, Q))
+             - sp.csr_matrix((np.full(M * FIVE, 1.0 / FIVE), (rows, ib.ravel())), shape=(M, Q))
+             + sp.csr_matrix((np.ones(ok_a.sum()), (np.where(ok_a)[0], P + np.searchsorted(teams, team_a[ok_a]))), shape=(M, Q))
+             - sp.csr_matrix((np.ones(ok_b.sum()), (np.where(ok_b)[0], P + np.searchsorted(teams, team_b[ok_b]))), shape=(M, Q))).tocsr()
         At = A.T.tocsr()
         age = (cutoff - f.time).dt.total_seconds().to_numpy() / 86400.0
         w = 0.5 ** (age / cfg.half_life_days) * np.where(f.source == "faceit", cfg.faceit_weight, 1.0)
         n = f.rounds.to_numpy(float)
         ra = f.rounds_a.to_numpy(float)
-        X = _prior_design(maps, players, inputs, cutoff, faceit)
-        K = X.shape[1]
+        X0 = _prior_design(maps, players, inputs, cutoff, faceit)
+        K = X0.shape[1]
+        Xs = sp.vstack([sp.csr_matrix(X0), sp.csr_matrix((T, K))]).tocsr()
         comm = communities(ia, ib, w, P, cfg.communities)
-        C = sp.csr_matrix((np.ones(P), (np.arange(P), comm)), shape=(P, int(comm.max()) + 1))
-        NC = C.shape[1]
+        NC = int(comm.max()) + 1
+        C = sp.csr_matrix((np.ones(P), (np.arange(P), comm)), shape=(Q, NC))
         inv_var = 1.0 / cfg.sigma ** 2
         inv_tau = 1.0 / cfg.tau ** 2
-        L, yr, wr = _rating_rows(f, ia, ib, w, P, cfg)
+        prec = np.concatenate([np.full(P, inv_var), np.full(T, 1.0 / cfg.team_sd ** 2 if T else 1.0)])
+        L, yr, wr = _rating_rows(f, ia, ib, w, Q, cfg)
         kappa = (cfg.rating_gamma / cfg.rating_sd) ** 2
 
         def split(theta):
-            return theta[:P], theta[P:P + K], theta[P + K:]
+            return theta[:Q], theta[Q:Q + K], theta[Q + K:]
 
         def objective(theta):
             s, g, c = split(theta)
             d = A @ s
-            r = s - X @ g - C @ c
-            obj = -(w * (ra * d - n * np.logaddexp(0.0, d))).sum() + 0.5 * inv_var * (r @ r) + 0.5e-2 * (g @ g) \
+            r = s - Xs @ g - C @ c
+            pr_ = prec * r
+            obj = -(w * (ra * d - n * np.logaddexp(0.0, d))).sum() + 0.5 * (r @ pr_) + 0.5e-2 * (g @ g) \
                 + 0.5 * inv_tau * (c @ c)
-            grad_s = -(At @ (w * (ra - n * expit(d)))) + inv_var * r
+            grad_s = -(At @ (w * (ra - n * expit(d)))) + pr_
             if kappa:
                 e = yr - L @ s
                 obj += 0.5 * kappa * (wr * e * e).sum()
                 grad_s -= kappa * (L.T @ (wr * e))
-            grad_g = -inv_var * (X.T @ r) + 1e-2 * g
-            grad_c = -inv_var * (C.T @ r) + inv_tau * c
+            grad_g = -(Xs.T @ pr_) + 1e-2 * g
+            grad_c = -(C.T @ pr_) + inv_tau * c
             return obj, np.concatenate([grad_s, grad_g, grad_c])
 
         def hessp(theta, v):
-            pr = expit(A @ theta[:P])
+            pr = expit(A @ theta[:Q])
             vs, vg, vc = split(v)
-            r = vs - X @ vg - C @ vc
-            hs = At @ (w * n * pr * (1 - pr) * (A @ vs)) + inv_var * r
+            pr_ = prec * (vs - Xs @ vg - C @ vc)
+            hs = At @ (w * n * pr * (1 - pr) * (A @ vs)) + pr_
             if kappa:
                 hs += kappa * (L.T @ (wr * (L @ vs)))
-            hg = -inv_var * (X.T @ r) + 1e-2 * vg
-            hc = -inv_var * (C.T @ r) + inv_tau * vc
+            hg = -(Xs.T @ pr_) + 1e-2 * vg
+            hc = -(C.T @ pr_) + inv_tau * vc
             return np.concatenate([hs, hg, hc])
 
-        res = minimize(objective, np.zeros(P + K + NC), jac=True, hessp=hessp, method="trust-krylov",
+        res = minimize(objective, np.zeros(Q + K + NC), jac=True, hessp=hessp, method="trust-krylov",
                        options={"maxiter": 200, "gtol": 1e-6})
         s, g, c = split(res.x)
         pr = expit(A @ s)
-        Hss = At @ sp.diags(w * n * pr * (1 - pr)) @ A + inv_var * sp.eye(P)
+        Pm = sp.diags(prec)
+        Hss = At @ sp.diags(w * n * pr * (1 - pr)) @ A + Pm
         if kappa:
             Hss = Hss + kappa * (L.T @ sp.diags(wr) @ L)
-        Xs = sp.csr_matrix(X)
-        H = sp.bmat([[Hss, -inv_var * Xs, -inv_var * C],
-                     [-inv_var * Xs.T, inv_var * (Xs.T @ Xs) + 1e-2 * sp.eye(K), inv_var * (Xs.T @ C)],
-                     [-inv_var * C.T, inv_var * (C.T @ Xs), inv_var * (C.T @ C) + inv_tau * sp.eye(NC)]]).tocsc()
+        H = sp.bmat([[Hss, -Pm @ Xs, -Pm @ C],
+                     [-(Pm @ Xs).T, Xs.T @ Pm @ Xs + 1e-2 * sp.eye(K), Xs.T @ Pm @ C],
+                     [-(Pm @ C).T, C.T @ Pm @ Xs, C.T @ Pm @ C + inv_tau * sp.eye(NC)]]).tocsc()
         lu = splu(H)
+        team_eff = dict(zip(teams.tolist(), s[P:].tolist()))
+        team_index = dict(zip(teams.tolist(), range(P, Q)))
+        s = s[:P]
+        X = X0
         played = np.bincount(np.concatenate([ia.ravel(), ib.ravel()]), minlength=P)
         offsets, pool = map_offsets(f, w, ra, n, pr, cutoff, cfg)
         prefs = map_preferences(f, cutoff, pool)
-        return cls(cutoff, players, s, played, comm, g, c, cfg.sigma, lu, X, offsets, pool, prefs,
+        return cls(cutoff, players, s, played, comm, g, c, cfg.sigma, cfg.tau, lu, X, offsets, pool, prefs, team_eff, team_index,
                    {"maps": M, "players": P, "iters": int(res.nit), "converged": bool(res.success),
                     "c": np.round(c, 3).tolist()})
 
@@ -162,10 +183,13 @@ class GraphFit:
         """Adds sign/5 per known player of the five into v; returns the five's mean skill, the variance it adds for
         players the fit never saw, how many it barely knows, and the communities of its known players."""
         P, K = len(self.players), len(self.gamma)
-        prior_unknown = float(self.gamma[0] + self.gamma[1] * (rank < UNRANKED)
-                              + self.gamma[2] * (np.log(UNRANKED) - np.log(rank)))
+        g_start = self.lu.shape[0] - K - len(self.c)
+        xu = np.array([1.0, 1.0, np.log(UNRANKED) - np.log(rank)])
+        prior_unknown = float(self.gamma[:3] @ xu)
+        unknown_var = self.sigma ** 2 + self.tau ** 2
         if not five:
-            return prior_unknown, self.sigma ** 2 + 0.3 ** 2, FIVE, []
+            v[g_start:g_start + 3] += sign * xu
+            return prior_unknown, unknown_var, FIVE, []
         vals, extra, thin, comms = [], 0.0, 0, []
         for p in five:
             i = np.searchsorted(self.players, p)
@@ -175,8 +199,10 @@ class GraphFit:
                 thin += int(self.maps_played[i] < 5)
                 comms.append(int(self.community[i]))
             else:
+                # The prior mean of a player the fit never saw moves with the fitted gamma, so it goes in v too.
                 vals.append(prior_unknown)
-                extra += (self.sigma ** 2 + 0.3 ** 2) / FIVE ** 2
+                v[g_start:g_start + 3] += sign * xu / FIVE
+                extra += unknown_var / FIVE ** 2
                 thin += 1
         return float(np.mean(vals)), extra, thin, comms
 
@@ -185,6 +211,12 @@ class GraphFit:
         v = np.zeros(n)
         ma, ea, ta, ca = self._vec(five_a, rank_a, 1.0, v)
         mb, eb, tb, cb = self._vec(five_b, rank_b, -1.0, v)
+        gap_players = ma - mb
+        for team, sign in ((team_a, 1.0), (team_b, -1.0)):
+            if team in self.team_index:
+                v[self.team_index[team]] += sign
+                gap_players_team = self.team_eff[team]
+                ma, mb = (ma + gap_players_team, mb) if sign > 0 else (ma, mb + gap_players_team)
         var = float(v @ self.lu.solve(v)) + ea + eb
         dom_a = max(set(ca), key=ca.count) if ca else -1
         dom_b = max(set(cb), key=cb.count) if cb else -1
@@ -198,7 +230,7 @@ class GraphFit:
                 for sd, o in self.map_offset.items()}
         out["pref_n_a"] = self.prefs.get(("n", team_a), 0.0)
         out["pref_n_b"] = self.prefs.get(("n", team_b), 0.0)
-        return out | {"gap": ma - mb, "gap_var": var, "pool_known": known, "thin_a": ta, "thin_b": tb, "comm_a": dom_a, "comm_b": dom_b,
+        return out | {"gap": ma - mb, "gap_players": gap_players, "gap_var": var, "pool_known": known, "thin_a": ta, "thin_b": tb, "comm_a": dom_a, "comm_b": dom_b,
                 "cross": int(dom_a != dom_b or dom_a < 0)}
 
 
