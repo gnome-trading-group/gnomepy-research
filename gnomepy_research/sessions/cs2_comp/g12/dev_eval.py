@@ -50,6 +50,8 @@ def walk(panel: pd.DataFrame, weeks, make_stack, eval_rows) -> pd.DataFrame:
 
 def report(name: str, res: pd.DataFrame, ev: pd.DataFrame) -> dict:
     d = ev.merge(res, on=["match_id", "week_cutoff"])
+    if E12 is not None:
+        d = d.merge(E12, on="match_id", how="left")
     d = d[d.m0.notna() & d.y.notna()]
     y = d.y.to_numpy(float)
     months = pd.to_datetime(d.time).dt.to_period("M").astype(str).to_numpy()
@@ -57,17 +59,35 @@ def report(name: str, res: pd.DataFrame, ev: pd.DataFrame) -> dict:
     lq = ll(d.q, y)
     lp = ll(pool(d.m0, d.q, y, months), y)
     lz = ll(pool(d.m0, d.z, y, months), y)
+    if E12 is not None and "e12" in d:
+        lb = ll(pool(d.m0, d.e12, y, months), y)
+        ls = ll(pool(d.m0, d.q, y, months, d.e12), y)
+        lsz = ll(pool(d.m0, d.z, y, months, d.e12), y)
+        print(f"{'':28s} e12 pool-m {boot(lb - lm)}  stack-basepool {boot(ls - lb)}  stackz-basepool {boot(lsz - lb)}")
     print(f"{name:28s} n={len(d)} market {lm.mean():.4f} q-m {boot(lq - lm)} pool-m {boot(lp - lm)} poolz-m {boot(lz - lm)}", flush=True)
     return {"name": name, "q_m": float((lq - lm).mean()), "pool_m": float((lp - lm).mean()), "poolz_m": float((lz - lm).mean())}
 
 
+E12 = None
+
+
 def main():
+    global E12, DATA, WORK
     ap = argparse.ArgumentParser()
     ap.add_argument("--panel", default=WORK + "panel.parquet")
     ap.add_argument("--build", action="store_true")
-    ap.add_argument("--raters", action="store_true")
+    ap.add_argument("--raters", default="")
     ap.add_argument("--period", default="dev", choices=["dev", "pre"])
+    ap.add_argument("--data", default=DATA)
+    ap.add_argument("--work", default=WORK)
+    ap.add_argument("--e12", default=WORK + "e12run")
     a = ap.parse_args()
+    DATA, WORK = a.data, a.work.rstrip("/") + "/"
+    if a.panel.startswith("@"):
+        a.panel = WORK + a.panel[1:]
+    e12 = sorted(Path(a.e12).glob("*.parquet"))
+    if e12:
+        E12 = pd.concat([pd.read_parquet(f) for f in e12])[["match_id", "q"]].rename(columns={"q": "e12"})
     if a.build:
         t = pd.read_parquet(DATA + "/targets_tune.parquet")
         p = panel(DATA, t)
@@ -83,12 +103,11 @@ def main():
     mix = ("gauss", "gauss_unc", "gauss_h", "joint_elo", "team_elo", "log_points", "hltv_rating", "faceit_level",
            "unknown", "idle", "new", "sub", "standin", "form", "market_elo")
     variants = {
-        "gauss_only": partial(Stack, use1=("gauss", "gauss_unc"), cols2=["m", "z", "one"]),
+        "gauss": partial(Stack, use1=("gauss",), model_only=True),
+        "gauss_unc": partial(Stack, use1=("gauss", "gauss_unc"), model_only=True),
+        "mix_model": partial(Stack, model_only=True),
+        "mix4_model": partial(Stack, use1=("gauss", "gauss_h", "team_elo", "log_points"), model_only=True),
         "direct_mix_ctx": partial(Stack, direct=mix),
-        "direct_mix_bias": partial(Stack, direct=mix + ("market_bias",)),
-        "direct_mix_shape": partial(Stack, direct=mix, market_terms=("m_curve", "m_weak", "m_young", "m_still", "drift", "m_lan")),
-        "direct_mix_ctx_l2_5": partial(Stack, direct=mix, l2_d=5.0),
-        "direct_mix_ctx_l2_80": partial(Stack, direct=mix, l2_d=80.0),
     }
     for name, mk in variants.items():
         res = walk(p, weeks, mk, ev)
@@ -96,9 +115,10 @@ def main():
         res.to_parquet(WORK + f"res_{name}.parquet")
     if not a.raters:
         return
-    for r in ["team_elo", "player_elo", "joint_elo", "hltv_rating", "faceit_level", "log_points", "market_elo", "gauss", "gauss_h"]:
+    for r in a.raters.split(",") if a.raters != "all" else ["team_elo", "player_elo", "joint_elo", "hltv_rating", "faceit_level", "log_points", "market_elo", "gauss", "gauss_h"]:
         res_r = walk(p, weeks, lambda r=r: SingleRater(r), ev)
         report(r, res_r, ev)
+        res_r.to_parquet(WORK + f"res_r_{r}.parquet")
 
 
 class SingleRater:

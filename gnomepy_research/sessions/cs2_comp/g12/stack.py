@@ -108,6 +108,7 @@ class Stack:
     direct: tuple | None = None
     l2_d: float = 20.0
     market_terms: tuple = ()
+    model_only: bool = False
     b1: np.ndarray | None = None
     b2: np.ndarray | None = None
     b_fallback: np.ndarray | None = None
@@ -152,6 +153,8 @@ class Stack:
 
     def predict(self, d: pd.DataFrame) -> np.ndarray:
         z = self.z(d)
+        if self.model_only:
+            return sigmoid(z)
         has_m = d.m0.notna().to_numpy()
         mk = (d.market_elo_a - d.market_elo_b).to_numpy(float)
         out = sigmoid(np.column_stack([z, mk]) @ self.b_fallback)

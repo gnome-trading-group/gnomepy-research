@@ -19,6 +19,8 @@ from gnomepy_research.sessions.cs2_comp.g12.data import five_tuple, load_inputs,
 from gnomepy_research.sessions.cs2_comp.g12.raters import RaterConfig, Replay
 from gnomepy_research.sessions.cs2_comp.g12.stack import Stack
 
+STACK = dict(use1=("gauss",), model_only=True)
+
 HIST_COLS = ["match_id", "team_a", "team_b", "week_cutoff", "five_a", "five_b", "sub_a", "sub_b", "bo_type", "is_lan",
              "tier", "y", "known", "time"]
 
@@ -52,7 +54,7 @@ def predict(data_dir: str | Path, targets: pd.DataFrame, faceit: bool = True, ve
     out = []
     for c in sorted(tg.week_cutoff.unique()):
         c = pd.Timestamp(c)
-        st = Stack().fit(hist, c)
+        st = Stack(**STACK).fit(hist, c)
         d = tg[tg.week_cutoff == c]
         out.append(pd.DataFrame({"match_id": d.match_id.to_numpy(), "q": st.predict(d), "fit_cutoff": c}))
         if verbose:
