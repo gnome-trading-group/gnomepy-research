@@ -7,9 +7,8 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import cg
 
 ANCHOR = {"rating": 1.0}
-NEW_MAPS = 5.0
 STAT_TARGETS = ["rating", "swing"]
-FEATURES = ["margin", *STAT_TARGETS, "min_n", "exp", "team", "margin_short", "coh", "coh_min", "new"]
+FEATURES = ["margin", *STAT_TARGETS, "min_n", "exp", "margin_short"]
 
 
 STATS_COLUMNS = ["mapstatsid", "is_team_a", "player_id", "side", "rating", "adr", "kast", "ek", "ed", "round_swing_pct"]
@@ -60,7 +59,7 @@ class SkillFit:
     def __init__(self, maps: pd.DataFrame, cutoff: pd.Timestamp, stats: pd.DataFrame | None = None,
                  faceit: pd.DataFrame | None = None, faceit_weight: float = 2.0,
                  halflife: float = 800.0, lam: float = 5.0, lam_rating: float = 3.0, gamma: float = 1.0,
-                 anchored: bool = True, window_days: float = 900.0, team_lam: float | None = None):
+                 anchored: bool = True, window_days: float = 900.0):
         self.anchored = anchored
         m, w_h = _window(maps, cutoff, halflife, window_days)
         cols = ["team_a_player_ids", "team_b_player_ids", "team_a_score", "team_b_score"]
@@ -84,29 +83,10 @@ class SkillFit:
         X = (sp.csr_matrix((np.ones(5 * n), (rows, ca)), shape=shape) - sp.csr_matrix((np.ones(5 * n), (rows, cb)), shape=shape)).tocsr()
         tot = (allm.team_a_score + allm.team_b_score).values
         y = (allm.team_a_score.values - allm.team_b_score.values) / np.maximum(tot, 1)
-        self.team_index: dict = {}
-        self.team_effect = np.zeros(0)
-        if team_lam is None:
-            self.margin_skill = _ridge(X, y, w, lam)
-        else:
-            for t in np.concatenate([m.team_a_id.values, m.team_b_id.values]):
-                self.team_index.setdefault(t, len(self.team_index))
-            nh = len(m)
-            ta = np.fromiter((self.team_index[t] for t in m.team_a_id.values), int, count=nh)
-            tb = np.fromiter((self.team_index[t] for t in m.team_b_id.values), int, count=nh)
-            tshape = (n, len(self.team_index))
-            XT = sp.csr_matrix((np.ones(nh), (np.arange(nh), ta)), shape=tshape) - sp.csr_matrix((np.ones(nh), (np.arange(nh), tb)), shape=tshape)
-            scale = np.sqrt(lam / team_lam)
-            sol = _ridge(sp.hstack([X, scale * XT]).tocsr(), y, w, lam)
-            self.margin_skill = sol[:len(ids)]
-            self.team_effect = scale * sol[len(ids):]
+        self.margin_skill = _ridge(X, y, w, lam)
         self.n_maps = np.asarray(sp.csr_matrix((np.repeat(w, 5), (rows, ca)), shape=shape).sum(0)).ravel() + \
             np.asarray(sp.csr_matrix((np.repeat(w, 5), (rows, cb)), shape=shape).sum(0)).ravel()
 
-        self.team_history: dict = {}
-        for tid, lu, wt in zip(np.concatenate([m.team_a_id.values, m.team_b_id.values]),
-                               list(m.team_a_player_ids) + list(m.team_b_player_ids), np.concatenate([w_h, w_h])):
-            self.team_history.setdefault(tid, []).append((frozenset(lu), wt))
         self.stat_skill: dict[str, np.ndarray] = {}
         if stats is not None:
             self._fit_stats(m, stats, w_h, lam_rating, gamma)
@@ -153,27 +133,18 @@ class SkillFit:
         v = self.stat_skill[name]
         return float(sum(v[self.index[p]] for p in ids if p in self.index))
 
-    def cohesion(self, ids, team) -> float:
-        cur = frozenset(ids)
-        return float(sum(wt for lu, wt in self.team_history.get(team, ()) if len(lu & cur) >= 4))
+    def exp_lineup(self, ids) -> float:
+        return float(sum(np.log1p(self.n_maps[self.index[p]]) for p in ids if p in self.index))
 
-    def newcomers(self, ids) -> float:
-        return float(sum(1 for p in ids if p in self.index and self.n_maps[self.index[p]] < NEW_MAPS) +
-                     sum(1 for p in ids if p not in self.index))
+    def stat_lineup(self, name, ids) -> float:
+        v = self.stat_skill[name]
+        return float(sum(v[self.index[p]] for p in ids if p in self.index))
 
-    def cohesion_features(self, pa, pb, ta, tb) -> list[float]:
-        ca, cb = np.log1p(self.cohesion(pa, ta)), np.log1p(self.cohesion(pb, tb))
-        return [ca - cb, min(ca, cb)]
-
-    def team_diff(self, ta, tb) -> float:
-        if not self.team_index:
-            return 0.0
-        return float(sum(sg * self.team_effect[self.team_index[t]] for t, sg in ((ta, 1), (tb, -1)) if t in self.team_index))
-
-    def diff(self, pa, pb, ta=None, tb=None) -> list[float]:
+    def diff(self, pa, pb) -> list[float]:
         sa, na = self.lineup(pa)
         sb, nb = self.lineup(pb)
-        return [sa - sb] + [self.stat_lineup(k, pa) - self.stat_lineup(k, pb) for k in STAT_TARGETS] + [np.log1p(min(na, nb)), self.exp_lineup(pa) - self.exp_lineup(pb), self.team_diff(ta, tb)] + self.cohesion_features(pa, pb, ta, tb)
+        return [sa - sb] + [self.stat_lineup(k, pa) - self.stat_lineup(k, pb) for k in STAT_TARGETS] + \
+            [np.log1p(min(na, nb)), self.exp_lineup(pa) - self.exp_lineup(pb)]
 
 
 class MultiFit:
@@ -186,8 +157,6 @@ class MultiFit:
             self.short = SkillFit(maps, cutoff, None, faceit=faceit, halflife=short_halflife, lam=short_lam,
                                   **{k: v for k, v in kw.items() if k in ("faceit_weight", "window_days")})
 
-    def diff(self, pa, pb, ta=None, tb=None) -> list[float]:
-        d = self.main.diff(pa, pb, ta, tb)
+    def diff(self, pa, pb) -> list[float]:
         short = 0.0 if self.short is None else self.short.lineup(pa)[0] - self.short.lineup(pb)[0]
-        new = self.main.newcomers(pa) - self.main.newcomers(pb)
-        return d[:6] + [short] + d[6:] + [new]
+        return self.main.diff(pa, pb) + [short]

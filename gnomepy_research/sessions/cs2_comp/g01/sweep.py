@@ -51,7 +51,7 @@ def main() -> None:
             if sub.empty:
                 continue
             fit = skill.MultiFit(maps, w, stats, faceit=faceit, **kw)
-            rows += [(r.t, r.y, r.match_id, r.lan, r.tier, *fit.diff(list(r.pa), list(r.pb), r.team_a_id, r.team_b_id)) for r in sub.itertuples()]
+            rows += [(r.t, r.y, r.match_id, r.lan, r.tier, *fit.diff(list(r.pa), list(r.pb))) for r in sub.itertuples()]
         d = pd.DataFrame(rows, columns=["t", "y", "match_id", "lan", "tier"] + skill.FEATURES)
         tr = d.t < SPLIT
         res = {"config": cfg, "seconds": time.time() - t0}
