@@ -51,6 +51,10 @@ class RatingConfig:
     # through a simulated veto (each side removes its worst maps and picks its best) instead of one gap for all maps.
     map_var: float = 0.0
     map_drift_per_day: float = 0.0002
+    # HLTV map ratings relative to teammates measure who in a five carries it:
+    # rating_p - mean(rating_five) ~ N(rating_gamma * (s_p - mean(s_five)), rating_sd^2). Zero rating_gamma turns it off.
+    rating_gamma: float = 0.0
+    rating_sd: float = 0.3
 
 
 def regulation(score_a: np.ndarray, score_b: np.ndarray, overtime: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -144,6 +148,29 @@ class SkillState:
                 self.team_days[team].append(day)
                 self.team_fives[team].append((day, frozenset(five)))
 
+    def observe_ratings(self, five: list[int], ratings, day: float) -> None:
+        """Sequential scalar Kalman updates, one per player, of the rating-deviation measurement."""
+        cfg = self.cfg
+        dev = np.asarray(ratings, float) - float(np.mean(ratings))
+        keys = [("p", p) for p in five]
+        for j in range(FIVE):
+            c = np.full(FIVE, -1.0 / FIVE)
+            c[j] += 1.0
+            c *= cfg.rating_gamma
+            bel = [self.belief(k, day, five) for k in keys]
+            pred = sum(cj * b[0] for cj, b in zip(c, bel))
+            S = sum(cj * cj * b[1] for cj, b in zip(c, bel)) + cfg.rating_sd ** 2
+            # Without cross-covariances the update would also move the five's mean; ratings only say who in the
+            # five carries it, so the shift is taken back out.
+            delta = np.array([v * cj * (dev[j] - pred) / S for cj, (_, v, _) in zip(c, bel)])
+            delta -= delta.mean()
+            # A diagonal state cannot hold the within-five contrast these measurements pin down; shrinking each
+            # player's variance would freeze the five's mean too, so only the means move.
+            for k, dl, (m, v, _) in zip(keys, delta, bel):
+                self.mu[k] = m + dl
+                self.var[k] = v
+                self.seen[k] = day
+
     def observe_gap(self, five_a: list[int], five_b: list[int], z: float, day: float, team_a: int, team_b: int,
                     lan: int) -> None:
         """A linear-Gaussian measurement z ~ N(gap, market_var) of the two fives' gap."""
@@ -234,6 +261,8 @@ def run(maps: pd.DataFrame, queries: pd.DataFrame, cfg: RatingConfig) -> pd.Data
     order = (maps.source != "market").astype(int)
     maps = maps.assign(_o=order).sort_values(["known", "_o", "match_id"], kind="stable").reset_index(drop=True)
     is_mkt = (maps.source == "market").to_numpy()
+    rt_a = maps.ratings_a.to_numpy() if "ratings_a" in maps and cfg.rating_gamma else np.full(len(maps), None)
+    rt_b = maps.ratings_b.to_numpy() if "ratings_b" in maps and cfg.rating_gamma else np.full(len(maps), None)
     z = (np.log(np.clip(maps.p_a.to_numpy(float), 0.02, 0.98)) - np.log(1 - np.clip(maps.p_a.to_numpy(float), 0.02, 0.98))) / cfg.market_scale \
         if "p_a" in maps else np.zeros(len(maps))
     mk = maps.known.to_numpy()
@@ -257,6 +286,9 @@ def run(maps: pd.DataFrame, queries: pd.DataFrame, cfg: RatingConfig) -> pd.Data
                 state.observe_gap(list(fa[j]), list(fb[j]), z[j], mday[j], ta[j], tb[j], lan[j])
                 continue
             state.update(list(fa[j]), list(fb[j]), ra[j], n[j], mday[j], wt[j], ta[j], tb[j], lan[j], mname[j])
+            for five, rt in ((fa[j], rt_a[j]), (fb[j], rt_b[j])):
+                if rt is not None and not np.isnan(rt).any():
+                    state.observe_ratings(list(five), rt, mday[j])
             if hltv[j]:
                 recent_maps.append((mday[j], mname[j]))
         i = stop

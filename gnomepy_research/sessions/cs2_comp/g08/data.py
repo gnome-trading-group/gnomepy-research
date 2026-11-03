@@ -49,7 +49,7 @@ class Inputs:
         h["time"] = naive(h.match_time.fillna(h.match_date))
         h["known"] = np.maximum(h.time, naive(h.match_date))
         self.series = self._series(h)
-        parts = [self._hltv_maps(h)]
+        parts = [self._hltv_maps(h, self._ratings())]
         if faceit:
             parts.append(self._faceit_maps())
         if market:
@@ -74,16 +74,26 @@ class Inputs:
         s["cutoff"] = week_start(s.time)
         return s.drop(columns=["played_a", "played_b"]).astype({"team_a": np.int64, "team_b": np.int64})
 
+    def _ratings(self) -> dict:
+        st = load(self.data_dir, "hltv/cs2_player_map_stats", self.until, ["match_id", "match_date", "map_name", "player_id", "side", "rating"])
+        st = st[(st.side == "all") & st.rating.notna() & st.player_id.notna()]
+        return dict(zip(zip(st.match_id.astype(np.int64), st.map_name, st.player_id.astype(np.int64)), st.rating.astype(float)))
+
     @staticmethod
-    def _hltv_maps(h: pd.DataFrame) -> pd.DataFrame:
+    def _hltv_maps(h: pd.DataFrame, rating: dict) -> pd.DataFrame:
         h = h[h.team_a_score != h.team_b_score]
         fa = [_five(x) for x in h.team_a_player_ids]
         fb = [_five(x) for x in h.team_b_player_ids]
         ok = np.array([a is not None and b is not None for a, b in zip(fa, fb)])
         h = h[ok]
         ra, n = regulation(h.team_a_score.to_numpy(int), h.team_b_score.to_numpy(int), np.zeros(len(h), bool))
+        fa = [x for x, k in zip(fa, ok) if k]
+        fb = [x for x, k in zip(fb, ok) if k]
+        mids, names = h.match_id.astype(np.int64).to_numpy(), h.map_name.to_numpy()
+        ratings = {side: [np.array([rating.get((m, nm, p), np.nan) for p in five]) for m, nm, five in zip(mids, names, fives)]
+                   for side, fives in (("a", fa), ("b", fb))}
         return pd.DataFrame({"match_id": h.match_id.astype(str).to_numpy(), "known": h.known.to_numpy(),
-                             "five_a": [x for x, k in zip(fa, ok) if k], "five_b": [x for x, k in zip(fb, ok) if k],
+                             "ratings_a": ratings["a"], "ratings_b": ratings["b"], "five_a": fa, "five_b": fb,
                              "rounds_a": ra, "rounds": n, "source": "hltv", "map_name": h.map_name.to_numpy(),
                              "team_a": h.team_a_id.astype(np.int64).to_numpy(), "team_b": h.team_b_id.astype(np.int64).to_numpy(),
                              "is_lan": h.is_lan.fillna(0).astype(int).to_numpy()})
