@@ -42,7 +42,7 @@ def main() -> None:
         rec = {"match_id": wk.match_id.to_numpy()}
         for name, cfg in CONFIGS.items():
             form = player_form(rows, c, cfg)
-            for col, short in (("form", name), ("activity", f"{name}act")):
+            for col, short in (("form", name), ("activity", f"{name}act"), ("round_form", f"{name}r")):
                 rec[f"{short}_a"] = [five_mean(form, v, col) for v in wk.lineup_a]
                 rec[f"{short}_b"] = [five_mean(form, v, col) for v in wk.lineup_b]
         out.append(pd.DataFrame(rec))

@@ -26,14 +26,16 @@ def main() -> None:
     ze, zb = logit(d.q_e12), logit(d.q_base)
     x = {"q_map": logit(d.q_m240s) - zb, "q_setting": logit(d.q_lan) - zb, "q_form": logit(d.q_form) - zb,
          "mm_form": (d.mm_a - d.mm_b).to_numpy(), "mm_activity": (d.mmact_a - d.mmact_b).to_numpy(),
-         "mm60_form": (d.mm60_a - d.mm60_b).to_numpy(), "mm60_activity": (d.mm60act_a - d.mm60act_b).to_numpy()}
+         "mm60_form": (d.mm60_a - d.mm60_b).to_numpy(), "mm60_activity": (d.mm60act_a - d.mm60act_b).to_numpy(),
+         "mm_round": (d.mmr_a - d.mmr_b).to_numpy(), "mm60_round": (d.mm60r_a - d.mm60r_b).to_numpy()}
     base, wb = cvfit([ze], y, mo)
     print(f"n={len(y)} e12 cv {base.mean():.4f} w={wb.round(3)} hltv-only cv {cvfit([zb], y, mo)[0].mean():.4f}")
     for k, v in x.items():
         l, w = cvfit([ze, v], y, mo)
         print(f"{k:14s} {ci(l - base)} w={w.round(3)}", flush=True)
     combos = [["q_map", "q_setting"], ["mm_form", "mm_activity"], ["q_map", "q_setting", "mm_form", "mm_activity"],
-              ["q_map", "q_setting", "q_form", "mm_form", "mm_activity"], ["q_map", "q_setting", "mm60_form", "mm60_activity"]]
+              ["q_map", "q_setting", "q_form", "mm_form", "mm_activity"], ["q_map", "q_setting", "mm60_form", "mm60_activity"],
+              ["q_map", "q_setting", "mm_round", "mm_activity"], ["q_map", "q_setting", "mm_form", "mm_round", "mm_activity"]]
     early = mo < "2025-08"
     for c in combos:
         l, w = cvfit([ze] + [x[k] for k in c], y, mo)
