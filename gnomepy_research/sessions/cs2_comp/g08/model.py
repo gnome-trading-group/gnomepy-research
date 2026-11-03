@@ -55,17 +55,18 @@ def _queries(inputs: Inputs, targets: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([hist, tg], ignore_index=True)
 
 
-def state_prices(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
+def state_prices(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = False, config: RatingConfig = CONFIG,
+                 window_days: int = LAYER_WINDOW_DAYS) -> pd.DataFrame:
     """match_id, week_cutoff, q_state for every target: the layer over the recurrent state, fitted per week."""
     inputs = Inputs(data_dir, targets.week_cutoff.max(), faceit=True, market=True)
     Q = _queries(inputs, targets)
-    feats = run(inputs.maps, Q, CONFIG)
+    feats = run(inputs.maps, Q, config)
     F = Q.merge(feats, on="qid")
     x = layer_features(F, list(LAYER_COLUMNS))
     out = []
     for week in sorted(targets.week_cutoff.unique()):
         week = pd.Timestamp(week)
-        tr = (~F.target & (F.known < week) & (F.cutoff >= week - pd.Timedelta(days=LAYER_WINDOW_DAYS))).to_numpy()
+        tr = (~F.target & (F.known < week) & (F.cutoff >= week - pd.Timedelta(days=window_days))).to_numpy()
         te = (F.target & (F.cutoff == week)).to_numpy()
         X = np.concatenate([x[tr], -x[tr]])
         y = np.concatenate([F.y.to_numpy()[tr], 1 - F.y.to_numpy()[tr]])
