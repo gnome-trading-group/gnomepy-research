@@ -14,6 +14,7 @@ from gnomepy_research.sessions.cs2_comp.bundle import load
 
 KICKOFF_WINDOW = pd.Timedelta(minutes=30)
 HORIZONS_H = (1, 3, 6, 12, 24)
+SMOOTH_MIN = (10, 20, 30, 45, 60, 90, 120, 180, 240, 360)
 EPS = 1e-3
 
 
@@ -66,6 +67,18 @@ def _last_before(t: np.ndarray, p: np.ndarray, at: np.datetime64) -> float:
     return float(p[i]) if i >= 0 else np.nan
 
 
+def _time_weighted(t: np.ndarray, lp: np.ndarray, k: np.datetime64, minutes: int) -> float:
+    """Mean logit price over the last `minutes` before kickoff, each print weighted by how long it stood; the price
+    before the window's first print stands from the window start."""
+    start = k - np.timedelta64(minutes, "m")
+    i = max(np.searchsorted(t, start, side="right") - 1, 0)
+    tt = np.maximum(t[i:], start)
+    dur = np.diff(np.append(tt, k)) / np.timedelta64(1, "s")
+    if dur.sum() <= 0:
+        return float(lp[-1])
+    return float((lp[i:] * dur).sum() / dur.sum())
+
+
 def path_features(paths: pd.DataFrame) -> pd.DataFrame:
     """One row per series from its prints before kickoff: the kickoff price m0 (last print within 30 minutes of
     kickoff, NaN without one), the last price whatever its age, earlier prices and how active the market was."""
@@ -88,6 +101,8 @@ def path_features(paths: pd.DataFrame) -> pd.DataFrame:
              "path_range": float(lp.max() - lp.min()), "path_mean": float(lp.mean())}
         for h in HORIZONS_H:
             r[f"p_{h}h"] = _last_before(t, p, k - np.timedelta64(h, "h"))
+        for w in SMOOTH_MIN:
+            r[f"tw_{w}"] = _time_weighted(t, lp, k, w)
         n1 = np.searchsorted(t, k - np.timedelta64(6, "h"))
         r["changes_6h"] = int((np.diff(p[n1:]) != 0).sum()) if len(p) - n1 > 1 else 0
         rows.append(r)
