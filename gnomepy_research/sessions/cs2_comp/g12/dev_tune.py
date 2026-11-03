@@ -37,10 +37,13 @@ def main():
     rows = s[(s.bo_type == 3) & s.y.notna() & (s.week_cutoff >= a.start) & (s.week_cutoff < a.end)][HIST_COLS].assign(target=False)
     for over in json.loads(a.grid):
         t0 = time.time()
+        if "extra" in over:
+            over["extra"] = tuple((n, o) for n, o in over["extra"])
         cfg = dataclasses.replace(RaterConfig(), **over)
         p = Replay(inp, cfg).run(rows)
+        names = [n for n, _ in cfg.extra]
         res = {k: round(score(p, c), 5) for k, c in
-               {"gauss": ["gauss"], "gauss_map": ["gauss", "map_adj"], "gauss_u": ["gauss", "gauss_unc"], "gauss_h": ["gauss_h"], "joint": ["joint_elo"],
+               {**{n: [n] for n in names}, "all_extra": ["gauss"] + names, "gauss": ["gauss"], "gauss_map": ["gauss", "map_adj"], "gauss_u": ["gauss", "gauss_unc"], "gauss_h": ["gauss_h"], "joint": ["joint_elo"],
                 "player": ["player_elo"], "team": ["team_elo"]}.items()}
         print(json.dumps(over), res, f"{time.time() - t0:.0f}s", flush=True)
 

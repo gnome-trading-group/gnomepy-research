@@ -52,6 +52,9 @@ def stage1_design(d: pd.DataFrame) -> pd.DataFrame:
     X["joint_elo"] = d.joint_elo_a - d.joint_elo_b
     X["gauss"] = d.gauss_a - d.gauss_b
     X["gauss_h"] = d.gauss_h_a - d.gauss_h_b
+    for c in d.columns:
+        if c.startswith("gx_") and c.endswith("_a"):
+            X[c[:-2]] = d[c] - d[c[:-2] + "_b"]
     X["map_adj"] = d.map_adj if "map_adj" in d else 0.0
     X["gauss_unc"] = X["gauss"] * (d.gauss_var_a + d.gauss_var_b)
     both_rt = d.hltv_rating_a.notna() & d.hltv_rating_b.notna()

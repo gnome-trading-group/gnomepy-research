@@ -18,6 +18,7 @@ plus availability context: unknown players, days idle, new players against the f
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 import numpy as np
@@ -45,6 +46,7 @@ class RaterConfig:
     r_gamma: float = 0.3
     r_sd: float = 0.6
     g_var0: float = 0.8
+    extra: tuple = ()
     g_team_var0: float = 0.0
     map_var0: float = 0.05
     map_slope: float = 4.0
@@ -243,6 +245,10 @@ class Replay:
         self.player = PlayerElo(cfg.player_k, cfg.player_k_new, cfg.player_init)
         self.joint = PlayerElo(cfg.player_k, cfg.player_k_new, cfg.player_init)
         self.gauss = GaussPlayer(cfg.g_var0, cfg.g_tau2, cfg.g_init, cfg.g_fill_drop, cfg.g_team_var0)
+        self.extra = []
+        for name, over in cfg.extra:
+            e = dataclasses.replace(cfg, **over)
+            self.extra.append((name, e, GaussPlayer(e.g_var0, e.g_tau2, e.g_init, e.g_fill_drop)))
         self.maps = MapOffsets(cfg.map_var0, cfg.map_slope)
         self.gauss_h = GaussPlayer(cfg.g_var0, cfg.g_tau2, cfg.g_init, cfg.g_fill_drop)
         self.rating: dict[int, float] = {}
@@ -275,10 +281,13 @@ class Replay:
         while self._fi < len(f) and f[self._fi].known < cutoff:
             r = f[self._fi]
             self.joint.update(r.five_a, r.five_b, r.rounds_a, r.rounds, c.faceit_step)
-            self.gauss.update(r.five_a, r.five_b, r.rounds_a, r.rounds, _days(r.time), c.g_faceit_step, c.g_faceit_scale)
-            if c.fr_gamma > 0:
-                self.gauss.rate(r.five_a, r.rating_a, c.fr_gamma, c.fr_sd)
-                self.gauss.rate(r.five_b, r.rating_b, c.fr_gamma, c.fr_sd)
+            for e, gm in [(c, self.gauss)] + [(e, gm) for _, e, gm in self.extra]:
+                if e.g_faceit_step <= 0:
+                    continue
+                gm.update(r.five_a, r.five_b, r.rounds_a, r.rounds, _days(r.time), e.g_faceit_step, e.g_faceit_scale)
+                if e.fr_gamma > 0:
+                    gm.rate(r.five_a, r.rating_a, e.fr_gamma, e.fr_sd)
+                    gm.rate(r.five_b, r.rating_b, e.fr_gamma, e.fr_sd)
             self._fi += 1
         lk, lp, lv = self._levels
         end = int(np.searchsorted(lk, np.datetime64(cutoff), side="left"))
@@ -333,6 +342,11 @@ class Replay:
         if c.r_gamma > 0:
             self.gauss.rate(r.five_a, r.rating_a, c.r_gamma, c.r_sd)
             self.gauss.rate(r.five_b, r.rating_b, c.r_gamma, c.r_sd)
+        for _, e, gm in self.extra:
+            gm.update(r.five_a, r.five_b, r.rounds_a, r.rounds, _days(r.time), e.g_hltv_step)
+            if e.r_gamma > 0:
+                gm.rate(r.five_a, r.rating_a, e.r_gamma, e.r_sd)
+                gm.rate(r.five_b, r.rating_b, e.r_gamma, e.r_sd)
         self.gauss_h.update(r.five_a, r.five_b, r.rounds_a, r.rounds, _days(r.time))
         for five, rt in ((r.five_a, r.rating_a), (r.five_b, r.rating_b)):
             for p, x in zip(five, rt):
@@ -375,6 +389,7 @@ class Replay:
             "form": form[0] * 0.5 ** ((cutoff - form[1]).total_seconds() / DAY / c.form_half_life) if form else 0.0,
             "player_elo": pe, "player_unknown": pu, "joint_elo": je, "joint_unknown": ju,
             "gauss": ge, "gauss_var": gv, "gauss_h": he, "gauss_h_var": hv,
+            **{name: gm.price(five, _days(cutoff))[0] for name, _, gm in self.extra},
             "hltv_rating": float(np.mean(rts)) if rts else np.nan, "rating_n": len(rts),
             "faceit_level": float(np.mean(lvl)) if lvl else np.nan, "level_n": len(lvl),
             "log_points": np.log1p(rk[1]) if fresh else 0.0, "ranked": float(fresh),
