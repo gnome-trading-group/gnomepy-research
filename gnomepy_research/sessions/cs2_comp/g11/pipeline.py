@@ -108,8 +108,14 @@ def build(data_dir: str, targets: pd.DataFrame, cfg: Config, faceit: bool, histo
     tm = market_summary(target_paths(data_dir, targets.match_id))
     t = targets.rename(columns={"team_a_id": "team_a", "team_b_id": "team_b", "team_a_lineup_ids": "lineup_a",
                                 "team_b_lineup_ids": "lineup_b"})
-    t["sub_a"] = [0 if v is None else len(v) for v in targets.team_a_standin_ids]
-    t["sub_b"] = [0 if v is None else len(v) for v in targets.team_b_standin_ids]
+    for side in ("a", "b"):
+        # A targets file without announced fives or stand-ins prices each side with the five it fielded last.
+        if f"lineup_{side}" not in t:
+            t[f"lineup_{side}"] = None
+        standin_ids = targets.get(f"team_{side}_standin_ids", pd.Series([None] * len(targets), index=targets.index))
+        t[f"sub_{side}"] = [0 if v is None else len(v) for v in standin_ids]
+    if "is_lan" not in t:
+        t["is_lan"] = 0
     t = t[["match_id", "team_a", "team_b", "lineup_a", "lineup_b", "sub_a", "sub_b", "is_lan", "week_cutoff"]].merge(
         tm.drop(columns=["kickoff"]), on="match_id", how="left")
     target_weeks = sorted(pd.Timestamp(c) for c in t.week_cutoff.unique())
