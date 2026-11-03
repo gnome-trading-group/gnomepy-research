@@ -2,7 +2,9 @@
 Run the copied frozen baseline e12 on the dev targets and keep its prices, so that what g16 knows beyond the market
 and e12 together can be measured before spending a harness score.
 
-    python -m gnomepy_research.sessions.cs2_comp.g16.baseline --data <bundle> --targets <parquet> [--out <dir>]
+    python -m gnomepy_research.sessions.cs2_comp.g16.baseline [--data <bundle>] [--targets <parquet>] [--out <dir>]
+
+The defaults are the Batch paths, so the job needs no arguments.
 """
 from __future__ import annotations
 
@@ -18,8 +20,8 @@ from gnomepy_research.sessions.cs2_comp.g16.e12.predict import predict
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data", required=True)
-    ap.add_argument("--targets", required=True)
+    ap.add_argument("--data", default="/work/in/comp")
+    ap.add_argument("--targets", default="/work/in/comp/targets_tune.parquet")
     ap.add_argument("--out", default=os.environ.get("OUTPUT_DIR", "."))
     a = ap.parse_args()
     targets = pd.read_parquet(a.targets)

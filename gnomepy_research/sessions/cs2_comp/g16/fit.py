@@ -68,7 +68,7 @@ def main() -> None:
     ap.add_argument("--data", required=True)
     ap.add_argument("--until", required=True)
     ap.add_argument("--score-from", required=True)
-    ap.add_argument("--params", required=True)
+    ap.add_argument("--params", default="")
     ap.add_argument("--init", default="{}")
     ap.add_argument("--evaluate")
     ap.add_argument("--maxfev", type=int, default=150)
@@ -82,7 +82,7 @@ def main() -> None:
     values = {"sigma0": base.sigma0, "tau": base.tau, "rho": base.rho, "lam": base.lam, "faceit_weight": 1.0,
               "off_low": 0.0, "off_mid": 0.0, "off_high": 0.0, "rating_gamma": 0.0, "rating_sd": 0.31}
     values.update(json.loads(a.init))
-    params = a.params.split(",")
+    params = [k for k in a.params.split(",") if k]
     won = inputs.maps.won_a.to_numpy(float)
     trace = []
     if a.evaluate:
