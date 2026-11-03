@@ -175,6 +175,8 @@ class EloConfig:
     k_faceit_low: float = 1.0
     # LAN maps relative to online HLTV maps.
     k_lan: float = 1.0
+    # Each HLTV map nudges a five toward the strength its HLTV rank implies, as a bookmaker blends in the rankings.
+    rank_pull: float = 0.0
     # A fast component on top of the slow rating: reacts to the last few maps, then fades.
     k_fast: float = 0.0
     fast_decay: float = 0.1
@@ -277,6 +279,12 @@ def elo_pass(maps: pd.DataFrame, requests: pd.DataFrame, cfg: EloConfig = EloCon
                     fast[p] = (1 - cfg.fast_decay) * fast.get(p, 0.0) + sgn * kmult * cfg.k_fast * delta
                 nmaps[p] += 1
                 last_seen[p] = now
+        if cfg.rank_pull > 0:
+            for five, rank in ((A, rka[i]), (B, rkb[i])):
+                if rank == rank:
+                    gap = cfg.rank_scale * (np.log(UNRANKED) - np.log(rank)) - 1.0 - np.mean([rating[p] for p in five])
+                    for p in five:
+                        rating[p] += cfg.rank_pull * gap
         st = stats.get(msid[i]) if stats is not None else None
         if st:
             for five in (A, B):

@@ -22,7 +22,7 @@ from gnomepy_research.sessions.cs2_comp.g09.core import (EloConfig, _ids, combin
 
 MULT = ("k", "k_new", "n_settle", "k_faceit", "decay_days", "ind_alpha", "fast_decay", "k_faceit_low", "k_lan")
 STEPS = {"k": 1.3, "k_new": 1.4, "n_settle": 1.6, "new_gap": 0.15, "rank_scale": 0.3, "margin": 0.1, "k_faceit": 1.5,
-         "faceit_offset": 0.4, "decay_days": 2.0, "ind_weight": 0.5, "ind_alpha": 1.5, "swing_weight": 0.5, "k_fast": 0.05, "fast_decay": 1.5, "k_faceit_low": 1.4, "k_lan": 1.3}
+         "faceit_offset": 0.4, "decay_days": 2.0, "ind_weight": 0.5, "ind_alpha": 1.5, "swing_weight": 0.5, "k_fast": 0.05, "fast_decay": 1.5, "k_faceit_low": 1.4, "k_lan": 1.3, "rank_pull": 0.003}
 STATE = {}
 
 
