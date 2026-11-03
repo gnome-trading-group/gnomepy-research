@@ -206,6 +206,7 @@ def predict_weeks(data_dir: str | Path, targets: pd.DataFrame, rcfg: RatingConfi
     sr["time"] = pd.to_datetime(sr.time)
     fits: dict[pd.Timestamp, SkillFit] = {}
     preds = []
+    weeks_out = []
     names = list(weights)
     beta = np.array([weights[k] for k in names])
     for c in weeks:
@@ -242,7 +243,8 @@ def predict_weeks(data_dir: str | Path, targets: pd.DataFrame, rcfg: RatingConfi
                         eta = logit(week.m0.to_numpy()[has]) + market_design(week[has], z[has], lcfg.market_features) @ bm
                         q[has] = 1 / (1 + np.exp(-eta))
         preds.append(pd.DataFrame({"match_id": week.match_id.to_numpy(), "q_model": q_model, "q": q, "z_model": z, "fit_cutoff": c}))
+        weeks_out.append(week)
         if verbose:
             print(f"{c:%Y-%m-%d} fit {sf.info['maps']} maps {sf.info['players']} players, market rows {n_market}, "
                   f"{len(week)} targets, {time.time() - t0:.0f}s", flush=True)
-    return Run(sr, tr, pd.concat(preds, ignore_index=True), {})
+    return Run(sr, pd.concat(weeks_out, ignore_index=True), pd.concat(preds, ignore_index=True), {})
