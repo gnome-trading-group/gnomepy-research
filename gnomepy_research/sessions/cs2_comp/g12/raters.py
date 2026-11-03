@@ -44,20 +44,31 @@ class RaterConfig:
     form_half_life: float = 90.0
     bias_k: float = 0.1
     r_gamma: float = 0.3
-    r_sd: float = 0.6
+    r_sd: float = 0.8
     g_var0: float = 0.8
     extra: tuple = ()
     g_team_var0: float = 0.0
     map_var0: float = 0.05
     map_slope: float = 4.0
     fr_gamma: float = 0.3
-    fr_sd: float = 0.4
+    fr_sd: float = 0.3
     g_hltv_step: float = 1.0
     g_tau2: float = 0.00002
     g_init: float = -0.2
-    g_fill_drop: float = 0.6
-    g_faceit_step: float = 0.5
-    g_faceit_scale: float = 1.2
+    g_fill_drop: float = 0.75
+    g_faceit_step: float = 0.75
+    g_faceit_scale: float = 1.0
+
+
+# Diverse settings of the same player filter, all near the best pre-dev log loss; stacking them averages out the
+# arbitrary parts of any one setting.
+EXTRA = (
+    ("gx_a", {"g_var0": 0.5, "g_tau2": 1e-5, "g_faceit_step": 1.0, "r_sd": 1.0, "fr_sd": 0.4, "g_hltv_step": 1.3}),
+    ("gx_b", {"g_var0": 1.2, "g_tau2": 5e-5, "g_fill_drop": 0.6, "g_faceit_step": 0.5, "g_faceit_scale": 1.2, "r_sd": 0.6,
+              "fr_sd": 0.4, "g_hltv_step": 0.8}),
+    ("gx_fast", {"g_tau2": 2e-4}),
+    ("gx_slow", {"g_tau2": 0.0, "g_var0": 0.5}),
+)
 
 
 def _days(t) -> float:

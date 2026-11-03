@@ -13,7 +13,7 @@ import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g12.data import load_hltv
 from gnomepy_research.sessions.cs2_comp.g12.predict import panel
-from gnomepy_research.sessions.cs2_comp.g12.raters import RaterConfig
+from gnomepy_research.sessions.cs2_comp.g12.raters import EXTRA, RaterConfig
 from gnomepy_research.sessions.cs2_comp.g12.stack import Stack, fit_logistic, logit, sigmoid, stage1_design
 
 DATA = "/Users/mprey/gnome-research-work/cs2/groundup/comp/data"
@@ -92,9 +92,7 @@ def main():
         E12 = pd.concat([pd.read_parquet(f) for f in e12])[["match_id", "q"]].rename(columns={"q": "e12"})
     if a.build:
         t = pd.read_parquet(DATA + "/targets_tune.parquet")
-        extra = (("gx_f1", {"g_faceit_step": 1.0, "g_faceit_scale": 1.0}), ("gx_slow", {"g_tau2": 0.0, "g_var0": 0.5}),
-                 ("gx_fast", {"g_tau2": 2e-4}))
-        p = panel(DATA, t, cfg=RaterConfig(extra=extra))
+        p = panel(DATA, t, cfg=RaterConfig(extra=EXTRA))
         p.to_parquet(a.panel)
     p = pd.read_parquet(a.panel)
     if a.period == "dev":
@@ -109,12 +107,13 @@ def main():
     allseg = ("s_unknown", "s_new", "s_young", "s_still", "s_lan", "s_unranked", "s_var")
     variants = {
         "gauss": partial(Stack, use1=("gauss",), model_only=True),
-        "seg_all": partial(Stack, use1=("gauss",), seg=allseg),
-        "seg_all_l2_20": partial(Stack, use1=("gauss",), seg=allseg, l2_seg=20.0),
-        "seg_all_l2_1": partial(Stack, use1=("gauss",), seg=allseg, l2_seg=1.0),
-        "seg_unk_new": partial(Stack, use1=("gauss",), seg=("s_unknown", "s_new")),
-        "seg_book": partial(Stack, use1=("gauss",), seg=("s_young", "s_still")),
-        "seg_all_extras": partial(Stack, use1=("gauss", "gx_f1", "gx_slow", "gx_fast"), seg=allseg),
+        "gauss_unc": partial(Stack, use1=("gauss", "gauss_unc"), model_only=True),
+        "gauss_cube": partial(Stack, use1=("gauss", "gauss_cube"), model_only=True),
+        "ens": partial(Stack, use1=("gauss", "gx_a", "gx_b", "gx_fast", "gx_slow"), model_only=True),
+        "ens_unc": partial(Stack, use1=("gauss", "gx_a", "gx_b", "gx_fast", "gx_slow") + ("gauss_unc",), model_only=True),
+        "ens_ctx": partial(Stack, use1=("gauss", "gx_a", "gx_b", "gx_fast", "gx_slow") + ("gauss_unc", "unknown", "new", "sub", "idle"), model_only=True),
+        "gx_a": partial(Stack, use1=("gx_a",), model_only=True),
+        "gx_b": partial(Stack, use1=("gx_b",), model_only=True),
     }
     for name, mk in variants.items():
         res = walk(p, weeks, mk, ev)

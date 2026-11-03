@@ -56,6 +56,7 @@ def stage1_design(d: pd.DataFrame) -> pd.DataFrame:
         if c.startswith("gx_") and c.endswith("_a"):
             X[c[:-2]] = d[c] - d[c[:-2] + "_b"]
     g = X["gauss"]
+    X["gauss_cube"] = g * g * g
     X["gauss_lan"] = g * d.is_lan.astype(float)
     X["gauss_new"] = g * (d.new_players_a + d.new_players_b)
     X["gauss_weak"] = g * ((d.rank_a > 100) | (d.rank_b > 100)).astype(float)
