@@ -118,7 +118,7 @@ class Inputs:
             "team_a": h.team_a_id.astype(np.int64).to_numpy(), "team_b": h.team_b_id.astype(np.int64).to_numpy(),
             "rank_a": h.team_a_rank.fillna(UNRANKED).to_numpy(float), "rank_b": h.team_b_rank.fillna(UNRANKED).to_numpy(float),
             "rounds": n, "rounds_a": ra, "source": "hltv", "division": "hltv", "is_lan": h.is_lan.fillna(0).to_numpy(int),
-            "map_name": h.map_name.to_numpy(), "picked_a": h.team_a_picked_map.to_numpy(float)})
+            "map_name": h.map_name.to_numpy()})
         st = load(self.data_dir, "hltv/cs2_player_map_stats", self.until,
                   ["match_id", "match_date", "map_name", "player_id", "side", "rating"])
         st = st[(st.side == "all") & st.rating.notna() & st.player_id.notna()]
@@ -187,7 +187,7 @@ class Inputs:
             "team_b": fh.faction2_hltv_team.fillna(-1).astype(np.int64).to_numpy(),
             "rank_a": UNRANKED, "rank_b": UNRANKED, "rounds": n, "rounds_a": ra, "source": "faceit",
             "division": [division(c) for c in fh.competition_name], "is_lan": 0,
-            "map_name": fh.map_name.to_numpy(), "picked_a": np.nan})
+            "map_name": fh.map_name.to_numpy()})
         self.faceit_maps = Maps.concat([Maps(frame, five_a, five_b)])
         ro = load(d, "faceit/faceit_rosters", self.until, ["match_id", "faceit_id", "played", "skill_level"])
         ro = ro[ro.played & ro.skill_level.notna()]

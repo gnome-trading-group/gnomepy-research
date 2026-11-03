@@ -65,7 +65,7 @@ class Standins:
 
 
 def price_rows(inputs: Inputs, fit: GraphFit, lineups: Lineups, standins: Standins, series: pd.DataFrame,
-               cutoff: pd.Timestamp, short: GraphFit | None = None) -> pd.DataFrame:
+               cutoff: pd.Timestamp) -> pd.DataFrame:
     """series: match_id, team_a, team_b, lineup_a, lineup_b, sub_a, sub_b (+ anything to carry along)."""
     rows = lineups.at(cutoff)
     by_team = {int(k): g for k, g in rows.groupby("team")}
@@ -84,18 +84,14 @@ def price_rows(inputs: Inputs, fit: GraphFit, lineups: Lineups, standins: Standi
             fives[side], ranks[side] = five, inputs.rank(team, cutoff)
             rec.update({f"new_{side}": new, f"idle_{side}": st["days_idle"], f"rank_{side}": ranks[side],
                         f"standin_{side}": standins.share(team, cutoff)})
-        rec.update(fit.gap(fives["a"], ranks["a"], fives["b"], ranks["b"], int(r.team_a), int(r.team_b),
-                           int(rec.get("is_lan") or 0)))
-        if short is not None:
-            sg = short.gap(fives["a"], ranks["a"], fives["b"], ranks["b"])
-            rec.update({"gap_short": sg["gap"], "gap_short_var": sg["gap_var"]})
+        rec.update(fit.gap(fives["a"], ranks["a"], fives["b"], ranks["b"], int(r.team_a), int(r.team_b)))
         rec["week_cutoff"] = cutoff
         out.append(rec)
     return pd.DataFrame(out)
 
 
 def build(data_dir: str, targets: pd.DataFrame, cfg: Config, faceit: bool, history_weeks: int,
-          short_cfg: Config | None = None, verbose: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+          verbose: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Returns (train rows: past market series priced at their own week, target rows)."""
     until = pd.Timestamp(targets.week_cutoff.max())
     inputs = Inputs(data_dir, until, faceit)
@@ -131,13 +127,12 @@ def build(data_dir: str, targets: pd.DataFrame, cfg: Config, faceit: bool, histo
             continue
         t0 = time.time()
         fit = GraphFit.fit(inputs, w, cfg, faceit)
-        short = GraphFit.fit(inputs, w, short_cfg, faceit) if short_cfg is not None else None
         if not hw.empty:
-            train.append(price_rows(inputs, fit, lineups, standins, hw.drop(columns=["week"]), w, short))
+            train.append(price_rows(inputs, fit, lineups, standins, hw.drop(columns=["week"]), w))
         if not tw.empty:
-            tgt.append(price_rows(inputs, fit, lineups, standins, tw.drop(columns=["week_cutoff"]), w, short))
+            tgt.append(price_rows(inputs, fit, lineups, standins, tw.drop(columns=["week_cutoff"]), w))
         if verbose:
             print(f"{w:%Y-%m-%d} fit {time.time() - t0:.1f}s maps {fit.info['maps']} players {fit.info['players']} "
-                  f"conv {fit.info['converged']} hist {len(hw)} targets {len(tw)}", flush=True)
+                  f"gnorm {fit.info['gnorm']:.1e} hist {len(hw)} targets {len(tw)}", flush=True)
     return (pd.concat(train, ignore_index=True) if train else pd.DataFrame(),
             pd.concat(tgt, ignore_index=True) if tgt else pd.DataFrame())

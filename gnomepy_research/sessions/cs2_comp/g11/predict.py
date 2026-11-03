@@ -23,9 +23,8 @@ import pandas as pd
 from gnomepy_research.sessions.cs2_comp.g11.graph import Config
 from gnomepy_research.sessions.cs2_comp.g11.pipeline import build
 
-CONFIG = Config(communities=(32,), laplace=False, faceit_maps=False)
+CONFIG = Config()
 FACEIT = True
-PRICE = "q_uni_10"
 
 
 def predict(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = False, rows_dir: str | Path | None = None) -> pd.DataFrame:
@@ -33,7 +32,7 @@ def predict(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = False, 
     if rows_dir is not None:
         Path(rows_dir).mkdir(parents=True, exist_ok=True)
         tgt.to_parquet(Path(rows_dir) / "targets.parquet", index=False)
-    return pd.DataFrame({"match_id": tgt.match_id.to_numpy(), "q": tgt[PRICE].to_numpy(float),
+    return pd.DataFrame({"match_id": tgt.match_id.to_numpy(), "q": tgt.q.to_numpy(float),
                          "fit_cutoff": pd.to_datetime(tgt.week_cutoff).to_numpy()})
 
 
