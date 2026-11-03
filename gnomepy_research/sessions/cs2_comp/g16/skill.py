@@ -18,7 +18,7 @@ import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.player_skill import PlayerSkillConfig, map_win_prob
 from gnomepy_research.sessions.cs2_comp.g16.data import Inputs
-from gnomepy_research.sessions.cs2_comp.g16.filter import SkillFilter
+from gnomepy_research.sessions.cs2_comp.g16.filter import SkillFilter, real_players
 
 SKILL_COLUMNS = ["gap", "gap_sd", "p_map", "p_series", "strength_a", "strength_b", "sd_a", "sd_b", "new_a", "new_b",
                  "chem_a", "chem_b", "games_a", "games_b", "known_a", "known_b"]
@@ -31,6 +31,7 @@ class SkillConfig:
     rating_gamma: float = 0.0
     rating_sd: float = 0.31
     division_offsets: dict = field(default_factory=dict)
+    team_sigma0: float = 0.0
 
 
 def bo3(p: np.ndarray) -> np.ndarray:
@@ -38,7 +39,7 @@ def bo3(p: np.ndarray) -> np.ndarray:
 
 
 def make_filter(inputs: Inputs, cfg: SkillConfig) -> SkillFilter:
-    return SkillFilter(cfg.filter, inputs.rankings, cfg.rating_gamma, cfg.rating_sd, cfg.division_offsets)
+    return SkillFilter(cfg.filter, inputs.rankings, cfg.rating_gamma, cfg.rating_sd, cfg.division_offsets, cfg.team_sigma0)
 
 
 def map_arrays(inputs: Inputs, cfg: SkillConfig) -> dict:
@@ -64,10 +65,11 @@ def observe(f: SkillFilter, cols: dict, i: int, cfg: SkillConfig) -> None:
 
 
 def _side(f: SkillFilter, lu, side: str) -> dict:
-    games = [f.games[p] for p in lu.players]
+    players = real_players(lu.players)
+    games = [f.games[p] for p in players]
     return {f"strength_{side}": lu.strength, f"sd_{side}": f.lineup_sd(lu), f"chem_{side}": lu.kappa,
             f"new_{side}": float(sum(g < f.cfg.new_player_maps for g in games)), f"games_{side}": float(min(games)),
-            f"known_{side}": float(sum(p in f._mu for p in lu.players))}
+            f"known_{side}": float(sum(p in f._mu for p in players))}
 
 
 def weekly_rows(inputs: Inputs, to_price: pd.DataFrame, cfg: SkillConfig | None = None, verbose: bool = False) -> pd.DataFrame:

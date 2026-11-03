@@ -31,7 +31,7 @@ from gnomepy_research.models.cs2.hltv.player_skill import PlayerSkillConfig, map
 from gnomepy_research.sessions.cs2_comp.g16.data import Inputs
 from gnomepy_research.sessions.cs2_comp.g16.skill import SkillConfig, make_filter, map_arrays, observe
 
-POSITIVE = {"sigma0", "tau", "rho", "faceit_weight", "lam", "kappa_max", "c0", "delta", "rating_gamma", "rating_sd"}
+POSITIVE = {"sigma0", "tau", "rho", "faceit_weight", "lam", "kappa_max", "c0", "delta", "rating_gamma", "rating_sd", "team_sigma0"}
 GROUPS = {"off_low": ("entry", "open"), "off_mid": ("intermediate", "main"), "off_high": ("advanced", "pro", "qualifier", "other")}
 FILTER_PARAMS = {"sigma0", "tau", "rho", "lam", "kappa_max", "c0", "delta", "a", "b"}
 
@@ -42,7 +42,8 @@ def make_config(values: dict) -> SkillConfig:
         if g in values:
             offsets.update({d: values[g] for d in divs})
     return SkillConfig(replace(PlayerSkillConfig(), **{k: v for k, v in values.items() if k in FILTER_PARAMS}),
-                       values.get("faceit_weight", 1.0), values.get("rating_gamma", 0.0), values.get("rating_sd", 0.31), offsets)
+                       values.get("faceit_weight", 1.0), values.get("rating_gamma", 0.0), values.get("rating_sd", 0.31), offsets,
+                       values.get("team_sigma0", 0.0))
 
 
 def map_loss(inputs: Inputs, cfg: SkillConfig, score_from: pd.Timestamp, won_a: np.ndarray) -> float:
@@ -80,7 +81,7 @@ def main() -> None:
     inputs = Inputs(a.data, pd.Timestamp(a.until))
     base = PlayerSkillConfig()
     values = {"sigma0": base.sigma0, "tau": base.tau, "rho": base.rho, "lam": base.lam, "faceit_weight": 1.0,
-              "off_low": 0.0, "off_mid": 0.0, "off_high": 0.0, "rating_gamma": 0.0, "rating_sd": 0.31}
+              "off_low": 0.0, "off_mid": 0.0, "off_high": 0.0, "rating_gamma": 0.0, "rating_sd": 0.31, "team_sigma0": 0.0}
     values.update(json.loads(a.init))
     params = [k for k in a.params.split(",") if k]
     won = inputs.maps.won_a.to_numpy(float)

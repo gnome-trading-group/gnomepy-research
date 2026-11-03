@@ -10,6 +10,10 @@ linear-Gaussian reading of exactly the part the rounds cannot see:
 Division-dependent newcomer priors. Each player gets a fifth of a map's information, so a five's level stays close to
 its newcomers' prior for many maps. FACEIT brings most newcomers, from ESEA Entry to Advanced, and the competition's
 division is the best guess at their level before any map is played.
+
+A team effect (as in TrueSkill 2): one more Gaussian state per HLTV team, entering its lineup with weight one beside
+the five players, so a team can be more or less than the sum of its players. The rounds only ever see the sum, so
+the split between players and team rests on the priors and on who moves between teams.
 """
 from __future__ import annotations
 
@@ -21,23 +25,45 @@ import pandas as pd
 from gnomepy_research.models.cs2.hltv.player_skill import PlayerSkillConfig, PlayerSkillFilter
 
 FIVE = 5
+TEAM_BASE = 10 ** 12
 _CENTER = np.eye(FIVE) - np.full((FIVE, FIVE), 1.0 / FIVE)
+
+
+def real_players(players) -> list[int]:
+    return [p for p in players if p < TEAM_BASE]
 
 
 class SkillFilter(PlayerSkillFilter):
     def __init__(self, cfg: PlayerSkillConfig, rankings: pd.DataFrame, rating_gamma: float = 0.0, rating_sd: float = 0.31,
-                 division_offsets: dict[str, float] | None = None):
+                 division_offsets: dict[str, float] | None = None, team_sigma0: float = 0.0):
         super().__init__(cfg, rankings)
         self.rating_gamma = rating_gamma
         self.rating_sd = rating_sd
         self.division_offsets = division_offsets or {}
+        self.team_sigma0 = team_sigma0
         self._division: str | None = None
 
     def _state(self, player: int, team_id: int, day: pd.Timestamp) -> tuple[float, float]:
-        if player not in self._mu and self._division is not None:
-            offset = self.division_offsets.get(self._division, 0.0)
-            return self.cfg.a + self.cfg.b * math.log1p(self._points(team_id, day)) + offset, self.cfg.sigma0 ** 2
+        if player not in self._mu:
+            if player >= TEAM_BASE:
+                return 0.0, self.team_sigma0 ** 2
+            if self._division is not None:
+                offset = self.division_offsets.get(self._division, 0.0)
+                return self.cfg.a + self.cfg.b * math.log1p(self._points(team_id, day)) + offset, self.cfg.sigma0 ** 2
         return super()._state(player, team_id, day)
+
+    def lineup(self, players: tuple[int, ...], team_id: int, standins: float, day: pd.Timestamp):
+        lu = super().lineup(players, team_id, standins, day)
+        if self.team_sigma0 and team_id >= 0:
+            t = TEAM_BASE + team_id
+            mu, var = self._state(t, team_id, day)
+            lu.players.append(t)
+            lu.mus.append(mu)
+            lu.variances.append(var)
+            lu.weights.append(1.0)
+            lu.strength += mu
+            lu.total += mu
+        return lu
 
     def observe(self, day: pd.Timestamp, team_a: int, team_b: int, five_a: tuple[int, ...], five_b: tuple[int, ...],
                 rounds_a: float, rounds_b: float, division: str | None) -> None:
