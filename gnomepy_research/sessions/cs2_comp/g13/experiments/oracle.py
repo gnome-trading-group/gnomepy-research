@@ -23,7 +23,28 @@ CANDIDATES = [
     ["drift6"], ["drift24"], ["z_lan", "lm0_lan"], ["log_rank"], ["standin", "idle"], ["z_unk"], ["z_new"], ["z_linked"],
     ["lm0_thinb", "z_thinb"], ["z_thinb"], ["lm0_thinb"], ["z_days"], ["lm0_days"], ["z_days", "lm0_days"],
     ["z_tier0", "lm0_tier0"], ["igl_missing"], ["awp_missing"], ["igl_missing", "awp_missing"],
+    ["mkt_err"], ["e12_err"], ["mkt_err", "e12_err"],
 ]
+TEAM_ERROR_SHRINK = 5.0
+
+
+def team_errors_for(rows: pd.DataFrame, d: pd.DataFrame) -> pd.DataFrame:
+    """Per series in `d`: each side's mean past pricing error of the market and of e12 (outcome minus price, from
+    the team's side, shrunk toward zero), A minus B, over the priced series in `rows` known before the series'
+    cutoff."""
+    priced = rows[rows.m0.notna() & rows.y.notna()].copy()
+    priced["e12"] = 1 / (1 + np.exp(-priced.z_e12))
+    priced["known"] = pd.to_datetime(priced.known)
+    out = np.zeros((len(d), 2))
+    for i, r in enumerate(d.itertuples()):
+        past = priced[priced.known < pd.Timestamp(r.week_cutoff)]
+        sides = pd.concat([pd.DataFrame({"team": past.team_a, "m": past.y - past.m0, "e": past.y - past.e12}),
+                           pd.DataFrame({"team": past.team_b, "m": past.m0 - past.y, "e": past.e12 - past.y})])
+        g = sides.groupby("team").agg(m=("m", "sum"), e=("e", "sum"), n=("m", "size"))
+        err = (g[["m", "e"]].div(g.n + TEAM_ERROR_SHRINK, axis=0)).to_dict("index")
+        a, b = err.get(r.team_a, {"m": 0.0, "e": 0.0}), err.get(r.team_b, {"m": 0.0, "e": 0.0})
+        out[i] = [a["m"] - b["m"], a["e"] - b["e"]]
+    return pd.DataFrame(out, columns=["mkt_err", "e12_err"], index=d.index)
 
 
 def held_out(X: np.ndarray, y: np.ndarray, months: np.ndarray) -> np.ndarray:
@@ -50,6 +71,7 @@ def columns(d: pd.DataFrame) -> dict[str, np.ndarray]:
         cols[k + "_d"] = d[k].to_numpy() - z
     for k in [c for c in d.columns if c.startswith("mp_")]:
         cols[k] = d[k].fillna(0).to_numpy()
+    cols["mkt_err"], cols["e12_err"] = d.mkt_err.to_numpy(), d.e12_err.to_numpy()
     if "thin_brief" in d:
         thin_b = d.thin_brief.to_numpy(float)
         days = (pd.to_datetime(d.time) - pd.to_datetime(d.week_cutoff)).dt.total_seconds().to_numpy() / 86400
@@ -85,6 +107,7 @@ def main() -> None:
     rows = rows.merge(feats, on=["match_id", "week_cutoff"], how="left")
     targets = pd.read_parquet(a.targets)
     d = rows[rows.match_id.isin(targets.match_id) & rows.y.notna()].copy()
+    d = d.join(team_errors_for(rows, d))
     y, months = d.y.to_numpy(float), pd.to_datetime(d.time).dt.to_period("M").astype(str).to_numpy()
     cols = columns(d)
     base_m = ll(d.m0, y)
