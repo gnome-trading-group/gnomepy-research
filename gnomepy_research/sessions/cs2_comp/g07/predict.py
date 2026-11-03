@@ -26,7 +26,8 @@ from gnomepy_research.sessions.cs2_comp.g07.market import path_features
 from gnomepy_research.sessions.cs2_comp.g07.model import Config, Filter, bo3_price
 
 EPOCH = np.datetime64("2023-01-01")
-CONFIG = Config()
+CONFIGS = [Config(v0=0.1, v_cap=1.4, tau2=6e-05, newcomer=-0.3, tv0=0.005, ttau2=0.0, w_hltv=0.75, w_faceit=0.9,
+                  scale_faceit=1.0, rating_gamma=0.45, rating_sd=0.4, w_rating=0.25, r_v0=0.05, r_tau2=3e-05)]
 WEEK = pd.Timedelta(days=7)
 
 
@@ -96,7 +97,16 @@ class LastFive:
         return self.last
 
 
-def weekly_rows(data_dir: str | Path, targets: pd.DataFrame, cfg: Config = CONFIG) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _priced(filters: list[Filter], rows: pd.DataFrame, last: dict) -> pd.DataFrame:
+    """The first filter's full view of each side, plus gap, gvar and q_skill of every further filter (suffixed _1, ...)."""
+    out = price_rows(filters[0], rows, last)
+    for i, f in enumerate(filters[1:], 1):
+        r = price_rows(f, rows, last)
+        out[[f"gap_{i}", f"gvar_{i}", f"q_skill_{i}"]] = r[["gap", "gvar", "q_skill"]].to_numpy()
+    return out
+
+
+def weekly_rows(data_dir: str | Path, targets: pd.DataFrame, cfgs: list[Config]) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Filter prices for every market series (training rows, each at its own Monday) and every target."""
     until = targets.week_cutoff.max()
     inputs = Inputs(data_dir, until)
@@ -105,7 +115,8 @@ def weekly_rows(data_dir: str | Path, targets: pd.DataFrame, cfg: Config = CONFI
     kick = paths.groupby("match_id").kickoff.first()
     kick = kick[kick < until]
     s = inputs.series.assign(match_id=inputs.series.match_id.astype(np.int64))
-    s = s[s.match_id.isin(kick.index)].copy()
+    # Only finished bo3s train the layer: a series still running at a cutoff would otherwise carry a partial result.
+    s = s[s.match_id.isin(kick.index) & (np.maximum(s.wins, s.maps - s.wins) == 2)].copy()
     s["kickoff"] = s.match_id.map(kick)
     s["week"] = [_monday(k) for k in s.kickoff]
     s["five_a"] = [_five(v) for v in s.lineup_a]
@@ -123,22 +134,23 @@ def weekly_rows(data_dir: str | Path, targets: pd.DataFrame, cfg: Config = CONFI
     t["time_k"] = naive(t.match_time)
     first = min(s.week.min() if len(s) else until, t.week_cutoff.min())
     weeks = pd.date_range(first, until, freq="7D")
-    f = Filter(cfg)
+    filters = [Filter(c) for c in cfgs]
     lf = LastFive(inputs.maps)
     train, pred = [], []
     for w in weeks:
         cut = np.datetime64(w)
-        f.advance(inputs.maps, cut, EPOCH)
+        for f in filters:
+            f.advance(inputs.maps, cut, EPOCH)
         last = lf.advance(cut)
         sw = s[s.week == w]
         if len(sw):
-            r = price_rows(f, sw.rename(columns={"time_k": "time"})[["match_id", "time", "team_a", "team_b", "five_a", "five_b"]], last)
+            r = _priced(filters, sw[["match_id", "time_k", "team_a", "team_b", "five_a", "five_b"]].rename(columns={"time_k": "time"}), last)
             r = r.merge(sw[["match_id", "time_k", "known", "y", "is_lan", "tier", "sub_a", "sub_b"]], on="match_id")
             r["week"] = w
             train.append(r)
         tw = t[t.week_cutoff == w]
         if len(tw):
-            r = price_rows(f, tw.rename(columns={"time_k": "time"})[["match_id", "time", "team_a", "team_b", "five_a", "five_b"]], last)
+            r = _priced(filters, tw[["match_id", "time_k", "team_a", "team_b", "five_a", "five_b"]].rename(columns={"time_k": "time"}), last)
             r = r.merge(tw[["match_id", "time_k", "week_cutoff", "is_lan", "event_tier", "sub_a", "sub_b"]].rename(columns={"event_tier": "tier"}),
                         on="match_id")
             pred.append(r)
@@ -150,8 +162,8 @@ def weekly_rows(data_dir: str | Path, targets: pd.DataFrame, cfg: Config = CONFI
     return train, pred
 
 
-def predict(data_dir: str | Path, targets: pd.DataFrame, cfg: Config = CONFIG) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    train, pred = weekly_rows(data_dir, targets, cfg)
+def predict(data_dir: str | Path, targets: pd.DataFrame, cfgs: list[Config] = CONFIGS) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    train, pred = weekly_rows(data_dir, targets, cfgs)
     out = []
     for w, g in pred.groupby("week_cutoff"):
         tr = train[(train.time_k < w) & (train.known < w)] if len(train) else train
@@ -169,14 +181,15 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--weeks", help="comma-separated week_cutoff dates to predict (default: all)")
     ap.add_argument("--rows", help="also save the training and target feature rows with this path prefix")
-    ap.add_argument("--config", help="filter overrides for experiments, k=v,...")
+    ap.add_argument("--config", action="append", help="filter config for experiments, k=v,... (repeatable: an ensemble)")
     a = ap.parse_args()
     targets = pd.read_parquet(a.targets)
     targets["week_cutoff"] = naive(targets.week_cutoff)
     if a.weeks:
         targets = targets[targets.week_cutoff.isin(pd.to_datetime(a.weeks.split(",")))]
-    cfg = dataclasses.replace(CONFIG, **{k: float(v) for k, v in (p.split("=") for p in a.config.split(","))}) if a.config else CONFIG
-    res, train, rows = predict(a.data, targets, cfg)
+    cfgs = [dataclasses.replace(Config(), **{k: float(v) for k, v in (p.split("=") for p in c.split(","))}) for c in a.config] \
+        if a.config else CONFIGS
+    res, train, rows = predict(a.data, targets, cfgs)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     res.to_parquet(a.out, index=False)
     if a.rows:
