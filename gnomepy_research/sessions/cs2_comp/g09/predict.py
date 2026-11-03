@@ -4,9 +4,10 @@ g09 predictions: P(team A wins the bo3) for every target series, from data befor
     python -m gnomepy_research.sessions.cs2_comp.g09.predict --data <bundle> --targets <targets parquet> --out <parquet>
         [--weeks 2026-04-06,2026-04-13]
 
-Per distinct week_cutoff: one chronological pass builds point-in-time features for every past series with a market
-(snapshotted at its own week start) and for the targets (at the cutoff); a ridge logistic layer fitted on the past
-series then prices the targets. See layer.py for the features.
+Per distinct week_cutoff: three chronological passes of a player power rating over HLTV (and FACEIT) maps give
+point-in-time rating gaps for every past bo3 series (snapshotted at its own week start) and for the targets (at the
+cutoff, priced with their announced fives); a ridge logistic layer fitted on the past series prices the targets.
+Nothing is random, and nothing depends on other weeks' targets.
 """
 from __future__ import annotations
 

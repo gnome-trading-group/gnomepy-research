@@ -1,13 +1,9 @@
 """
-Team-level context a bookmaker adjusts a power rating for, from the maps before each request's snapshot time and the
+Team-level adjustments a bookmaker makes to a power rating, from the maps before each request's snapshot time and the
 rating's own pre-map residuals (result minus what the rating expected):
 
   form     recency-weighted residual over recent maps: is the team running above or below its rating
   mapadv   expected residual edge over the maps a greedy bo3 veto leaves, from each team's shrunk per-map residuals
-  rest     log days since the team last played; load: maps in the last three days
-  new      players of the announced five who did not play the team's last map (roster news)
-  setting  shrunk residual over the past year on maps played in the same setting (LAN or online) as the series
-Each is returned per side and as the A-minus-B difference.
 """
 from __future__ import annotations
 
@@ -22,10 +18,8 @@ POOL_WINDOW_DAYS = 60.0
 
 
 def _long(maps: pd.DataFrame, resid: np.ndarray) -> pd.DataFrame:
-    a = pd.DataFrame({"time": maps.time.to_numpy(), "team": maps.team_a_id.to_numpy(), "map": maps.map_name.to_numpy(),
-                      "res": resid, "five": maps.team_a_player_ids.to_numpy(), "lan": maps.is_lan.to_numpy(float)})
-    b = pd.DataFrame({"time": maps.time.to_numpy(), "team": maps.team_b_id.to_numpy(), "map": maps.map_name.to_numpy(),
-                      "res": -resid, "five": maps.team_b_player_ids.to_numpy(), "lan": maps.is_lan.to_numpy(float)})
+    a = pd.DataFrame({"time": maps.time.to_numpy(), "team": maps.team_a_id.to_numpy(), "map": maps.map_name.to_numpy(), "res": resid})
+    b = pd.DataFrame({"time": maps.time.to_numpy(), "team": maps.team_b_id.to_numpy(), "map": maps.map_name.to_numpy(), "res": -resid})
     return pd.concat([a, b], ignore_index=True).sort_values("time", kind="stable").reset_index(drop=True)
 
 
@@ -47,10 +41,11 @@ def _veto(diff: dict[str, float], pool: list[str]) -> float:
 
 
 def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> pd.DataFrame:
+    """rows: key, snap, team_a_id, team_b_id. Returns key, form_a, form_b, form (A minus B) and mapadv."""
     lg = _long(maps, resid)
     times = lg.time.to_numpy()
     by_team = {t: g.index.to_numpy() for t, g in lg.groupby("team")}
-    res_all, lan_all, fives = lg.res.to_numpy(), lg.lan.to_numpy(), lg.five.to_numpy()
+    res_all = lg.res.to_numpy()
     map_names, map_code = np.unique(lg["map"].fillna("").to_numpy(), return_inverse=True)
     mtimes, mnames = maps.time.to_numpy(), maps.map_name.fillna("").to_numpy()
     pools: dict = {}
@@ -64,19 +59,11 @@ def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> 
         pool = pools[snap]
         feats = {"key": r.key}
         side_maps = {}
-        for side, team, five in (("a", r.team_a_id, r.lineup_a), ("b", r.team_b_id, r.lineup_b)):
-            idx = by_team.get(team)
-            if idx is None:
-                feats.update({f"form_{side}": 0.0, f"nform_{side}": 0.0, f"rest_{side}": np.log1p(60.0),
-                              f"load_{side}": 0.0, f"maps90_{side}": 0.0, f"setting_{side}": 0.0,
-                              f"new_{side}": 5.0 if five else 0.0})
-                side_maps[side] = {}
-                continue
+        for side, team in (("a", r.team_a_id), ("b", r.team_b_id)):
+            idx = by_team.get(team, np.array([], int))
             idx = idx[times[idx] < snap]
             if len(idx) == 0:
-                feats.update({f"form_{side}": 0.0, f"nform_{side}": 0.0, f"rest_{side}": np.log1p(60.0),
-                              f"load_{side}": 0.0, f"maps90_{side}": 0.0, f"setting_{side}": 0.0,
-                              f"new_{side}": 5.0 if five else 0.0})
+                feats[f"form_{side}"] = 0.0
                 side_maps[side] = {}
                 continue
             age = (snap - times[idx]) / np.timedelta64(1, "D")
@@ -84,15 +71,6 @@ def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> 
             ok = ~np.isnan(res)
             w = np.where(ok & (age <= FORM_WINDOW_DAYS), 0.5 ** (age / FORM_HALF_LIFE_DAYS), 0.0)
             feats[f"form_{side}"] = float((w * np.nan_to_num(res)).sum() / (w.sum() + 3.0))
-            feats[f"nform_{side}"] = float(w.sum())
-            feats[f"rest_{side}"] = float(np.log1p(min(age.min(), 60.0)))
-            feats[f"load_{side}"] = float((age <= 3).sum())
-            feats[f"maps90_{side}"] = float((age <= 90).sum())
-            last_five = fives[idx[-1]]
-            last = set() if last_five is None else {int(x) for x in last_five}
-            feats[f"new_{side}"] = float(len([p for p in five if p not in last])) if five else 0.0
-            sw = ok & (age <= 365) & (lan_all[idx] == float(r.is_lan))
-            feats[f"setting_{side}"] = float(res[sw].sum() / (sw.sum() + 10.0))
             mw = ok & (age <= MAP_WINDOW_DAYS)
             codes = map_code[idx][mw]
             tot = np.bincount(codes, weights=res[mw], minlength=len(map_names))
@@ -102,6 +80,5 @@ def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> 
         feats["mapadv"] = _veto(diff, pool)
         out.append(feats)
     f = pd.DataFrame(out)
-    for c in ("form", "rest", "load", "new", "setting"):
-        f[c] = f[f"{c}_a"] - f[f"{c}_b"]
+    f["form"] = f.form_a - f.form_b
     return f
