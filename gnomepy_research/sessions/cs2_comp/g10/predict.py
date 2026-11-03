@@ -4,20 +4,23 @@ g10 predictions: P(team A wins the bo3) for every target series, from data befor
     python -m gnomepy_research.sessions.cs2_comp.g10.predict --data <bundle> --targets <targets parquet> --out <parquet>
         [--weeks 2026-04-06,2026-04-13] [--parts <dir>]
 
-The e12 skill price (HLTV and FACEIT player-skill fits, frozen logistic layer) moved by three team-level corrections
-the player fit cannot see, each a shrunken round residual against the HLTV-only skill fit at the same cutoff:
+The e12 skill price (HLTV and FACEIT player-skill fits, frozen logistic layer) moved by corrections from information
+the player fit does not use:
 
-  map pool    per (team, map) residuals, priced through a bo3 veto in which each side bans its worst maps and picks
-              its best;
-  setting     per (team, LAN or online) residuals, for the setting the series is played in;
-  form        per team residuals over the last few weeks (21-day half-life).
+  map pool     per (team, map) round residuals against the HLTV-only skill fit at the same cutoff, priced through a
+               bo3 veto in which each side bans its worst maps and picks its best;
+  setting      per (team, LAN or online) round residuals, for the setting the series is played in;
+  matchmaking  the five's mean FACEIT matchmaking win residual (120-day half-life, shrunken) and mean log game volume,
+               A minus B: current individual form and practice that HLTV and organised FACEIT maps do not see.
 
-    logit q = logit(q_e12) + sum_k w_k * (logit(q_k) - logit(q_hltv))
+    logit q = logit(q_e12) + w_map * (logit(q_map) - logit(q_hltv)) + w_setting * (logit(q_setting) - logit(q_hltv))
+              + w_form * mm_form + w_activity * mm_activity
 
-The weights w_k were fitted on 11,172 bo3 series from Jan 2025 to Mar 2026 (weekly point-in-time fits, outcomes
-only, no market), so they are point-in-time for every dev and confirmation target. The market's price path is not an
-input: on the dev months none of its summaries (two-hour average, opening price, liquidity, staleness, market age)
-added anything once the e12 skill price was pooled with the kickoff price (see README).
+The weights were fitted against e12 on 11,172 bo3 series from Jan 2025 to Mar 2026 (weekly point-in-time fits,
+outcomes only, no market), so they are point-in-time for every dev and confirmation target. Team form over the last
+few weeks is computed (q_form) but left out: it helped on outcomes alone, yet on dev the market already prices it.
+The market's price path is not an input: on the dev months none of its summaries (two-hour average, opening price,
+liquidity, staleness, market age) added anything once the e12 price was pooled with the kickoff price (see README).
 """
 from __future__ import annotations
 
@@ -39,7 +42,7 @@ from gnomepy_research.sessions.cs2_comp.g10.mm import MMConfig, five_mean, mm_ro
 MAP_CONFIG = MapConfig(half_life_days=240.0, prior_rounds=240.0)
 SETTING_CONFIG = MapConfig(half_life_days=240.0, prior_rounds=120.0)
 MM_CONFIG = MMConfig()
-WEIGHTS = {"q_map": 0.166, "q_setting": 0.09, "q_form": 0.13}
+WEIGHTS = {"q_map": 0.3246, "q_setting": 0.116, "mm_form": 1.7811, "mm_activity": 0.0483}
 
 
 def _logit(p) -> np.ndarray:
