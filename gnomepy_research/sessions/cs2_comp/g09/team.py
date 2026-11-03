@@ -50,12 +50,18 @@ def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> 
     lg = _long(maps, resid)
     times = lg.time.to_numpy()
     by_team = {t: g.index.to_numpy() for t, g in lg.groupby("team")}
-    all_maps = maps[["time", "map_name"]]
+    res_all, lan_all, fives = lg.res.to_numpy(), lg.lan.to_numpy(), lg.five.to_numpy()
+    map_names, map_code = np.unique(lg["map"].fillna("").to_numpy(), return_inverse=True)
+    mtimes, mnames = maps.time.to_numpy(), maps.map_name.fillna("").to_numpy()
+    pools: dict = {}
     out = []
     for r in rows.itertuples(index=False):
         snap = np.datetime64(r.snap)
-        recent = all_maps[(all_maps.time < snap) & (all_maps.time >= snap - np.timedelta64(int(POOL_WINDOW_DAYS), "D"))]
-        pool = list(recent.map_name.value_counts().index[:7]) if len(recent) else []
+        if snap not in pools:
+            recent = mnames[(mtimes < snap) & (mtimes >= snap - np.timedelta64(int(POOL_WINDOW_DAYS), "D"))]
+            names, counts = np.unique(recent, return_counts=True)
+            pools[snap] = [str(m) for m in names[np.argsort(-counts, kind="stable")][:7]]
+        pool = pools[snap]
         feats = {"key": r.key}
         side_maps = {}
         for side, team, five in (("a", r.team_a_id, r.lineup_a), ("b", r.team_b_id, r.lineup_b)):
@@ -74,7 +80,7 @@ def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> 
                 side_maps[side] = {}
                 continue
             age = (snap - times[idx]) / np.timedelta64(1, "D")
-            res = lg.res.to_numpy()[idx]
+            res = res_all[idx]
             ok = ~np.isnan(res)
             w = np.where(ok & (age <= FORM_WINDOW_DAYS), 0.5 ** (age / FORM_HALF_LIFE_DAYS), 0.0)
             feats[f"form_{side}"] = float((w * np.nan_to_num(res)).sum() / (w.sum() + 3.0))
@@ -82,14 +88,16 @@ def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> 
             feats[f"rest_{side}"] = float(np.log1p(min(age.min(), 60.0)))
             feats[f"load_{side}"] = float((age <= 3).sum())
             feats[f"maps90_{side}"] = float((age <= 90).sum())
-            last_five = lg.five.iloc[idx[-1]]
+            last_five = fives[idx[-1]]
             last = set() if last_five is None else {int(x) for x in last_five}
             feats[f"new_{side}"] = float(len([p for p in five if p not in last])) if five else 0.0
-            sw = ok & (age <= 365) & (lg.lan.to_numpy()[idx] == float(r.is_lan))
+            sw = ok & (age <= 365) & (lan_all[idx] == float(r.is_lan))
             feats[f"setting_{side}"] = float(res[sw].sum() / (sw.sum() + 10.0))
             mw = ok & (age <= MAP_WINDOW_DAYS)
-            mm = pd.DataFrame({"map": lg["map"].to_numpy()[idx][mw], "res": res[mw]}).groupby("map").res.agg(["sum", "size"])
-            side_maps[side] = (mm["sum"] / (mm["size"] + MAP_SHRINK)).to_dict()
+            codes = map_code[idx][mw]
+            tot = np.bincount(codes, weights=res[mw], minlength=len(map_names))
+            cnt = np.bincount(codes, minlength=len(map_names))
+            side_maps[side] = {str(map_names[c]): tot[c] / (cnt[c] + MAP_SHRINK) for c in np.flatnonzero(cnt)}
         diff = {m: side_maps["a"].get(m, 0.0) - side_maps["b"].get(m, 0.0) for m in pool}
         feats["mapadv"] = _veto(diff, pool)
         out.append(feats)

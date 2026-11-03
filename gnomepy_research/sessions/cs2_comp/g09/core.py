@@ -87,7 +87,7 @@ def load_faceit_maps(data_dir: str | Path, cutoff: pd.Timestamp) -> pd.DataFrame
     m = load(data_dir, "faceit/faceit_matches", cutoff, ["match_id", "finished_at"])
     h = load(data_dir, "faceit/faceit_match_history", cutoff,
              ["match_id", "map_name", "team_a_faceit_ids", "team_b_faceit_ids", "team_a_score", "team_b_score", "team_a_won"])
-    link = load(data_dir, "faceit/faceit_hltv_series_link", cutoff, ["faceit_match_id"])
+    link = load(data_dir, "faceit/faceit_hltv_series_link", cutoff)
     ex = load(data_dir, "faceit/faceit_exclusions", cutoff)
     h = h[~h.match_id.isin(link.faceit_match_id)]
     h = h[~h.match_id.isin(ex[ex.map_name.isna()].match_id)]
@@ -176,10 +176,12 @@ def elo_pass(maps: pd.DataFrame, requests: pd.DataFrame, cfg: EloConfig = EloCon
                 vals.append(base)
         return float(np.mean(vals)) if vals else base, len(known)
 
+    req_rows = list(req.itertuples(index=False))
+
     def answer(upto):
         nonlocal ri
         while ri < len(req) and snaps[ri] <= upto:
-            r = req.iloc[ri]
+            r = req_rows[ri]
             now = pd.Timestamp(r.snap)
             a, ka = team_rating(r.lineup_a, r.rank_a, now)
             b, kb = team_rating(r.lineup_b, r.rank_b, now)
@@ -276,10 +278,12 @@ def market_rating_pass(closes: pd.DataFrame, requests: pd.DataFrame, cfg: Market
         v += cfg.roster_var * max(4 - overlap, 0)
         return mu[team], v, 1.0
 
+    req_rows = list(req.itertuples(index=False))
+
     def answer(upto):
         nonlocal ri
         while ri < len(req) and snaps[ri] <= upto:
-            r = req.iloc[ri]
+            r = req_rows[ri]
             now = pd.Timestamp(r.snap)
             ma, va, ha = state(r.team_a, now, r.lineup_a)
             mb, vb, hb = state(r.team_b, now, r.lineup_b)
@@ -311,25 +315,28 @@ def market_rating_pass(closes: pd.DataFrame, requests: pd.DataFrame, cfg: Market
 
 def build_rows(data_dir: str | Path, cutoff: pd.Timestamp, targets: pd.DataFrame,
                elo_cfg: EloConfig = EloConfig(), mr_cfg: MarketRatingConfig = MarketRatingConfig(),
-               train_gap_hours: float = 4.0) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Feature rows for the past series with a market (training, with outcome y) and for the targets, from data
-    before cutoff plus the targets' own lineups and paths."""
+               train_gap_hours: float = 4.0, train_days: float = 400.0) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Feature rows for the past bo3 series (training, with outcome y; market columns where the series had a
+    market) and for the targets, from data before cutoff plus the targets' own lineups and paths."""
     maps = load_maps(data_dir, cutoff)
     outcomes = series_outcomes(maps)
     past_paths = load(data_dir, "market/series_paths", cutoff)
     past_paths = past_paths[naive(past_paths.kickoff) < cutoff - pd.Timedelta(hours=train_gap_hours)]
     ps = path_summary(past_paths)
-    kick = past_paths.groupby("match_id").kickoff.first().pipe(naive)
     first = maps.drop_duplicates("match_id").set_index("match_id")
-    tr = ps.join(kick.rename("kickoff")).join(outcomes[["y"]], how="inner")
-    tr = tr[tr.y.notna()].join(first[["team_a_id", "team_b_id", "team_a_lineup_ids", "team_b_lineup_ids",
-                                      "team_a_player_ids", "team_b_player_ids", "team_a_rank", "team_b_rank", "is_lan", "event_tier"]])
-    tr = tr.reset_index().rename(columns={"index": "match_id"})
+    tr = outcomes[(outcomes.bo == 3) & outcomes.y.notna() & (outcomes.time < cutoff - pd.Timedelta(hours=train_gap_hours))
+                  & (outcomes.time >= cutoff - pd.Timedelta(days=train_days))][["y", "time"]]
+    tr = tr.rename(columns={"time": "kickoff"}).join(ps, how="left")
+    tr = tr.join(first[["team_a_id", "team_b_id", "team_a_lineup_ids", "team_b_lineup_ids", "team_a_player_ids",
+                        "team_b_player_ids", "team_a_rank", "team_b_rank", "is_lan", "event_tier"]])
+    tr = tr.rename_axis("match_id").reset_index()
     tr["snap"] = week_start(tr.kickoff)
     tr["lineup_a"] = [_ids(l) or _ids(p) for l, p in zip(tr.team_a_lineup_ids, tr.team_a_player_ids)]
     tr["lineup_b"] = [_ids(l) or _ids(p) for l, p in zip(tr.team_b_lineup_ids, tr.team_b_player_ids)]
-    tr["sub_a"] = 0
-    tr["sub_b"] = 0
+    lu = load(data_dir, "hltv/cs2_match_lineups", cutoff, ["match_date", "match_id", "team_id", "is_standin"])
+    subs = lu[lu.is_standin.fillna(False).astype(bool)].groupby(["match_id", "team_id"]).size()
+    tr["sub_a"] = [float(subs.get((m, t), 0)) for m, t in zip(tr.match_id, tr.team_a_id)]
+    tr["sub_b"] = [float(subs.get((m, t), 0)) for m, t in zip(tr.match_id, tr.team_b_id)]
 
     tg = targets.copy()
     tp = path_summary(target_paths(data_dir, tg.match_id))
@@ -358,7 +365,7 @@ def build_rows(data_dir: str | Path, cutoff: pd.Timestamp, targets: pd.DataFrame
     resid[hidx[hidx >= 0]] = resid_all[hidx >= 0]
     tf = team_features(maps, resid, rows)
 
-    closes = tr[["match_id", "kickoff", "team_a_id", "team_b_id", "tw3", "lineup_a", "lineup_b"]].rename(
+    closes = tr[["match_id", "kickoff", "team_a_id", "team_b_id", "tw3", "lineup_a", "lineup_b"]].assign(kickoff=lambda d: d.kickoff.astype("datetime64[ns]")).rename(
         columns={"team_a_id": "team_a", "team_b_id": "team_b", "tw3": "z", "lineup_a": "five_a", "lineup_b": "five_b"}).dropna(subset=["z"])
     mreq = rows[["key", "snap", "team_a_id", "team_b_id", "lineup_a", "lineup_b"]].rename(
         columns={"key": "match_id", "team_a_id": "team_a", "team_b_id": "team_b"})
