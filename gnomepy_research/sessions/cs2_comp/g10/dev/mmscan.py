@@ -28,9 +28,10 @@ def main() -> None:
     D = Path(a.dir)
     mm = pd.read_parquet(D / "mm.parquet")
     names = sorted({c[:-2] for c in mm.columns if c.endswith("_a")})
+    names = [n for n in names if n != "act"] + ["act"]
     for n in names:
         mm[f"{n}_d"] = mm[f"{n}_a"] - mm[f"{n}_b"]
-    mm["cov"] = np.minimum(mm[f"{names[0]}_ka"], mm[f"{names[0]}_kb"])
+    mm["cov"] = np.minimum(mm["mm120_ka"], mm["mm120_kb"])
     pre = pd.concat([pd.read_parquet(p) for p in sorted(D.glob("prehist_*.parquet"))], ignore_index=True).merge(mm, on="match_id")
     y = pre.y.to_numpy(float)
     mo = pd.to_datetime(pre.time).dt.strftime("%Y-%m").to_numpy()
@@ -43,6 +44,12 @@ def main() -> None:
         print(f"pre {n:6s} {ci(l - base)} w={w.round(3)} early {np.mean((l - base)[early]):+.4f} late {np.mean((l - base)[~early]):+.4f}", flush=True)
         l2, w2 = cvfit([pre[f"{n}_d"]], y, mo)
         print(f"   {n} alone vs intercept-only: {np.mean(l2) - np.mean(cvfit([np.zeros(len(y))], y, mo)[0]):+.4f} w={w2.round(3)}")
+    for combo in (["mm120", "act"], ["mm240", "act"]):
+        l, w = cvfit([zb] + [pre[f"{n}_d"] for n in combo], y, mo)
+        print(f"pre joint {combo} {ci(l - base)} w={w.round(3)}")
+    for n in ("mm120", "mm240"):
+        l, w = cvfit([zb, pre[f"{n}_d"], logit(pre.q_m240s) - zb, logit(pre.q_lan) - zb], y, mo)
+        print(f"pre joint {n}+map+lan {ci(l - base)} w={w.round(3)}")
     comp = pd.concat([pd.read_parquet(p) for p in sorted(D.glob("components_*.parquet"))], ignore_index=True)
     ev = pd.read_parquet(D / "ev.parquet").drop(columns="q_e12")
     d = ev.merge(comp, on="match_id").merge(mm, on="match_id", how="left")
