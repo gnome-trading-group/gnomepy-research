@@ -11,15 +11,16 @@ then prices the week's targets from their announced fives and their own price pa
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g12.data import five_tuple, load_inputs, load_target_market, naive
-from gnomepy_research.sessions.cs2_comp.g12.raters import RaterConfig, Replay
+from gnomepy_research.sessions.cs2_comp.g12.raters import EXTRA, RaterConfig, Replay
 from gnomepy_research.sessions.cs2_comp.g12.stack import Stack
 
-STACK = dict(use1=("gauss",), model_only=True)
+STACK = dict(use1=("gauss",) + tuple(name for name, _ in EXTRA), model_only=True)
 
 HIST_COLS = ["match_id", "team_a", "team_b", "week_cutoff", "five_a", "five_b", "sub_a", "sub_b", "bo_type", "is_lan",
              "tier", "y", "known", "time"]
@@ -36,7 +37,7 @@ def target_rows(targets: pd.DataFrame) -> pd.DataFrame:
         "time": naive(targets.match_time).to_numpy(), "target": True})
 
 
-def panel(data_dir: str | Path, targets: pd.DataFrame, faceit: bool = True, cfg: RaterConfig = RaterConfig()) -> pd.DataFrame:
+def panel(data_dir: str | Path, targets: pd.DataFrame, faceit: bool = True, cfg: RaterConfig = RaterConfig(extra=EXTRA)) -> pd.DataFrame:
     until = pd.Timestamp(naive(targets.week_cutoff).max())
     inp = load_inputs(data_dir, until, faceit)
     hist = inp.series[inp.series.week_cutoff <= until][HIST_COLS].assign(target=False)
@@ -70,6 +71,8 @@ def main() -> None:
     ap.add_argument("--no-faceit", dest="faceit", action="store_false")
     ap.add_argument("--weeks", help="comma-separated week_cutoff dates to predict (default: all)")
     a = ap.parse_args()
+    if a.out.startswith("@"):
+        a.out = str(Path(os.environ["OUTPUT_DIR"]) / a.out[1:])
     targets = pd.read_parquet(a.targets)
     targets["week_cutoff"] = naive(targets.week_cutoff)
     if a.weeks:
