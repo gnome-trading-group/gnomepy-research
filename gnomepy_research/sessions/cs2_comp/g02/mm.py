@@ -58,3 +58,8 @@ class MatchmakingTable:
         clf = LogisticRegression(C=c, fit_intercept=True, solver="lbfgs", max_iter=200)
         clf.fit(X, (m.winner == "faction1").to_numpy(), sample_weight=0.5 ** (age / half_life))
         return dict(zip(players, clf.coef_[0][:-1])), float(clf.coef_[0][-1])
+
+    def activity(self, cutoff: pd.Timestamp, days: int = 30) -> dict[int, int]:
+        end = int(cutoff.tz_localize("UTC").timestamp()) if cutoff.tzinfo is None else int(cutoff.timestamp())
+        m = self.matches[(self.matches.finished_at < end) & (self.matches.finished_at >= end - days * 86400)]
+        return self.linked[self.linked.match_id.isin(m.match_id)].hltv_id.value_counts().to_dict()

@@ -27,6 +27,8 @@ def main() -> None:
         ratings, level_coef = table.fit(pd.Timestamp(cutoffs[i]), args.c, args.half_life, args.window)
         df = pd.DataFrame({"player_id": list(ratings), "mm": list(ratings.values())})
         df["level_coef"] = level_coef
+        act = table.activity(pd.Timestamp(cutoffs[i]))
+        df["n30"] = df.player_id.map(act).fillna(0)
         df.to_parquet(Path(args.out) / f"mm_{args.tag}_{pd.Timestamp(cutoffs[i]).date()}.parquet", index=False)
         print(i, len(df), level_coef, flush=True)
 
