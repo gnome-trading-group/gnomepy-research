@@ -155,6 +155,8 @@ models/cs2/hltv/             HLTV point-in-time features and priors; Bayesian se
 models/cs2/bayes/            Bayesian series model: data preparation and NUTS fitting
 models/cs2/win_probability/  pre-map, round and series models
 models/cs2/prematch/         Polymarket market lookup, HLTV team identity
+models/cs2/e12/              e12-wide-mm series model: weekly fit (HLTV + FACEIT skills, matchmaking skill) saved as
+                             an artifact, and the pricer sessions use on announced fives (base-only)
 models/cfb/features/         CFB point-in-time features
 models/cfb/efficiency/       dynamic efficiency model and posteriors
 models/cfb/hyperparameters/  its fitted hyperparameters
@@ -184,7 +186,7 @@ whose strategies could be launched the same way.
 | `equivalent_event_arb` | `EquivalentEventArb` | EQUIVALENT contracts across/within venues: pure arb plus EWMA stat arb | `event_ids`, `max_position`, `min_pure_arb_bps`, `taker_edge_threshold_bps`, `price_model` |
 | `equivalent_event_arb__fix_unfilled_legs` | `EquivalentEventArbFillFix` | Branch: fixes unfilled legs | as parent, plus `min_contract_price` |
 | `equivalent_event_arb__low_vol_changes` | `LowVolEquivalentEventArb` | Branch: maker-only with a volatility-regime entry filter | as parent, plus `vol_regime_*` |
-| `implication_boundary_arb` | `ImplicationBoundaryArb` | A IMPLIES B pairs where price(A) > price(B) | `event_ids`, `size`, `min_edge_bps`, `min_implies_confidence` |
+| `implication_boundary_arb` | `ImplicationBoundaryArb` | A IMPLIES B pairs where price(A) > price(B) | `event_ids`, `size`, `min_edge_bps`, `allow_flagged` |
 | `informed_pmm` | `InformedPredictionMarketMaker` | Quotes Kalshi using a Kalman-smoothed Polymarket reference | `ref_listing_id`, `quote_listing_id`, `value_function_path`, `max_position` |
 | `kalshi_sports_mm` | `KalshiSportsMM` | Two-sided MM on both Kalshi contracts of a game; Polymarket as adverse-selection gate | `ref_listing_id`, `team_a_listing_id`, `team_b_listing_id`, `max_exposure`, `base_spread` |
 | `n_exchange_arb` | `NExchangeArb` | Perp futures spread arb across Hyperliquid/Lighter | `size`, `max_position`, `entry_z`, `close_z` |
@@ -211,8 +213,8 @@ installs only what its code uses:
 - A package declares the extras its code needs in its `__init__.py`: `EXTRAS = ("xgboost",)`.
   The nearest enclosing package that declares EXTRAS decides for every module in it; code with
   none runs on the base. Today: `models/cs2/win_probability` → xgboost, `models/cs2/bayes` and
-  `models/cfb/efficiency` → pymc, and the sessions that run them. `models/cs2/hltv`, `models/cs2/prematch` and
-  `models/cfb/features` are base-only.
+  `models/cfb/efficiency` → pymc, and the sessions that run them. `models/cs2/hltv`, `models/cs2/prematch`,
+  `models/cs2/e12` and `models/cfb/features` are base-only.
 - gnome-orchestrator's `start-session.sh` runs
   `python3 gnomepy_research/dependencies.py extras <strategy class>` and installs
   `gnomepy-research[<extras>]` pinned by `constraints.txt`.
