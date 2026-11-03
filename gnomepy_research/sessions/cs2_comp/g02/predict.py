@@ -97,6 +97,9 @@ class Fitter:
         """Player strengths implied by earlier kickoff prices: a recency-weighted ridge of logit(m0) on the two fives."""
         if cutoff not in self._market:
             tr = past_series(self.data_dir, cutoff)
+            if tr.empty:
+                self._market[cutoff] = {}
+                return 0.0
             ids = sorted({p for col in (tr.team_a_lineup_ids, tr.team_b_lineup_ids) for ps in col for p in ps})
             idx = {p: i for i, p in enumerate(ids)}
             rows, cols, vals = [], [], []
