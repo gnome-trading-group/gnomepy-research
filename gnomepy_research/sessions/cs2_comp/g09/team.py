@@ -6,6 +6,7 @@ rating's own pre-map residuals (result minus what the rating expected):
   mapadv   expected residual edge over the maps a greedy bo3 veto leaves, from each team's shrunk per-map residuals
   rest     log days since the team last played; load: maps in the last three days
   new      players of the announced five who did not play the team's last map (roster news)
+  setting  shrunk residual over the past year on maps played in the same setting (LAN or online) as the series
 Each is returned per side and as the A-minus-B difference.
 """
 from __future__ import annotations
@@ -22,9 +23,9 @@ POOL_WINDOW_DAYS = 60.0
 
 def _long(maps: pd.DataFrame, resid: np.ndarray) -> pd.DataFrame:
     a = pd.DataFrame({"time": maps.time.to_numpy(), "team": maps.team_a_id.to_numpy(), "map": maps.map_name.to_numpy(),
-                      "res": resid, "five": maps.team_a_player_ids.to_numpy()})
+                      "res": resid, "five": maps.team_a_player_ids.to_numpy(), "lan": maps.is_lan.to_numpy(float)})
     b = pd.DataFrame({"time": maps.time.to_numpy(), "team": maps.team_b_id.to_numpy(), "map": maps.map_name.to_numpy(),
-                      "res": -resid, "five": maps.team_b_player_ids.to_numpy()})
+                      "res": -resid, "five": maps.team_b_player_ids.to_numpy(), "lan": maps.is_lan.to_numpy(float)})
     return pd.concat([a, b], ignore_index=True).sort_values("time", kind="stable").reset_index(drop=True)
 
 
@@ -61,13 +62,15 @@ def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> 
             idx = by_team.get(team)
             if idx is None:
                 feats.update({f"form_{side}": 0.0, f"nform_{side}": 0.0, f"rest_{side}": np.log1p(60.0),
-                              f"load_{side}": 0.0, f"maps90_{side}": 0.0, f"new_{side}": 5.0 if five else 0.0})
+                              f"load_{side}": 0.0, f"maps90_{side}": 0.0, f"setting_{side}": 0.0,
+                              f"new_{side}": 5.0 if five else 0.0})
                 side_maps[side] = {}
                 continue
             idx = idx[times[idx] < snap]
             if len(idx) == 0:
                 feats.update({f"form_{side}": 0.0, f"nform_{side}": 0.0, f"rest_{side}": np.log1p(60.0),
-                              f"load_{side}": 0.0, f"maps90_{side}": 0.0, f"new_{side}": 5.0 if five else 0.0})
+                              f"load_{side}": 0.0, f"maps90_{side}": 0.0, f"setting_{side}": 0.0,
+                              f"new_{side}": 5.0 if five else 0.0})
                 side_maps[side] = {}
                 continue
             age = (snap - times[idx]) / np.timedelta64(1, "D")
@@ -82,6 +85,8 @@ def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> 
             last_five = lg.five.iloc[idx[-1]]
             last = set() if last_five is None else {int(x) for x in last_five}
             feats[f"new_{side}"] = float(len([p for p in five if p not in last])) if five else 0.0
+            sw = ok & (age <= 365) & (lg.lan.to_numpy()[idx] == float(r.is_lan))
+            feats[f"setting_{side}"] = float(res[sw].sum() / (sw.sum() + 10.0))
             mw = ok & (age <= MAP_WINDOW_DAYS)
             mm = pd.DataFrame({"map": lg["map"].to_numpy()[idx][mw], "res": res[mw]}).groupby("map").res.agg(["sum", "size"])
             side_maps[side] = (mm["sum"] / (mm["size"] + MAP_SHRINK)).to_dict()
@@ -89,6 +94,6 @@ def team_features(maps: pd.DataFrame, resid: np.ndarray, rows: pd.DataFrame) -> 
         feats["mapadv"] = _veto(diff, pool)
         out.append(feats)
     f = pd.DataFrame(out)
-    for c in ("form", "rest", "load", "new"):
+    for c in ("form", "rest", "load", "new", "setting"):
         f[c] = f[f"{c}_a"] - f[f"{c}_b"]
     return f

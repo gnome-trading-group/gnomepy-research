@@ -107,8 +107,16 @@ def load_faceit_maps(data_dir: str | Path, cutoff: pd.Timestamp) -> pd.DataFrame
                          "team_a_rank": np.nan, "team_b_rank": np.nan, "src": "faceit"})
 
 
+def map_ratings(data_dir: str | Path, cutoff: pd.Timestamp) -> dict:
+    """mapstatsid -> {player_id: HLTV rating} for maps before cutoff."""
+    s = load(data_dir, "hltv/cs2_player_map_stats", cutoff, ["match_date", "mapstatsid", "player_id", "side", "rating"])
+    s = s[(s.side == "all") & s.rating.notna() & s.mapstatsid.notna()]
+    return {k: dict(zip(g.player_id.astype(int), g.rating.astype(float))) for k, g in s.groupby("mapstatsid")}
+
+
 def combined_maps(maps: pd.DataFrame, faceit: pd.DataFrame | None) -> pd.DataFrame:
-    cols = ["time", "team_a_player_ids", "team_b_player_ids", "team_a_score", "team_b_score", "team_a_won", "team_a_rank", "team_b_rank"]
+    cols = ["time", "team_a_player_ids", "team_b_player_ids", "team_a_score", "team_b_score", "team_a_won", "team_a_rank", "team_b_rank",
+            "mapstatsid"]
     h = maps[cols].assign(src="hltv", hidx=np.arange(len(maps)))
     if faceit is None or faceit.empty:
         return h
@@ -128,9 +136,14 @@ class EloConfig:
     # unranked HLTV team.
     k_faceit: float = 0.0
     faceit_offset: float = -0.5
+    # Who carries a five: a recency-weighted HLTV rating deviation from the five's mean, added to the player's
+    # strength, so a five that changes players is priced by who leaves and who joins.
+    ind_weight: float = 0.0
+    ind_alpha: float = 0.05
 
 
-def elo_pass(maps: pd.DataFrame, requests: pd.DataFrame, cfg: EloConfig = EloConfig()) -> tuple[pd.DataFrame, np.ndarray]:
+def elo_pass(maps: pd.DataFrame, requests: pd.DataFrame, cfg: EloConfig = EloConfig(),
+             stats: dict | None = None) -> tuple[pd.DataFrame, np.ndarray]:
     """Player-level map Elo in logit units. A team is the mean of its five. A player never seen enters at the mean
     of the teammates already rated minus new_gap, or from the team's HLTV rank when the whole five is new. The update
     mixes map win and round share (margin) and is larger while a player has few maps.
@@ -141,20 +154,24 @@ def elo_pass(maps: pd.DataFrame, requests: pd.DataFrame, cfg: EloConfig = EloCon
     rating: dict[int, float] = {}
     nmaps: dict[int, int] = {}
     last_seen: dict[int, pd.Timestamp] = {}
+    dev: dict[int, float] = {}
     req = requests.sort_values("snap").reset_index(drop=True)
     snaps = req.snap.to_numpy()
     out = np.full((len(req), 5), np.nan)
+
+    def strength(p):
+        return rating[p] + cfg.ind_weight * dev.get(p, 0.0)
     ri = 0
 
     def team_rating(five, rank, now):
-        known = [rating[p] for p in five if p in rating]
+        known = [strength(p) for p in five if p in rating]
         base = (np.mean(known) - cfg.new_gap) if known else cfg.rank_scale * (np.log(UNRANKED) - np.log(rank if rank and rank == rank else UNRANKED)) - 1.0
         vals = []
         for p in five:
             if p in rating:
                 age = (now - last_seen[p]).days if now is not None else 0
                 shrink = 0.5 ** (max(age - 60, 0) / cfg.decay_days)
-                vals.append(rating[p] * shrink + base * (1 - shrink) if age > 60 else rating[p])
+                vals.append(strength(p) * shrink + base * (1 - shrink) if age > 60 else strength(p))
             else:
                 vals.append(base)
         return float(np.mean(vals)) if vals else base, len(known)
@@ -177,6 +194,7 @@ def elo_pass(maps: pd.DataFrame, requests: pd.DataFrame, cfg: EloConfig = EloCon
     won = maps.team_a_won.to_numpy(float)
     rka, rkb = maps.team_a_rank.to_numpy(float), maps.team_b_rank.to_numpy(float)
     faceit = (maps.src == "faceit").to_numpy() if "src" in maps else np.zeros(len(maps), bool)
+    msid = maps.mapstatsid.to_numpy() if "mapstatsid" in maps else np.full(len(maps), None)
     resid = np.full(len(maps), np.nan)
     for i in range(len(maps)):
         answer(times[i])
@@ -198,8 +216,8 @@ def elo_pass(maps: pd.DataFrame, requests: pd.DataFrame, cfg: EloConfig = EloCon
                 for p in new:
                     rating[p] = base
                     nmaps[p] = 0
-        ra = np.mean([rating[p] for p in A])
-        rb = np.mean([rating[p] for p in B])
+        ra = np.mean([strength(p) for p in A])
+        rb = np.mean([strength(p) for p in B])
         e = 1 / (1 + np.exp(-(ra - rb)))
         tot = sa[i] + sb[i]
         share = sa[i] / tot if tot > 0 else won[i]
@@ -212,6 +230,15 @@ def elo_pass(maps: pd.DataFrame, requests: pd.DataFrame, cfg: EloConfig = EloCon
                 rating[p] += sgn * kmult * k * delta
                 nmaps[p] += 1
                 last_seen[p] = now
+        st = stats.get(msid[i]) if stats is not None else None
+        if st:
+            for five in (A, B):
+                rs = [st[p] for p in five if p in st]
+                if len(rs) >= 4:
+                    m = float(np.mean(rs))
+                    for p in five:
+                        if p in st:
+                            dev[p] = (1 - cfg.ind_alpha) * dev.get(p, 0.0) + cfg.ind_alpha * (st[p] - m)
     answer(np.datetime64("2262-01-01"))
     res = pd.DataFrame(out, columns=["elo_gap", "known_a", "known_b", "minmaps_a", "minmaps_b"])
     res["match_id"] = req.match_id.to_numpy()
@@ -324,7 +351,7 @@ def build_rows(data_dir: str | Path, cutoff: pd.Timestamp, targets: pd.DataFrame
     req = rows[["key", "snap", "lineup_a", "lineup_b", "team_a_rank", "team_b_rank"]].rename(
         columns={"key": "match_id", "team_a_rank": "rank_a", "team_b_rank": "rank_b"})
     cm = combined_maps(maps, load_faceit_maps(data_dir, cutoff) if elo_cfg.k_faceit > 0 else None)
-    e, resid_all = elo_pass(cm, req, elo_cfg)
+    e, resid_all = elo_pass(cm, req, elo_cfg, map_ratings(data_dir, cutoff) if elo_cfg.ind_weight != 0 else None)
     e = e.rename(columns={"match_id": "key"})
     resid = np.full(len(maps), np.nan)
     hidx = cm.hidx.to_numpy()
