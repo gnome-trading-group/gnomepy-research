@@ -1,5 +1,5 @@
-"""g08's series price: the recurrent skill state read out at each weekly cutoff, a logistic layer refitted every week on
-past HLTV bo3 series, and an even logit average with the frozen e12 price.
+"""g08's series price: the recurrent skill state read out at each weekly cutoff and a logistic layer refitted every week
+on past HLTV bo3 series.
 
 The layer sees one feature, logit of the veto-simulated series price from the state, and is fitted on both orientations
 of every past series (no intercept), so swapping the teams flips the price. It is refitted each week on the series
@@ -19,7 +19,6 @@ from gnomepy_research.sessions.cs2_comp.g08.ratings import RatingConfig, run
 CONFIG = RatingConfig(market_var=0.3, map_var=0.003)
 HISTORY_START = pd.Timestamp("2024-06-01")
 LAYER_WINDOW_DAYS = 540
-E12_WEIGHT = 0.5
 
 
 def logit(p) -> np.ndarray:
@@ -33,11 +32,12 @@ def _queries(inputs: Inputs, targets: pd.DataFrame) -> pd.DataFrame:
     hist = pd.DataFrame({"qid": "h" + s.match_id.astype(str), "match_id": s.match_id.to_numpy(), "cutoff": s.cutoff.to_numpy(),
                          "known": s.known.to_numpy(), "y": s.y.to_numpy(float), "team_a": s.team_a.to_numpy(),
                          "team_b": s.team_b.to_numpy(), "five_a": s.five_a.to_numpy(), "five_b": s.five_b.to_numpy(),
-                         "target": False})
+                         "lan": s.is_lan.fillna(0).to_numpy(int), "tier": s.event_tier.fillna(-1).to_numpy(int), "target": False})
     tg = pd.DataFrame({"qid": "t" + targets.match_id.astype(str), "match_id": targets.match_id.to_numpy(),
                        "cutoff": targets.week_cutoff.to_numpy(), "known": targets.week_cutoff.to_numpy(), "y": np.nan,
                        "team_a": targets.team_a_id.to_numpy(np.int64), "team_b": targets.team_b_id.to_numpy(np.int64),
                        "five_a": targets.team_a_lineup_ids.to_numpy(), "five_b": targets.team_b_lineup_ids.to_numpy(),
+                       "lan": targets.is_lan.fillna(0).to_numpy(int), "tier": targets.event_tier.fillna(-1).to_numpy(int),
                        "target": True})
     return pd.concat([hist, tg], ignore_index=True)
 
@@ -62,8 +62,3 @@ def state_prices(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = Fa
         if verbose:
             print(f"{week.date()}: layer on {tr.sum()} series, slope {layer.coef_[0, 0]:.3f}, {te.sum()} targets", flush=True)
     return pd.concat(out, ignore_index=True)
-
-
-def combine(q_state: np.ndarray, q_e12: np.ndarray) -> np.ndarray:
-    z = (1 - E12_WEIGHT) * logit(q_state) + E12_WEIGHT * logit(q_e12)
-    return 1 / (1 + np.exp(-z))

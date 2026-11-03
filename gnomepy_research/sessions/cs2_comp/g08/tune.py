@@ -51,6 +51,9 @@ def layer_features(F: pd.DataFrame, cols: list[str]) -> np.ndarray:
     feats = {"sv": logit(F.series_veto), "sf": logit(F.series_flat), "su": logit(F.series_unc),
              "unk": (F.unknown_a - F.unknown_b).to_numpy(float), "form": (F.form_a - F.form_b).to_numpy(float),
              "coh": (F.cohesion_a - F.cohesion_b).to_numpy(float)}
+    feats["sv_lan"] = feats["sv"] * F.lan.to_numpy(float)
+    for t in sorted(F.tier.unique()):
+        feats[f"sv_t{t}"] = feats["sv"] * (F.tier == t).to_numpy(float)
     return np.column_stack([feats[c] for c in cols])
 
 
