@@ -51,7 +51,7 @@ def _logit(p) -> np.ndarray:
 
 
 def components(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
-    """Per target: q_e12, the HLTV-only skill price and the three corrected prices."""
+    """Per target: q_e12, the HLTV-only skill price, the corrected prices and the matchmaking differences."""
     t = targets.rename(columns={"team_a_id": "team_a", "team_b_id": "team_b"})[["match_id", "team_a", "team_b", "week_cutoff", "is_lan"]].copy()
     for side in ("a", "b"):
         t[f"lineup_{side}"] = targets[f"team_{side}_lineup_ids"].to_numpy()
@@ -64,7 +64,7 @@ def components(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = Fals
                         "gap": h.gap.to_numpy(), "q_e12": q_e12})
     out = out.merge(t[["match_id", "team_a", "team_b", "is_lan"]], on="match_id")
     maps = load_maps(data_dir, until)
-    mm = mm_rows(data_dir, until)
+    games = mm_rows(data_dir, until)
     lineups = t.set_index("match_id")[["lineup_a", "lineup_b"]]
     parts = []
     for c in sorted(out.week_cutoff.unique()):
@@ -72,14 +72,14 @@ def components(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = Fals
         t0 = time.time()
         wk = out[out.week_cutoff == c].copy()
         fit = SkillFit.fit(inputs, c, CONFIG_HLTV, False)
-        mm = MapModel(maps, fit, c, MAP_CONFIG)
-        ms = MapModel(maps, fit, c, SETTING_CONFIG)
+        pool_model = MapModel(maps, fit, c, MAP_CONFIG)
+        setting_model = MapModel(maps, fit, c, SETTING_CONFIG)
         trip = list(zip(wk.gap, wk.team_a.astype(int), wk.team_b.astype(int), wk.is_lan.astype(int)))
         wk["q_hltv"] = series_price(wk.gap.to_numpy())
-        wk["q_map"] = [mm.series_price(g, a, b) for g, a, b, _ in trip]
-        wk["q_setting"] = series_price(np.array([ms.lan_gap(g, a, b, lan) for g, a, b, lan in trip]))
-        wk["q_form"] = series_price(np.array([ms.offset_gap(g, a, b, "form") for g, a, b, _ in trip]))
-        form = player_form(mm, c, MM_CONFIG)
+        wk["q_map"] = [pool_model.series_price(g, a, b) for g, a, b, _ in trip]
+        wk["q_setting"] = series_price(np.array([setting_model.lan_gap(g, a, b, lan) for g, a, b, lan in trip]))
+        wk["q_form"] = series_price(np.array([setting_model.offset_gap(g, a, b, "form") for g, a, b, _ in trip]))
+        form = player_form(games, c, MM_CONFIG)
         lu = lineups.loc[wk.match_id]
         for col in ("form", "activity"):
             wk[f"mm_{col}"] = (np.array([five_mean(form, v, col) for v in lu.lineup_a])
