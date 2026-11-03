@@ -53,6 +53,8 @@ class Config:
     faceit_maps: bool = True
     community_seed: int = 0
     teammate_weight: float = 1.0
+    # Recency half-life of the edges the communities are found on (0: the fit's own map weights).
+    community_half_life: float = 0.0
     pool_days: int = 60
 
 
@@ -133,7 +135,8 @@ class GraphFit:
         X0 = X0[:, np.r_[np.ones(min(5, X0.shape[1]), bool), X0[:, 5:].any(axis=0)]]
         K = X0.shape[1]
         Xs = sp.vstack([sp.csr_matrix(X0), sp.csr_matrix((T, K))]).tocsr()
-        levels = [communities(ia, ib, w, P, k, cfg.community_seed, cfg.teammate_weight) for k in cfg.communities]
+        w_comm = w if not cfg.community_half_life else 0.5 ** (age / cfg.community_half_life)
+        levels = [communities(ia, ib, w_comm, P, k, cfg.community_seed, cfg.teammate_weight) for k in cfg.communities]
         comm = levels[0]
         C = sp.hstack([sp.csr_matrix((np.ones(P), (np.arange(P), lv)), shape=(Q, int(lv.max()) + 1)) for lv in levels]).tocsr()
         NC = C.shape[1]
