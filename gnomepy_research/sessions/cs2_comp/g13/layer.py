@@ -1,10 +1,11 @@
 """
-The layer that prices a series from its market path and the e12 skill price.
+The layer that prices a series from the e12 skill price and its market path.
 
-A ridge logistic regression, refit at every weekly cutoff on every priced bo3 series known before it. Its inputs are
-the logit of a smoothed kickoff price, e12's logit price, and how far the market can be trusted: a thin market (few
-prints, or a price that never moved) carries less of the answer, so the skill price gets more say there. Every
-column is antisymmetric in A and B except the intercept, which absorbs the first-listed team's edge.
+A ridge logistic regression, refit at every weekly cutoff on every priced bo3 series known before it. e12's logit
+price enters with a fixed coefficient of 1; the layer learns only an intercept (the first-listed team's edge) and a
+thin-market gate: where the market is thin (few prints, or a price that never moved) it shifts weight from the
+smoothed kickoff price to the skill price. Re-learning the market/e12 mix inside q was tried and only added noise,
+since the scorer's own pool fits that mix. Every column is antisymmetric in A and B except the intercept.
 """
 from __future__ import annotations
 
@@ -24,8 +25,10 @@ def logit(p) -> np.ndarray:
 @dataclass(frozen=True)
 class LayerSpec:
     price: str = "m_last2h"
-    columns: tuple[str, ...] = ("lm", "z", "lm_thin", "z_thin")
+    columns: tuple[str, ...] = ("lm_thin", "z_thin")
     l2: float = 1.0
+    # A column added to the logit with a fixed coefficient of 1, so the layer only learns what to add to it.
+    offset: str | None = "z"
     # Rows the layer may learn from: at least this many weeks of priced history, else the fallback price is used.
     min_rows: int = 200
 
@@ -35,8 +38,8 @@ def thin_market(rows: pd.DataFrame) -> np.ndarray:
 
 
 def design(rows: pd.DataFrame, spec: LayerSpec) -> np.ndarray:
-    """One column per name in `spec.columns`, then the intercept. Missing path features count as a thin market
-    at a flat price."""
+    """One column per name in `spec.columns`, then the intercept, then the offset (or zeros). Missing path features
+    count as a thin market at a flat price."""
     m = rows[spec.price].fillna(0.5)
     lm = logit(m)
     z = rows.z_e12.to_numpy(float)
@@ -58,16 +61,18 @@ def design(rows: pd.DataFrame, spec: LayerSpec) -> np.ndarray:
         sd = rows.ekf_sd.fillna(0.0).to_numpy(float)
         cols.update({"z_ekf": ze, "zekf_thin": ze * thin, "z_sd": z * sd, "lm_sd": lm * sd,
                      "ekf_chem": rows.ekf_chem.fillna(0.0).to_numpy(float)})
-    return np.column_stack([cols[c] for c in spec.columns] + [np.ones(len(rows))])
+    offset = cols[spec.offset] if spec.offset else np.zeros(len(rows))
+    return np.column_stack([cols[c] for c in spec.columns] + [np.ones(len(rows)), offset])
 
 
 def fit_ridge(X: np.ndarray, y: np.ndarray, l2: float) -> np.ndarray:
-    """Newton steps on the L2-penalised log loss (the intercept is not penalised)."""
+    """Newton steps on the L2-penalised log loss (the intercept is not penalised); the last column is the offset."""
+    X, offset = X[:, :-1], X[:, -1]
     pen = np.full(X.shape[1], l2)
     pen[-1] = 0.0
     w = np.zeros(X.shape[1])
     for _ in range(100):
-        p = 1 / (1 + np.exp(-X @ w))
+        p = 1 / (1 + np.exp(-(X @ w + offset)))
         H = X.T @ (X * (p * (1 - p))[:, None]) + np.diag(pen) + 1e-9 * np.eye(X.shape[1])
         step = np.linalg.solve(H, X.T @ (y - p) - pen * w)
         w += step
@@ -95,7 +100,8 @@ class Layer:
     def predict(self, rows: pd.DataFrame) -> np.ndarray:
         if self.weights is None:
             return fallback(rows, self.spec)
-        return 1 / (1 + np.exp(-(design(rows, self.spec) @ self.weights)))
+        X = design(rows, self.spec)
+        return 1 / (1 + np.exp(-(X[:, :-1] @ self.weights + X[:, -1])))
 
 
 def fallback(rows: pd.DataFrame, spec: LayerSpec) -> np.ndarray:
