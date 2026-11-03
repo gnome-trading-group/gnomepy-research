@@ -24,7 +24,7 @@ CONFIG = Config()
 SHORT = None
 FACEIT = False
 HISTORY_WEEKS = 26
-COLUMNS = ["zm", "zr", "zr_nomkt", "one"]
+COLUMNS = ["zm", "zr", "one"]
 L2 = 1.0
 
 

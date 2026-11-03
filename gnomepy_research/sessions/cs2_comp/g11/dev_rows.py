@@ -20,7 +20,7 @@ ap.add_argument("--weeks")
 ap.add_argument("--history-weeks", type=int, default=0)
 ap.add_argument("--faceit", action="store_true")
 ap.add_argument("--tau", type=float, default=0.3)
-ap.add_argument("--communities", type=int, default=8)
+ap.add_argument("--communities", default="8")
 ap.add_argument("--tag", default="")
 ap.add_argument("--short-hl", type=float, default=0.0)
 ap.add_argument("--hl", type=float, default=300.0)
@@ -33,8 +33,8 @@ wc = pd.to_datetime(t.week_cutoff)
 t["week_cutoff"] = wc.dt.tz_convert(None) if wc.dt.tz is not None else wc
 if a.weeks:
     t = t[t.week_cutoff.isin(pd.to_datetime(a.weeks.split(",")))]
-cfg = Config(tau=a.tau, communities=a.communities, half_life_days=a.hl, sigma=a.sigma, window_days=a.window, team_sd=a.team_sd)
-short = Config(tau=a.tau, communities=a.communities, half_life_days=a.short_hl, window_days=int(3 * a.short_hl)) if a.short_hl else None
+cfg = Config(tau=a.tau, communities=tuple(int(k) for k in a.communities.split(",")), half_life_days=a.hl, sigma=a.sigma, window_days=a.window, team_sd=a.team_sd)
+short = Config(tau=a.tau, communities=tuple(int(k) for k in a.communities.split(",")), half_life_days=a.short_hl, window_days=int(3 * a.short_hl)) if a.short_hl else None
 train, tgt = build(a.data, t, cfg, a.faceit, a.history_weeks, short, verbose=True)
 out = Path(a.out)
 out.mkdir(parents=True, exist_ok=True)

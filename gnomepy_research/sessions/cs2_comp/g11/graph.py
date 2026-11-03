@@ -38,7 +38,8 @@ class Config:
     half_life_days: float = 300.0
     sigma: float = 0.5
     tau: float = 0.3
-    communities: int = 8
+    # One set of community effects per resolution (number of spectral communities); scenes nest inside regions.
+    communities: tuple = (8,)
     faceit_weight: float = 0.5
     rating_gamma: float = 0.6
     rating_sd: float = 0.31
@@ -117,9 +118,10 @@ class GraphFit:
         X0 = _prior_design(maps, players, inputs, cutoff, faceit)
         K = X0.shape[1]
         Xs = sp.vstack([sp.csr_matrix(X0), sp.csr_matrix((T, K))]).tocsr()
-        comm = communities(ia, ib, w, P, cfg.communities)
-        NC = int(comm.max()) + 1
-        C = sp.csr_matrix((np.ones(P), (np.arange(P), comm)), shape=(Q, NC))
+        levels = [communities(ia, ib, w, P, k) for k in cfg.communities]
+        comm = levels[0]
+        C = sp.hstack([sp.csr_matrix((np.ones(P), (np.arange(P), lv)), shape=(Q, int(lv.max()) + 1)) for lv in levels]).tocsr()
+        NC = C.shape[1]
         inv_var = 1.0 / cfg.sigma ** 2
         inv_tau = 1.0 / cfg.tau ** 2
         prec = np.concatenate([np.full(P, inv_var), np.full(T, 1.0 / cfg.team_sd ** 2 if T else 1.0)])
