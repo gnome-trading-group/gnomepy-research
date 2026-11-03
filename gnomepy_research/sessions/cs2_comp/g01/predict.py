@@ -66,11 +66,12 @@ def fit_pool(lm: np.ndarray, lp: np.ndarray, y: np.ndarray, lam: float = LAM) ->
     return minimize(nll, prior, jac=grad, method="L-BFGS-B").x
 
 
-def predict_week(data_dir: str, week: pd.Timestamp, targets: pd.DataFrame) -> pd.DataFrame:
+def predict_week(data_dir: str, week: pd.Timestamp, targets: pd.DataFrame, stage1_from: pd.Timestamp = STAGE1_FROM,
+                 lam: float = LAM) -> pd.DataFrame:
     hist = bundle.load(data_dir, "hltv/cs2_match_history", before=week)
     maps = ratings.prepare_maps(hist)
     ser = ratings.series_table(maps)
-    ser = ser[(ser.bo == 3) & ser.y.notna() & (ser.t >= STAGE1_FROM)].copy()
+    ser = ser[(ser.bo == 3) & ser.y.notna() & (ser.t >= stage1_from)].copy()
     ser["week"] = ratings.monday(ser.t)
     tq = pd.DataFrame({"week": week, "team_a_id": targets.team_a_id.values, "team_b_id": targets.team_b_id.values,
                        "pa": targets.team_a_lineup_ids.map(list).values, "pb": targets.team_b_lineup_ids.map(list).values,
@@ -91,7 +92,7 @@ def predict_week(data_dir: str, week: pd.Timestamp, targets: pd.DataFrame) -> pd
     nh = len(hq)
     Xh, Xt = X[:nh], X[nh:]
 
-    train = (ser.t >= STAGE1_FROM).values
+    train = (ser.t >= stage1_from).values
     clf = LogisticRegression(C=1.0, max_iter=500).fit(np.nan_to_num(Xh[train]), ser.y.values[train])
     p_h = clf.predict_proba(np.nan_to_num(Xh))[:, 1]
     p_t = clf.predict_proba(np.nan_to_num(Xt))[:, 1]
@@ -100,7 +101,7 @@ def predict_week(data_dir: str, week: pd.Timestamp, targets: pd.DataFrame) -> pd
     m_tgt = kickoff_prices(bundle.target_paths(data_dir, targets.match_id))
     m0_h = ser.match_id.map(m_hist).values.astype(float)
     ok = ~np.isnan(m0_h)
-    coef = fit_pool(logit(m0_h[ok]), logit(p_h[ok]), ser.y.values[ok])
+    coef = fit_pool(logit(m0_h[ok]), logit(p_h[ok]), ser.y.values[ok], lam)
     m0_t = targets.match_id.map(m_tgt).values.astype(float)
     q = p_t.copy()
     have = ~np.isnan(m0_t)
@@ -117,13 +118,15 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--weeks", type=int, nargs="*")
     ap.add_argument("--debug", action="store_true")
+    ap.add_argument("--stage1-from", default=str(STAGE1_FROM.date()))
+    ap.add_argument("--lam", type=float, default=LAM)
     a = ap.parse_args()
     t = pd.read_parquet(a.targets)
     t["week_cutoff"] = pd.to_datetime(t.week_cutoff)
     weeks = sorted(t.week_cutoff.unique())
     if a.weeks:
         weeks = [weeks[i] for i in a.weeks]
-    out = [predict_week(a.data, pd.Timestamp(w), t[t.week_cutoff == w]) for w in weeks]
+    out = [predict_week(a.data, pd.Timestamp(w), t[t.week_cutoff == w], pd.Timestamp(a.stage1_from), a.lam) for w in weeks]
     res = pd.concat(out, ignore_index=True)
     if not a.debug:
         res = res[["match_id", "q", "fit_cutoff"]]
