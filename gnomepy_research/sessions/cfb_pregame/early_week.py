@@ -35,7 +35,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from gnomepy import ExecutionReport, Intent, OrderStatus, OrderType, Scales, Side, Strategy
-from gnomepy.java.schemas import Schema
+from gnomepy.java.schemas import StreamRecord
 from gnomepy.registry import RegistryClient
 
 logger = logging.getLogger(__name__)
@@ -151,7 +151,7 @@ class CFBEarlyWeek(Strategy):
                                                    float(g["p_home"]), bool(g.get("off_protocol", False)))
         if not self._games:
             raise ValueError("no game on the slate has both listings in the registry")
-        self._owner = {(leg.exchange_id, leg.security_id): (game.game_id, side)
+        self._owner = {leg.listing_id: (game.game_id, side)
                        for game in self._games.values() for side, leg in enumerate(game.legs)}
         logger.info("%d games, model %s, %.0f contracts, gap %.2f", len(self._games), model, contracts, min_gap)
 
@@ -186,8 +186,8 @@ class CFBEarlyWeek(Strategy):
 
     # ---- engine callbacks ----------------------------------------------------------------
 
-    def on_market_data(self, data: Schema) -> list[Intent]:
-        owner = self._owner.get((data.exchange_id, data.security_id))
+    def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        owner = self._owner.get(self.streams.listing_id(data.stream_id))
         if owner is None:
             return []
         leg = self._games[owner[0]].legs[owner[1]]
@@ -203,7 +203,7 @@ class CFBEarlyWeek(Strategy):
         return intents
 
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
-        owner = self._owner.get((report.exchange_id, report.security_id))
+        owner = self._owner.get(self.streams.listing_id_for(report.exchange_id, report.security_id))
         if owner is None or report.order_status not in TERMINAL:
             return []
         game = self._games[owner[0]]

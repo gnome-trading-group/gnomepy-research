@@ -2,8 +2,9 @@
 CFBEarlyWeek: the decision at 72 hours out, resting entries and their re-pegs, the entry close, resting exits, the
 taker exit before kickoff, restarts, the session's end, and its metrics.
 
-The registry, books, session control and metrics are the in-memory stand-ins of test_cfb_pregame_strategy; positions
-are a plain table of held shares. Intents are recorded by a stand-in with Intent's fields, since a local engine JAR may
+The registry, session control and metrics are in-memory stand-ins with the engine's interface, and the stream
+directory is conftest's FakeStreams: market data arrives as stream records named only by their stream, as in gnomepy 3.
+Positions are a plain table of held shares. Intents are recorded by a stand-in with Intent's fields, since a local engine JAR may
 predate post-only orders.
 """
 from __future__ import annotations
@@ -16,16 +17,119 @@ import pytest
 
 from gnomepy import OrderStatus, OrderType, Scales, Side
 from gnomepy_research.sessions.cfb_pregame import early_week as mod
-from tests.sessions.test_cfb_pregame_strategy import LISTINGS, _Book, _Control, _Metrics, _Registry, _Report
+from tests.sessions.conftest import FakeStreams, stream_of
 
 P, S = Scales.PRICE, Scales.SIZE
 HOUR = 3_600_000_000_000
+# listing -> (exchange_id, security_id)
+LISTINGS = {101: (5, 1101), 102: (5, 1102), 201: (5, 1201), 202: (5, 1202)}
 KICKOFF = pd.Timestamp("2026-11-07T17:00:00Z")
 # game_id -> (home listing, away listing, kickoff)
 GAMES = {1: (101, 102, KICKOFF), 2: (201, 202, KICKOFF + pd.Timedelta(hours=3))}
 # Home .48/.50 and away .50/.52: the market has the home team at .49.
 HOME_BOOK = ([(0.48, 500)], [(0.50, 500)])
 AWAY_BOOK = ([(0.50, 500)], [(0.52, 500)])
+
+
+@dataclass
+class _Listing:
+    exchange_id: int
+    security_id: int
+
+
+@dataclass
+class _Spec:
+    tick_size: int = P // 100
+    lot_size: int = S // 100
+    min_size: int = 0
+
+
+class _Registry:
+    def __init__(self, missing=()):
+        self.missing = set(missing)
+
+    def get_listing(self, *, listing_id, **_):
+        return [] if listing_id in self.missing else [_Listing(*LISTINGS[listing_id])]
+
+    def get_listing_spec(self, *, listing_id, **_):
+        return [_Spec()]
+
+
+@dataclass
+class _Report:
+    exchange_id: int
+    security_id: int
+    order_status: OrderStatus
+
+
+class _Control:
+    def __init__(self):
+        self.exits = []
+
+    def requestExit(self, reason, flatten, timeout_millis):
+        self.exits.append((reason, flatten))
+        return len(self.exits) == 1
+
+    def isExiting(self):
+        return bool(self.exits)
+
+
+class _MetricStream:
+    def __init__(self):
+        self.columns, self.rows, self._row, self._frozen = [], [], None, False
+
+    def add_long_column(self, name):
+        assert not self._frozen
+        self.columns.append(name)
+        return len(self.columns) - 1
+
+    add_double_column = add_long_column
+
+    def freeze(self):
+        self._frozen = True
+
+    def begin(self):
+        assert self._frozen and self._row is None
+        self._row = {}
+
+    def set_long(self, column, value):
+        self._row[self.columns[column]] = value
+
+    set_double = set_long
+
+    def commit(self):
+        self.rows.append(self._row)
+        self._row = None
+
+
+class _Metrics:
+    def __init__(self):
+        self.streams = {}
+
+    def create_stream(self, name):
+        self.streams[name] = _MetricStream()
+        return self.streams[name]
+
+
+class _Book:
+    """A stream record of one listing's book: gnomepy 3 market data carries its stream id, not the venue's ids."""
+
+    def __init__(self, listing, bids, asks, ts):
+        self.stream_id = stream_of(listing)
+        self.event_timestamp = ts
+        self._bids, self._asks = bids, asks
+
+    def bid_price(self, i):
+        return int(self._bids[i][0] * P) if i < len(self._bids) else 0
+
+    def bid_size(self, i):
+        return int(self._bids[i][1] * S) if i < len(self._bids) else 0
+
+    def ask_price(self, i):
+        return int(self._asks[i][0] * P) if i < len(self._asks) else 0
+
+    def ask_size(self, i):
+        return int(self._asks[i][1] * S) if i < len(self._asks) else 0
 
 
 @dataclass
@@ -74,6 +178,7 @@ def make(monkeypatch):
         with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry(missing)):
             strat = mod.CFBEarlyWeek(games=args, model="e11", **kw)
         strat._position_view = _Held()
+        strat._streams = FakeStreams(LISTINGS)
         strat._control = _Control()
         strat._metric_recorder = _Metrics()
         strat.register_metrics()
@@ -87,7 +192,7 @@ def _at(hours_before, game=1):
 
 def _tick(strat, listing, book, hours_before, game=1):
     bids, asks = book
-    return strat.on_market_data(_Book(LISTINGS[listing], bids, asks, _at(hours_before, game)))
+    return strat.on_market_data(_Book(listing, bids, asks, _at(hours_before, game)))
 
 
 def _both(strat, hours_before, game=1, home=HOME_BOOK, away=AWAY_BOOK):
