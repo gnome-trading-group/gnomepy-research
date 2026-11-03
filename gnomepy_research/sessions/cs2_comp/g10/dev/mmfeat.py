@@ -11,10 +11,10 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
-from gnomepy_research.sessions.cs2_comp.g10.mm import MMConfig, five_mean, mm_rows, player_form
+from gnomepy_research.sessions.cs2_comp.g10.mm import MMConfig, five_mean, level_trend, mm_rows, player_form
 from gnomepy_research.sessions.cs2_comp.g10.rows import monday
 
-CONFIGS = {"mm": MMConfig(), "mm14": MMConfig(half_life_days=14.0, window_days=42), "mm365": MMConfig(half_life_days=365.0, window_days=365)}
+CONFIGS = {"mm": MMConfig()}
 
 
 def main() -> None:
@@ -45,6 +45,10 @@ def main() -> None:
             for col, short in (("form", name), ("activity", f"{name}act"), ("round_form", f"{name}r")):
                 rec[f"{short}_a"] = [five_mean(form, v, col) for v in wk.lineup_a]
                 rec[f"{short}_b"] = [five_mean(form, v, col) for v in wk.lineup_b]
+        lv = level_trend(rows, c)
+        for col in ("level", "level_change"):
+            rec[f"{col}_a"] = [five_mean(lv, v, col) for v in wk.lineup_a]
+            rec[f"{col}_b"] = [five_mean(lv, v, col) for v in wk.lineup_b]
         out.append(pd.DataFrame(rec))
     res = pd.concat(out, ignore_index=True)
     print(res.describe().T.to_string(), flush=True)
