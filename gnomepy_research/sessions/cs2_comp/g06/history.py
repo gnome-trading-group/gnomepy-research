@@ -54,11 +54,17 @@ def market_series_targets(data_dir: str | Path, before: pd.Timestamp) -> pd.Data
     s = hltv_series(data_dir, before)
     s = s[s.match_id.isin(paths)].copy()
     s["week_cutoff"] = week_start(s.time)
+    return standins(data_dir, s, before).reset_index(drop=True)
+
+
+def standins(data_dir: str | Path, s: pd.DataFrame, before: pd.Timestamp) -> pd.DataFrame:
+    """Each series' announced stand-ins per side, from the HLTV lineups."""
     lu = load(data_dir, "hltv/cs2_match_lineups", before, ["match_id", "match_date", "team_id", "player_id", "is_standin"])
     st = lu[lu.is_standin.fillna(False).astype(bool)].groupby(["match_id", "team_id"]).player_id.apply(list).to_dict()
+    s = s.copy()
     for side in ("a", "b"):
         s[f"team_{side}_standin_ids"] = [st.get((m, t), []) for m, t in zip(s.match_id, s[f"team_{side}_id"])]
-    return s.reset_index(drop=True)
+    return s
 
 
 def _last_before(t: np.ndarray, p: np.ndarray, at: np.datetime64) -> float:
