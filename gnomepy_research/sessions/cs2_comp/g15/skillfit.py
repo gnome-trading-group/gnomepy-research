@@ -34,6 +34,8 @@ class FitConfig:
     sigma: float = 0.5
     team_sigma: float = 0.0
     faceit_weight: float = 0.5
+    # With FACEIT maps, use each player's latest FACEIT skill level in the skill prior.
+    faceit_levels: bool = False
     # HLTV map ratings relative to teammates as a second measurement of who in a five carries it:
     # rating_p - mean(rating_five) ~ N(rating_gamma * (s_p - mean(s_five)), rating_sd^2). Zero turns it off.
     rating_gamma: float = 0.0
@@ -54,12 +56,14 @@ class MapSet:
     frame: pd.DataFrame
     five_a: np.ndarray
     five_b: np.ndarray
+    levels: pd.DataFrame | None = None     # uid, known, level: FACEIT skill levels, when they became known
 
     def between(self, start: pd.Timestamp, cutoff: pd.Timestamp) -> MapSet:
         """Maps played since `start` and known before `cutoff` (a FACEIT map is known once FACEIT finalised it)."""
         t = self.frame.time.to_numpy()
         keep = (t >= np.datetime64(start)) & (self.frame.known.to_numpy() < np.datetime64(cutoff))
-        return MapSet(self.frame[keep].reset_index(drop=True), self.five_a[keep], self.five_b[keep])
+        levels = self.levels[self.levels.known < cutoff] if self.levels is not None else None
+        return MapSet(self.frame[keep].reset_index(drop=True), self.five_a[keep], self.five_b[keep], levels)
 
     @staticmethod
     def from_maps(maps: pd.DataFrame, source: str = "hltv") -> MapSet:
@@ -82,8 +86,9 @@ class MapSet:
     def concat(parts: list[MapSet]) -> MapSet:
         frame = pd.concat([p.frame for p in parts], ignore_index=True)
         order = np.argsort(frame.time.to_numpy(), kind="stable")
+        levels = [p.levels for p in parts if p.levels is not None]
         return MapSet(frame.iloc[order].reset_index(drop=True), np.concatenate([p.five_a for p in parts])[order],
-                      np.concatenate([p.five_b for p in parts])[order])
+                      np.concatenate([p.five_b for p in parts])[order], levels[0] if levels else None)
 
 
 @dataclass

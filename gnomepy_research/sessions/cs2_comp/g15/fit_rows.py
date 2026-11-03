@@ -14,20 +14,24 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g15.data import attach_ratings, load_maps, load_rankings, load_series
-from gnomepy_research.sessions.cs2_comp.g15.faceit import FaceitLink, load_faceit_maps
+from gnomepy_research.sessions.cs2_comp.g15.faceit import FaceitLink, load_faceit_levels, load_faceit_maps
 from gnomepy_research.sessions.cs2_comp.g15.features import _lineup, history_jobs, target_jobs
 from gnomepy_research.sessions.cs2_comp.g15.ratings import Rankings
 from gnomepy_research.sessions.cs2_comp.g15.skillfit import Fit, FitConfig, MapSet, fit_window, veto_series
 
 
-def load_mapset(data_dir: str, until: pd.Timestamp, faceit: bool, ratings: bool = False) -> MapSet:
+def load_mapset(data_dir: str, until: pd.Timestamp, faceit: bool, ratings: bool = False, levels: bool = False) -> MapSet:
     h = load_maps(data_dir, until)
     h["known"] = np.maximum(h.time, h.match_date)
     if ratings:
         h = attach_ratings(data_dir, h, until)
     parts = [MapSet.from_maps(h, "hltv")]
     if faceit:
-        parts.append(MapSet.from_maps(load_faceit_maps(data_dir, until, FaceitLink(data_dir)), "faceit"))
+        link = FaceitLink(data_dir)
+        fs = MapSet.from_maps(load_faceit_maps(data_dir, until, link), "faceit")
+        if levels:
+            fs.levels = load_faceit_levels(data_dir, until, link)
+        parts.append(fs)
     return MapSet.concat(parts)
 
 
@@ -65,7 +69,7 @@ def fit_rows(data_dir: str, jobs: pd.DataFrame, cfg: FitConfig, faceit: bool, pr
     jobs["week_cutoff"] = pd.to_datetime(jobs.week_cutoff)
     until = jobs.week_cutoff.max()
     t0 = time.time()
-    ms = load_mapset(data_dir, until, faceit, cfg.rating_gamma > 0)
+    ms = load_mapset(data_dir, until, faceit, cfg.rating_gamma > 0, faceit and cfg.faceit_levels)
     rk = Rankings(load_rankings(data_dir, until))
     if verbose:
         print(f"{len(ms.frame)} maps loaded in {time.time() - t0:.1f}s", flush=True)
@@ -102,11 +106,12 @@ def main() -> None:
     ap.add_argument("--rating-sd", type=float, default=0.31)
     ap.add_argument("--map-sigma", type=float, default=0.0)
     ap.add_argument("--lan-sigma", type=float, default=0.0)
+    ap.add_argument("--faceit-levels", action="store_true")
     ap.add_argument("--prefix", default="bf")
     a = ap.parse_args()
     cfg = FitConfig(window_days=a.window, half_life_days=a.half_life, sigma=a.sigma, team_sigma=a.team_sigma, faceit_weight=a.faceit_weight,
                     rating_gamma=a.rating_gamma, rating_sd=a.rating_sd, map_sigma=a.map_sigma,
-                    lan_sigma=a.lan_sigma)
+                    lan_sigma=a.lan_sigma, faceit_levels=a.faceit_levels)
     if a.targets:
         jobs = target_jobs(pd.read_parquet(a.targets))
     else:

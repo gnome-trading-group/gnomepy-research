@@ -74,3 +74,14 @@ def load_faceit_maps(data_dir: str | Path, until: pd.Timestamp, link: FaceitLink
                         "rounds_a": fh.rounds_a.to_numpy(), "rounds_b": fh.rounds_b.to_numpy(),
                         "competition": fh.competition_name.to_numpy()})
     return out.sort_values(["time", "match_id"], kind="stable").reset_index(drop=True)
+
+
+def load_faceit_levels(data_dir: str | Path, until: pd.Timestamp, link: FaceitLink) -> pd.DataFrame:
+    """Each roster appearance's FACEIT skill level on the unified id, keyed by when its match was finalised."""
+    fm = load(data_dir, "faceit/faceit_matches", until, ["match_id", "finished_at"])
+    known = dict(zip(fm.match_id, pd.to_datetime(fm.finished_at, unit="s")))
+    ro = load(data_dir, "faceit/faceit_rosters", until, ["match_id", "faceit_id", "played", "skill_level"])
+    ro = ro[ro.played.fillna(False).astype(bool) & ro.skill_level.notna()]
+    out = pd.DataFrame({"uid": [link.uid(f) for f in ro.faceit_id], "known": ro.match_id.map(known).to_numpy(),
+                        "level": ro.skill_level.to_numpy(float)}).dropna()
+    return out.sort_values("known", kind="stable").reset_index(drop=True)
