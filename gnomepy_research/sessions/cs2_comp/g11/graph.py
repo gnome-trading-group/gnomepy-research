@@ -44,7 +44,6 @@ class Config:
     rating_sd: float = 0.31
     # Prior sd of a team's map-specific round-logit offset, and the window that sets the active map pool.
     map_sd: float = 0.1
-    player_map_sd: float = 0.1
     pool_days: int = 60
     # The Laplace factorisation is only needed for gap variances.
     laplace: bool = False
@@ -90,7 +89,6 @@ class GraphFit:
     map_offset: dict = field(default_factory=dict)
     pool: tuple = ()
     levels: dict = field(default_factory=dict)
-    player_offset: dict = field(default_factory=dict)
     resolutions: int = 1
     info: dict = field(default_factory=dict)
 
@@ -169,13 +167,11 @@ class GraphFit:
         lu = splu(H) if cfg.laplace else None
         played = np.bincount(np.concatenate([ia.ravel(), ib.ravel()]), minlength=P)
         offsets, pool = map_offsets(f, w, ra, n, pr, cutoff, cfg)
-        player_offsets = player_map_offsets(f, players[ia], players[ib], w, ra, n, pr, pool, cfg)
         levels = {}
         if faceit:
             lv = inputs.levels[inputs.levels.known < cutoff]
             levels = {int(u): float(x) for u, x in lv.groupby("uid")["level"].last().items()}
         return cls(cutoff, players, s, played, comm, g, c, cfg.sigma, cfg.tau, lu, n_theta, X0, offsets, pool, levels,
-                   player_offsets,
                    len(cfg.communities),
                    {"maps": M, "players": P, "iters": int(res.nit), "gnorm": float(np.abs(res.jac).max())})
 
@@ -218,13 +214,7 @@ class GraphFit:
         dom_a = max(set(ca), key=ca.count) if ca else -1
         dom_b = max(set(cb), key=cb.count) if cb else -1
         known = sum(1 for m in self.pool for t in (team_a, team_b) if (t, m) in self.map_offset)
-        q_players = float("nan")
-        if self.pool and five_a and five_b:
-            shift = np.mean([np.mean([self.player_offset.get((p, m), 0.0) for p in five_a])
-                             - np.mean([self.player_offset.get((p, m), 0.0) for p in five_b]) for m in self.pool])
-            q_players = float(series_price(np.array([ma - mb + shift]))[0])
-        return {"gap": ma - mb, "q": pool_price(ma - mb, team_a, team_b, self.map_offset, self.pool), "q_players": q_players,
-                "gap_var": var,
+        return {"gap": ma - mb, "q": pool_price(ma - mb, team_a, team_b, self.map_offset, self.pool), "gap_var": var,
                 "pool_known": known, "thin_a": ta, "thin_b": tb, "comm_a": dom_a, "comm_b": dom_b,
                 "cross": int(dom_a != dom_b or dom_a < 0)}
 
@@ -246,23 +236,6 @@ def map_offsets(f: pd.DataFrame, w: np.ndarray, ra: np.ndarray, n: np.ndarray, p
     counts = recent.map_name.value_counts()
     pool = tuple(sorted(counts.index[:7]))
     return offsets, pool
-
-
-def player_map_offsets(f: pd.DataFrame, five_a: np.ndarray, five_b: np.ndarray, w: np.ndarray, ra: np.ndarray,
-                       n: np.ndarray, pr: np.ndarray, pool: tuple, cfg: Config) -> dict:
-    """As map_offsets, per player: each map's residual rounds are shared by the five that played it, so a five's
-    offset follows its players through roster moves."""
-    keep = f.map_name.isin(pool).to_numpy()
-    res = (w * (ra - n * pr))[keep] / FIVE
-    info = (w * n * pr * (1 - pr))[keep] / FIVE ** 2
-    mp = f.map_name.to_numpy()[keep]
-    d = pd.DataFrame({"player": np.concatenate([five_a[keep].ravel(), five_b[keep].ravel()]),
-                      "map": np.concatenate([np.repeat(mp, FIVE), np.repeat(mp, FIVE)]),
-                      "res": np.concatenate([np.repeat(res, FIVE), -np.repeat(res, FIVE)]),
-                      "fisher": np.concatenate([np.repeat(info, FIVE), np.repeat(info, FIVE)])})
-    g = d.groupby(["player", "map"])[["res", "fisher"]].sum()
-    b = g.res / (g.fisher + 1.0 / cfg.player_map_sd ** 2)
-    return {(int(p), m): float(v) for (p, m), v in b.items()}
 
 
 def pool_price(gap: float, team_a: int, team_b: int, offsets: dict, pool: tuple) -> float:
