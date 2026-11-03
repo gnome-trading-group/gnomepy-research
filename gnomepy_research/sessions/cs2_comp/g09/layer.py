@@ -38,6 +38,10 @@ def design(rows: pd.DataFrame, features=FEATURES) -> np.ndarray:
     cols = {"z0": z0, "d3": d3, "ze": ze, "rk": rk, "nomkt": no, "nomkt_ze": no * ze, "nomkt_rk": no * rk,
             "liq_d3": d3 * liq, "liq_z0": z0 * liq, "liq_ze": ze * liq, "thin": thin, "thin_z0": thin * z0,
             "thin_ze": thin * ze, "lan_ze": lan * ze, "lan_z0": lan * z0}
+    for c in rows.columns:
+        if c.startswith("elo_gap_"):
+            pc = 1 / (1 + np.exp(-rows[c].to_numpy(float)))
+            cols["ze_" + c[len("elo_gap_"):]] = logit(bo3(pc))
     return np.column_stack([cols[f] if f in cols else rows[f].to_numpy(float) for f in features] + [np.ones(len(rows))])
 
 

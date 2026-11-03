@@ -352,7 +352,8 @@ def market_rating_pass(closes: pd.DataFrame, requests: pd.DataFrame, cfg: Market
 
 def build_rows(data_dir: str | Path, cutoff: pd.Timestamp, targets: pd.DataFrame,
                elo_cfg: EloConfig = EloConfig(), mr_cfg: MarketRatingConfig = MarketRatingConfig(),
-               train_gap_hours: float = 4.0, train_days: float = 400.0) -> tuple[pd.DataFrame, pd.DataFrame]:
+               train_gap_hours: float = 4.0, train_days: float = 400.0,
+               extra_elo: dict[str, EloConfig] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Feature rows for the past bo3 series (training, with outcome y; market columns where the series had a
     market) and for the targets, from data before cutoff plus the targets' own lineups and paths."""
     maps = load_maps(data_dir, cutoff)
@@ -394,9 +395,13 @@ def build_rows(data_dir: str | Path, cutoff: pd.Timestamp, targets: pd.DataFrame
     rows["key"] = np.arange(len(rows))
     req = rows[["key", "snap", "lineup_a", "lineup_b", "team_a_rank", "team_b_rank"]].rename(
         columns={"key": "match_id", "team_a_rank": "rank_a", "team_b_rank": "rank_b"})
-    cm = combined_maps(maps, load_faceit_maps(data_dir, cutoff) if elo_cfg.k_faceit > 0 else None)
+    fm = load_faceit_maps(data_dir, cutoff) if any(c.k_faceit > 0 for c in [elo_cfg, *(extra_elo or {}).values()]) else None
+    cm = combined_maps(maps, fm if elo_cfg.k_faceit > 0 else None)
     e, resid_all = elo_pass(cm, req, elo_cfg, player_stats(data_dir, cutoff, elo_cfg))
     e = e.rename(columns={"match_id": "key"})
+    for name, cfg in (extra_elo or {}).items():
+        x, _ = elo_pass(combined_maps(maps, fm if cfg.k_faceit > 0 else None), req, cfg, player_stats(data_dir, cutoff, cfg))
+        e = e.merge(x[["match_id", "elo_gap"]].rename(columns={"match_id": "key", "elo_gap": f"elo_gap_{name}"}), on="key")
     resid = np.full(len(maps), np.nan)
     hidx = cm.hidx.to_numpy()
     resid[hidx[hidx >= 0]] = resid_all[hidx >= 0]
