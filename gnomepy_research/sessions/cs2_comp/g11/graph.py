@@ -81,6 +81,7 @@ class GraphFit:
     X: np.ndarray
     map_offset: dict = field(default_factory=dict)
     pool: tuple = ()
+    prefs: dict = field(default_factory=dict)
     info: dict = field(default_factory=dict)
 
     @classmethod
@@ -152,7 +153,8 @@ class GraphFit:
         lu = splu(H)
         played = np.bincount(np.concatenate([ia.ravel(), ib.ravel()]), minlength=P)
         offsets, pool = map_offsets(f, w, ra, n, pr, cutoff, cfg)
-        return cls(cutoff, players, s, played, comm, g, c, cfg.sigma, lu, X, offsets, pool,
+        prefs = map_preferences(f, cutoff, pool)
+        return cls(cutoff, players, s, played, comm, g, c, cfg.sigma, lu, X, offsets, pool, prefs,
                    {"maps": M, "players": P, "iters": int(res.nit), "converged": bool(res.success),
                     "c": np.round(c, 3).tolist()})
 
@@ -190,6 +192,12 @@ class GraphFit:
         known = sum(1 for m in self.pool if (team_a, m) in first) + sum(1 for m in self.pool if (team_b, m) in first)
         out = {f"q_veto_{int(round(sd * 100))}": veto_price(ma - mb, team_a, team_b, o, self.pool)
                for sd, o in self.map_offset.items()}
+        out |= {f"q_pref_{int(round(sd * 100))}": veto_price(ma - mb, team_a, team_b, o, self.pool, self.prefs)
+                for sd, o in self.map_offset.items()}
+        out |= {f"q_uni_{int(round(sd * 100))}": uniform_price(ma - mb, team_a, team_b, o, self.pool)
+                for sd, o in self.map_offset.items()}
+        out["pref_n_a"] = self.prefs.get(("n", team_a), 0.0)
+        out["pref_n_b"] = self.prefs.get(("n", team_b), 0.0)
         return out | {"gap": ma - mb, "gap_var": var, "pool_known": known, "thin_a": ta, "thin_b": tb, "comm_a": dom_a, "comm_b": dom_b,
                 "cross": int(dom_a != dom_b or dom_a < 0)}
 
@@ -215,19 +223,58 @@ def map_offsets(f: pd.DataFrame, w: np.ndarray, ra: np.ndarray, n: np.ndarray, p
     return offsets, pool
 
 
-def veto_price(gap: float, team_a: int, team_b: int, offsets: dict, pool: tuple) -> float:
-    """P(A wins a bo3) when both sides veto greedily on their map advantages (ban, ban, pick, pick, ban, ban,
-    decider), averaged over which side starts the veto."""
+def map_preferences(f: pd.DataFrame, cutoff: pd.Timestamp, pool: tuple, half_life_days: float = 90.0) -> dict:
+    """How each team vetoes, from what it has done: ("pick", team, map) is the log share of its own picks on the map
+    and ("play", team, map) the log share of its maps played there (a map it never plays is one it bans), both
+    recency weighted and smoothed toward an even spread over the pool."""
+    h = f[(f.source == "hltv") & (f.time >= cutoff - pd.Timedelta(days=4 * half_life_days)) & f.map_name.isin(pool)]
+    w = 0.5 ** ((cutoff - h.time).dt.total_seconds().to_numpy() / 86400.0 / half_life_days)
+    pa = h.picked_a.to_numpy(float)
+    d = pd.DataFrame({"team": np.concatenate([h.team_a.to_numpy(), h.team_b.to_numpy()]),
+                      "map": np.concatenate([h.map_name.to_numpy(), h.map_name.to_numpy()]),
+                      "play": np.concatenate([w, w]),
+                      "pick": np.concatenate([w * (pa == 1), w * (pa == 0)])})
+    g = d.groupby(["team", "map"])[["play", "pick"]].sum()
+    tot = g.groupby(level=0).sum()
+    k = len(pool)
+    out = {}
+    for (t, m), r in g.iterrows():
+        tt = tot.loc[t]
+        out[("play", int(t), m)] = float(np.log((r.play + 0.5) / (tt.play + 0.5 * k)))
+        out[("pick", int(t), m)] = float(np.log((r.pick + 0.25) / (tt.pick + 0.25 * k)))
+    for t, tt in tot.iterrows():
+        out[("n", int(t))] = float(tt.play)
+    return out
+
+
+def uniform_price(gap: float, team_a: int, team_b: int, offsets: dict, pool: tuple) -> float:
+    """P(A wins a bo3) with the gap shifted by the pool-average map offset of each side."""
+    if not pool:
+        return float(series_price(np.array([gap]))[0])
+    shift = np.mean([offsets.get((team_a, m), 0.0) - offsets.get((team_b, m), 0.0) for m in pool])
+    return float(series_price(np.array([gap + shift]))[0])
+
+
+def veto_price(gap: float, team_a: int, team_b: int, offsets: dict, pool: tuple, prefs: dict | None = None) -> float:
+    """P(A wins a bo3) when both sides veto greedily (ban, ban, pick, pick, ban, ban, decider), averaged over which
+    side starts the veto. Without prefs each side vetoes on its true map advantages; with prefs each picks the maps it
+    has picked most and bans the maps it has played least."""
     if len(pool) < 7:
         return float(series_price(np.array([gap]))[0])
     adv = {m: gap + offsets.get((team_a, m), 0.0) - offsets.get((team_b, m), 0.0) for m in pool}
+    teams = {1.0: team_a, -1.0: team_b}
     out = 0.0
     for first in (1.0, -1.0):
         left = list(pool)
         picks = []
         for step, actor in enumerate((first, -first, first, -first, first, -first)):
-            key = lambda m: actor * adv[m]
-            m = min(left, key=key) if step in (0, 1, 4, 5) else max(left, key=key)
+            ban = step in (0, 1, 4, 5)
+            if prefs is None:
+                key = lambda m: actor * adv[m]
+            else:
+                kind = "play" if ban else "pick"
+                key = lambda m: prefs.get((kind, teams[actor], m), 0.0) + 1e-3 * actor * adv[m]
+            m = min(left, key=key) if ban else max(left, key=key)
             left.remove(m)
             if step in (2, 3):
                 picks.append(m)
