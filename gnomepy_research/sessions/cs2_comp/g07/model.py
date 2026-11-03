@@ -47,6 +47,11 @@ class Config:
     div_rate: float = 0.002     # how fast the division running means follow their players
     # HLTV map ratings relative to teammates measure who in a five carries it: rating_p - mean(rating) ~
     # N(rating_gamma * (s_p - mean(s)), rating_sd^2), tempered by w_rating. Zero rating_gamma turns it off.
+    # Region offsets: every side carries its team's region offset (EU, NA, SA, ASIA, OCE, MENA, CIS, read from the
+    # event names a team plays in), learned only from cross-region maps. A cross-region result then moves the whole
+    # region, not just the ten players in it. Zero r_v0 turns it off.
+    r_v0: float = 0.0
+    r_tau2: float = 0.0
     rating_gamma: float = 0.0
     rating_sd: float = 0.3
     w_rating: float = 0.5
@@ -78,6 +83,10 @@ class Filter:
         self.tvar: dict[int, float] = {}
         self.tlast: dict[int, float] = {}
         self.div_mean: dict[str, float] = {}
+        self.rmu: dict[str, float] = {}
+        self.rvar: dict[str, float] = {}
+        self.rlast: dict[str, float] = {}
+        self.team_regions: dict[int, dict[str, int]] = {}
         self.cursor = 0
 
     def _player(self, p: int, now: float) -> tuple[float, float]:
@@ -94,6 +103,18 @@ class Filter:
         if v is None:
             return 0.0, self.cfg.tv0
         return self.tmu[t], min(v + self.cfg.ttau2 * (now - self.tlast[t]), max(v, self.cfg.tv0))
+
+    def region_of(self, team: int, map_region: str) -> str:
+        counts = self.team_regions.get(team)
+        if counts:
+            return max(sorted(counts), key=counts.get)
+        return map_region
+
+    def _region(self, r: str, now: float) -> tuple[float, float]:
+        v = self.rvar.get(r)
+        if v is None:
+            return 0.0, self.cfg.r_v0
+        return self.rmu[r], min(v + self.cfg.r_tau2 * (now - self.rlast[r]), max(v, self.cfg.r_v0))
 
     def five(self, five, now: float, div: str) -> tuple[list[float], list[float], int]:
         """Prior means and variances for a five, newcomers drawn from their known teammates."""
@@ -139,17 +160,24 @@ class Filter:
                 self.mu[p] = m + gam * c * v * innov
                 self.var[p] = v - gam * gam * c * c * v * v / s_obs
 
+    def _regions(self, ra: str, rb: str, now: float) -> tuple[float, float, float, float, bool]:
+        if not self.cfg.r_v0 or not ra or not rb or ra == rb:
+            return 0.0, 0.0, 0.0, 0.0, False
+        return (*self._region(ra, now), *self._region(rb, now), True)
+
     def update(self, five_a, five_b, team_a: int, team_b: int, rounds: float, rounds_a: float, src: int, div: str,
-               now: float, rating_a=None, rating_b=None) -> None:
+               now: float, rating_a=None, rating_b=None, map_region: str = "") -> None:
         cfg = self.cfg
         ma, va, _ = self.five(five_a, now, div)
         mb, vb, _ = self.five(five_b, now, div)
         ua, uva = self._team(team_a, now)
         ub, uvb = self._team(team_b, now)
+        reg_a, reg_b = self.region_of(team_a, map_region), self.region_of(team_b, map_region)
+        rma, rva, rmb, rvb, cross = self._regions(reg_a, reg_b, now)
         scale = cfg.scale_faceit if src else 1.0
         w = cfg.w_faceit if src else cfg.w_hltv
-        d = scale * ((sum(ma) - sum(mb)) / FIVE + ua - ub)
-        S = scale * scale * ((sum(va) + sum(vb)) / (FIVE * FIVE) + uva + uvb)
+        d = scale * ((sum(ma) - sum(mb)) / FIVE + ua - ub + rma - rmb)
+        S = scale * scale * ((sum(va) + sum(vb)) / (FIVE * FIVE) + uva + uvb + rva + rvb)
         pr = 1.0 / (1.0 + math.exp(-d))
         g = w * (rounds_a - rounds * pr)
         h = w * rounds * pr * (1 - pr)
@@ -166,6 +194,16 @@ class Filter:
                 self.tmu[t] = u + sign * scale * uv * g * k
                 self.tvar[t] = uv - scale * scale * uv * uv * h * k
                 self.tlast[t] = now
+        if cross:
+            for r, rm, rv, sign in ((reg_a, rma, rva, 1.0), (reg_b, rmb, rvb, -1.0)):
+                self.rmu[r] = rm + sign * scale * rv * g * k
+                self.rvar[r] = rv - scale * scale * rv * rv * h * k
+                self.rlast[r] = now
+        if map_region:
+            for t in (team_a, team_b):
+                if t >= 0:
+                    c_t = self.team_regions.setdefault(t, {})
+                    c_t[map_region] = c_t.get(map_region, 0) + 1
         if cfg.rating_gamma:
             if rating_a is not None:
                 self._ratings(five_a, rating_a)
@@ -183,14 +221,20 @@ class Filter:
         sl = slice(self.cursor, stop)
         now = ((maps.time.to_numpy()[sl] - epoch) / _DAY).astype(float)
         cols = [maps[c].to_numpy()[sl] for c in ("five_a", "five_b", "team_a", "team_b", "rounds", "rounds_a", "src", "div",
-                                                 "rating_a", "rating_b")]
-        for fa, fb, ta, tb, n, ra, src, div, rta, rtb, t in zip(*cols, now):
-            self.update(fa, fb, int(ta), int(tb), float(n), float(ra), int(src), div, float(t), rta, rtb)
+                                                 "rating_a", "rating_b", "region")]
+        for fa, fb, ta, tb, n, ra, src, div, rta, rtb, reg, t in zip(*cols, now):
+            self.update(fa, fb, int(ta), int(tb), float(n), float(ra), int(src), div, float(t), rta, rtb, reg)
         self.cursor = stop
 
     def side(self, five, team: int, now: float, div: str = "hltv") -> tuple[float, float, int, float]:
-        """Mean and variance of a side's strength, how many of its players are unknown, and their mean map count."""
+        """Mean and variance of a side's strength (without its region), how many of its players are unknown, and
+        their mean map count."""
         mus, vs, unknown = self.five(five, now, div)
         u, uv = self._team(team, now)
         nmaps = float(np.mean([self.n.get(p, 0) for p in five]))
         return sum(mus) / FIVE + u, sum(vs) / (FIVE * FIVE) + uv, unknown, nmaps
+
+    def region_gap(self, team_a: int, team_b: int, now: float) -> tuple[float, float]:
+        """Mean and variance of the region offset difference between two teams (zero within a region)."""
+        rma, rva, rmb, rvb, _ = self._regions(self.region_of(team_a, ""), self.region_of(team_b, ""), now)
+        return rma - rmb, rva + rvb

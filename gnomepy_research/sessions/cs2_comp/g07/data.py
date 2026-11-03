@@ -21,6 +21,16 @@ from gnomepy_research.sessions.cs2_comp.bundle import load
 FIVE = 5
 _DIVISION_RE = re.compile(r"(entry|open10|open|intermediate|main|advanced|premier|challenger|pro league)", re.I)
 DIVISIONS = ("entry", "open", "intermediate", "main", "advanced", "pro", "other")
+_REGIONS = [
+    ("SA", re.compile(r"south america|brazil|latam|latin america|argentin|\bsa\b", re.I)),
+    ("NA", re.compile(r"north america|\bna\b|americas", re.I)),
+    ("OCE", re.compile(r"oceania|australia|\boce\b|\banz\b", re.I)),
+    ("ASIA", re.compile(r"asia|apac|china|chinese|east asia|india|mongolia|japan|korea|\bsea\b|southeast|vietnam|philippin|indonesia", re.I)),
+    ("MENA", re.compile(r"mena|middle east|africa|arab|turkey|saudi", re.I)),
+    ("CIS", re.compile(r"\bcis\b|russia|ukraine|kazakh", re.I)),
+    ("EU", re.compile(r"europe|\beu\b|nordic|baltic|poland|polish|german|france|french|spain|spanish|portugal|ital|uk\b|dach|balkan|czech|romania|hungar|benelux", re.I)),
+]
+_FACEIT_REGIONS = {"EU": "EU", "NA": "NA", "SA": "SA", "OCE": "OCE", "SEA": "ASIA"}
 
 
 def faceit_uid(faceit_id: str) -> int:
@@ -37,6 +47,14 @@ def division(name: str | None) -> str:
     if d in ("premier", "challenger", "pro league"):
         return "pro"
     return d
+
+
+def region(event_name: str | None) -> str:
+    """The region an event's name names, or "" for international and unnamed ones."""
+    for name, rx in _REGIONS:
+        if rx.search(event_name or ""):
+            return name
+    return ""
 
 
 def naive(s: pd.Series) -> pd.Series:
@@ -88,6 +106,10 @@ class Inputs:
         h["known"] = np.maximum(h.time, naive(h.match_date))
         self.series = self._series(h)
         self.hltv_known = h.groupby("match_id").known.max().to_dict()
+        lu = load(self.data_dir, "hltv/cs2_match_lineups", self.until, ["match_id", "match_date", "team_id", "is_standin"])
+        lu = lu.dropna(subset=["team_id"])
+        sub = lu.groupby(["match_id", "team_id"]).is_standin.sum()
+        self.standins = {(int(m), int(t)): int(v) for (m, t), v in sub.items()}
         h = h[(h.team_a_score != h.team_b_score) & h.team_a_id.notna() & h.team_b_id.notna()]
         fa, oka = _fives(h.team_a_player_ids)
         fb, okb = _fives(h.team_b_player_ids)
@@ -112,7 +134,7 @@ class Inputs:
             "time": h.time.to_numpy(), "known": h.known.to_numpy(),
             "team_a": h.team_a_id.astype(np.int64).to_numpy(), "team_b": h.team_b_id.astype(np.int64).to_numpy(),
             "five_a": fa, "five_b": fb, "rating_a": ratings(fa), "rating_b": ratings(fb), "rounds": n, "rounds_a": ra,
-            "src": 0, "div": "hltv",
+            "src": 0, "div": "hltv", "region": [region(e) for e in h.event_name],
             "lan": h.is_lan.fillna(0).to_numpy(int), "tier": h.event_tier.fillna(0).to_numpy(int)})
 
     @staticmethod
@@ -134,7 +156,8 @@ class Inputs:
         link = load(d, "faceit/hltv_faceit_map")
         self.f2h = dict(zip(link.faceit_id, link.hltv_id.astype(np.int64)))
         fm = load(d, "faceit/faceit_matches", self.until,
-                  ["match_id", "finished_at", "has_stats", "competition_name", "faction1_hltv_team", "faction2_hltv_team"])
+                  ["match_id", "finished_at", "has_stats", "competition_name", "faction1_hltv_team", "faction2_hltv_team",
+                   "region"])
         fm["known"] = pd.to_datetime(fm.finished_at, unit="s")
         # The FACEIT copy of a series is dropped once its HLTV twin was known before the FACEIT copy finished, a rule
         # that reads the same at any cutoff because the link only exists once both copies are known.
@@ -149,7 +172,8 @@ class Inputs:
                 "team_a_ot_score", "team_b_ot_score", "team_a_faceit_ids", "team_b_faceit_ids", "team_a_players",
                 "team_b_players"]
         fh = load(d, "faceit/faceit_match_history", self.until, cols)
-        fh = fh.merge(fm[["match_id", "known", "competition_name", "faction1_hltv_team", "faction2_hltv_team"]], on="match_id")
+        fh = fh.merge(fm[["match_id", "known", "competition_name", "faction1_hltv_team", "faction2_hltv_team", "region"]],
+                      on="match_id")
         fh = fh[~fh.match_id.isin(whole)]
         fh = fh[[(m, n) not in bad for m, n in zip(fh.match_id, fh.map_name)]]
         fh = fh[(fh.team_a_players == FIVE) & (fh.team_b_players == FIVE) & (fh.team_a_score != fh.team_b_score)]
@@ -168,7 +192,8 @@ class Inputs:
             "team_a": fh.faction1_hltv_team.fillna(-1).astype(np.int64).to_numpy(),
             "team_b": fh.faction2_hltv_team.fillna(-1).astype(np.int64).to_numpy(),
             "five_a": fa, "five_b": fb, "rating_a": None, "rating_b": None, "rounds": n, "rounds_a": ra, "src": 1,
-            "div": [division(c) for c in fh.competition_name], "lan": 0, "tier": -1})
+            "div": [division(c) for c in fh.competition_name], "lan": 0, "tier": -1,
+            "region": [_FACEIT_REGIONS.get(r, "") for r in fh.region]})
 
     def uid(self, faceit_id: str) -> int:
         h = self.f2h.get(faceit_id)
