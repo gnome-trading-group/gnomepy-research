@@ -22,7 +22,7 @@ from gnomepy_research.sessions.cs2_comp.g09.core import (EloConfig, _ids, combin
 
 MULT = ("k", "k_new", "n_settle", "k_faceit", "decay_days", "ind_alpha")
 STEPS = {"k": 1.3, "k_new": 1.4, "n_settle": 1.6, "new_gap": 0.15, "rank_scale": 0.3, "margin": 0.1, "k_faceit": 1.5,
-         "faceit_offset": 0.4, "decay_days": 2.0, "ind_weight": 0.5, "ind_alpha": 1.5}
+         "faceit_offset": 0.4, "decay_days": 2.0, "ind_weight": 0.5, "ind_alpha": 1.5, "swing_weight": 0.5}
 STATE = {}
 
 
@@ -62,7 +62,7 @@ def main() -> None:
     cur = replace(EloConfig(), **json.loads(a.init))
     if a.faceit and cur.k_faceit <= 0:
         cur = replace(cur, k_faceit=0.5)
-    params = [p for p in STEPS if (a.faceit or p not in ("k_faceit", "faceit_offset")) and (a.ind or p not in ("ind_weight", "ind_alpha"))]
+    params = [p for p in STEPS if (a.faceit or p not in ("k_faceit", "faceit_offset")) and (a.ind or p not in ("ind_weight", "ind_alpha", "swing_weight"))]
     log = []
     out = Path(os.environ.get("OUTPUT_DIR", "."))
     with Pool(min(os.cpu_count() or 1, 2 * len(params))) as pool:
