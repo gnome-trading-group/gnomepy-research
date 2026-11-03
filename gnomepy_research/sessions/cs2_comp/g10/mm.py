@@ -69,9 +69,9 @@ def player_form(rows: pd.DataFrame, cutoff: pd.Timestamp, cfg: MMConfig, kind: s
 
 def level_trend(rows: pd.DataFrame, cutoff: pd.Timestamp, lookback_days: int = 90) -> pd.DataFrame:
     """Per player: latest FACEIT level before cutoff and its change over the lookback."""
-    r = rows[(rows.time < cutoff) & rows.level.notna()]
-    last = r.groupby("hltv_id").level.last()
-    old = r[r.time < cutoff - pd.Timedelta(days=lookback_days)].groupby("hltv_id").level.last()
+    r = rows[(rows.time < cutoff) & rows["level"].notna()]
+    last = r.groupby("hltv_id")["level"].last()
+    old = r[r.time < cutoff - pd.Timedelta(days=lookback_days)].groupby("hltv_id")["level"].last()
     return pd.DataFrame({"level": last, "level_change": (last - old.reindex(last.index)).fillna(0.0)})
 
 
