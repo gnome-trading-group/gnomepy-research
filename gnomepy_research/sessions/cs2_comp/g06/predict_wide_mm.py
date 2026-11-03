@@ -20,7 +20,7 @@ from gnomepy_research.sessions.cs2_comp.g06.mm_skill import MatchmakingGames, fi
 from gnomepy_research.sessions.cs2_comp.g06.predict_wide import PRIOR_SD, arguments, read_targets, write
 from gnomepy_research.sessions.cs2_comp.g06.wide import e12_wide
 
-GAMMA = 0.41
+GAMMA = 0.406
 
 
 def mm_diff(data_dir: str, targets: pd.DataFrame) -> pd.Series:
