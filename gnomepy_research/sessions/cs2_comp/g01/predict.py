@@ -1,4 +1,4 @@
-"""g01: Elo ratings (team + player, round margin, roster-change reset) calibrated by logistic regression, then pooled
+"""g01: opponent-adjusted player skill (ridge on round margin and HLTV stats) calibrated by logistic regression, pooled
 with the kickoff market price through a ridge-to-identity logistic fitted on past series that have a market."""
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from gnomepy_research.sessions.cs2_comp.g01 import ratings, skill
 
 STAGE1_FROM = pd.Timestamp("2025-10-06")
 LAM = 5.0
-ELO_PARAMS = {"k_player": 40.0, "margin": 0.9}
 EPS = 1e-4
 
 
@@ -38,7 +37,7 @@ _FITS: dict[pd.Timestamp, skill.SkillFit] = {}
 
 
 def skill_features(maps: pd.DataFrame, stats: pd.DataFrame, queries: pd.DataFrame) -> np.ndarray:
-    out = np.zeros((len(queries), 3))
+    out = np.zeros((len(queries), len(skill.FEATURES)))
     for week, idx in queries.groupby("week").indices.items():
         if week not in _FITS:
             _FITS[week] = skill.SkillFit(maps, week, stats)
@@ -48,8 +47,8 @@ def skill_features(maps: pd.DataFrame, stats: pd.DataFrame, queries: pd.DataFram
     return out
 
 
-def stage1_matrix(f: np.ndarray, sk: np.ndarray, lan: np.ndarray) -> np.ndarray:
-    return np.column_stack([sk[:, :2], f[:, :2], lan])
+def stage1_matrix(sk: np.ndarray) -> np.ndarray:
+    return sk
 
 
 def fit_pool(lm: np.ndarray, lp: np.ndarray, y: np.ndarray, lam: float = LAM) -> np.ndarray:
@@ -81,12 +80,11 @@ def predict_week(data_dir: str, week: pd.Timestamp, targets: pd.DataFrame) -> pd
     hq = ser[["week", "team_a_id", "team_b_id", "pa", "pb"]].copy()
     hq["lan"] = ser.lan.fillna(0).astype(float).values
     allq = pd.concat([hq, tq], ignore_index=True)
-    feats = ratings.snapshot_features(maps, allq, ELO_PARAMS)
     stats = bundle.load(data_dir, "hltv/cs2_player_map_stats", before=week,
-                        columns=["match_date", "mapstatsid", "is_team_a", "player_id", "side", "rating"])
-    stats = stats[stats.side == "all"]
+                        columns=skill.STATS_COLUMNS + ["match_date"])
+    stats = skill.prepare_stats(stats)
     sk = skill_features(maps, stats, allq[["week", "pa", "pb"]].reset_index(drop=True))
-    X = stage1_matrix(feats, sk, allq.lan.values)
+    X = stage1_matrix(sk)
     nh = len(hq)
     Xh, Xt = X[:nh], X[nh:]
 
