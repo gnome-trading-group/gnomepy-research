@@ -21,9 +21,9 @@ from gnomepy_research.sessions.cs2_comp.g11.graph import Config
 from gnomepy_research.sessions.cs2_comp.g11.layer import features, fit_logistic
 from gnomepy_research.sessions.cs2_comp.g11.pipeline import WEEK, build
 
-CONFIG = Config(communities=(32,), laplace=False)
+CONFIG = Config(communities=(32,), laplace=False, faceit_maps=False)
 SHORT = None
-FACEIT = False
+FACEIT = True
 HISTORY_WEEKS = 40
 COLUMNS = ["zm", "zr", "one"]
 L2 = 1.0
