@@ -65,7 +65,7 @@ def faceit_maps(data_dir, cutoff: pd.Timestamp, window_days: int) -> pd.DataFram
 
 
 def fit_ratings(maps: pd.DataFrame, cutoff: pd.Timestamp, c: float, half_life: float, faceit_weight: float,
-                rank_scale: float = 1.0):
+                rank_scale: float = 1.0, skill: dict[int, float] | None = None):
     """Returns (player ratings, per-rank-point coefficient)."""
     maps = maps[(maps.a.map(len) == 5) & (maps.b.map(len) == 5)]
     players = sorted({p for col in (maps.a, maps.b) for ps in col for p in ps})
@@ -78,7 +78,11 @@ def fit_ratings(maps: pd.DataFrame, cutoff: pd.Timestamp, c: float, half_life: f
             rows.append(r), cols.append(idx[p]), vals.append(-1.0)
     X = sp.csr_matrix((vals, (rows, cols)), shape=(len(maps), len(players)))
     kd = sp.csr_matrix((maps.ka - maps.kb).to_numpy()[:, None] * rank_scale)
-    X = sp.hstack([X, kd]).tocsr()
+    extra = [kd]
+    if skill is not None:
+        gap = np.array([sum(skill.get(p, 0.0) for p in a) - sum(skill.get(p, 0.0) for p in b) for a, b in zip(maps.a, maps.b)])
+        extra.append(sp.csr_matrix(gap[:, None] * rank_scale))
+    X = sp.hstack([X] + extra).tocsr()
     age = (cutoff - maps.day).dt.total_seconds().to_numpy() / 86400
     decay = 0.5 ** (age / half_life) * np.where(maps.src.to_numpy() == 1, faceit_weight, 1.0)
     Xs = sp.vstack([X, X])
@@ -87,6 +91,8 @@ def fit_ratings(maps: pd.DataFrame, cutoff: pd.Timestamp, c: float, half_life: f
     clf = LogisticRegression(C=c, fit_intercept=False, solver="lbfgs", max_iter=300)
     clf.fit(Xs, ys, sample_weight=ws)
     coef = clf.coef_[0]
+    if skill is not None:
+        return dict(zip(players, coef[:-2])), coef[-2] * rank_scale, coef[-1] * rank_scale
     return dict(zip(players, coef[:-1])), coef[-1] * rank_scale
 
 
@@ -95,8 +101,8 @@ def bo3(p: np.ndarray) -> np.ndarray:
 
 
 def price(ratings: dict[int, float], rank_coef: float, a: list[int], b: list[int], rank_diff: float,
-          scale: float) -> float:
-    d = sum(ratings.get(p, 0.0) for p in a) - sum(ratings.get(p, 0.0) for p in b) + rank_coef * rank_diff
+          scale: float, skill_term: float = 0.0) -> float:
+    d = sum(ratings.get(p, 0.0) for p in a) - sum(ratings.get(p, 0.0) for p in b) + rank_coef * rank_diff + skill_term
     return float(bo3(1 / (1 + np.exp(-scale * d))))
 
 

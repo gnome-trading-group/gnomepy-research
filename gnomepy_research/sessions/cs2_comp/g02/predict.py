@@ -72,26 +72,31 @@ class Fitter:
         self._mm: dict[pd.Timestamp, dict[int, float]] = {}
         self._table: MatchmakingTable | None = None
 
-    def at(self, cutoff: pd.Timestamp):
-        if cutoff not in self._cache:
-            maps = pd.concat([rating.hltv_maps(self.data_dir, cutoff, WINDOW_DAYS),
-                              rating.faceit_maps(self.data_dir, cutoff, WINDOW_DAYS)], ignore_index=True)
-            ratings, rank_coef = rating.fit_ratings(maps, cutoff, C_RIDGE, HALF_LIFE_DAYS, FACEIT_WEIGHT)
-            self._cache[cutoff] = (ratings, rank_coef, rating.current_ranks(self.data_dir, cutoff))
-        return self._cache[cutoff]
-
-    def matchmaking_gap(self, cutoff: pd.Timestamp, row) -> float:
+    def skills(self, cutoff: pd.Timestamp) -> dict[int, float]:
         if cutoff not in self._mm:
             if self._table is None:
                 self._table = MatchmakingTable(self.data_dir)
             self._mm[cutoff] = self._table.fit(cutoff, MM_C)[0]
-        r = self._mm[cutoff]
+        return self._mm[cutoff]
+
+    def at(self, cutoff: pd.Timestamp):
+        if cutoff not in self._cache:
+            maps = pd.concat([rating.hltv_maps(self.data_dir, cutoff, WINDOW_DAYS),
+                              rating.faceit_maps(self.data_dir, cutoff, WINDOW_DAYS)], ignore_index=True)
+            ratings, rank_coef, skill_coef = rating.fit_ratings(maps, cutoff, C_RIDGE, HALF_LIFE_DAYS, FACEIT_WEIGHT,
+                                                                skill=self.skills(cutoff))
+            self._cache[cutoff] = (ratings, rank_coef, skill_coef, rating.current_ranks(self.data_dir, cutoff))
+        return self._cache[cutoff]
+
+    def matchmaking_gap(self, cutoff: pd.Timestamp, row) -> float:
+        r = self.skills(cutoff)
         return sum(r.get(p, 0.0) for p in row.team_a_lineup_ids) - sum(r.get(p, 0.0) for p in row.team_b_lineup_ids)
 
     def price(self, cutoff: pd.Timestamp, row) -> float:
-        ratings, rank_coef, ranks = self.at(cutoff)
+        ratings, rank_coef, skill_coef, ranks = self.at(cutoff)
         return rating.price(ratings, rank_coef, list(row.team_a_lineup_ids), list(row.team_b_lineup_ids),
-                            rating.rank_diff(ranks, row.team_a_id, row.team_b_id), MAP_SCALE)
+                            rating.rank_diff(ranks, row.team_a_id, row.team_b_id), MAP_SCALE,
+                            skill_coef * self.matchmaking_gap(cutoff, row))
 
 
 def fit_blend(lm: np.ndarray, lq: np.ndarray, dmm: np.ndarray, y: np.ndarray) -> np.ndarray:
