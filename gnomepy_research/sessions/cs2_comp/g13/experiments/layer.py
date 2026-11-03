@@ -1,11 +1,12 @@
 """
-The layer that prices a series from the e12 skill price and its market path.
+A walk-forward ridge logistic layer over the e12 skill price and the series' market path: the candidate `q` this
+entry evaluated and did not submit.
 
-A ridge logistic regression, refit at every weekly cutoff on every priced bo3 series known before it. e12's logit
-price enters with a fixed coefficient of 1; the layer learns only an intercept (the first-listed team's edge) and a
-thin-market gate: where the market is thin (few prints, or a price that never moved) it shifts weight from the
-smoothed kickoff price to the skill price. Re-learning the market/e12 mix inside q was tried and only added noise,
-since the scorer's own pool fits that mix. Every column is antisymmetric in A and B except the intercept.
+Refit at every weekly cutoff on every priced bo3 series known before it. The default spec anchors on e12's logit
+price (fixed coefficient 1) and learns an intercept and a thin-market gate (few prints, or a price that never
+moved); other specs re-learn the market/e12 mix or add context columns. On dev every spec sat at or below the
+baseline pool and the gate's weights flipped sign from week to week, so `predict.py` carries e12's price alone.
+Every column is antisymmetric in A and B except the intercept.
 """
 from __future__ import annotations
 

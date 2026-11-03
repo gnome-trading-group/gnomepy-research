@@ -15,7 +15,7 @@ import pandas as pd
 from gnomepy_research.sessions.cs2_comp.bundle import load
 from gnomepy_research.sessions.cs2_comp.g13.experiments.evalkit import ci, fmt, ll, pool
 from gnomepy_research.sessions.cs2_comp.g13.market import PATH_COLUMNS, path_features
-from gnomepy_research.sessions.cs2_comp.g13.layer import Layer, LayerSpec, fallback, thin_market
+from gnomepy_research.sessions.cs2_comp.g13.experiments.layer import Layer, LayerSpec, fallback, thin_market
 
 GATE = ("lm", "z", "lm_thin", "z_thin")
 SPECS = {
