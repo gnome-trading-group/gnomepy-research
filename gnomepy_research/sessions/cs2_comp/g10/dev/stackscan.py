@@ -44,6 +44,21 @@ def main() -> None:
 
     ctx = context_columns(d)
     de = ze - z0
+    T2 = pd.read_parquet(f"{a.data}/targets_tune.parquet")
+    long = pd.concat([T2[["match_id", "match_time", "week_cutoff", "team_a_id"]].set_axis(["match_id", "t", "wk", "team"], axis=1),
+                      T2[["match_id", "match_time", "week_cutoff", "team_b_id"]].set_axis(["match_id", "t", "wk", "team"], axis=1)])
+    long = long.sort_values("t")
+    long["nprev"] = long.groupby(["wk", "team"]).cumcount()
+    nprev = long.groupby("match_id").nprev.sum()
+    d["nprev"] = d.match_id.map(nprev).fillna(0).to_numpy()
+    days = (pd.to_datetime(T2.set_index("match_id").match_time).dt.tz_convert(None) - pd.to_datetime(T2.set_index("match_id").week_cutoff)).dt.total_seconds() / 86400
+    d["days"] = d.match_id.map(days).to_numpy()
+    print(d[["nprev", "days"]].describe(), flush=True)
+    cvx([de * (d.days - 3.5) / 3.5], "de*days")
+    cvx([de * np.minimum(d.nprev, 3)], "de*nprev")
+    cvx([de * (d.nprev > 0)], "de*anyprev")
+    cvx([de * ctx["young"].to_numpy(), de * (d.days - 3.5) / 3.5], "de*young + de*days")
+    cvx([de * ctx["young"].to_numpy(), de * np.minimum(d.nprev, 3)], "de*young + de*nprev")
     cvx([], "none")
     cvx([d.zbar_120m - z0], "twap120")
     cvx([d.zbar_30m - z0], "twap30")
