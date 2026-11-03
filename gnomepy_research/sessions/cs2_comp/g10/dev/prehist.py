@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from threadpoolctl import threadpool_limits
 
+from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
 from gnomepy_research.sessions.cs2_comp.g10.e12_data import Inputs
 from gnomepy_research.sessions.cs2_comp.g10.e12_model import Config, Lineups, SkillFit, series_price, team_state
 from gnomepy_research.sessions.cs2_comp.g10.mapveto import MapConfig, MapModel, load_maps
@@ -49,6 +50,44 @@ def _gap(offsets: dict, which: str, gap: float, team_a: int, team_b: int) -> flo
         v = o.get((min(team_a, team_b), max(team_a, team_b)), 0.0)
         return gap + (v if team_a < team_b else -v)
     return gap + o.get(team_a, 0.0) - o.get(team_b, 0.0)
+
+
+def play_counts(maps: pd.DataFrame, cutoff: pd.Timestamp, half_life_days: float = 120.0, window_days: int = 365) -> dict:
+    m = maps[(maps.time < cutoff) & (maps.time >= cutoff - pd.Timedelta(days=window_days))]
+    w = 0.5 ** ((cutoff - m.time).dt.total_seconds().to_numpy() / 86400.0 / half_life_days)
+    long = pd.DataFrame({"team": np.r_[m.team_a, m.team_b], "map": np.r_[m.map_name, m.map_name], "w": np.r_[w, w]})
+    return long.groupby(["team", "map"]).w.sum().to_dict()
+
+
+def preference_price(mm: MapModel, plays: dict, gap: float, team_a: int, team_b: int, strength: float) -> float:
+    """bo3 veto where each side bans the maps it plays least and picks the maps it plays most (plus `strength` times
+    its map advantage in logit units), priced by the map strengths of the maps that end up played."""
+    maps = mm.pool
+    if len(maps) < 3:
+        return float(series_price(np.array([gap]))[0])
+    adv = np.array([gap + mm.offset.get((team_a, mp), 0.0) - mm.offset.get((team_b, mp), 0.0) for mp in maps])
+    pw = regulation_map_win(adv)
+    lw = np.log(pw / (1 - pw))
+    pa = np.array([plays.get((team_a, mp), 0.0) for mp in maps])
+    pb = np.array([plays.get((team_b, mp), 0.0) for mp in maps])
+    sa = np.log((pa + 0.3) / (pa.sum() + 0.3 * len(maps))) + strength * lw
+    sb = np.log((pb + 0.3) / (pb.sum() + 0.3 * len(maps))) - strength * lw
+    out = 0.0
+    for a_first in (True, False):
+        left = list(range(len(maps)))
+        picks = []
+        for act, is_a in zip(["ban", "ban", "pick", "pick", "ban", "ban"], [a_first, not a_first] * 3):
+            if len(left) <= 1:
+                break
+            sc = (sa if is_a else sb)[left]
+            j = int(np.argmin(sc)) if act == "ban" else int(np.argmax(sc))
+            v = left.pop(j)
+            if act == "pick":
+                picks.append(v)
+        decider = pw[left[0]]
+        p1, p2 = pw[picks[0]], pw[picks[1]]
+        out += 0.5 * (p1 * p2 + (p1 * (1 - p2) + (1 - p1) * p2) * decider)
+    return float(out)
 
 
 def _five(v):
@@ -90,8 +129,13 @@ def main() -> None:
         gaps = np.array(gaps)
         rec = {"match_id": week.match_id.to_numpy(), "time": week.time.to_numpy(), "y": week.y.to_numpy(),
                "is_lan": week.is_lan.to_numpy(), "q_base": series_price(gaps)}
+        plays = play_counts(maps, c)
         for name, cfg in MAPS.items():
             mm = MapModel(maps, fit, c, cfg)
+            if name == "m240s":
+                for lam in (0.0, 1.0):
+                    rec[f"q_pref{int(lam)}"] = [preference_price(mm, plays, g, int(x), int(z), lam)
+                                                for g, x, z in zip(gaps, week.team_a, week.team_b)]
             rec[f"q_{name}"] = [mm.series_price(g, int(x), int(z)) for g, x, z in zip(gaps, week.team_a, week.team_b)]
             if name == "m240":
                 lg = np.array([mm.lan_gap(g, int(x), int(z), int(l)) for g, x, z, l in
