@@ -33,8 +33,9 @@ def main():
     ap.add_argument("--grid", required=True)
     ap.add_argument("--start", default="2025-04-01")
     ap.add_argument("--end", default="2026-03-30")
+    ap.add_argument("--pugs", type=int, default=0, help="load FACEIT pugs with at least this many linked players")
     a = ap.parse_args()
-    inp = load_inputs(a.data, pd.Timestamp(a.end), True)
+    inp = load_inputs(a.data, pd.Timestamp(a.end), True, a.pugs)
     s = inp.series
     rows = s[(s.bo_type == 3) & s.y.notna() & (s.week_cutoff >= a.start) & (s.week_cutoff < a.end)][HIST_COLS]
     for raters in json.loads(a.grid):

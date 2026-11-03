@@ -21,6 +21,12 @@ FIVE = 5
 KICKOFF_WINDOW = pd.Timedelta(minutes=30)
 
 
+def faceit_uid(faceit_id: str, f2h: dict) -> int:
+    """The HLTV id of a linked FACEIT player; an unlinked one gets a stable negative id of its own."""
+    h = f2h.get(faceit_id)
+    return int(h) if h is not None else -int(hashlib.blake2b(faceit_id.encode(), digest_size=7).hexdigest(), 16)
+
+
 def naive(s: pd.Series) -> pd.Series:
     s = pd.to_datetime(s)
     return s.dt.tz_convert(None) if s.dt.tz is not None else s
@@ -71,6 +77,7 @@ class Inputs:
     maps: pd.DataFrame                  # one decisive HLTV map per row, sorted by when it became known
     series: pd.DataFrame                # one HLTV series per row with outcome, announced fives, week_cutoff
     faceit_maps: pd.DataFrame | None    # one FACEIT organised map per row, sorted by when it became known
+    pugs: pd.DataFrame | None = None    # FACEIT matchmaking and hub 5v5 games among linked players, same shape
 
 
 def _ratings(data_dir: Path, until: pd.Timestamp) -> dict:
@@ -143,8 +150,7 @@ def load_faceit(data_dir: Path, until: pd.Timestamp) -> pd.DataFrame:
     fh = fh[(fh.team_a_players == FIVE) & (fh.team_b_players == FIVE) & (fh.team_a_score != fh.team_b_score)]
 
     def uid(f: str) -> int:
-        h = f2h.get(f)
-        return int(h) if h is not None else -int(hashlib.blake2b(f.encode(), digest_size=7).hexdigest(), 16)
+        return faceit_uid(f, f2h)
 
     fh = fh.assign(time=naive(fh.match_time.fillna(fh.match_date))).sort_values(["known", "match_id", "map_name"], kind="stable")
     fa = [tuple(sorted({uid(x) for x in v})) if v is not None else () for v in fh.team_a_faceit_ids]
@@ -172,11 +178,45 @@ def load_faceit(data_dir: Path, until: pd.Timestamp) -> pd.DataFrame:
     return maps.reset_index(drop=True)
 
 
-def load_inputs(data_dir: str | Path, until: pd.Timestamp, faceit: bool = True) -> Inputs:
+def load_pugs(data_dir: Path, until: pd.Timestamp, min_linked: int) -> pd.DataFrame:
+    """FACEIT 5v5 games outside the organised competitions (matchmaking queues, hubs such as FPL) with at least
+    `min_linked` HLTV-linked players: random fives of known players, so a noisy but frequent read on their form."""
+    link = load(data_dir, "faceit/hltv_faceit_map")
+    f2h = dict(zip(link.faceit_id, link.hltv_id.astype(np.int64)))
+    hm = load(data_dir, "faceit/history_matches", until,
+              ["match_id", "competition_type", "game_mode", "teams_size", "finished_at", "status", "score_faction1",
+               "score_faction2"])
+    org = set(load(data_dir, "faceit/faceit_matches", until, ["match_id"]).match_id)
+    hm = hm[(hm.teams_size == FIVE) & hm.game_mode.eq("5v5") & hm.score_faction1.notna() & hm.score_faction2.notna()
+            & (hm.score_faction1 != hm.score_faction2) & ~hm.match_id.isin(org)]
+    hp = load(data_dir, "faceit/history_players", until, ["match_id", "faction", "faceit_id"])
+    hp = hp[hp.match_id.isin(set(hm.match_id))]
+    linked = hp.faceit_id.isin(f2h.keys())
+    n_linked = linked.groupby(hp.match_id).sum()
+    keep = set(n_linked.index[n_linked >= min_linked])
+    hp = hp[hp.match_id.isin(keep)]
+    hm = hm[hm.match_id.isin(keep)]
+    hp = hp.assign(uid=[faceit_uid(f, f2h) for f in hp.faceit_id]).sort_values(["match_id", "faction", "uid"], kind="stable")
+    fives = {k: tuple(sorted(set(g))) for k, g in hp.groupby(["match_id", "faction"], sort=False).uid}
+    fa = [fives.get((m, "faction1"), ()) for m in hm.match_id]
+    fb = [fives.get((m, "faction2"), ()) for m in hm.match_id]
+    ok = np.array([len(a) == FIVE and len(b) == FIVE for a, b in zip(fa, fb)])
+    hm = hm[ok]
+    sa, sb = hm.score_faction1.to_numpy(int), hm.score_faction2.to_numpy(int)
+    ot = sa + sb > 24
+    known = pd.to_datetime(hm.finished_at, unit="s")
+    out = pd.DataFrame({"match_id": hm.match_id.to_numpy(), "time": known.to_numpy(), "known": known.to_numpy(),
+                        "rounds_a": np.where(ot, 12, sa), "rounds": np.where(ot, 24, sa + sb),
+                        "five_a": [x for x, k in zip(fa, ok) if k], "five_b": [x for x, k in zip(fb, ok) if k]})
+    return out.sort_values(["known", "match_id"], kind="stable").reset_index(drop=True)
+
+
+def load_inputs(data_dir: str | Path, until: pd.Timestamp, faceit: bool = True, pugs_min_linked: int = 0) -> Inputs:
     data_dir = Path(data_dir)
     until = pd.Timestamp(until)
     maps, series = load_hltv(data_dir, until)
-    return Inputs(maps, series, load_faceit(data_dir, until) if faceit else None)
+    pugs = load_pugs(data_dir, until, pugs_min_linked) if pugs_min_linked else None
+    return Inputs(maps, series, load_faceit(data_dir, until) if faceit else None, pugs)
 
 
 def load_target_market(data_dir: str | Path, match_ids) -> pd.DataFrame:

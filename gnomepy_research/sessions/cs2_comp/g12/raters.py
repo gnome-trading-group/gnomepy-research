@@ -35,6 +35,7 @@ class RaterConfig:
     r_sd: float = 0.8
     fr_gamma: float = 0.3       # the same for the FACEIT stat proxy of the rating
     fr_sd: float = 0.3
+    pug_step: float = 0.0       # likelihood weight of a FACEIT matchmaking or hub game
 
 
 # Name and overrides of each rater; "gauss" is the best pre-dev setting, the others are near it.
@@ -118,7 +119,8 @@ class Replay:
         self.raters = [(name, GaussPlayer(dataclasses.replace(RaterConfig(), **over))) for name, over in raters]
         self._maps = list(inputs.maps.itertuples(index=False))
         self._fmaps = list(inputs.faceit_maps.itertuples(index=False)) if inputs.faceit_maps is not None else []
-        self._hi = self._fi = 0
+        self._pugs = list(inputs.pugs.itertuples(index=False)) if inputs.pugs is not None else []
+        self._hi = self._fi = self._pi = 0
 
     def _advance(self, cutoff: pd.Timestamp) -> None:
         while self._hi < len(self._maps) and self._maps[self._hi].known < cutoff:
@@ -143,6 +145,13 @@ class Replay:
                     gm.rate(r.five_a, r.rating_a, c.fr_gamma, c.fr_sd)
                     gm.rate(r.five_b, r.rating_b, c.fr_gamma, c.fr_sd)
             self._fi += 1
+        while self._pi < len(self._pugs) and self._pugs[self._pi].known < cutoff:
+            r = self._pugs[self._pi]
+            now = _days(r.time)
+            for _, gm in self.raters:
+                if gm.cfg.pug_step > 0:
+                    gm.update(r.five_a, r.five_b, r.rounds_a, r.rounds, now, gm.cfg.pug_step)
+            self._pi += 1
 
     def run(self, rows: pd.DataFrame) -> pd.DataFrame:
         """rows: match_id, team_a, team_b, week_cutoff, five_a, five_b (+ anything else, passed through). Returns one
