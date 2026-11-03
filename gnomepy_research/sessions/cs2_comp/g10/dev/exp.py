@@ -13,7 +13,7 @@ from threadpoolctl import threadpool_limits
 
 from gnomepy_research.sessions.cs2_comp.g10.e12_data import Inputs
 from gnomepy_research.sessions.cs2_comp.g10.e12_model import Config, Lineups, SkillFit, series_price, team_state
-from gnomepy_research.sessions.cs2_comp.g10.evaluate import Scorer
+from gnomepy_research.sessions.cs2_comp.g10.dev.evaluate import Scorer
 from gnomepy_research.sessions.cs2_comp.g10.mapveto import MapConfig, MapModel, load_maps
 
 BASE = Config(sigma=0.5, half_life_days=300.0, rating_gamma=0.6, rating_sd=0.31)

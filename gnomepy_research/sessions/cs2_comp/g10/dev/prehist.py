@@ -21,6 +21,36 @@ MAPS = {"m120": MapConfig(), "m240": MapConfig(half_life_days=240.0, prior_round
         "m240s": MapConfig(half_life_days=240.0, prior_rounds=240.0), "m365": MapConfig(half_life_days=365.0, prior_rounds=120.0)}
 
 
+def _shrunk(team: np.ndarray, g: np.ndarray, h: np.ndarray, prior: float) -> dict:
+    agg = pd.DataFrame({"team": team, "g": g, "h": h}).groupby("team")[["g", "h"]].sum()
+    return (agg.g / (agg.h + prior)).to_dict()
+
+
+def team_offsets(mm: MapModel, form_half_life_days: float = 21.0) -> dict[str, dict]:
+    """Team residuals over the whole window, over the last few weeks, and per pair of teams (head to head)."""
+    x = mm.residuals
+    a, b = x.team_a.to_numpy(), x.team_b.to_numpy()
+    wr, wi = (x.w * x.r).to_numpy(), (x.w * x.info).to_numpy()
+    out = {"team": _shrunk(np.r_[a, b], np.r_[wr, -wr], np.r_[wi, wi], mm.prior)}
+    recent = (x.age <= 3 * form_half_life_days).to_numpy()
+    wf = 0.5 ** (x.age.to_numpy()[recent] / form_half_life_days)
+    fr, fi = wf * x.r.to_numpy()[recent], wf * x.info.to_numpy()[recent]
+    out["form"] = _shrunk(np.r_[a[recent], b[recent]], np.r_[fr, -fr], np.r_[fi, fi], mm.prior)
+    lo, hi = np.minimum(a, b), np.maximum(a, b)
+    sign = np.where(a == lo, 1.0, -1.0)
+    pair = pd.DataFrame({"lo": lo, "hi": hi, "g": sign * wr, "h": wi}).groupby(["lo", "hi"])[["g", "h"]].sum()
+    out["pair"] = (pair.g / (pair.h + mm.prior)).to_dict()
+    return out
+
+
+def _gap(offsets: dict, which: str, gap: float, team_a: int, team_b: int) -> float:
+    o = offsets[which]
+    if which == "pair":
+        v = o.get((min(team_a, team_b), max(team_a, team_b)), 0.0)
+        return gap + (v if team_a < team_b else -v)
+    return gap + o.get(team_a, 0.0) - o.get(team_b, 0.0)
+
+
 def _five(v):
     if v is None or len(v) != 5 or len(set(v)) != 5:
         return None
@@ -68,9 +98,9 @@ def main() -> None:
                                zip(gaps, week.team_a, week.team_b, week.is_lan)])
                 rec["q_lan"] = series_price(lg)
                 rec["q_lanmap"] = [mm.series_price(g2, int(x), int(z)) for g2, x, z in zip(lg, week.team_a, week.team_b)]
-                rec["q_pair"] = series_price(np.array([mm.pair_gap(g, int(x), int(z)) for g, x, z in zip(gaps, week.team_a, week.team_b)]))
-                for which in ("team", "form"):
-                    rec[f"q_{which}"] = series_price(np.array([mm.offset_gap(g, int(x), int(z), which)
+                offs = team_offsets(mm)
+                for which in ("team", "form", "pair"):
+                    rec[f"q_{which}"] = series_price(np.array([_gap(offs, which, g, int(x), int(z))
                                                                for g, x, z in zip(gaps, week.team_a, week.team_b)]))
         out.append(pd.DataFrame(rec))
         print(f"{c:%Y-%m-%d} {len(week)} {time.time() - t0:.1f}s", flush=True)

@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 from threadpoolctl import threadpool_limits
 
-from gnomepy_research.sessions.cs2_comp.g10.rows import build
+from gnomepy_research.sessions.cs2_comp.g10.dev.rows import build
 
 
 def main() -> None:

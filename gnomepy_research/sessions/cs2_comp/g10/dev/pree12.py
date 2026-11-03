@@ -13,7 +13,7 @@ from threadpoolctl import threadpool_limits
 
 from gnomepy_research.sessions.cs2_comp.g10.e12_data import Inputs
 from gnomepy_research.sessions.cs2_comp.g10.e12_predict import LAYER_FACEIT, design, rows
-from gnomepy_research.sessions.cs2_comp.g10.rows import monday
+from gnomepy_research.sessions.cs2_comp.g10.dev.rows import monday
 
 
 def main() -> None:

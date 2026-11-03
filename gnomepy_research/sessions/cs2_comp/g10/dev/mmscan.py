@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g10.dev.stackscan import fitw
-from gnomepy_research.sessions.cs2_comp.g10.evaluate import ci, ll, logit, pool
+from gnomepy_research.sessions.cs2_comp.g10.dev.evaluate import ci, ll, logit, pool
 
 
 def cvfit(cols, y, groups):

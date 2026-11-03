@@ -18,7 +18,7 @@ the player fit does not use:
 
 The weights were fitted against e12 on 11,172 bo3 series from Jan 2025 to Mar 2026 (weekly point-in-time fits,
 outcomes only, no market), so they are point-in-time for every dev and confirmation target. Team form over the last
-few weeks is computed (q_form) but left out: it helped on outcomes alone, yet on dev the market already prices it.
+few weeks is left out: it helped on outcomes alone, yet on dev the market already prices it.
 The market's price path is not an input: on the dev months none of its summaries (two-hour average, opening price,
 liquidity, staleness, market age) added anything once the e12 price was pooled with the kickoff price (see README).
 """
@@ -78,7 +78,6 @@ def components(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = Fals
         wk["q_hltv"] = series_price(wk.gap.to_numpy())
         wk["q_map"] = [pool_model.series_price(g, a, b) for g, a, b, _ in trip]
         wk["q_setting"] = series_price(np.array([setting_model.lan_gap(g, a, b, lan) for g, a, b, lan in trip]))
-        wk["q_form"] = series_price(np.array([setting_model.offset_gap(g, a, b, "form") for g, a, b, _ in trip]))
         form = player_form(games, c, MM_CONFIG)
         lu = lineups.loc[wk.match_id]
         for col in ("form", "activity"):

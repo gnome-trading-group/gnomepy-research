@@ -12,7 +12,7 @@ from scipy.special import expit
 from gnomepy_research.sessions.cs2_comp.bundle import load, target_paths
 from gnomepy_research.sessions.cs2_comp.g10.e12_data import Inputs
 from gnomepy_research.sessions.cs2_comp.g10.e12_predict import LAYER_FACEIT, LAYER_HLTV, design, rows
-from gnomepy_research.sessions.cs2_comp.g10.paths import path_features
+from gnomepy_research.sessions.cs2_comp.g10.dev.paths import path_features
 
 SETTLE = pd.Timedelta(hours=12)
 

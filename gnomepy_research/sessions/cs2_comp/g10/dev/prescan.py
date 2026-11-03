@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g10.dev.stackscan import fitw
-from gnomepy_research.sessions.cs2_comp.g10.evaluate import ci, ll, logit
+from gnomepy_research.sessions.cs2_comp.g10.dev.evaluate import ci, ll, logit
 
 
 def main() -> None:
@@ -40,7 +40,7 @@ def main() -> None:
     lanf = d.is_lan.to_numpy(float)
     l, w = cv([zb * lanf, lanf])
     print(f"zb*lan {ci(l - base)} w={w.round(3)}", flush=True)
-    incs = {c: logit(d[c]) - zb for c in ["q_m240s", "q_lan", "q_team", "q_form"]}
+    incs = {c: logit(d[c]) - zb for c in ["q_m240s", "q_lan", "q_team", "q_form", "q_pair"]}
     for combo in (["q_m240s", "q_lan", "q_form", "q_pair"],["q_m240s", "q_lan"], ["q_m240s", "q_team"], ["q_m240s", "q_lan", "q_form"], ["q_m240s", "q_team", "q_form"]):
         l, w = cv([incs[c] for c in combo])
         print(f"joint {combo} {ci(l - base)} w={w.round(3)}", flush=True)

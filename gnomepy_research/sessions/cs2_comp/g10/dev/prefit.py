@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g10.dev.mmscan import cvfit
-from gnomepy_research.sessions.cs2_comp.g10.evaluate import ci, logit
+from gnomepy_research.sessions.cs2_comp.g10.dev.evaluate import ci, logit
 
 
 def main() -> None:
@@ -26,21 +26,14 @@ def main() -> None:
     ze, zb = logit(d.q_e12), logit(d.q_base)
     x = {"q_map": logit(d.q_m240s) - zb, "q_setting": logit(d.q_lan) - zb, "q_form": logit(d.q_form) - zb,
          "mm_form": (d.mm_a - d.mm_b).to_numpy(), "mm_activity": (d.mmact_a - d.mmact_b).to_numpy(),
-         }
-    x["net"] = (d.mmnet_a - d.mmnet_b).to_numpy() / 10.0
-    x["net365"] = (d.mm365net_a - d.mm365net_b).to_numpy() / 10.0
-    x["form365"] = (d.mm365_a - d.mm365_b).to_numpy()
-    x["level"] = (d.level_a - d.level_b).to_numpy()
-    x["level_change"] = (d.level_change_a - d.level_change_b).to_numpy()
+         "mm60_form": (d.mm60_a - d.mm60_b).to_numpy(), "mm60_activity": (d.mm60act_a - d.mm60act_b).to_numpy()}
     base, wb = cvfit([ze], y, mo)
     print(f"n={len(y)} e12 cv {base.mean():.4f} w={wb.round(3)} hltv-only cv {cvfit([zb], y, mo)[0].mean():.4f}")
     for k, v in x.items():
         l, w = cvfit([ze, v], y, mo)
         print(f"{k:14s} {ci(l - base)} w={w.round(3)}", flush=True)
-    combos = [["q_map", "q_setting", "mm_form", "mm_activity"],
-              ["q_map", "q_setting", "mm_form", "mm_activity", "net"],
-              ["q_map", "q_setting", "mm_form", "mm_activity", "net365"],
-              ["q_map", "q_setting", "net", "mm_activity"]]
+    combos = [["q_map", "q_setting"], ["mm_form", "mm_activity"], ["q_map", "q_setting", "mm_form", "mm_activity"],
+              ["q_map", "q_setting", "q_form", "mm_form", "mm_activity"], ["q_map", "q_setting", "mm60_form", "mm60_activity"]]
     early = mo < "2025-08"
     for c in combos:
         l, w = cvfit([ze] + [x[k] for k in c], y, mo)

@@ -11,10 +11,10 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
-from gnomepy_research.sessions.cs2_comp.g10.mm import MMConfig, five_mean, level_trend, mm_rows, player_form
-from gnomepy_research.sessions.cs2_comp.g10.rows import monday
+from gnomepy_research.sessions.cs2_comp.g10.mm import MMConfig, five_mean, mm_rows, player_form
+from gnomepy_research.sessions.cs2_comp.g10.dev.rows import monday
 
-CONFIGS = {"mm": MMConfig(), "mm365": MMConfig(half_life_days=1e9, window_days=365)}
+CONFIGS = {"mm": MMConfig(), "mm60": MMConfig(half_life_days=60.0, window_days=180)}
 
 
 def main() -> None:
@@ -42,13 +42,9 @@ def main() -> None:
         rec = {"match_id": wk.match_id.to_numpy()}
         for name, cfg in CONFIGS.items():
             form = player_form(rows, c, cfg)
-            for col, short in (("form", name), ("activity", f"{name}act"), ("net", f"{name}net")):
+            for col, short in (("form", name), ("activity", f"{name}act")):
                 rec[f"{short}_a"] = [five_mean(form, v, col) for v in wk.lineup_a]
                 rec[f"{short}_b"] = [five_mean(form, v, col) for v in wk.lineup_b]
-        lv = level_trend(rows, c)
-        for col in ("level", "level_change"):
-            rec[f"{col}_a"] = [five_mean(lv, v, col) for v in wk.lineup_a]
-            rec[f"{col}_b"] = [five_mean(lv, v, col) for v in wk.lineup_b]
         out.append(pd.DataFrame(rec))
     res = pd.concat(out, ignore_index=True)
     print(res.describe().T.to_string(), flush=True)
