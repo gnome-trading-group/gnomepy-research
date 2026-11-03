@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cs2_comp.g14.data import FIVE, Inputs, load_inputs, target_market
-from gnomepy_research.sessions.cs2_comp.g14.layer import LayerConfig, Layers, model_column
+from gnomepy_research.sessions.cs2_comp.g14.data import FIVE, Inputs, load_inputs, logit, target_market
+from gnomepy_research.sessions.cs2_comp.g14.layer import LayerConfig, Layers, fit_ridge_logistic, market_design, model_column
 from gnomepy_research.sessions.cs2_comp.g14.ratings import Engine, RatingConfig, bo3, map_win
 from gnomepy_research.sessions.cs2_comp.g14.skillfit import FitConfig, SkillFit, fit
 
@@ -172,3 +172,77 @@ def run(data_dir: str | Path, targets: pd.DataFrame, rcfg: RatingConfig, lcfg: L
         if verbose:
             print(f"{c:%Y-%m-%d} layer rows {lay.n_model} market rows {lay.n_market}", flush=True)
     return Run(sr, tr, pd.concat(preds, ignore_index=True), layers)
+
+
+def market_cutoffs(inputs: Inputs, until: pd.Timestamp) -> list[pd.Timestamp]:
+    """The first Monday of each month from the month the market data starts, up to `until`: the batch fits whose
+    prices the market layer learns from."""
+    if inputs.market.empty:
+        return []
+    first = pd.Timestamp(inputs.market.kickoff.min()).normalize().replace(day=1)
+    out = []
+    month = first
+    while month <= until:
+        monday = month + pd.Timedelta(days=(7 - month.weekday()) % 7)
+        if monday <= until:
+            out.append(monday)
+        month = (month + pd.Timedelta(days=32)).replace(day=1)
+    return out
+
+
+def predict_weeks(data_dir: str | Path, targets: pd.DataFrame, rcfg: RatingConfig, fcfg: FitConfig, lcfg: LayerConfig,
+                  weights: dict[str, float], verbose: bool = False, market_layer: bool = True) -> Run:
+    """The delivered flow: per week, the batch fit at the cutoff prices the targets, the frozen weights give the
+    model's price, and a market layer fitted on the market-era series (priced by the monthly fits before the cutoff)
+    adjusts it where the target has a kickoff price."""
+    targets = prepare_targets(targets)
+    weeks = sorted(pd.Timestamp(c) for c in targets.week_cutoff.unique())
+    t0 = time.time()
+    inputs = load_inputs(data_dir, max(weeks), rcfg.faceit)
+    if verbose:
+        print(f"loaded {len(inputs.maps)} maps, {len(inputs.series)} series in {time.time() - t0:.0f}s", flush=True)
+    months = market_cutoffs(inputs, max(weeks)) if market_layer else []
+    sr, tr, _ = online_pass(data_dir, inputs, targets, sorted(set(weeks) | set(months)), rcfg, verbose)
+    sr["time"] = pd.to_datetime(sr.time)
+    fits: dict[pd.Timestamp, SkillFit] = {}
+    preds = []
+    names = list(weights)
+    beta = np.array([weights[k] for k in names])
+    for c in weeks:
+        t0 = time.time()
+        sf = fit(inputs, c, fcfg)
+        week = tr[tr.week_cutoff == c]
+        week = add_fit_features(week, sf, list(zip(week.five_a, week.five_b))).drop(columns=["five_a", "five_b"])
+        z = np.column_stack([model_column(week, f) for f in names]) @ beta
+        q_model = 1 / (1 + np.exp(-z))
+        q = q_model.copy()
+        n_market = 0
+        if market_layer:
+            parts = []
+            past = [m for m in months if m <= c]
+            for m, nxt in zip(past, past[1:] + [c]):
+                if m not in fits:
+                    fits[m] = fit(inputs, m, fcfg)
+                rows = sr[(sr.time >= m) & (sr.time < nxt)]
+                if len(rows):
+                    parts.append(add_fit_features(rows, fits[m], [(tuple(a), tuple(b)) for a, b in zip(rows.five_a, rows.five_b)]))
+            if parts:
+                train = pd.concat(parts, ignore_index=True)
+                train = train[(pd.to_datetime(train.known) < c) & train.m0.notna()]
+                n_market = len(train)
+                if n_market >= lcfg.min_market_rows:
+                    zt = np.column_stack([model_column(train, f) for f in names]) @ beta
+                    Xm = market_design(train, zt, lcfg.market_features)
+                    scale = np.maximum(Xm.std(axis=0), 1e-6)
+                    scale[-1] = 1.0
+                    bm = fit_ridge_logistic(Xm / scale, train.y.to_numpy(float), np.ones(len(train)), lcfg.l2_market,
+                                            offset=logit(train.m0.to_numpy())) / scale
+                    has = week.m0.notna().to_numpy()
+                    if has.any():
+                        eta = logit(week.m0.to_numpy()[has]) + market_design(week[has], z[has], lcfg.market_features) @ bm
+                        q[has] = 1 / (1 + np.exp(-eta))
+        preds.append(pd.DataFrame({"match_id": week.match_id.to_numpy(), "q_model": q_model, "q": q, "z_model": z, "fit_cutoff": c}))
+        if verbose:
+            print(f"{c:%Y-%m-%d} fit {sf.info['maps']} maps {sf.info['players']} players, market rows {n_market}, "
+                  f"{len(week)} targets, {time.time() - t0:.0f}s", flush=True)
+    return Run(sr, tr, pd.concat(preds, ignore_index=True), {})

@@ -27,8 +27,8 @@ class LayerConfig:
     window_days: float = 540.0
     half_life_days: float = 365.0
     l2_model: float = 2.0
-    l2_market: float = 4.0
-    market_features: tuple[str, ...] = MARKET_FEATURES
+    l2_market: float = 2.0
+    market_features: tuple[str, ...] = ("z_model", "drift24", "drift1")
     model_features: tuple[str, ...] = MODEL_FEATURES
     min_market_rows: int = 150
 

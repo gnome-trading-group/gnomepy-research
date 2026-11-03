@@ -19,7 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g14.layer import LayerConfig
-from gnomepy_research.sessions.cs2_comp.g14.pipeline import run
+from gnomepy_research.sessions.cs2_comp.g14.pipeline import predict_weeks, run
 from gnomepy_research.sessions.cs2_comp.g14.ratings import RatingConfig
 from gnomepy_research.sessions.cs2_comp.g14.skillfit import FitConfig
 
@@ -40,6 +40,7 @@ def main() -> None:
     ap.add_argument("--rows", help="directory to also save the series and target rows in")
     ap.add_argument("--train-rows", help="walk-forward rows to fit the layers on instead of the frozen weights")
     ap.add_argument("--fit", default="{}", help="FitConfig overrides as JSON")
+    ap.add_argument("--no-market-layer", dest="market_layer", action="store_false")
     a = ap.parse_args()
     targets = pd.read_parquet(a.targets)
     wc = pd.to_datetime(targets.week_cutoff)
@@ -48,8 +49,10 @@ def main() -> None:
         targets = targets[targets.week_cutoff.isin(pd.to_datetime(a.weeks.split(",")))]
     rcfg = RatingConfig(**{**RATING.__dict__, "faceit": a.faceit})
     fcfg = FitConfig(**{**FIT.__dict__, **json.loads(a.fit)})
-    train = pd.read_parquet(a.train_rows) if a.train_rows else None
-    res = run(a.data, targets, rcfg, LAYER, verbose=True, fcfg=fcfg, weights=None if train is not None else WEIGHTS, train_rows=train)
+    if a.train_rows:
+        res = run(a.data, targets, rcfg, LAYER, verbose=True, fcfg=fcfg, train_rows=pd.read_parquet(a.train_rows))
+    else:
+        res = predict_weeks(a.data, targets, rcfg, fcfg, LAYER, WEIGHTS, verbose=True, market_layer=a.market_layer)
     if a.rows:
         Path(a.rows).mkdir(parents=True, exist_ok=True)
         res.series_rows.to_parquet(Path(a.rows) / "series_rows.parquet", index=False)
