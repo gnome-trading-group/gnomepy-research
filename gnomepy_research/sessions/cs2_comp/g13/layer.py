@@ -53,10 +53,11 @@ def design(rows: pd.DataFrame, spec: LayerSpec) -> np.ndarray:
         "z_new": z * rows.new.to_numpy(float),
     }
     if "z_ekf" in rows:
+        # Experiment columns (experiments/ekf.py); a series the filter could not price takes e12's price.
         ze = rows.z_ekf.fillna(rows.z_e12).to_numpy(float)
-        sd = rows.ekf_sd.fillna(rows.ekf_sd.median() if rows.ekf_sd.notna().any() else 0.0).to_numpy(float)
+        sd = rows.ekf_sd.fillna(0.0).to_numpy(float)
         cols.update({"z_ekf": ze, "zekf_thin": ze * thin, "z_sd": z * sd, "lm_sd": lm * sd,
-                     "ekf_chem": rows.ekf_chem.fillna(0).to_numpy(float)})
+                     "ekf_chem": rows.ekf_chem.fillna(0.0).to_numpy(float)})
     return np.column_stack([cols[c] for c in spec.columns] + [np.ones(len(rows))])
 
 
