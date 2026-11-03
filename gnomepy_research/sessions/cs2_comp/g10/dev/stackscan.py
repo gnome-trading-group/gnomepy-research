@@ -28,7 +28,7 @@ def main() -> None:
     E = pd.read_parquet(f"{a.work}/ev.parquet")
     X_ = pd.read_parquet(f"{a.work}/exp.parquet")
     T = pd.read_parquet(f"{a.data}/targets_tune.parquet")[["match_id", "is_lan", "event_tier", "team_a_standin_ids", "team_b_standin_ids"]]
-    d = E.merge(R[R.is_target].drop(columns=["y", "q_e12"]), on="match_id").merge(T, on="match_id").merge(X_, on="match_id")
+    d = E.merge(R[R.is_target].drop(columns=["y", "q_e12", "m0"]), on="match_id").merge(T, on="match_id").merge(X_, on="match_id")
     y = d.y.to_numpy(float)
     mo = d.month.to_numpy()
     z0, ze = logit(d.m0), logit(d.q_e12)
