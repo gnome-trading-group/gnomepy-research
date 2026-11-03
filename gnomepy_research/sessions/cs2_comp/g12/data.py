@@ -68,12 +68,9 @@ def path_features(paths: pd.DataFrame) -> pd.DataFrame:
 
 @dataclass
 class Inputs:
-    maps: pd.DataFrame          # one decisive HLTV map per row, time-sorted
-    series: pd.DataFrame        # one HLTV series per row with outcome, announced fives, week_cutoff
-    rankings: pd.DataFrame      # date, team_id, points, rank
-    market: pd.DataFrame        # per past series: kickoff, m0 and path shape (prints known before `until`)
-    faceit_maps: pd.DataFrame | None
-    faceit_levels: pd.DataFrame | None
+    maps: pd.DataFrame                  # one decisive HLTV map per row, sorted by when it became known
+    series: pd.DataFrame                # one HLTV series per row with outcome, announced fives, week_cutoff
+    faceit_maps: pd.DataFrame | None    # one FACEIT organised map per row, sorted by when it became known
 
 
 def _ratings(data_dir: Path, until: pd.Timestamp) -> dict:
@@ -99,11 +96,6 @@ def load_hltv(data_dir: Path, until: pd.Timestamp) -> tuple[pd.DataFrame, pd.Dat
     s["week_cutoff"] = monday(s.time)
     s["five_a"] = [five_tuple(l) or five_tuple(p) for l, p in zip(s.lineup_a, s.played_a)]
     s["five_b"] = [five_tuple(l) or five_tuple(p) for l, p in zip(s.lineup_b, s.played_b)]
-    lu = load(data_dir, "hltv/cs2_match_lineups", until, ["match_id", "match_date", "team_id", "is_standin"])
-    sub = lu.groupby(["match_id", "team_id"]).is_standin.sum()
-    subd = dict(zip(zip(sub.index.get_level_values(0).astype(np.int64), sub.index.get_level_values(1).astype(np.int64)), sub.to_numpy()))
-    s["sub_a"] = [int(subd.get((m, int(t)), 0)) for m, t in zip(s.match_id, s.team_a)]
-    s["sub_b"] = [int(subd.get((m, int(t)), 0)) for m, t in zip(s.match_id, s.team_b)]
     s = s.drop(columns=["lineup_a", "lineup_b", "played_a", "played_b", "wins"])
     s = s.astype({"team_a": np.int64, "team_b": np.int64, "match_id": np.int64})
 
@@ -131,9 +123,9 @@ def load_hltv(data_dir: Path, until: pd.Timestamp) -> tuple[pd.DataFrame, pd.Dat
     return maps.reset_index(drop=True), s
 
 
-def load_faceit(data_dir: Path, until: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_faceit(data_dir: Path, until: pd.Timestamp) -> pd.DataFrame:
     """FACEIT organised 5v5 maps on HLTV player ids where linked (others keep a negative id), minus series HLTV
-    already has; and each player's FACEIT skill level by the time it was known."""
+    already has, with a rating proxy per player."""
     link = load(data_dir, "faceit/hltv_faceit_map")
     f2h = dict(zip(link.faceit_id, link.hltv_id.astype(np.int64)))
     fm = load(data_dir, "faceit/faceit_matches", until, ["match_id", "finished_at", "has_stats"])
@@ -177,27 +169,16 @@ def load_faceit(data_dir: Path, until: pd.Timestamp) -> tuple[pd.DataFrame, pd.D
                          "five_a": fa_ok, "five_b": fb_ok,
                          "rating_a": [[perf.get((m, n, p), np.nan) for p in f] for m, n, f in zip(fh.match_id, fh.map_name, fa_ok)],
                          "rating_b": [[perf.get((m, n, p), np.nan) for p in f] for m, n, f in zip(fh.match_id, fh.map_name, fb_ok)]})
-    ro = load(data_dir, "faceit/faceit_rosters", until, ["match_id", "faceit_id", "played", "skill_level"])
-    ro = ro[ro.played & ro.skill_level.notna() & ro.faceit_id.isin(f2h.keys())]
-    ro = ro.merge(fm[["match_id", "known"]], on="match_id")
-    levels = pd.DataFrame({"player": ro.faceit_id.map(f2h).astype(np.int64).to_numpy(), "known": ro.known.to_numpy(),
-                           "level": ro.skill_level.to_numpy(float)}).sort_values(["known", "player"], kind="stable")
-    return maps.reset_index(drop=True), levels.reset_index(drop=True)
+    return maps.reset_index(drop=True)
 
 
 def load_inputs(data_dir: str | Path, until: pd.Timestamp, faceit: bool = True) -> Inputs:
     data_dir = Path(data_dir)
     until = pd.Timestamp(until)
     maps, series = load_hltv(data_dir, until)
-    rk = load(data_dir, "hltv/cs2_team_rankings", until, ["date", "team_id", "rank", "points"])
-    rk = rk.assign(date=naive(rk["date"])).sort_values(["date", "team_id"], kind="stable").reset_index(drop=True)
-    sp = load(data_dir, "market/series_paths", until)
-    sp = sp[naive(sp.kickoff) < until]
-    market = path_features(sp).merge(series[["match_id", "team_a", "team_b"]], on="match_id")
-    market = market.sort_values(["kickoff", "match_id"], kind="stable").reset_index(drop=True)
-    fmaps, levels = load_faceit(data_dir, until) if faceit else (None, None)
-    return Inputs(maps, series, rk, market, fmaps, levels)
+    return Inputs(maps, series, load_faceit(data_dir, until) if faceit else None)
 
 
 def load_target_market(data_dir: str | Path, match_ids) -> pd.DataFrame:
+    """The targets' kickoff prices, for development diagnostics only: the model itself does not read prices."""
     return path_features(target_paths(data_dir, match_ids))
