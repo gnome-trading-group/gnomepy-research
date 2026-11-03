@@ -23,6 +23,7 @@ from gnomepy_research.sessions.cs2_comp.g07.model import Config, Filter, bo3_pri
 
 EPOCH = np.datetime64("2023-01-01")
 DEV_START = pd.Timestamp("2025-01-01")
+DATA_END = pd.Timestamp("2026-08-01")
 
 
 def series_fives(inputs: Inputs) -> pd.DataFrame:
@@ -85,15 +86,15 @@ def held_out(cols, y, groups):
 
 def kickoff_prices(data: str) -> pd.DataFrame:
     """m0 per market series: the last print within 30 minutes of kickoff, else the last print."""
-    p = load(data, "market/series_paths").sort_values(["match_id", "t"])
+    p = load(data, "market/series_paths", DATA_END).sort_values(["match_id", "t"])
     last = p.groupby("match_id").tail(1)
     return pd.DataFrame({"match_id": last.match_id.astype(str).to_numpy(), "m0": last.p_a.to_numpy(),
                          "kickoff": last.kickoff.dt.tz_convert(None).to_numpy()})
 
 
-def summary(res: pd.DataFrame, market: pd.DataFrame) -> dict:
+def summary(res: pd.DataFrame, market: pd.DataFrame, history_end: pd.Timestamp = pd.Timestamp("2026-03-01")) -> dict:
     y = res.y.to_numpy(float)
-    pre = (res.time < pd.Timestamp("2026-03-01")).to_numpy()
+    pre = (res.time < history_end).to_numpy()
     rec = held_out([_logit(res.q)], y, res.time.dt.to_period("Q").astype(str).to_numpy())
     j = res.assign(match_id=res.match_id.astype(str)).merge(market, on="match_id")
     yy, mo = j.y.to_numpy(float), j.kickoff.dt.month.to_numpy()
@@ -105,7 +106,7 @@ def summary(res: pd.DataFrame, market: pd.DataFrame) -> dict:
 def load_inputs(data: str, cache: str | None) -> Inputs:
     if cache and Path(cache).exists():
         return pickle.loads(Path(cache).read_bytes())
-    inputs = Inputs(data, pd.Timestamp("2026-08-01"))
+    inputs = Inputs(data, DATA_END)
     if cache:
         Path(cache).write_bytes(pickle.dumps(inputs))
     return inputs
@@ -127,6 +128,7 @@ def main() -> None:
     ap.add_argument("--configs-json", help="a JSON list of config strings, appended to --config")
     ap.add_argument("--tag", default="")
     ap.add_argument("--save", action="store_true")
+    ap.add_argument("--history-end", default="2026-03-01", help="history log loss counts series before this date")
     a = ap.parse_args()
     if a.configs_json:
         a.config = (a.config or []) + json.loads(a.configs_json)
@@ -145,7 +147,7 @@ def main() -> None:
         res["config"] = text
         if a.save:
             res.to_parquet(out_dir / f"dev_{a.tag}{i}.parquet", index=False)
-        sm = {"config": text, **summary(res, market)}
+        sm = {"config": text, **summary(res, market, pd.Timestamp(a.history_end))}
         summaries.append(sm)
         print(f"[{i}] {time.time() - t0:.0f}s {json.dumps(sm)}", flush=True)
     (out_dir / f"summary_{a.tag}.json").write_text(json.dumps(summaries, indent=1))
