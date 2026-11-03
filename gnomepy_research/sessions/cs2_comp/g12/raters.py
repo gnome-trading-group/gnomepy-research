@@ -48,6 +48,7 @@ class RaterConfig:
     g_var0: float = 0.8
     extra: tuple = ()
     lan_alpha: float = 0.05
+    g_online_step: float = 1.0
     g_team_var0: float = 0.0
     map_var0: float = 0.05
     map_slope: float = 4.0
@@ -361,7 +362,8 @@ class Replay:
                     self.lan[pl] = (1 - c.lan_alpha) * self.lan.get(pl, 0.0) + c.lan_alpha * sign * res
         for t, five in ((a, r.five_a), (b, r.five_b)):
             self.fives.setdefault(t, []).append((now, frozenset(five)))
-        self.gauss.update(r.five_a, r.five_b, r.rounds_a, r.rounds, _days(r.time), c.g_hltv_step, 1.0, a, b)
+        self.gauss.update(r.five_a, r.five_b, r.rounds_a, r.rounds, _days(r.time),
+                          c.g_hltv_step * (1.0 if r.is_lan else c.g_online_step), 1.0, a, b)
         if c.r_gamma > 0:
             self.gauss.rate(r.five_a, r.rating_a, c.r_gamma, c.r_sd)
             self.gauss.rate(r.five_b, r.rating_b, c.r_gamma, c.r_sd)
