@@ -5,22 +5,27 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from gnomepy_research.sessions.cs2_comp.g04.players import PlayerFit
+from gnomepy_research.sessions.cs2_comp.g04.pm import Fit
 
-PARAMS = dict(lam_player=16.0, lam_team=0.5, half_life=1200.0, soft=1.0, rating_prior=20.0)
+CONFIGS = [dict(faceit_weight=0.5), dict(use_faceit=False)]
 
 
 def bo3(p):
     return p * p * (3 - 2 * p)
 
 
+def _logit(p):
+    return np.log(p / (1 - p))
+
+
 def predict(data_dir, targets: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for cutoff, grp in targets.groupby("week_cutoff"):
-        fit = PlayerFit(data_dir, cutoff, **PARAMS)
+        fits = [Fit(data_dir, cutoff, **c) for c in CONFIGS]
         for r in grp.itertuples():
-            z = fit.map_logit(r.team_a_id, list(r.team_a_lineup_ids), r.team_b_id, list(r.team_b_lineup_ids))
-            rows.append((r.match_id, bo3(1 / (1 + np.exp(-z))), pd.Timestamp(cutoff)))
+            zs = [f.map_logit(r.team_a_id, list(r.team_a_lineup_ids), r.team_b_id, list(r.team_b_lineup_ids)) for f in fits]
+            lq = np.mean([_logit(bo3(1 / (1 + np.exp(-z)))) for z in zs])
+            rows.append((r.match_id, 1 / (1 + np.exp(-lq)), pd.Timestamp(cutoff)))
     out = pd.DataFrame(rows, columns=["match_id", "q", "fit_cutoff"])
     out["q"] = out.q.clip(0.02, 0.98)
     return out
