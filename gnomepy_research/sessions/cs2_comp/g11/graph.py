@@ -51,10 +51,11 @@ class Config:
     laplace: bool = True
     # With FACEIT on, False keeps FACEIT to the skill prior (levels) and fits on HLTV maps only.
     faceit_maps: bool = True
+    community_seed: int = 0
     pool_days: int = 60
 
 
-def communities(ia: np.ndarray, ib: np.ndarray, w: np.ndarray, P: int, k: int) -> np.ndarray:
+def communities(ia: np.ndarray, ib: np.ndarray, w: np.ndarray, P: int, k: int, seed: int = 0) -> np.ndarray:
     """Spectral communities of the player graph (teammates and opponents on a map are linked, by map weight)."""
     if k <= 1 or P < 10 * k:
         return np.zeros(P, dtype=int)
@@ -71,7 +72,7 @@ def communities(ia: np.ndarray, ib: np.ndarray, w: np.ndarray, P: int, k: int) -
     vals, vecs = eigsh(N, k=k, which="LA", v0=np.full(P, 1.0 / np.sqrt(P)))
     emb = vecs * dinv[:, None]
     emb = emb / np.maximum(np.linalg.norm(emb, axis=1, keepdims=True), 1e-12)
-    return KMeans(n_clusters=k, n_init=4, random_state=0).fit_predict(emb)
+    return KMeans(n_clusters=k, n_init=4, random_state=seed).fit_predict(emb)
 
 
 @dataclass
@@ -127,7 +128,7 @@ class GraphFit:
         X0 = X0[:, np.r_[np.ones(min(5, X0.shape[1]), bool), X0[:, 5:].any(axis=0)]]
         K = X0.shape[1]
         Xs = sp.vstack([sp.csr_matrix(X0), sp.csr_matrix((T, K))]).tocsr()
-        levels = [communities(ia, ib, w, P, k) for k in cfg.communities]
+        levels = [communities(ia, ib, w, P, k, cfg.community_seed) for k in cfg.communities]
         comm = levels[0]
         C = sp.hstack([sp.csr_matrix((np.ones(P), (np.arange(P), lv)), shape=(Q, int(lv.max()) + 1)) for lv in levels]).tocsr()
         NC = C.shape[1]
