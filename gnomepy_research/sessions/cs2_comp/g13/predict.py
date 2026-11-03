@@ -12,6 +12,7 @@ its own week's cutoff, so a run for one week gives the same answer as a run for 
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import numpy as np
@@ -67,11 +68,13 @@ def main() -> None:
     if a.weeks:
         targets = targets[targets.week_cutoff.isin(pd.to_datetime(a.weeks.split(",")))]
     out, rows = predict(a.data, targets, verbose=True)
-    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(a.out, index=False)
+    # On Batch the output directory is only known through the environment, so paths may name it as $OUTPUT_DIR.
+    out_path = Path(os.path.expandvars(a.out))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(out_path, index=False)
     if a.rows:
-        rows.to_parquet(a.rows, index=False)
-    print(f"wrote {len(out)} predictions to {a.out}")
+        rows.to_parquet(Path(os.path.expandvars(a.rows)), index=False)
+    print(f"wrote {len(out)} predictions to {out_path}")
 
 
 if __name__ == "__main__":
