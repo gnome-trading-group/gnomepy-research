@@ -14,15 +14,18 @@ from scipy.special import expit
 from gnomepy_research.sessions.cs2_comp.g06.e12.data import Inputs
 from gnomepy_research.sessions.cs2_comp.g06.e12.features import feature_rows
 from gnomepy_research.sessions.cs2_comp.g06.e12.predict import CONFIG_FACEIT, CONFIG_HLTV, LAYER_FACEIT, design
+from gnomepy_research.sessions.cs2_comp.g06.newcomer import feature_rows as newcomer_rows
 from gnomepy_research.sessions.cs2_comp.g06.predict import targets_frame
 
 
-def e12_wide(data_dir: str | Path, series: pd.DataFrame, prior_sd: float) -> pd.DataFrame:
-    """e12's HLTV+FACEIT price for each series from the fits at its own week_cutoff, with prior sd `prior_sd`."""
+def e12_wide(data_dir: str | Path, series: pd.DataFrame, prior_sd: float, newcomer: bool = False) -> pd.DataFrame:
+    """e12's HLTV+FACEIT price for each series from the fits at its own week_cutoff, with prior sd `prior_sd`, and
+    with `newcomer` the FACEIT-level prior for players the HLTV+FACEIT fit has not seen."""
     t = targets_frame(series)
     inputs = Inputs(data_dir, t.week_cutoff.max(), True)
     h = feature_rows(inputs, t, dataclasses.replace(CONFIG_HLTV, sigma=prior_sd), False)
-    f = feature_rows(inputs, t, dataclasses.replace(CONFIG_FACEIT, sigma=prior_sd), True)
+    cfg = dataclasses.replace(CONFIG_FACEIT, sigma=prior_sd)
+    f = newcomer_rows(inputs, t, cfg) if newcomer else feature_rows(inputs, t, cfg, True)
     X = design(h, f)[list(LAYER_FACEIT)]
     return pd.DataFrame({"match_id": h.match_id.to_numpy(), "week_cutoff": h.week_cutoff.to_numpy(),
                          "e12": expit(X.to_numpy() @ np.array(list(LAYER_FACEIT.values())))})

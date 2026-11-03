@@ -33,15 +33,17 @@ def main() -> None:
     ap.add_argument("--sd", type=float, required=True)
     ap.add_argument("--part", type=int, default=0)
     ap.add_argument("--parts", type=int, default=1)
+    ap.add_argument("--newcomer", action="store_true")
     ap.add_argument("--out", default=os.environ.get("OUTPUT_DIR", "."))
     a = ap.parse_args()
     s = selection_series(a.data)
     weeks = sorted(s.week_cutoff.unique())[a.part::a.parts]
     s = s[s.week_cutoff.isin(weeks)]
     with threadpool_limits(1):
-        e = e12_wide(a.data, s, a.sd)
+        e = e12_wide(a.data, s, a.sd, a.newcomer)
     Path(a.out).mkdir(parents=True, exist_ok=True)
-    e.merge(s[["match_id", "y"]], on="match_id").to_parquet(Path(a.out) / f"wide_sd{a.sd}_p{a.part}.parquet", index=False)
+    name = f"wide_sd{a.sd}{'_new' if a.newcomer else ''}_p{a.part}.parquet"
+    e.merge(s[["match_id", "y"]], on="match_id").to_parquet(Path(a.out) / name, index=False)
 
 
 if __name__ == "__main__":
