@@ -37,8 +37,11 @@ def main() -> None:
         lan = d.is_lan.to_numpy() == 1
         print(f"{c:10s} raw {ci(ll(d[c], y) - ll(d.q_base, y))} cv-inc {ci(l - base)} w={w[1]:.3f} "
               f"lan {np.mean((l - base)[lan]):+.4f} online {np.mean((l - base)[~lan]):+.4f} sd_inc {inc.std():.3f}", flush=True)
+    lanf = d.is_lan.to_numpy(float)
+    l, w = cv([zb * lanf, lanf])
+    print(f"zb*lan {ci(l - base)} w={w.round(3)}", flush=True)
     incs = {c: logit(d[c]) - zb for c in ["q_m240s", "q_lan", "q_team", "q_form"]}
-    for combo in (["q_m240s", "q_lan"], ["q_m240s", "q_team"], ["q_m240s", "q_lan", "q_form"], ["q_m240s", "q_team", "q_form"]):
+    for combo in (["q_m240s", "q_lan", "q_form", "q_pair"],["q_m240s", "q_lan"], ["q_m240s", "q_team"], ["q_m240s", "q_lan", "q_form"], ["q_m240s", "q_team", "q_form"]):
         l, w = cv([incs[c] for c in combo])
         print(f"joint {combo} {ci(l - base)} w={w.round(3)}", flush=True)
     for half in (mo < "2025-08", mo >= "2025-08"):

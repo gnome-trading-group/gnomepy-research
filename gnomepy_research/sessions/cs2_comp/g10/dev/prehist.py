@@ -68,6 +68,7 @@ def main() -> None:
                                zip(gaps, week.team_a, week.team_b, week.is_lan)])
                 rec["q_lan"] = series_price(lg)
                 rec["q_lanmap"] = [mm.series_price(g2, int(x), int(z)) for g2, x, z in zip(lg, week.team_a, week.team_b)]
+                rec["q_pair"] = series_price(np.array([mm.pair_gap(g, int(x), int(z)) for g, x, z in zip(gaps, week.team_a, week.team_b)]))
                 for which in ("team", "form"):
                     rec[f"q_{which}"] = series_price(np.array([mm.offset_gap(g, int(x), int(z), which)
                                                                for g, x, z in zip(gaps, week.team_a, week.team_b)]))

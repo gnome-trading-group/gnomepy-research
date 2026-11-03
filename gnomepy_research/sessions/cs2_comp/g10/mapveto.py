@@ -88,6 +88,16 @@ class MapModel:
         form = pd.DataFrame({"team": np.r_[m.team_a.to_numpy()[recent], m.team_b.to_numpy()[recent]],
                              "g": np.r_[wf * rr, -wf * rr], "h": np.r_[wf * inf, wf * inf]}).groupby("team")[["g", "h"]].sum()
         self.form_offset = (form.g / (form.h + prior)).to_dict()
+        lo, hi = np.minimum(m.team_a, m.team_b).to_numpy(), np.maximum(m.team_a, m.team_b).to_numpy()
+        sign = np.where(m.team_a.to_numpy() == lo, 1.0, -1.0)
+        pair = pd.DataFrame({"lo": lo, "hi": hi, "g": sign * w * r, "h": info}).groupby(["lo", "hi"])[["g", "h"]].sum()
+        self.pair_offset = (pair.g / (pair.h + prior)).to_dict()
+
+    def pair_gap(self, gap: float, team_a: int, team_b: int) -> float:
+        """The skill gap plus the residual of past meetings between these two teams."""
+        lo, hi = min(team_a, team_b), max(team_a, team_b)
+        o = self.pair_offset.get((lo, hi), 0.0)
+        return gap + (o if team_a == lo else -o)
 
     def offset_gap(self, gap: float, team_a: int, team_b: int, which: str) -> float:
         o = getattr(self, f"{which}_offset")
