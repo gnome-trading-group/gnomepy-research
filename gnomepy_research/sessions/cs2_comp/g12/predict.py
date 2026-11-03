@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import resource
 from pathlib import Path
 
 import pandas as pd
@@ -23,7 +22,6 @@ from gnomepy_research.sessions.cs2_comp.g12.raters import RATERS, Replay
 from gnomepy_research.sessions.cs2_comp.g12.stack import Stack
 
 COLS = tuple(name for name, _ in RATERS)
-PUGS_MIN_LINKED = 0
 HIST_COLS = ["match_id", "team_a", "team_b", "week_cutoff", "five_a", "five_b", "bo_type", "is_lan", "tier", "y", "known",
              "time"]
 
@@ -37,12 +35,11 @@ def target_rows(targets: pd.DataFrame) -> pd.DataFrame:
         "time": naive(targets.match_time).to_numpy(), "target": True})
 
 
-def panel(data_dir: str | Path, targets: pd.DataFrame, faceit: bool = True, raters=RATERS,
-          pugs_min_linked: int = PUGS_MIN_LINKED) -> pd.DataFrame:
+def panel(data_dir: str | Path, targets: pd.DataFrame, faceit: bool = True, raters=RATERS) -> pd.DataFrame:
     """Every HLTV series up to the latest target week (training rows) and every target, priced by the raters as they
     stood at the row's own week_cutoff."""
     until = pd.Timestamp(naive(targets.week_cutoff).max())
-    inp = load_inputs(data_dir, until, faceit, pugs_min_linked if faceit else 0)
+    inp = load_inputs(data_dir, until, faceit)
     hist = inp.series[inp.series.week_cutoff <= until][HIST_COLS].assign(target=False)
     return Replay(inp, raters).run(pd.concat([hist, target_rows(targets)], ignore_index=True))
 
@@ -78,8 +75,7 @@ def main() -> None:
     out = predict(a.data, targets, a.faceit, verbose=True)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     out.to_parquet(a.out, index=False)
-    print(f"wrote {len(out)} predictions to {a.out}; peak memory {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**30:.2f} GiB"
-          " (macOS) or x1024 (Linux)")
+    print(f"wrote {len(out)} predictions to {a.out}")
 
 
 if __name__ == "__main__":

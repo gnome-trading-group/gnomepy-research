@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from gnomepy_research.sessions.cs2_comp.g12.data import load_hltv, load_target_market, naive
-from gnomepy_research.sessions.cs2_comp.g12.predict import PUGS_MIN_LINKED, panel
+from gnomepy_research.sessions.cs2_comp.g12.predict import panel
 from gnomepy_research.sessions.cs2_comp.g12.raters import RATERS
 from gnomepy_research.sessions.cs2_comp.g12.stack import Stack, fit_logistic, logit, sigmoid
 
@@ -59,13 +59,12 @@ def main():
     ap.add_argument("--e12")
     ap.add_argument("--raters", help="json list of (name, RaterConfig overrides) to evaluate instead of the model's")
     ap.add_argument("--faceit", type=int, default=1)
-    ap.add_argument("--pugs", type=int, default=PUGS_MIN_LINKED)
     a = ap.parse_args()
     raters = tuple((n, o) for n, o in json.loads(a.raters)) if a.raters else RATERS
     cols = tuple(n for n, _ in raters)
     t = pd.read_parquet(Path(a.data) / "targets_tune.parquet")
     t["week_cutoff"] = naive(t.week_cutoff)
-    p = panel(a.data, t, bool(a.faceit), raters, a.pugs)
+    p = panel(a.data, t, bool(a.faceit), raters)
     out = os.environ.get("OUTPUT_DIR")
     if out:
         p.to_parquet(Path(out) / "panel.parquet", index=False)
