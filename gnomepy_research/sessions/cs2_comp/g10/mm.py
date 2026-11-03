@@ -64,7 +64,8 @@ def player_form(rows: pd.DataFrame, cutoff: pd.Timestamp, cfg: MMConfig, kind: s
     g["form"] = g.g / (g.h + cfg.prior_games * 0.25)
     g["activity"] = np.log1p(g.n)
     g["round_form"] = g.gr / (g.hr + cfg.prior_games * 0.25 * 22)
-    return g[["form", "activity", "round_form"]]
+    g["net"] = g.g
+    return g[["form", "activity", "round_form", "net"]]
 
 
 def level_trend(rows: pd.DataFrame, cutoff: pd.Timestamp, lookback_days: int = 90) -> pd.DataFrame:

@@ -27,6 +27,9 @@ def main() -> None:
     x = {"q_map": logit(d.q_m240s) - zb, "q_setting": logit(d.q_lan) - zb, "q_form": logit(d.q_form) - zb,
          "mm_form": (d.mm_a - d.mm_b).to_numpy(), "mm_activity": (d.mmact_a - d.mmact_b).to_numpy(),
          }
+    x["net"] = (d.mmnet_a - d.mmnet_b).to_numpy() / 10.0
+    x["net365"] = (d.mm365net_a - d.mm365net_b).to_numpy() / 10.0
+    x["form365"] = (d.mm365_a - d.mm365_b).to_numpy()
     x["level"] = (d.level_a - d.level_b).to_numpy()
     x["level_change"] = (d.level_change_a - d.level_change_b).to_numpy()
     base, wb = cvfit([ze], y, mo)
@@ -35,8 +38,9 @@ def main() -> None:
         l, w = cvfit([ze, v], y, mo)
         print(f"{k:14s} {ci(l - base)} w={w.round(3)}", flush=True)
     combos = [["q_map", "q_setting", "mm_form", "mm_activity"],
-              ["q_map", "q_setting", "mm_form", "mm_activity", "level_change"],
-              ["q_map", "q_setting", "mm_form", "mm_activity", "level", "level_change"]]
+              ["q_map", "q_setting", "mm_form", "mm_activity", "net"],
+              ["q_map", "q_setting", "mm_form", "mm_activity", "net365"],
+              ["q_map", "q_setting", "net", "mm_activity"]]
     early = mo < "2025-08"
     for c in combos:
         l, w = cvfit([ze] + [x[k] for k in c], y, mo)
