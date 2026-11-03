@@ -8,9 +8,9 @@ g06: e12's player-skill price, corrected by the announced fives' FACEIT matchmak
 
 e12 is refitted at each week_cutoff (HLTV and HLTV+FACEIT skill fits and its fixed logistic layer) and prices each side
 with its announced five. mm is the five's mean skill in a fit on the FACEIT matchmaking, hub and championship games
-its players played before the cutoff (`mm_skill`). GAMMA is that difference's weight relative to the skill price in a
-logistic regression on every HLTV bo3 series of Jan 2025 - Feb 2026, all of it before the first tune cutoff; the fit's
-settings were chosen on those series too.
+its players played before the cutoff (`mm_skill`). GAMMA is that difference's weight relative to logit(e12) in a
+logistic regression on every HLTV bo3 series of Jan 2025 - Feb 2026 (each priced by e12 at its own week_cutoff), all
+of it before the first tune cutoff; the matchmaking fit's settings were chosen on those series too.
 
 q carries no market information: the harness pools it with the kickoff price, and pre-kickoff price paths added
 nothing once a skill price was pooled (see the README).
@@ -29,7 +29,7 @@ from gnomepy_research.sessions.cs2_comp.g06.e12.predict import LAYER_FACEIT, LAY
 from gnomepy_research.sessions.cs2_comp.g06.history import logit, naive
 from gnomepy_research.sessions.cs2_comp.g06.mm_skill import MatchmakingGames, five_diff
 
-GAMMA = 0.61
+GAMMA = 0.41
 
 
 def targets_frame(df: pd.DataFrame) -> pd.DataFrame:

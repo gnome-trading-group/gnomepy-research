@@ -12,7 +12,6 @@ import pandas as pd
 from gnomepy_research.models.cs2.hltv.config import showmatch_mask
 from gnomepy_research.sessions.cs2_comp.bundle import load
 
-KICKOFF_WINDOW = pd.Timedelta(minutes=30)
 HORIZONS_H = (1, 3, 6, 12, 24)
 SMOOTH_MIN = (10, 20, 30, 45, 60, 90, 120, 180, 240, 360)
 EPS = 1e-3
