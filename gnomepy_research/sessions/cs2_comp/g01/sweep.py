@@ -27,6 +27,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True)
     ap.add_argument("--configs", required=True, help="JSON list of SkillFit keyword dicts")
+    ap.add_argument("--expanding", action="store_true", help="monthly expanding-window stage 1 over Apr-Jul")
     ap.add_argument("--dump", action="store_true")
     ap.add_argument("--out", default=os.environ.get("OUTPUT_DIR", "."))
     a = ap.parse_args()
@@ -53,11 +54,21 @@ def main() -> None:
             fit = skill.MultiFit(maps, w, stats, faceit=faceit, **kw)
             rows += [(r.t, r.y, r.match_id, r.lan, r.tier, *fit.diff(list(r.pa), list(r.pb))) for r in sub.itertuples()]
         d = pd.DataFrame(rows, columns=["t", "y", "match_id", "lan", "tier"] + skill.FEATURES)
-        tr = d.t < SPLIT
         res = {"config": cfg, "seconds": time.time() - t0}
-        clf = LogisticRegression(C=1, max_iter=1000).fit(d[skill.FEATURES][tr], d.y[tr])
-        res["loss"] = float(log_loss(clf.predict_proba(d[skill.FEATURES][~tr])[:, 1], d.y[~tr]))
-        print(res, flush=True)
+        if a.expanding:
+            losses, ys = [], []
+            for start in pd.date_range(SPLIT, LAST_WEEK, freq="MS"):
+                tr = d.t < start
+                te = (d.t >= start) & (d.t < start + pd.offsets.MonthBegin(1))
+                clf = LogisticRegression(C=1, max_iter=1000).fit(d[skill.FEATURES][tr], d.y[tr])
+                losses.append(-np.sum(d.y[te] * np.log(clf.predict_proba(d[skill.FEATURES][te])[:, 1]) +
+                                      (1 - d.y[te]) * np.log(clf.predict_proba(d[skill.FEATURES][te])[:, 0])))
+                ys.append(int(te.sum()))
+            res["loss"] = float(sum(losses) / sum(ys))
+        else:
+            tr = d.t < SPLIT
+            clf = LogisticRegression(C=1, max_iter=1000).fit(d[skill.FEATURES][tr], d.y[tr])
+            res["loss"] = float(log_loss(clf.predict_proba(d[skill.FEATURES][~tr])[:, 1], d.y[~tr]))
         results.append(res)
         if dump:
             d.to_parquet(Path(a.out) / f"features_{len(results)}.parquet")
