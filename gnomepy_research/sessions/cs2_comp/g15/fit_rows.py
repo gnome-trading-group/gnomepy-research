@@ -17,7 +17,7 @@ from gnomepy_research.sessions.cs2_comp.g15.data import attach_ratings, load_map
 from gnomepy_research.sessions.cs2_comp.g15.faceit import FaceitLink, load_faceit_maps
 from gnomepy_research.sessions.cs2_comp.g15.features import _lineup, history_jobs, target_jobs
 from gnomepy_research.sessions.cs2_comp.g15.ratings import Rankings
-from gnomepy_research.sessions.cs2_comp.g15.skillfit import Fit, FitConfig, MapSet, fit_window
+from gnomepy_research.sessions.cs2_comp.g15.skillfit import Fit, FitConfig, MapSet, fit_window, veto_series
 
 
 def load_mapset(data_dir: str, until: pd.Timestamp, faceit: bool, ratings: bool = False) -> MapSet:
@@ -39,9 +39,24 @@ def price_jobs(fit: Fit, week: pd.DataFrame, rk: Rankings, cutoff: pd.Timestamp,
         ra, rb = rk.rank_of(ta, cutoff), rk.rank_of(tb, cutoff)
         sa, unseen_a, few_a = fit.lineup(fa, ra)
         sb, unseen_b, few_b = fit.lineup(fb, rb)
-        out.append({"match_id": j.match_id, "week_cutoff": cutoff, f"{prefix}_pgap": sa - sb,
-                    f"{prefix}_tgap": fit.team(ta) - fit.team(tb), f"{prefix}_unseen_a": unseen_a, f"{prefix}_unseen_b": unseen_b,
-                    f"{prefix}_few_a": few_a, f"{prefix}_few_b": few_b})
+        lan = bool(j.is_lan)
+        if lan:
+            sa += fit.lineup_lan(fa)
+            sb += fit.lineup_lan(fb)
+        row = {"match_id": j.match_id, "week_cutoff": cutoff, f"{prefix}_pgap": sa - sb,
+               f"{prefix}_tgap": fit.team(ta) - fit.team(tb), f"{prefix}_unseen_a": unseen_a, f"{prefix}_unseen_b": unseen_b,
+               f"{prefix}_few_a": few_a, f"{prefix}_few_b": few_b}
+        if fit.map_dev is not None:
+            ma, mb = fit.lineup_on_maps(fa, ra, lan), fit.lineup_on_maps(fb, rb, lan)
+            if ma is not None and mb is not None:
+                gaps = ma - mb
+                p_veto = float(np.clip(veto_series(gaps), 1e-4, 1 - 1e-4))
+                row[f"{prefix}_veto_logit"] = float(np.log(p_veto / (1 - p_veto)))
+                row[f"{prefix}_map_spread"] = float(gaps.std())
+            else:
+                row[f"{prefix}_veto_logit"] = np.nan
+                row[f"{prefix}_map_spread"] = np.nan
+        out.append(row)
     return out
 
 
@@ -85,10 +100,13 @@ def main() -> None:
     ap.add_argument("--window", type=int, default=365)
     ap.add_argument("--rating-gamma", type=float, default=0.0)
     ap.add_argument("--rating-sd", type=float, default=0.31)
+    ap.add_argument("--map-sigma", type=float, default=0.0)
+    ap.add_argument("--lan-sigma", type=float, default=0.0)
     ap.add_argument("--prefix", default="bf")
     a = ap.parse_args()
     cfg = FitConfig(window_days=a.window, half_life_days=a.half_life, sigma=a.sigma, team_sigma=a.team_sigma, faceit_weight=a.faceit_weight,
-                    rating_gamma=a.rating_gamma, rating_sd=a.rating_sd)
+                    rating_gamma=a.rating_gamma, rating_sd=a.rating_sd, map_sigma=a.map_sigma,
+                    lan_sigma=a.lan_sigma)
     if a.targets:
         jobs = target_jobs(pd.read_parquet(a.targets))
     else:

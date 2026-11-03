@@ -4,11 +4,14 @@ g15 predictions: P(team A wins the bo3) for every target series, from data befor
     python -m gnomepy_research.sessions.cs2_comp.g15.predict --data <bundle> --targets <targets parquet> --out <parquet>
         [--weeks 2026-04-06,2026-04-13]
 
-Per distinct week_cutoff, two batch skill fits on the maps of the trailing 900 days (half-life 900 days): HLTV with
-the per-player map-rating channel, and HLTV plus FACEIT. Each prices the announced fives through a binomial map model
-and a bo3. The fixed logistic layer below blends the two bo3 logits; its weights were fitted by
-`dev_layer.py` on the Sep 2024 - Mar 2026 weekly walk-forward, all before the first tune cutoff, so they are
-point-in-time for every target.
+Per distinct week_cutoff, two batch skill fits on the maps of the trailing 900 days (half-life 900 days):
+
+- HLTV maps, with the per-player map-rating channel and per-player map deviations; the announced fives are priced on
+  each map of the active pool and the bo3 goes through the veto (`skillfit.veto_series`);
+- HLTV plus FACEIT maps, priced as one bo3 from the fives' mean skill.
+
+The fixed logistic layer below blends the two bo3 logits; its weights were fitted by `dev_layer.py` on the Sep 2024 -
+Mar 2026 weekly walk-forward, all before the first tune cutoff, so they are point-in-time for every target.
 """
 from __future__ import annotations
 
@@ -26,10 +29,23 @@ from gnomepy_research.sessions.cs2_comp.g15.skillfit import FitConfig
 
 LONG = dict(window_days=900, half_life_days=900)
 FITS = {
-    "g": (FitConfig(rating_gamma=0.3, rating_sd=0.45, **LONG), False),
-    "f": (FitConfig(faceit_weight=0.5, **LONG), True),
+    "g": (FitConfig(sigma=0.7, rating_gamma=0.3, rating_sd=0.45, map_sigma=0.35, **LONG), False),
+    "f": (FitConfig(sigma=0.7, faceit_weight=0.5, **LONG), True),
 }
-LAYER = {"one": 0.014394, "z_g": 0.376197, "z_f": 0.285802}
+LAYER = {"one": 0.020948, "z_g_veto": 0.402839, "z_f": 0.231434}
+
+
+def z_columns(rows: pd.DataFrame) -> dict[str, np.ndarray]:
+    """Every layer column: z_<fit> is the bo3 logit of the fit's gap; z_<fit>_veto the veto-priced logit, falling back
+    to z_<fit> for a side without a five."""
+    out = {"one": np.ones(len(rows))}
+    for name in FITS:
+        out[f"z_{name}"] = z_series(rows[f"{name}_gap"])
+        col = f"{name}_veto_logit"
+        if col in rows:
+            v = rows[col].to_numpy(float)
+            out[f"z_{name}_veto"] = np.where(np.isnan(v), out[f"z_{name}"], v)
+    return out
 
 
 def predict(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = False, rows_dir: str | Path | None = None) -> pd.DataFrame:
@@ -41,9 +57,8 @@ def predict(data_dir: str | Path, targets: pd.DataFrame, verbose: bool = False, 
     if rows_dir is not None:
         Path(rows_dir).mkdir(parents=True, exist_ok=True)
         rows.to_parquet(Path(rows_dir) / "rows.parquet", index=False)
-    z = np.zeros(len(rows))
-    for col, weight in LAYER.items():
-        z += weight * (np.ones(len(rows)) if col == "one" else z_series(rows[f"{col[2:]}_gap"]))
+    cols = z_columns(rows)
+    z = sum(weight * cols[col] for col, weight in LAYER.items())
     return pd.DataFrame({"match_id": rows.match_id.to_numpy(), "q": expit(z), "fit_cutoff": pd.to_datetime(rows.week_cutoff).to_numpy()})
 
 

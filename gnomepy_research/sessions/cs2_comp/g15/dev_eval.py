@@ -58,6 +58,7 @@ def main() -> None:
     ap.add_argument("--warmup", default="2024-09-01")
     ap.add_argument("--extra", nargs="*", default=[], help="batch-fit row files to merge on match_id")
     ap.add_argument("--each", action="store_true", help="score every *_gap column alone instead of the named variants")
+    ap.add_argument("--l2", type=float, default=1.0, help="ridge for the market-aware expanding fits")
     ap.add_argument("--variants", help="JSON {name: [columns]} replacing the built-in pure variants")
     ap.add_argument("--market-variants", help="JSON {name: [columns]} replacing the built-in market-aware variants")
     a = ap.parse_args()
@@ -108,7 +109,7 @@ def main() -> None:
         for m in np.unique(months[dev]):
             tr = has_m & (months < m) & (rows.week_cutoff < pd.Timestamp(m + "-01")).to_numpy()
             te = dev & (months == m)
-            w = fit_logistic(X[tr], y[tr], l2=1.0)
+            w = fit_logistic(X[tr], y[tr], l2=a.l2)
             q[te] = expit(X[te] @ w)
         lq = log_loss(q[dev], y[dev])
         lp = log_loss(pool(m0[dev], q[dev], y[dev], months[dev]), y[dev])

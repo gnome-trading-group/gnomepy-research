@@ -57,6 +57,13 @@ def design(rows: pd.DataFrame, cols: list[str]) -> np.ndarray:
                     tot = np.nan_to_num(r[ca].to_numpy(float), nan=5.0) + np.nan_to_num(r[cb].to_numpy(float), nan=5.0)
                     d[f"{name}_{kind}"] = z * tot
                     d[f"{prefix}_{kind}"] = np.nan_to_num(r[ca].to_numpy(float), nan=5.0) - np.nan_to_num(r[cb].to_numpy(float), nan=5.0)
+    for c in r.columns:
+        if c.endswith("_logit"):
+            prefix = c.split("_")[0]
+            fallback = d.get("z_" + prefix, np.zeros(n))
+            v = r[c].to_numpy(float)
+            d["z_" + c[:-6]] = np.where(np.isnan(v), fallback, v)
+            d["z_" + c[:-6] + "_thin"] = d["z_" + c[:-6]] * thin
     few_a = np.nan_to_num(r.pm_new_a.to_numpy(float), nan=5.0) if "pm_new_a" in r else np.zeros(n)
     few_b = np.nan_to_num(r.pm_new_b.to_numpy(float), nan=5.0) if "pm_new_b" in r else np.zeros(n)
     d["few"] = few_a - few_b
@@ -82,6 +89,11 @@ def design(rows: pd.DataFrame, cols: list[str]) -> np.ndarray:
         d["zm_prints"] = zm * np.log1p(np.nan_to_num(r.n_prints.to_numpy(float), nan=0.0))
         d["drift"] = zm - clip_logit(np.nan_to_num(r.p_24h.to_numpy(float), nan=0.5)) * has
         d["drift48"] = zm - clip_logit(np.nan_to_num(r.p_first.to_numpy(float), nan=0.5)) * has
+        prints = np.log1p(np.nan_to_num(r.n_prints.to_numpy(float), nan=0.0))
+        stale = np.log1p(np.nan_to_num(r.stale_min.to_numpy(float), nan=0.0))
+        for name in [k for k in d if k.startswith("z_")]:
+            d[name + "_prints"] = d[name] * prints
+            d[name + "_stale"] = d[name] * stale
     return np.column_stack([d[c] for c in cols])
 
 

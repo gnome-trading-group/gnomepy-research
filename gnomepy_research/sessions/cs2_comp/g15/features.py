@@ -157,5 +157,6 @@ def target_jobs(targets: pd.DataFrame) -> pd.DataFrame:
     t["match_time"] = mt.dt.tz_convert(None) if mt.dt.tz is not None else mt
     return pd.DataFrame({"match_id": t.match_id, "week_cutoff": t.week_cutoff, "team_a": t.team_a_id, "team_b": t.team_b_id,
                          "lineup_a": t.team_a_lineup_ids, "lineup_b": t.team_b_lineup_ids,
-                         "standins_a": t.team_a_standin_ids, "standins_b": t.team_b_standin_ids,
+                         "standins_a": t.team_a_standin_ids if "team_a_standin_ids" in t else None,
+                         "standins_b": t.team_b_standin_ids if "team_b_standin_ids" in t else None,
                          "is_lan": t.is_lan, "event_tier": t.event_tier, "match_time": t.match_time})
