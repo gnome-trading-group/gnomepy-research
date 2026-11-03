@@ -56,7 +56,6 @@ class Inputs:
         parts = [self._hltv_maps(h, self._ratings())]
         if faceit:
             parts.append(self._faceit_maps())
-            parts.append(self._levels())
         if market:
             parts.append(self._market_rows())
         self.maps = pd.concat(parts, ignore_index=True)
@@ -107,7 +106,6 @@ class Inputs:
         d = self.data_dir
         link = load(d, "faceit/hltv_faceit_map")
         f2h = dict(zip(link.faceit_id, link.hltv_id.astype(np.int64)))
-        self._f2h = f2h
 
         def uid(f):
             return int(f2h[f]) if f in f2h else faceit_uid(f)
@@ -156,26 +154,6 @@ class Inputs:
                              "ratings_a": rt_a, "ratings_b": rt_b,
                              "team_a": fh.faction1_hltv_team.fillna(-1).astype(np.int64).to_numpy(),
                              "team_b": fh.faction2_hltv_team.fillna(-1).astype(np.int64).to_numpy(), "is_lan": 0})
-
-    def _uid(self, faceit_id: str) -> int:
-        h = self._f2h.get(faceit_id)
-        return int(h) if h is not None else faceit_uid(faceit_id)
-
-    def _levels(self) -> pd.DataFrame:
-        """Each linked player's FACEIT skill level whenever it changes, known once its match finished."""
-        ro = load(self.data_dir, "faceit/faceit_rosters", self.until, ["match_id", "faceit_id", "played", "skill_level"])
-        ro = ro[ro.played.fillna(False).astype(bool) & ro.skill_level.notna()]
-        fm = load(self.data_dir, "faceit/faceit_matches", self.until, ["match_id", "finished_at"])
-        ro = ro.merge(fm, on="match_id")
-        ro["known"] = pd.to_datetime(ro.finished_at, unit="s")
-        ro["uid"] = [self._uid(f) for f in ro.faceit_id]
-        ro = ro.sort_values(["uid", "known", "match_id"], kind="stable")
-        changed = (ro.uid != ro.uid.shift()) | (ro.skill_level != ro.skill_level.shift())
-        ro = ro[changed.to_numpy()]
-        return pd.DataFrame({"match_id": ro.match_id.astype(str).to_numpy(), "known": ro.known.to_numpy(),
-                             "five_a": [(u,) for u in ro.uid], "five_b": [() for _ in range(len(ro))], "rounds_a": np.nan,
-                             "rounds": np.nan, "source": "level", "team_a": -1, "team_b": -1, "is_lan": 0,
-                             "p_a": ro.skill_level.to_numpy(float)})
 
     def _market_rows(self) -> pd.DataFrame:
         """Past series' kickoff prices as gap measurements on the fives the series announced. A row counts once the

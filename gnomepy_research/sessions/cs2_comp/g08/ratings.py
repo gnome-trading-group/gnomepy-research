@@ -57,9 +57,6 @@ class RatingConfig:
     rating_sd: float = 0.3
     # FACEIT maps carry a rating proxy fitted on HLTV maps (kills, deaths and damage per round); zero leaves it out.
     faceit_rating_sd: float = 0.0
-    # A player the state has not seen starts at level_coef * (FACEIT skill level - 8) from where it would otherwise
-    # start, when a FACEIT level is known for them; zero ignores levels.
-    level_coef: float = 0.0
 
 
 def regulation(score_a: np.ndarray, score_b: np.ndarray, overtime: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -77,7 +74,6 @@ class SkillState:
         self.var: dict[tuple, float] = {}
         self.seen: dict[tuple, float] = {}
         self.maps: dict[int, int] = defaultdict(int)
-        self.levels: dict[int, float] = {}
         self.team_form: dict[int, float] = defaultdict(float)
         self.team_days: dict[int, deque] = defaultdict(lambda: deque(maxlen=400))
         self.team_fives: dict[int, deque] = defaultdict(lambda: deque(maxlen=60))
@@ -90,13 +86,11 @@ class SkillState:
             return 0.0, cfg.lan_var
         if key[0] == "m":
             return 0.0, cfg.map_var
-        level = self.levels.get(key[1])
-        shift = cfg.level_coef * (level - 8.0) if level is not None else 0.0
         known = [self.mu[("p", m)] for m in mates if ("p", m) in self.mu]
         if len(known) >= 2:
-            return float(np.mean(known)) + cfg.new_offset + shift, cfg.prior_var
+            return float(np.mean(known)) + cfg.new_offset, cfg.prior_var
         # Ratings are zero-sum, so a wholly new five entering at zero sits at the population's mean.
-        return shift, cfg.prior_var
+        return 0.0, cfg.prior_var
 
     def belief(self, key: tuple, day: float, mates: list[int]) -> tuple[float, float, bool]:
         cfg = self.cfg
@@ -267,13 +261,10 @@ def run(maps: pd.DataFrame, queries: pd.DataFrame, cfg: RatingConfig) -> pd.Data
     Returns one feature row per query, read from the state holding every map known before the query's cutoff."""
     if not cfg.market_var:
         maps = maps[maps.source != "market"]
-    if not cfg.level_coef:
-        maps = maps[maps.source != "level"]
-    # A series' price was known before its own maps were played, and a level before the maps it was read from.
-    order = (~maps.source.isin(["market", "level"])).astype(int)
+    # A series' price was known before its own maps were played.
+    order = (maps.source != "market").astype(int)
     maps = maps.assign(_o=order).sort_values(["known", "_o", "match_id"], kind="stable").reset_index(drop=True)
     is_mkt = (maps.source == "market").to_numpy()
-    is_lvl = (maps.source == "level").to_numpy()
     rt_a = maps.ratings_a.to_numpy() if "ratings_a" in maps and cfg.rating_gamma else np.full(len(maps), None)
     rt_b = maps.ratings_b.to_numpy() if "ratings_b" in maps and cfg.rating_gamma else np.full(len(maps), None)
     z = (np.log(np.clip(maps.p_a.to_numpy(float), 0.02, 0.98)) - np.log(1 - np.clip(maps.p_a.to_numpy(float), 0.02, 0.98))) / cfg.market_scale \
@@ -295,9 +286,6 @@ def run(maps: pd.DataFrame, queries: pd.DataFrame, cfg: RatingConfig) -> pd.Data
         c64 = np.datetime64(pd.Timestamp(cutoff))
         stop = np.searchsorted(mk, c64, side="left")
         for j in range(i, stop):
-            if is_lvl[j]:
-                state.levels[int(fa[j][0])] = float(maps.p_a.iat[j])
-                continue
             if is_mkt[j]:
                 state.observe_gap(list(fa[j]), list(fb[j]), z[j], mday[j], ta[j], tb[j], lan[j])
                 continue
