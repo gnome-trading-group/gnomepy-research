@@ -15,6 +15,12 @@ match. Every book update re-checks the edge and tops the holding up to the Kelly
 order walks the ask book only as deep as every share still clears the threshold and the Kelly size; it is a limit at
 the deepest level it costed, so it only ever takes liquidity it has already priced. It never holds both teams.
 
+It decides again only when something it reads has changed: a listing's top of book, the model's price, a fill, or the
+window opening. An order that comes back short (cancelled, expired or rejected with shares left) backs its listing off
+until that listing's top of book moves: the book it saw was wrong about what could be taken, and asking again against
+the same book only repeats the miss. That matters most in paper, where the feed never shows our own fills, so the
+book keeps offering what the simulator already let us take.
+
 A held position is sold only after the model's price has changed since it last bought (a lineup or stand-in change),
 and only into bids whose proceeds after the fee beat the new fair price by min_edge: selling then is worth more than
 holding. A move in the market alone never sells, since the market moving is what the blend already prices. Once the
@@ -94,6 +100,13 @@ class _Leg:
     bids: list[Level] = field(default_factory=list)
     in_flight: bool = False
     last_limit: float = 0.0
+    # The top of book when an order here last came back short; nothing is sent here until the top moves off it.
+    backoff_top: tuple | None = None
+
+
+def _top(leg: _Leg) -> tuple:
+    """(best ask, best bid), each a level or None."""
+    return (leg.asks[0] if leg.asks else None, leg.bids[0] if leg.bids else None)
 
 
 def _fetch(uri: str) -> tuple[Path, str]:
@@ -201,6 +214,10 @@ class CS2Series(Strategy):
         # The model price the position was last bought at; a change from it is what lets the session sell.
         self._entry_q: float | None = None
         self._recorded_quote_at: int | None = None
+        # Something the decision reads has changed since it last ran.
+        self._dirty = True
+        self._decided_quote_at: int | None = None
+        self._was_ready = False
 
         registry = RegistryClient()
         self._venues = [(leg["venue"], (self._resolve(registry, leg["venue"], 0, leg["listing_team_a"]),
@@ -295,10 +312,17 @@ class CS2Series(Strategy):
         leg = self._leg_of.get(self.streams.listing_id(data.stream_id))
         if leg is None:
             return []
+        before = _top(leg)
         leg.asks = [Level(data.ask_price(i) / PRICE_SCALE, data.ask_size(i) / SIZE_SCALE)
                     for i in range(self.book_depth) if data.ask_size(i) > 0]
         leg.bids = [Level(data.bid_price(i) / PRICE_SCALE, data.bid_size(i) / SIZE_SCALE)
                     for i in range(self.book_depth) if data.bid_size(i) > 0]
+        top = _top(leg)
+        if top != before:
+            self._dirty = True
+        if leg.backoff_top is not None and top != leg.backoff_top:
+            leg.backoff_top = None
+            self._dirty = True
         return self._evaluate(data.event_timestamp)
 
     def _evaluate(self, now_ns: int) -> list[Intent]:
@@ -314,14 +338,18 @@ class CS2Series(Strategy):
         if state is None or quote is None:
             return []
         self._record_quote(now_ns, quote)
-        if now_ns - state.at_ns > self.max_state_age_ns:
+        ready = (now_ns - state.at_ns <= self.max_state_age_ns and now_ns >= state.kickoff_ns - self.window_ns
+                 and quote.lineup_known and not math.isnan(quote.q)
+                 and 0 <= now_ns - self._model_cutoff_ns <= self.max_model_age_ns)
+        if ready and not self._was_ready:
+            self._dirty = True
+        self._was_ready = ready
+        if quote.at_ns != self._decided_quote_at:
+            self._dirty = True
+        if not ready or in_flight or not self._dirty:
             return []
-        if now_ns < state.kickoff_ns - self.window_ns:
-            return []
-        if not quote.lineup_known or in_flight or math.isnan(quote.q):
-            return []
-        if not 0 <= now_ns - self._model_cutoff_ns <= self.max_model_age_ns:
-            return []
+        self._dirty = False
+        self._decided_quote_at = quote.at_ns
         mid = self._mid_team_a()
         if mid is None:
             return []
@@ -341,7 +369,7 @@ class CS2Series(Strategy):
             if sale is not None:
                 leg, s = sale
                 return self._order(now_ns, leg, SELL, quote.q, mid, fairs[leg.team], s.best_bid, s.edge_at_best,
-                                   s.limit_price, s.shares, s.proceeds, held[leg.team])
+                                   s.limit_price, s.shares, s.proceeds, held[leg.team], levels=leg.bids)
 
         entry = self._best_entry(fairs, (held_team,) if held_team is not None else (0, 1))
         if entry is None:
@@ -359,7 +387,7 @@ class CS2Series(Strategy):
         self._entry_q = quote.q
         leg.last_limit = take.limit_price
         return self._order(now_ns, leg, BUY, quote.q, mid, e.fair, e.best_ask, e.edge_at_best, take.limit_price,
-                           take.shares, take.cost, held[leg.team], kelly_bankroll)
+                           take.shares, take.cost, held[leg.team], kelly_bankroll, levels=e.levels)
 
     def _mid_team_a(self) -> float | None:
         """Team A's mid: Polymarket International's when it has one, else the tightest two-sided book elsewhere."""
@@ -380,7 +408,7 @@ class CS2Series(Strategy):
         """The listing, on any venue, of an allowed team whose best ask clears the edge by the most."""
         entries = []
         for leg in self._legs:
-            if leg.team not in teams:
+            if leg.team not in teams or leg.backoff_top is not None:
                 continue
             e = evaluate_side(fairs[leg.team], leg.asks, min_edge=self.min_edge, fee_rate=self._taker_rate(leg),
                               tick=leg.tick)
@@ -393,7 +421,7 @@ class CS2Series(Strategy):
         sales = []
         for leg in self._legs:
             filled = states[leg.listing_id][0]
-            if leg.team != team or filled <= 0:
+            if leg.team != team or filled <= 0 or leg.backoff_top is not None:
                 continue
             s = sell_down(fair, leg.bids, filled, min_edge=self.min_edge, fee_rate=self._taker_rate(leg),
                           lot=leg.lot / SIZE_SCALE)
@@ -407,18 +435,35 @@ class CS2Series(Strategy):
 
     def _order(self, now_ns: int, leg: _Leg, direction: int, q: float, mid: float, fair: float, best: float,
                edge: float, limit: float, shares: float, usd: float, held_shares: float,
-               kelly_bankroll: float = math.nan) -> list[Intent]:
+               kelly_bankroll: float = math.nan, levels=()) -> list[Intent]:
         leg.in_flight = True
         self._record_order(now_ns, leg, direction, q, mid, fair, best, edge, limit, shares, usd, held_shares,
                            kelly_bankroll)
+        reach = [lv for lv in levels if (lv.price <= limit + 1e-12 if direction == BUY else lv.price >= limit - 1e-12)]
+        logger.info(
+            "match %d %s %s team %s (listing %d): model %.3f, mid %.3f, fair %.3f | best %s %.3f, edge %.3f | "
+            "limit %.3f, %.2f sh $%.2f over [%s] | held %.2f, kelly bankroll %.0f",
+            self.match_id, "BUY" if direction == BUY else "SELL", leg.venue, "AB"[leg.team], leg.listing_id, q, mid,
+            fair, "ask" if direction == BUY else "bid", best, edge, limit, shares, usd,
+            ", ".join(f"{lv.price:.3f}x{lv.size:.2f}" for lv in reach), held_shares, kelly_bankroll)
         return [Intent(leg.exchange_id, leg.security_id, take_side=Side.BID if direction == BUY else Side.ASK,
                        take_size=round(shares * SIZE_SCALE), take_order_type=OrderType.LIMIT,
                        take_limit_price=round(limit * PRICE_SCALE))]
 
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
         leg = self._leg_of.get(self.streams.listing_id_for(report.exchange_id, report.security_id))
-        if leg is not None and report.order_status in TERMINAL:
+        if leg is None:
+            return []
+        if getattr(report, "filled_qty", 0) or report.order_status == OrderStatus.FILLED:
+            # Holdings changed, so the Kelly size did.
+            self._dirty = True
+        if report.order_status in TERMINAL:
             leg.in_flight = False
+            if report.order_status != OrderStatus.FILLED:
+                leg.backoff_top = _top(leg)
+                logger.info("match %d %s team %s (listing %d): order %s with shares left, backing off until its top "
+                            "of book moves", self.match_id, leg.venue, "AB"[leg.team], leg.listing_id,
+                            report.order_status.name)
         return []
 
     # ---- metrics ---------------------------------------------------------------------------

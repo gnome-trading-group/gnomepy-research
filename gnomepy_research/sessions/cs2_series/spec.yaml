@@ -29,6 +29,8 @@ constraints:
     - selling on a market move alone - only a change in the model's price allows a sale
     - selling unless the proceeds after the fee beat the current fair price by min_edge
     - holding more than the Kelly size at the current price, or more than max_stake_usd per match
+    - sending again to a listing whose last order came back short before its top of book moves
+    - deciding on a book update that changed nothing the decision reads
   notes:
     - Model (Nov 2026) - e12-wide-mm, e12 plus 0.406 x the FACEIT matchmaking-skill gap of the announced fives, replaced the XGB pre-veto + Bayesian series blend
     - The fair price is fitted on kickoff prices only, so the session trades the last hour; 12h-out comparisons carry lineup lookahead and say nothing about this window

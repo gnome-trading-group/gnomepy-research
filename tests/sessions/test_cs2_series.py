@@ -13,6 +13,8 @@ import json
 import math
 import time
 from dataclasses import dataclass
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -871,3 +873,150 @@ def test_each_new_model_price_is_recorded_once(make):
     assert [r["q"] for r in rows] == pytest.approx([0.40, 0.60])
     assert rows[0]["lineups_hash"] != rows[1]["lineups_hash"] and rows[1]["lineup_known"] == 1
     assert rows[1]["model_cutoff"] == pd.Timestamp("2026-10-02").value
+
+
+# ---- retries: back off after a miss, decide only on what changed ------------------------------------------------
+
+def _decisions(strat):
+    """Counts the decisions the strategy runs: each starts by reading the mid."""
+    calls = []
+    real = strat._mid_team_a
+    strat._mid_team_a = lambda: calls.append(1) or real()
+    return calls
+
+
+def test_a_miss_backs_its_listing_off_until_its_top_of_book_moves(make):
+    s = make()
+    assert _key(_tick(s, 102, B_ASK, 30)[0]) == LISTINGS[102]
+    _done(s, 102, OrderStatus.CANCELED)
+    assert _tick(s, 102, B_ASK, 29) == [], "the same book: asking again would only miss again"
+    assert _tick(s, 102, B_ASK, 20) == [], "however long it waits"
+    assert _tick(s, 102, [(0.50, 900)], 19) != [], "its top moved: the book has something new to say"
+
+
+@pytest.mark.parametrize("status", [OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED])
+def test_any_order_that_ends_short_backs_off(make, status):
+    s = make()
+    _tick(s, 102, B_ASK, 30)
+    s.on_execution_report(_Report(*LISTINGS[102], status))
+    assert s._legs[[leg.listing_id for leg in s._legs].index(102)].backoff_top is not None
+
+
+def test_a_miss_on_one_venue_leaves_the_others_trading(make):
+    s = make()
+    _tick(s, 102, B_ASK, 30)
+    _done(s, 102, OrderStatus.CANCELED)
+    out = _tick(s, 202, [(0.52, 1000)], 29)
+    assert [_key(o) for o in out] == [LISTINGS[202]], "Polymarket backed off; Kalshi's ask still clears"
+
+
+def test_a_full_fill_does_not_back_off_and_decides_again_on_the_next_update(make):
+    s = make()
+    o = _tick(s, 102, [(0.50, 20), (0.55, 1000)], 30)[0]
+    s.positions.fill(102, shares=o.take_size / S, price=0.50, fee=o.take_size / S * taker_fee(0.50, FEE))
+    _done(s, 102, OrderStatus.FILLED)
+    calls = _decisions(s)
+    _tick(s, 202, [(0.95, 1000)], 29)
+    assert calls, "holdings changed, so the Kelly size did: decide again"
+    assert s._legs[[leg.listing_id for leg in s._legs].index(102)].backoff_top is None
+
+
+def test_only_a_top_of_book_change_or_a_new_model_price_triggers_a_decision(make):
+    s = make()
+    calls = _decisions(s)
+    _tick(s, 102, [(0.58, 1000), (0.60, 10)], 30)
+    assert len(calls) == 1, "the window opened: decide"
+    _tick(s, 102, [(0.58, 1000), (0.61, 10)], 29)
+    _tick(s, 102, [(0.58, 1000), (0.61, 10)], 28)
+    assert len(calls) == 1, "only a deeper level moved, then nothing did"
+    _tick(s, 102, [(0.57, 1000), (0.61, 10)], 27)
+    assert len(calls) == 2, "the best ask moved"
+
+
+def test_a_book_seen_before_the_window_is_decided_on_when_it_opens(make):
+    s = make()
+    assert _tick(s, 102, B_ASK, 90) == []
+    assert _tick(s, 102, B_ASK, 30) != [], "nothing in the book changed, but the window opened"
+
+
+def test_a_change_while_an_order_is_in_flight_is_decided_on_after_it(make):
+    s = make()
+    _tick(s, 102, B_ASK, 30)
+    _tick(s, 202, [(0.52, 1000)], 29)
+    _done(s, 102, OrderStatus.CANCELED)
+    assert [_key(o) for o in _tick(s, 102, B_ASK, 28)] == [LISTINGS[202]], \
+        "Kalshi's new ask arrived while Polymarket's order was out; it is acted on once that order is back"
+
+
+def test_each_order_and_each_back_off_is_logged(make, caplog):
+    s = make()
+    with caplog.at_level("INFO", logger=mod.__name__):
+        _tick(s, 102, [(0.50, 100), (0.51, 50), (0.70, 5)], 30)
+        _done(s, 102, OrderStatus.CANCELED)
+    order, backoff = [r.getMessage() for r in caplog.records]
+    assert order.startswith("match 7 BUY polymarket team B (listing 102): model 0.400")
+    assert "fair 0.600" in order and "best ask 0.500" in order
+    assert "over [0.500x100.00, 0.510x50.00]" in order, "the levels the order reaches, not the ones past its limit"
+    assert backoff.startswith("match 7 polymarket team B (listing 102): order CANCELED with shares left, backing off")
+
+
+# ---- regression: a prod paper session's own books ----------------------------------------------------------------
+
+# Paper session 7450c387 (2026-11-04, Azuolas v Walczaki), 11:05:30-11:10 UTC: every book update of its six listings
+# from its journal, kickoff 12:00. Prod sent 110 IOCs in that span, about one per update, 105 filling nothing.
+JOURNAL_BOOKS = Path(__file__).parent / "fixtures" / "cs2_series_books_7450c387.csv"
+JOURNAL_KICKOFF = pd.Timestamp("2026-11-04 12:00", tz="UTC").value
+# Its book streams, as this file's listings: team A is Azuolas.
+JOURNAL_STREAMS = {2230413: 101, 2230414: 102, 2224916: 201, 2224917: 202, 2223067: 301, 2223066: 302}
+# The blend weights in prod that day; the stand-in model's 0.40 is close to the session's 0.403.
+PROD_BLEND = MarketBlend(market=0.6123418580625587, model=0.5130722002876456, intercept=0.008852116804822632)
+
+
+class _PaperExchange:
+    """Fills IOCs the way the paper simulator does: a level offers its displayed size less what we already took there
+    (the feed never shows our fills), and what we took is given back only as the level shrinks."""
+
+    def __init__(self):
+        self.asks, self.consumed = {}, {}
+
+    def on_book(self, listing, asks):
+        old, taken = self.asks.get(listing, {}), self.consumed.setdefault(listing, {})
+        for price in list(taken):
+            shrink = max(0.0, old.get(price, 0.0) - asks.get(price, 0.0))
+            taken[price] = min(max(0.0, taken[price] - shrink), asks.get(price, 0.0))
+        self.asks[listing] = asks
+
+    def buy(self, listing, shares, limit):
+        taken, got, cost = self.consumed.setdefault(listing, {}), 0.0, 0.0
+        for price, size in sorted(self.asks[listing].items()):
+            if price > limit + 1e-9 or got >= shares - 1e-9:
+                break
+            take = min(max(0.0, size - taken.get(price, 0.0)), shares - got)
+            got, cost = got + take, cost + take * price
+            taken[price] = taken.get(price, 0.0) + take
+        return got, cost / got if got else 0.0
+
+
+def test_a_prod_paper_sessions_books_no_longer_draw_an_order_per_update(make):
+    books = pd.read_csv(JOURNAL_BOOKS)
+    s, exchange, orders = make(models=_models(blend=PROD_BLEND)), _PaperExchange(), []
+    for r in books.itertuples():
+        listing = JOURNAL_STREAMS[r.stream]
+        level = lambda side, i: (getattr(r, f"{side}p{i}"), getattr(r, f"{side}s{i}"))
+        asks = [level("a", i) for i in range(10) if not pd.isna(getattr(r, f"as{i}"))]
+        bids = [level("b", i) for i in range(10) if not pd.isna(getattr(r, f"bs{i}"))]
+        exchange.on_book(listing, dict(asks))
+        out = _tick(s, listing, asks, (JOURNAL_KICKOFF - r.ts) / MINUTE, bids)
+        for o in out:
+            bought = next(lid for lid, venue in LISTINGS.items() if venue == _key(o))
+            shares, limit = o.take_size / S, o.take_limit_price / P
+            got, price = exchange.buy(bought, shares, limit)
+            if got:
+                s.positions.fill(bought, shares=got, price=price, fee=got * taker_fee(price, FEE))
+            orders.append((bought, shares, got))
+            s.on_execution_report(SimpleNamespace(
+                exchange_id=o.exchange_id, security_id=o.security_id, filled_qty=round(got * S),
+                order_status=OrderStatus.FILLED if got >= shares - 1e-9 else OrderStatus.CANCELED))
+    assert orders[0][0] == 301 and orders[0][2] == orders[0][1], "Polymarket US's Azuolas ask, filled in full"
+    assert len(orders) <= 25, f"{len(orders)} orders for {len(books)} book updates"
+    assert sum(got > 0 for _, _, got in orders) >= len(orders) // 4, "orders go out when the book has something new, so a fair share of them fill"
