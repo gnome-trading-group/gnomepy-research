@@ -39,3 +39,48 @@ def install() -> None:
     """Applies the rule to every reader of the bundle's HLTV series."""
     e12_data.load = load
     history.load = load
+
+
+# ---- the prod pipelines' schedule ---------------------------------------------------------------------------------
+# hltv_cs2 scrapes results daily at 06:00 UTC and faceit_daily loads FACEIT at 07:30, so a fit run after both (08:30)
+# sees an HLTV series only from the first 06:00 after it surely ended, and a FACEIT match from the first 07:30 after
+# FACEIT finished it.
+HLTV_SCRAPE_H = 6.0
+FACEIT_LOAD_H = 7.5
+FACEIT_TIMED = ("faceit/faceit_matches", "faceit/history_matches")
+
+
+def next_daily(t: pd.Series, hour: float) -> pd.Series:
+    """The first time of day `hour` at or after each t."""
+    at = t.dt.normalize() + pd.Timedelta(hours=hour)
+    return at.where(at >= t, at + pd.Timedelta(days=1))
+
+
+def _scheduled_load(data_dir, table, before=None, columns=None):
+    if table == "hltv/cs2_match_history":
+        cols = None if columns is None else list(dict.fromkeys(columns + ["match_time", "match_date", "bo_type"]))
+        d = _original(data_dir, table, None, cols)
+        seen = next_daily(known_at(d.match_time, d.bo_type), HLTV_SCRAPE_H)
+        if before is not None:
+            d, seen = d[seen < pd.Timestamp(before)], seen[seen < pd.Timestamp(before)]
+        d = d.assign(match_time=seen.dt.tz_localize("UTC"))
+        return d if columns is None else d[columns]
+    if table in FACEIT_TIMED:
+        cols = None if columns is None else list(dict.fromkeys(columns + ["finished_at"]))
+        d = _original(data_dir, table, None, cols)
+        seen = next_daily(pd.to_datetime(d.finished_at, unit="s"), FACEIT_LOAD_H)
+        d = d.assign(finished_at=(seen - pd.Timestamp("1970-01-01")) // pd.Timedelta(seconds=1))
+        if before is not None:
+            d = d[seen.to_numpy() < pd.Timestamp(before).to_datetime64()]
+        return d if columns is None else d[columns]
+    return _original(data_dir, table, before, columns)
+
+
+def install_schedule() -> None:
+    """Applies the pipelines' schedule to every reader: the bundle's own recursive cuts (FACEIT tables cut through
+    faceit_matches) included."""
+    from gnomepy_research.sessions.cs2_comp.g06 import mm_skill
+    bundle.load = _scheduled_load
+    e12_data.load = _scheduled_load
+    history.load = _scheduled_load
+    mm_skill.load = _scheduled_load
