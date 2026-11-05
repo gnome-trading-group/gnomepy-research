@@ -1,0 +1,20 @@
+# DRAFT written by Claude on 2026-11-04 for review - spec.yaml is user-authored, so edit freely.
+name: cs2_series__mm
+description: >
+  Branch of cs2_series: the same model, blend, legs and last-hour window, but resting bids around a fair price anchored
+  to the liquid venues instead of taker buys. Joins liquid books, or (wide_only) only sets the price in wide ones.
+  Research only (backtests on paper sessions' journals).
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+
+constraints:
+  strategy_type: market_making
+  avoid:
+    - crossing the book
+    - taking the fair price from a wide book's mid
+    - bidding a wide book at or above a liquid venue's ask for the team
+    - more than the Kelly size or max_stake_usd per match, resting quotes included
+    - quoting on a model price that has changed since the quotes were placed
+    - resting quotes in the last pull_before_kickoff_min before kickoff
