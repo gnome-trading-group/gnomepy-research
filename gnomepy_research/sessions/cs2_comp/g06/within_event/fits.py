@@ -7,7 +7,8 @@ S   a fit at 08:30 UTC each day on what hltv_cs2 (06:00) and faceit_daily (07:30
 W   weekly Monday 00:00 fits, the loader's own rule (series known from their start): what prod does
 Wb  weekly fits, series known from start + buffer (pit.py)
 D   a fit at 00:00 UTC of each target's match day, series known from start + buffer
-Writes $OUTPUT_DIR/q_<variant>_<part>.parquet."""
+Writes $OUTPUT_DIR/q_<variant>_<part>.parquet; with --internals also internals_<variant>_<part>.parquet: each side's
+features from both skill fits (h_*: HLTV, f_*: HLTV+FACEIT), e12's layer columns (x_*) and the matchmaking-skill gap."""
 import argparse
 import os
 import time
@@ -26,6 +27,7 @@ ap.add_argument("--targets", required=True)
 ap.add_argument("--variant", choices=("W", "Wb", "D", "S"), required=True)
 ap.add_argument("--noise", choices=("none", "tight", "jitter1", "jitter2"), default="none",
                 help="fit-noise check: tight = gtol 1e-8 and 1,000 iterations; jitterN = a seeded random start")
+ap.add_argument("--internals", action="store_true")
 ap.add_argument("--part", type=int, default=0)
 ap.add_argument("--parts", type=int, default=1)
 a = ap.parse_args()
@@ -50,7 +52,7 @@ if a.noise != "none":
 from gnomepy_research.sessions.cs2_comp.g06.history import logit, naive  # noqa: E402
 from gnomepy_research.sessions.cs2_comp.g06.predict_wide import PRIOR_SD  # noqa: E402
 from gnomepy_research.sessions.cs2_comp.g06.predict_wide_mm import GAMMA, mm_diff  # noqa: E402
-from gnomepy_research.sessions.cs2_comp.g06.wide import e12_wide  # noqa: E402
+from gnomepy_research.sessions.cs2_comp.g06.wide import e12_wide, e12_wide_internals  # noqa: E402
 
 t = pd.read_parquet(a.targets).drop_duplicates("match_id").reset_index(drop=True)
 t["week_cutoff"] = naive(t.week_cutoff)
@@ -65,10 +67,16 @@ t = t[t.week_cutoff.isin(cutoffs[a.part::a.parts])].reset_index(drop=True)
 assert (t.week_cutoff <= naive(t.match_time)).all(), "a fit cutoff after kickoff"
 start = time.time()
 with threadpool_limits(1):
-    e = e12_wide(a.data, t, PRIOR_SD)
+    if a.internals:
+        e, internals = e12_wide_internals(a.data, t, PRIOR_SD)
+    else:
+        e = e12_wide(a.data, t, PRIOR_SD)
     mm = mm_diff(a.data, t)
 q = expit(logit(e.e12) + GAMMA * mm.reindex(e.match_id).to_numpy(float))
 out = Path(os.environ.get("OUTPUT_DIR", "."))
 pd.DataFrame({"match_id": e.match_id, "q": np.asarray(q), "fit_cutoff": e.week_cutoff}).to_parquet(
     out / f"q_{a.variant}{'' if a.noise == 'none' else '_' + a.noise}_{a.part}.parquet", index=False)
+if a.internals:
+    internals["mm_diff"] = mm.reindex(internals.match_id).to_numpy(float)
+    internals.to_parquet(out / f"internals_{a.variant}_{a.part}.parquet", index=False)
 print(f"{a.variant} part {a.part}/{a.parts}: {len(e)} predictions, {t.week_cutoff.nunique()} cutoffs, {time.time() - start:.0f}s")
