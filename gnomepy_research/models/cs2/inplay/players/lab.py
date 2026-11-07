@@ -24,6 +24,7 @@ MONTHS = ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08"]
 
 def build(out: Path):
     out.mkdir(parents=True, exist_ok=True)
+    E.CFG["map_prior"] = "elo"
     b = Bundle.load(DATA)
     t0 = time.time()
     hist = E.History(b, E.CFG["half_life"])
@@ -35,11 +36,16 @@ def build(out: Path):
     rt = with_prior(round_table(sub))
     rates, team = E.strength(model, sub, rt.game_id.unique())
     rt = pd.concat([rt, E.map_skill(sub, rt, rates, team)], axis=1)
+    done = b.games[b.games.map_a_wins.notna()]
+    r2, t2 = E.strength(model, b, done.game_id)
+    pm = E.premap(b, done.game_id, r2, t2).join(b.games.set_index("game_id")[["map_a_wins", "begin", "end"]])
+    pm.to_parquet(out / "pm.parquet")
     rt = rt.merge(b.games[["game_id", "begin", "end", "match_begin"]], on="game_id")
     print("map rows", time.time() - t0, flush=True)
     rt.to_parquet(out / "rt.parquet")
     st = map_states(b, legal)
-    x, _ = E.rows(model, sub, st)
+    model["premap"] = None
+    x, _ = E.rows(model, sub, st, rates, team, pm)
     x = x.join(rt.set_index(["game_id", "round"])[["a_wins"]], on=["game_id", "round"])
     x["y_ct"] = np.where(x.side_a == "CT", x.a_wins, 1 - x.a_wins)
     x = x.merge(b.games[["game_id", "end", "match_begin"]], on="game_id", how="left")
@@ -67,20 +73,37 @@ def price(rmodel, mmodel, rcols, mcols, xs, rt):
     return p_a * m[1].reindex(keys).to_numpy() + (1 - p_a) * m[0].reindex(keys).to_numpy(), p_ct
 
 
+def roster_prior(rt, xs, pm, cutoff):
+    tr = pm[pm.end < cutoff]
+    lr = E.fit_premap(tr, tr.map_a_wins)
+    ok = pm[E.PM].notna().all(axis=1)
+    z = pd.Series(np.nan, index=pm.index)
+    z[ok] = lr.decision_function(pm.loc[ok, E.PM])
+    zz = z.reindex(rt.game_id).to_numpy()
+    use = (rt.has_prior.to_numpy() == 0) & ~np.isnan(zz)
+    rt = rt.assign(prior_logit=np.where(use, zz, rt.prior_logit))
+    pl = rt.set_index(["game_id", "round"]).prior_logit.reindex(pd.MultiIndex.from_frame(xs[["game_id", "round"]])).to_numpy()
+    return rt, xs.assign(ct_prior=np.where(xs.side_a == "CT", pl, -pl))
+
+
 def evaluate(d: Path, variants: dict, months=MONTHS, seed=0):
-    rt = pd.read_parquet(d / "rt.parquet")
-    xs = pd.read_parquet(d / "states.parquet")
+    rt0 = pd.read_parquet(d / "rt.parquet")
+    xs0 = pd.read_parquet(d / "states.parquet")
+    pm = pd.read_parquet(d / "pm.parquet")
     res = {k: [] for k in variants}
     for m in months:
         start = pd.Timestamp(m + "-01", tz="UTC"); end = start + pd.offsets.MonthBegin(1)
-        rtr = rt[rt.end < start]; xtr = xs[xs.end < start]
-        te = (xs.match_begin >= start) & (xs.match_begin < end)
-        xte = xs[te]
-        rte = rt[rt.game_id.isin(set(xte.game_id))]
-        y = rte.groupby("game_id").map_a_wins.first().reindex(xte.game_id).to_numpy(float)
+        priors = {"elo": (rt0, xs0), "roster": roster_prior(rt0, xs0, pm, start)}
         fits = {}
-        for name, (rc, mc, rkw, mkw) in variants.items():
-            k_r, k_m = (tuple(rc), tuple(sorted(rkw.items()))), (tuple(mc), tuple(sorted(mkw.items())))
+        for name, (rc, mc, rkw, mkw, pr) in variants.items():
+            rt, xs = priors[pr]
+            rtr = rt[rt.end < start]; xtr = xs[xs.end < start]
+            te = (xs.match_begin >= start) & (xs.match_begin < end)
+            xte = xs[te]
+            rte = rt[rt.game_id.isin(set(xte.game_id))]
+            y = rte.groupby("game_id").map_a_wins.first().reindex(xte.game_id).to_numpy(float)
+            uses_prior = "ct_prior" in rc
+            k_r, k_m = (tuple(rc), tuple(sorted(rkw.items())), pr if uses_prior else ""), (tuple(mc), tuple(sorted(mkw.items())), pr)
             if k_r not in fits:
                 fits[k_r] = trees(seed, max_depth=6, learning_rate=0.05, **rkw).fit(xtr[rc], xtr.y_ct)
             if k_m not in fits:
@@ -107,12 +130,13 @@ def report(res: dict, base="base"):
 
 
 def default_variants():
-    R, M = ROUND, MAPCOLS
+    R, M, P = ROUND, MAPCOLS, ["ct_prior", "has_prior"]
     return {
-        "base": (R, M, {}, {}),
-        "round_skill": (R + E.ROUND_X, M, {}, {}),
-        "map_skill": (R, M + E.MAP_X, {}, {}),
-        "both": (R + E.ROUND_X, M + E.MAP_X, {}, {}),
+        "base": (R, M, {}, {}, "elo"),
+        "roster_prior": (R, M, {}, {}, "roster"),
+        "round_prior": (R + P, M, {}, {}, "elo"),
+        "rskill+rprior": (R + E.ROUND_X + P, M, {}, {}, "elo"),
+        "all_roster": (R + E.ROUND_X + P, M, {}, {}, "roster"),
     }
 
 
