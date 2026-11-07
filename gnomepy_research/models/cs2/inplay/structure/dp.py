@@ -62,7 +62,7 @@ SCORES = legal_scores()
 SCORE_IX = {s: i for i, s in enumerate(SCORES)}
 
 
-def q_rows(statics: pd.DataFrame, sa: int, sb: int, ks: np.ndarray) -> pd.DataFrame:
+def q_rows(statics: pd.DataFrame, sa: int, sb: int, ks: np.ndarray, extra=()) -> pd.DataFrame:
     n = sa + sb + 1
     na, nb = need(sa, sb)
     ot = int(min(sa, sb) >= 12)
@@ -73,10 +73,10 @@ def q_rows(statics: pd.DataFrame, sa: int, sb: int, ks: np.ndarray) -> pd.DataFr
         ct_a=np.tile(ct_a_at(statics.ct_a.to_numpy(), statics["round"].to_numpy(), n), len(ks)),
         ot=ot, round_in_half=rih, pistol=int(n in (1, 13)), map_code=np.tile(statics.map_code.to_numpy(), len(ks)),
         prior_logit=np.tile(statics.prior_logit.to_numpy(), len(ks)), has_prior=np.tile(statics.has_prior.to_numpy(), len(ks)),
-        streak=np.repeat(ks, m)))
+        streak=np.repeat(ks, m), **{c: np.tile(statics[c].to_numpy(), len(ks)) for c in extra}))
 
 
-def values(q_model, statics: pd.DataFrame) -> np.ndarray:
+def values(q_model, statics: pd.DataFrame, extra=()) -> np.ndarray:
     """V[map, score index, k + KMAX]: P(A wins the map) at the start of a round with that score and streak.
     statics: one row per map with ct_a/round (A's side at some known round), map_code, prior_logit, has_prior."""
     m = len(statics)
@@ -100,9 +100,9 @@ def values(q_model, statics: pd.DataFrame) -> np.ndarray:
         n = total + 1
         X, meta = [], []
         for sa, sb in pairs:
-            X.append(q_rows(statics, sa, sb, ks_all))
+            X.append(q_rows(statics, sa, sb, ks_all, extra))
             meta.append((sa, sb))
-        q = q_model.predict_proba(pd.concat(X, ignore_index=True)[QCOLS])[:, 1].reshape(len(pairs), len(ks_all), m)
+        q = q_model.predict_proba(pd.concat(X, ignore_index=True)[QCOLS + list(extra)])[:, 1].reshape(len(pairs), len(ks_all), m)
         reset_next = bool(resets(np.array([n + 1]))[0])
         for j, (sa, sb) in enumerate(meta):
             for ki, k in enumerate(ks_all):
