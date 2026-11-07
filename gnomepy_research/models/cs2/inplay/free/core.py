@@ -26,21 +26,41 @@ from gnomepy_research.models.cs2.inplay.data import Bundle
 from gnomepy_research.models.cs2.inplay.features import legal_maps, map_states, round_table
 
 TIER = {"s": 0, "a": 1, "b": 2, "c": 3, "d": 4}
-SHRINK = 4.0
-
-CFG = dict(map_extra=["res_mean", "kill_mean"], map_kw={}, round_extra=[], round_kw={})
+CFG = dict(map_extra=["res_mean", "kill_mean"], map_kw={}, round_kw={}, shrink=4.0, expect="basic", alive_end_kills=False, nop_fix=False)
 
 
 def exp_design(rt: pd.DataFrame) -> np.ndarray:
     ct_eq = np.where(rt.ct_a == 1, rt.a_equip, rt.b_equip) / 1000
     t_eq = np.where(rt.ct_a == 1, rt.b_equip, rt.a_equip) / 1000
     lc, lt = np.log1p(ct_eq), np.log1p(t_eq)
-    return np.c_[lc, lt, lc * lt, np.eye(11)[rt.map_code.to_numpy() + 1]]
+    cols = [lc, lt, lc * lt, np.eye(11)[rt.map_code.to_numpy() + 1]]
+    if CFG["expect"] == "rich":
+        a_ct = rt.ct_a.to_numpy() == 1
+        for k in ("awp", "rifles", "helmets"):
+            cols += [np.where(a_ct, rt[f"a_{k}"], rt[f"b_{k}"]), np.where(a_ct, rt[f"b_{k}"], rt[f"a_{k}"])]
+        cols += [rt.pistol.to_numpy(), lc ** 2, lt ** 2]
+    return np.column_stack(cols)
 
 
-def fit_expect(rt: pd.DataFrame) -> LogisticRegression:
+def map_design(rt: pd.DataFrame) -> np.ndarray:
+    return np.c_[np.eye(11)[rt.map_code.to_numpy() + 1], rt.pistol.to_numpy()]
+
+
+def fit_expect(rt: pd.DataFrame):
     y_ct = np.where(rt.ct_a == 1, rt.a_wins, 1 - rt.a_wins)
-    return LogisticRegression(C=10, max_iter=2000).fit(exp_design(rt), y_ct)
+    if not CFG["nop_fix"]:
+        return LogisticRegression(C=10, max_iter=2000).fit(exp_design(rt), y_ct)
+    # Rounds without player data have no equipment (zeros), so they get a side-and-map-only expectation instead.
+    hp = rt.has_players.to_numpy(bool)
+    return (LogisticRegression(C=10, max_iter=2000).fit(exp_design(rt[hp]), y_ct[hp]),
+            LogisticRegression(C=10, max_iter=2000).fit(map_design(rt[hp]), y_ct[hp]))
+
+
+def expect_ct(expect, rt: pd.DataFrame) -> np.ndarray:
+    if not isinstance(expect, tuple):
+        return expect.predict_proba(exp_design(rt))[:, 1]
+    full, bare = expect
+    return np.where(rt.has_players.to_numpy(bool), full.predict_proba(exp_design(rt))[:, 1], bare.predict_proba(map_design(rt))[:, 1])
 
 
 def round_kills(b: Bundle) -> pd.DataFrame:
@@ -55,30 +75,43 @@ def history(b: Bundle, rt: pd.DataFrame, expect: LogisticRegression) -> pd.DataF
     """Per round, the in-map form features as known at its start, plus what the next round's start needs."""
     rt = rt.sort_values(["game_id", "round"]).copy()
     g = rt.game_id
-    p_ct = expect.predict_proba(exp_design(rt))[:, 1]
+    shrink = CFG["shrink"]
+    p_ct = expect_ct(expect, rt)
     rt["p_exp_a"] = np.where(rt.ct_a == 1, p_ct, 1 - p_ct)
     # Who won a round is known once the next round starts, from the score.
     a_won = rt.groupby("game_id").score_a.shift(-1) - rt.score_a
     res = a_won - rt.p_exp_a
     rt["res_sum"] = res.groupby(g).cumsum().groupby(g).shift(1).fillna(0.0)
     rt["n_prev"] = rt["round"] - 1
-    rt["res_mean"] = rt.res_sum / (rt.n_prev + SHRINK)
+    rt["res_mean"] = rt.res_sum / (rt.n_prev + shrink)
     has_ev = g.isin(set(b.events.game_id)).to_numpy()
     kd = rt.join(round_kills(b), on=["game_id", "round"]).kd.fillna(0.0)
+    if CFG["alive_end_kills"] and "a_alive_end" in rt:
+        # Maps without a timeline (2025) still record survivors per round in training data, and with equal rosters
+        # kills minus deaths equals survivors minus the opponent's survivors. Scored maps always use the timeline.
+        surv = (rt.a_alive_end - rt.b_alive_end).astype(float)
+        use = ~has_ev & rt.groupby("game_id").a_alive_end.transform(lambda v: v.notna().all()).to_numpy()
+        kd = pd.Series(np.where(use, surv.fillna(0.0), kd), index=rt.index)
+        has_ev = has_ev | use
     cs = kd.groupby(g).cumsum()
     lag2 = cs.groupby(g).shift(2).fillna(0.0)
     lag1 = cs.groupby(g).shift(1).fillna(0.0)
-    rt["kill_mean"] = np.where(has_ev, lag2 / ((rt["round"] - 2).clip(lower=0) + SHRINK), np.nan)
-    rt["kill_next"] = np.where(has_ev, lag1 / (rt["round"] - 1 + SHRINK), np.nan)
+    rt["kill_mean"] = np.where(has_ev, lag2 / ((rt["round"] - 2).clip(lower=0) + shrink), np.nan)
+    rt["kill_next"] = np.where(has_ev, lag1 / (rt["round"] - 1 + shrink), np.nan)
+    # kill1_*: kills through the previous round, for the variant that adds the current round's kills so far
+    rt["kill1_mean"], rt["kill_cs1"] = rt.kill_next, np.where(has_ev, lag1, np.nan)
     for side, flag in (("ct", 1), ("t", 0)):
         on = (rt.ct_a == flag).astype(float)
         v = (res * on).fillna(0.0)
         rt[f"res_{side}_sum"] = v.groupby(g).cumsum().groupby(g).shift(1).fillna(0.0)
         rt[f"n_{side}"] = on.groupby(g).cumsum().groupby(g).shift(1).fillna(0.0)
-        rt[f"res_{side}_mean"] = rt[f"res_{side}_sum"] / (rt[f"n_{side}"] + SHRINK)
+        rt[f"res_{side}_mean"] = rt[f"res_{side}_sum"] / (rt[f"n_{side}"] + shrink)
         kv, kn = (kd * on).groupby(g).cumsum(), on.groupby(g).cumsum()
-        rt[f"kill_{side}_mean"] = np.where(has_ev, kv.groupby(g).shift(2).fillna(0.0) / (kn.groupby(g).shift(2).fillna(0.0) + SHRINK), np.nan)
-        rt[f"kill_{side}_next"] = np.where(has_ev, kv.groupby(g).shift(1).fillna(0.0) / (kn.groupby(g).shift(1).fillna(0.0) + SHRINK), np.nan)
+        rt[f"kill_{side}_mean"] = np.where(has_ev, kv.groupby(g).shift(2).fillna(0.0) / (kn.groupby(g).shift(2).fillna(0.0) + shrink), np.nan)
+        rt[f"kill_{side}_next"] = np.where(has_ev, kv.groupby(g).shift(1).fillna(0.0) / (kn.groupby(g).shift(1).fillna(0.0) + shrink), np.nan)
+        rt[f"kill1_{side}_mean"] = rt[f"kill_{side}_next"]
+        rt[f"kill_{side}_cs1"] = np.where(has_ev, kv.groupby(g).shift(1).fillna(0.0), np.nan)
+        rt[f"kill_{side}_n1"] = kn.groupby(g).shift(1).fillna(0.0)
     rt["tier_code"] = rt.tier.map(TIER).fillna(4).astype(int)
     return rt
 
@@ -88,15 +121,26 @@ def table(b: Bundle, expect) -> pd.DataFrame:
     return history(b, rt, expect)
 
 
-def next_ext(rr: pd.DataFrame, a_won: int, extra):
+def next_ext(rr: pd.DataFrame, a_won: int, extra, kd_now=None):
+    """Map-model features of the next round's start given who wins this one. kd_now (per row, team A's kills minus
+    deaths so far in this round) feeds the kill1_* features."""
+    shrink = CFG["shrink"]
     X, done = next_round(rr, a_won)
     for c in extra:
+        if c.startswith("kill1_"):
+            side = c.split("_")[1] if c != "kill1_mean" else None
+            if side is None:
+                X[c] = ((rr.kill_cs1 + kd_now) / (rr.n_prev + 1 + shrink)).to_numpy()
+            else:
+                on = (rr.ct_a == (1 if side == "ct" else 0)).astype(float)
+                X[c] = ((rr[f"kill_{side}_cs1"] + on * kd_now) / (rr[f"kill_{side}_n1"] + on + shrink)).to_numpy()
+            continue
         if c == "res_mean":
-            X[c] = ((rr.res_sum + a_won - rr.p_exp_a) / (rr.n_prev + 1 + SHRINK)).to_numpy()
+            X[c] = ((rr.res_sum + a_won - rr.p_exp_a) / (rr.n_prev + 1 + shrink)).to_numpy()
         elif c in ("res_ct_mean", "res_t_mean"):
             side = c.split("_")[1]
             on = (rr.ct_a == (1 if side == "ct" else 0)).astype(float)
-            X[c] = ((rr[f"res_{side}_sum"] + on * (a_won - rr.p_exp_a)) / (rr[f"n_{side}"] + on + SHRINK)).to_numpy()
+            X[c] = ((rr[f"res_{side}_sum"] + on * (a_won - rr.p_exp_a)) / (rr[f"n_{side}"] + on + shrink)).to_numpy()
         elif c.startswith("kill_"):
             X[c] = rr[c.replace("_mean", "_next")].to_numpy()
         else:
@@ -126,14 +170,19 @@ def fit(train: Bundle, asof: pd.Timestamp, seed: int):
 def predict(model, ctx: Bundle, states: pd.DataFrame) -> np.ndarray:
     x, _ = round_rows(ctx, states)
     p_ct = model["round_model"].predict_proba(x[ROUND])[:, 1]
-    keys = pd.MultiIndex.from_frame(states[["game_id", "round"]])
-    rt = table(ctx.subset(states.game_id), model["expect"]).set_index(["game_id", "round"])
-    rr = rt.loc[keys.unique()].reset_index()
+    rt = table(ctx.subset(states.game_id), model["expect"])
+    rr = states[["game_id", "round"]].join(rt.set_index(["game_id", "round"]), on=["game_id", "round"]).reset_index(drop=True)
+    a_ct = (x.side_a == "CT").to_numpy()
+    # Equal starting rosters, so A's kills minus deaths so far is A's alive count minus B's.
+    kd_now = np.where(a_ct, x.ct_alive - x.t_alive, x.t_alive - x.ct_alive)
+    return combine(model["map_model"], rr, p_ct, a_ct, kd_now)
+
+
+def combine(map_model, rr, p_ct, a_ct, kd_now):
     extra = CFG["map_extra"]
     m = {}
     for a_won in (1, 0):
-        X, done = next_ext(rr, a_won, extra)
-        p = model["map_model"].predict_proba(X[MAPCOLS + extra])[:, 1]
-        m[a_won] = pd.Series(np.where(np.isnan(done), p, done), index=pd.MultiIndex.from_frame(rr[["game_id", "round"]]))
-    p_a = np.where(x.side_a == "CT", p_ct, 1 - p_ct)
-    return p_a * m[1].reindex(keys).to_numpy() + (1 - p_a) * m[0].reindex(keys).to_numpy()
+        X, done = next_ext(rr, a_won, extra, kd_now)
+        m[a_won] = np.where(np.isnan(done), map_model.predict_proba(X[MAPCOLS + extra])[:, 1], done)
+    p_a = np.where(a_ct, p_ct, 1 - p_ct)
+    return p_a * m[1] + (1 - p_a) * m[0]

@@ -31,6 +31,14 @@ def prep():
         cv, cn = v.groupby(g).cumsum(), n.groupby(g).cumsum()
         rt[f'kill_{side}_mean'] = np.where(has_ev, cv.groupby(g).shift(2).fillna(0), np.nan) / (cn.groupby(g).shift(2).fillna(0) + 4)
         rt[f'kill_{side}_next'] = np.where(has_ev, cv.groupby(g).shift(1).fillna(0), np.nan) / (cn.groupby(g).shift(1).fillna(0) + 4)
+    pl = (rt.planted.fillna(0) - 0.5) * np.where(rt.ct_a == 1, -1, 1)
+    op = rt.open_a.fillna(0)
+    for name, val in (('plant', pl), ('open', op)):
+        for side, flag in (('ct', 1), ('t', 0)):
+            v = val.where(rt.ct_a == flag, 0.0); n = (rt.ct_a == flag).astype(float)
+            cv, cn = v.groupby(g).cumsum(), n.groupby(g).cumsum()
+            rt[f'{name}_{side}_mean'] = np.where(has_ev, cv.groupby(g).shift(2).fillna(0), np.nan) / (cn.groupby(g).shift(2).fillna(0) + 4)
+            rt[f'{name}_{side}_next'] = np.where(has_ev, cv.groupby(g).shift(1).fillna(0), np.nan) / (cn.groupby(g).shift(1).fillna(0) + 4)
     j = st.join(rt.set_index(['game_id', 'round'])[['ct_a', 'res_ct_mean', 'res_t_mean']], on=['game_id', 'round'])
     st['ctteam_ct_form'] = np.where(j.ct_a == 1, j.res_ct_mean, -j.res_t_mean)
     st['tteam_t_form'] = np.where(j.ct_a == 1, -j.res_ct_mean, j.res_t_mean)
@@ -43,7 +51,7 @@ def nr_ext(cols):
         rs = rr.res_sum + a_won - rr.p_exp_a
         for c in cols:
             if c == 'res_mean': X[c] = (rs / (rr.n_prev + 5)).to_numpy()
-            elif c.startswith('kill_') and c.endswith('_mean'): X[c] = rr[c.replace('_mean', '_next')].to_numpy()
+            elif c.split('_')[0] in ('kill', 'plant', 'open') and c.endswith('_mean'): X[c] = rr[c.replace('_mean', '_next')].to_numpy()
             elif c in ('res_ct_mean', 'res_t_mean'):
                 side = c.split('_')[1]; flag = 1 if side == 'ct' else 0
                 cur = (rr.ct_a == flag).astype(float)
