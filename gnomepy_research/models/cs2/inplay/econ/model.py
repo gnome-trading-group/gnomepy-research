@@ -43,13 +43,14 @@ ECO_SETS = {
     "v2t": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "tier"],
     "v2n": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "p_next"],
     "v3nb": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "nbuy2_a", "nbuy2_b", "d_nbuy2", "nrebuy_a", "nrebuy_b"],
+    "v2tc": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "tier", "bo", "map_no", "has_prior"],
     "lean": SCORE + ["a_alive", "b_alive", "a_eq", "b_eq", "n_la", "n_lb", "proj_a", "proj_b", "nbuy_a", "nbuy_b", "d_res", "d_nbuy"],
 }
 
 # The next round's winner is a far less noisy target than the map's, so a model of it turns the economy into one number.
 NEXT = V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "map_code", "tier"]
 
-DEFAULT = dict(round_extra=False, eco=True, eco_feats="v2bt", map_tier=False, aug_weight=0, next_folds=3, half_life=0, soft=False,
+DEFAULT = dict(round_extra=False, eco=True, eco_feats="v2t", map_tier=False, aug_weight=0, next_folds=3, half_life=0, soft=False, round_tier=False,
                next_trees=dict(n_estimators=300, max_depth=5, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
                                min_child_weight=100, reg_lambda=5),
                eco_trees=dict(n_estimators=300, max_depth=4, learning_rate=0.03, subsample=0.7, colsample_bytree=0.8,
@@ -79,7 +80,10 @@ def round_info(b: Bundle, game_ids) -> pd.DataFrame:
     tm = team_money(b, game_ids)
     rt = rt.join(tm, on=["game_id", "round"])
     rt["a_ctr"], rt["b_ctr"] = loss_counters(rt)
-    rt["tier"] = rt.game_id.map(b.games.drop_duplicates("game_id").set_index("game_id").tier)
+    g = b.games.drop_duplicates("game_id").set_index("game_id")
+    rt["tier"] = rt.game_id.map(g.tier)
+    rt["tier_code"] = rt.tier.map(TIERS)
+    rt["bo"], rt["map_no"] = rt.game_id.map(g.bo), rt.game_id.map(g.map_no)
     return rt.set_index(["game_id", "round"])
 
 
@@ -87,7 +91,7 @@ def state_rows(b: Bundle, states: pd.DataFrame, rt: pd.DataFrame) -> pd.DataFram
     r = rt.reindex(pd.MultiIndex.from_frame(states[["game_id", "round"]]))
     a_ct = (r.side_a == "CT").to_numpy()
     f = state_table(b, states, np.where(a_ct, r.a_ctr, r.b_ctr), np.where(a_ct, r.b_ctr, r.a_ctr))
-    cols = ["side_a", "a_equip", "b_equip", "a_money_pre", "b_money_pre", "a_mleft", "b_mleft", "need_a", "need_b", "map_code"]
+    cols = ["tier_code", "side_a", "a_equip", "b_equip", "a_money_pre", "b_money_pre", "a_mleft", "b_mleft", "need_a", "need_b", "map_code"]
     x = states.join(f).join(rt[cols], on=["game_id", "round"])
     a_ct = x.side_a == "CT"
     sw = lambda a, b: (np.where(a_ct, x[a], x[b]), np.where(a_ct, x[b], x[a]))
@@ -139,8 +143,10 @@ def eco_rows(x: pd.DataFrame, rt: pd.DataFrame, o: int):
     e["planted"], e["t"] = x.planted.to_numpy(), x.t.to_numpy()
     e["prior_logit"] = r.prior_logit.to_numpy()
     e["map_code"] = r.map_code.to_numpy()
+    for c in ("bo", "map_no", "has_prior"):
+        e[c] = r[c].to_numpy() if c in r else np.nan
     e["tier"] = r.tier.map(TIERS).to_numpy() if "tier" in r else np.nan
-    econ = [c for c in e.columns if c not in SCORE + ["prior_logit", "tier", "map_code"]]
+    econ = [c for c in e.columns if c not in SCORE + ["prior_logit", "tier", "map_code", "bo", "map_no", "has_prior"]]
     # At a half or overtime-half start money resets, so this round's economy says nothing about the next.
     e.loc[reset, econ] = np.nan
     nx = nxt[MAPCOLS].assign(tier=e.tier.to_numpy() if "tier" in e else np.nan)
@@ -155,7 +161,7 @@ class Model:
         self.seed = seed
 
     def round_cols(self):
-        return ROUND + (ROUND_EXTRA if self.cfg["round_extra"] else [])
+        return ROUND + (ROUND_EXTRA if self.cfg["round_extra"] else []) + (["tier_code"] if self.cfg["round_tier"] else [])
 
     def fit(self, train: Bundle):
         legal = legal_maps(train)
