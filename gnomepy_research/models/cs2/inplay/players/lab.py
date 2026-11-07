@@ -68,7 +68,7 @@ def price(rmodel, mmodel, rcols, mcols, xs, rt):
     m = {}
     for a_won in (1, 0):
         X, done = next_round(u, a_won)
-        X = pd.concat([X, u[[c for c in mcols if c not in MAPCOLS]]], axis=1)
+        X = E.with_dp(pd.concat([X, u[[c for c in mcols if c not in MAPCOLS and c != "dp"]]], axis=1))
         p = mmodel.predict_proba(X[mcols])[:, 1]
         m[a_won] = pd.Series(np.where(np.isnan(done), p, done), index=pd.MultiIndex.from_frame(u[["game_id", "round"]]))
     p_a = np.where(xs.side_a == "CT", p_ct, 1 - p_ct)
@@ -87,10 +87,13 @@ def roster_prior(rt, xs, pm, cutoff, stack):
     p[use] = zz[use]
     if stack in E.STACK:
         d = tr.assign(z=z.reindex(tr.index)).dropna(subset=["p_market", "p_e12", "map_a_wins", "z"])
-        if len(d) >= 300:
-            st = LogisticRegression(C=1.0).fit(E.stack_x(d, d.z), d.map_a_wins)
-            ok = (rt.p_market.notna() & rt.p_e12.notna()).to_numpy() & ~np.isnan(zz)
-            p[ok] = st.decision_function(E.stack_x(rt[ok], zz[ok]))
+        dx = E.stack_x(d.assign(game_id=d.index), d.z, pm)
+        dok = dx.notna().all(axis=1).to_numpy()
+        if dok.sum() >= 300:
+            st = LogisticRegression(C=1.0).fit(dx[dok], d.map_a_wins[dok])
+            x = E.stack_x(rt, zz, pm)
+            ok = (rt.p_market.notna() & rt.p_e12.notna()).to_numpy() & ~np.isnan(zz) & x.notna().all(axis=1).to_numpy()
+            p[ok] = st.decision_function(x[ok])
     rt = rt.assign(prior_logit=p)
     pl = rt.set_index(["game_id", "round"]).prior_logit.reindex(pd.MultiIndex.from_frame(xs[["game_id", "round"]])).to_numpy()
     return rt, xs.assign(ct_prior=np.where(xs.side_a == "CT", pl, -pl))
@@ -100,6 +103,8 @@ def evaluate(d: Path, variants: dict, months=MONTHS, seed=0):
     rt0 = pd.read_parquet(d / "rt.parquet")
     xs0 = pd.read_parquet(d / "states.parquet")
     pm = pd.read_parquet(d / "pm.parquet")
+    if "kd_rate" not in rt0:
+        rt0["kd_rate"] = E.kill_diff(Bundle.load(DATA), rt0)
     if "side_adv_ct" not in rt0:
         rt0["side_adv_ct"] = E.logit(rt0.a_ct_map) - E.logit(rt0.b_t_map)
         rt0["side_adv_t"] = E.logit(rt0.a_t_map) - E.logit(rt0.b_ct_map)
@@ -114,6 +119,7 @@ def evaluate(d: Path, variants: dict, months=MONTHS, seed=0):
         fits = {}
         for name, (rc, mc, rkw, mkw, pr) in variants.items():
             rt, xs = priors[pr]
+            rt = E.with_dp(rt)
             rtr = rt[rt.end < start]; xtr = xs[xs.end < start]
             te = (xs.match_begin >= start) & (xs.match_begin < end)
             xte = xs[te]
@@ -124,7 +130,8 @@ def evaluate(d: Path, variants: dict, months=MONTHS, seed=0):
             if k_r not in fits:
                 fits[k_r] = trees(seed, max_depth=6, learning_rate=0.05, **rkw).fit(xtr[rc], xtr.y_ct)
             if k_m not in fits:
-                fits[k_m] = trees(seed, **mkw).fit(rtr[mc], rtr.map_a_wins)
+                kw = {k: v for k, v in mkw.items() if k != "bag"}
+                fits[k_m] = E.Bag(lambda sd: trees(sd, **kw), mkw.get("bag", 1), seed).fit(rtr[mc], rtr.map_a_wins)
             p, p_ct = price(fits[k_r], fits[k_m], rc, mc, xte, rte)
             res[name].append(pd.DataFrame(dict(month=m, game_id=xte.game_id.to_numpy(), kind=xte.kind.to_numpy(), ll=ll(p, y),
                                                rll=ll(p_ct, xte.y_ct.to_numpy()))))
@@ -147,21 +154,15 @@ def report(res: dict, base="base"):
 
 
 def default_variants():
-    R, M, P = ROUND, MAPCOLS, ["ct_prior", "has_prior"]
+    R, M = ROUND, MAPCOLS
     NH = [c for c in M if c != "has_prior"]
     kw = dict(monotone_constraints="(-1,1,0,0,0,0,0,0,0,1)", max_depth=6, min_child_weight=300, learning_rate=0.05)
-    kw2 = dict(kw, monotone_constraints="(-1,1,0,0,0,0,0,0,0,1,1,1)")
-    SA = ["side_adv_ct", "side_adv_t"]
     return {
         "base": (R, M, {}, {}, "elo"),
         "F": (R, NH, {}, kw, "full:mez"),
-        "F side": (R, NH + SA, {}, kw2, "full:mez"),
-        "F rskill": (R + E.ROUND_X, NH, {}, kw, "full:mez"),
-        "F rskill rprior": (R + E.ROUND_X + P, NH, {}, kw, "full:mez"),
-        "F me": (R, NH, {}, kw, "full:me"),
-        "F mz": (R, NH, {}, kw, "full:mz"),
-        "base-pm mez": (R, NH, {}, kw, "base:mez"),
-        "pelo mez": (R, NH, {}, kw, "pelo:mez"),
+        "F2 mez": (R, NH, {}, kw, "full2:mez"),
+        "F2 memap": (R, NH, {}, kw, "full2:memap"),
+        "F2 memap rskill": (R + E.ROUND_X, NH, {}, kw, "full2:memap"),
     }
 
 
