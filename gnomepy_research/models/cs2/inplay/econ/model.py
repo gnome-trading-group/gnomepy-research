@@ -19,15 +19,24 @@ import xgboost as xgb
 from ..baseline import MAPCOLS, ROUND, next_round, trees, with_prior
 from ..data import Bundle
 from ..features import legal_maps, map_states, resets, round_table
-from .econ_features import MONEY_CAP, SIDE_COLS, state_table, team_money
+from .econ_features import SIDE_COLS, loss_counters, state_table, team_money
 
 ROUND_EXTRA = ["ct_rifles", "t_rifles", "ct_helmets", "t_helmets", "ct_mleft", "t_mleft", "ct_money_pre", "t_money_pre"]
-ECO = ["o", "n_need_a", "n_need_b", "n_ct_a", "a_alive", "b_alive", "a_eq", "b_eq", "a_rifles", "b_rifles", "a_awp", "b_awp",
-       "a_kills", "b_kills", "a_mleft", "b_mleft", "a_equip", "b_equip", "n_la", "n_lb", "proj_a", "proj_b", "res_a", "res_b",
-       "d_res", "planted", "t"]
+SCORE = ["o", "n_need_a", "n_need_b", "n_ct_a"]
+V1 = SCORE + ["a_alive", "b_alive", "a_eq", "b_eq", "a_rifles", "b_rifles", "a_awp", "b_awp", "a_kills", "b_kills", "a_mleft",
+              "b_mleft", "a_equip", "b_equip", "n_la", "n_lb", "proj_a", "proj_b", "res_a", "res_b", "d_res", "planted", "t"]
+ECO_SETS = {
+    "v1": V1,
+    "v2": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy"],
+    "score": SCORE,
+    "score_alive": SCORE + ["a_alive", "b_alive", "a_eq", "b_eq"],
+    "money_only": SCORE + ["a_mleft", "b_mleft", "a_equip", "b_equip", "n_la", "n_lb", "proj_a", "proj_b"],
+    "lean": SCORE + ["a_alive", "b_alive", "a_eq", "b_eq", "n_la", "n_lb", "proj_a", "proj_b", "nbuy_a", "nbuy_b", "d_res", "d_nbuy"],
+}
 
-DEFAULT = dict(round_extra=True, eco=True, eco_trees=dict(n_estimators=300, max_depth=4, learning_rate=0.03, subsample=0.7,
-                                                          colsample_bytree=0.8, min_child_weight=300, reg_lambda=20))
+DEFAULT = dict(round_extra=False, eco=True, eco_feats="v2", aug_weight=0,
+               eco_trees=dict(n_estimators=300, max_depth=4, learning_rate=0.03, subsample=0.7, colsample_bytree=0.8,
+                              min_child_weight=300, reg_lambda=20))
 
 
 def logit(p):
@@ -49,11 +58,14 @@ def round_info(b: Bundle, game_ids) -> pd.DataFrame:
     rt = with_prior(round_table(b.subset(game_ids)))
     tm = team_money(b, game_ids)
     rt = rt.join(tm, on=["game_id", "round"])
+    rt["a_ctr"], rt["b_ctr"] = loss_counters(rt)
     return rt.set_index(["game_id", "round"])
 
 
 def state_rows(b: Bundle, states: pd.DataFrame, rt: pd.DataFrame) -> pd.DataFrame:
-    f = state_table(b, states)
+    r = rt.reindex(pd.MultiIndex.from_frame(states[["game_id", "round"]]))
+    a_ct = (r.side_a == "CT").to_numpy()
+    f = state_table(b, states, np.where(a_ct, r.a_ctr, r.b_ctr), np.where(a_ct, r.b_ctr, r.a_ctr))
     cols = ["side_a", "a_equip", "b_equip", "a_money_pre", "b_money_pre", "a_mleft", "b_mleft", "need_a", "need_b", "map_code"]
     x = states.join(f).join(rt[cols], on=["game_id", "round"])
     a_ct = x.side_a == "CT"
@@ -65,18 +77,25 @@ def state_rows(b: Bundle, states: pd.DataFrame, rt: pd.DataFrame) -> pd.DataFram
     return x.join(ab_view(x))
 
 
-def eco_rows(x: pd.DataFrame, rt: pd.DataFrame, o: int):
+def start_rows(b: Bundle, game_ids) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Round-start states of maps without timelines: everyone alive, nothing happened yet. They carry the economy
+    between rounds for every map with player data, not only the 2026 maps with timelines."""
+    r = b.rounds[b.rounds.game_id.isin(set(game_ids)) & b.rounds.has_players]
+    st = pd.DataFrame(dict(game_id=r.game_id.to_numpy(), round=r["round"].to_numpy(), step=0, kind="start", event_seq=-1,
+                           ingame_ms=0, elapsed=0))
+    rt = round_info(b, set(st.game_id))
+    return state_rows(b, st, rt), rt
+
+
+def eco_rows(x: pd.DataFrame, rt: pd.DataFrame, o: int, feats=V1):
     """M-correction features of each state given round outcome o (1 = A wins the round), the score-state map features
     of the next round and done (1/0 where o ends the map)."""
     keys = pd.MultiIndex.from_frame(x[["game_id", "round"]])
     r = rt.reindex(keys).reset_index()
     nxt, done = next_round(r, o)
-    n = (r["round"] + 1).to_numpy()
-    reset = resets(n)
-    la, lb = nxt.a_loss_ctr.to_numpy(), nxt.b_loss_ctr.to_numpy()
-    # Loss bonus is paid from the counter after the loss; the winner gets the elimination/time reward.
-    inc_a = np.where(o == 1, 3250, 1400 + 500 * np.minimum(la, 4))
-    inc_b = np.where(o == 1, 1400 + 500 * np.minimum(lb, 4), 3250)
+    reset = resets((r["round"] + 1).to_numpy())
+    wa, wb = ("w", "l") if o == 1 else ("l", "w")
+    la, lb = r.a_ctr.to_numpy(), r.b_ctr.to_numpy()
     e = pd.DataFrame(index=x.index)
     e["o"] = o
     e["n_need_a"], e["n_need_b"], e["n_ct_a"] = nxt.need_a.to_numpy(), nxt.need_b.to_numpy(), nxt.ct_a.to_numpy()
@@ -84,17 +103,20 @@ def eco_rows(x: pd.DataFrame, rt: pd.DataFrame, o: int):
         e[f"a_{c}"], e[f"b_{c}"] = x[f"a_{c}"].to_numpy(), x[f"b_{c}"].to_numpy()
     for c in ("a_mleft", "b_mleft", "a_equip", "b_equip"):
         e[c] = x[c].to_numpy()
-    e["n_la"], e["n_lb"] = la, lb
-    e["proj_a"] = np.minimum(x.a_mleft.to_numpy() + 5 * inc_a + 300 * x.a_kills.to_numpy(), 5 * MONEY_CAP)
-    e["proj_b"] = np.minimum(x.b_mleft.to_numpy() + 5 * inc_b + 300 * x.b_kills.to_numpy(), 5 * MONEY_CAP)
+    e["n_la"] = np.where(o == 1, np.maximum(la - 1, 0), np.minimum(la + 1, 4))
+    e["n_lb"] = np.where(o == 1, np.minimum(lb + 1, 4), np.maximum(lb - 1, 0))
+    e["proj_a"], e["proj_b"] = x[f"a_proj_{wa}"].to_numpy(), x[f"b_proj_{wb}"].to_numpy()
+    e["nbuy_a"], e["nbuy_b"] = x[f"a_nbuy_{wa}"].to_numpy(), x[f"b_nbuy_{wb}"].to_numpy()
+    e["nfull_a"], e["nfull_b"] = x[f"a_nfull_{wa}"].to_numpy(), x[f"b_nfull_{wb}"].to_numpy()
+    e["d_nbuy"] = e.nbuy_a - e.nbuy_b
     e["res_a"] = e.proj_a + x.a_eq.to_numpy()
     e["res_b"] = e.proj_b + x.b_eq.to_numpy()
     e["d_res"] = e.res_a - e.res_b
     e["planted"], e["t"] = x.planted.to_numpy(), x.t.to_numpy()
-    econ = [c for c in ECO if c not in ("o", "n_need_a", "n_need_b", "n_ct_a")]
+    econ = [c for c in e.columns if c not in SCORE]
     # At a half or overtime-half start money resets, so this round's economy says nothing about the next.
     e.loc[reset, econ] = np.nan
-    return e[ECO], nxt[MAPCOLS], done
+    return e[feats], nxt[MAPCOLS], done
 
 
 class Model:
@@ -109,9 +131,22 @@ class Model:
         legal = legal_maps(train)
         st = map_states(train, legal)
         rt = round_info(train, set(st.game_id))
-        return self.fit_rows(train, legal, state_rows(train, st, rt), rt)
+        aug = start_rows(train, legal - set(st.game_id)) if self.cfg["aug_weight"] else None
+        return self.fit_rows(train, legal, state_rows(train, st, rt), rt, aug=aug)
 
-    def fit_rows(self, train: Bundle, legal, x: pd.DataFrame, rt: pd.DataFrame, map_model=None, round_model=None):
+    def eco_part(self, x, rt, w):
+        a_wins = rt.a_wins.reindex(pd.MultiIndex.from_frame(x[["game_id", "round"]])).to_numpy()
+        out = []
+        for o in (1, 0):
+            m = a_wins == o
+            e, nx, done = eco_rows(x[m], rt, o, ECO_SETS[self.cfg["eco_feats"]])
+            keep = np.isnan(done)
+            base = logit(self.map_model.predict_proba(nx[keep])[:, 1])
+            mw = rt.map_a_wins.reindex(pd.MultiIndex.from_frame(x[m][["game_id", "round"]])).to_numpy()[keep]
+            out.append((e[keep], base, mw, np.full(keep.sum(), w)))
+        return out
+
+    def fit_rows(self, train: Bundle, legal, x: pd.DataFrame, rt: pd.DataFrame, map_model=None, round_model=None, aug=None):
         if map_model is None:
             rt_all = with_prior(round_table(train.subset(legal)))
             rt_all = rt_all[rt_all.map_a_wins.notna()]
@@ -124,22 +159,18 @@ class Model:
         self.round_model = round_model
         self.eco_model = None
         if self.cfg["eco"]:
-            parts = []
-            for o in (1, 0):
-                m = a_wins == o
-                e, nx, done = eco_rows(x[m], rt, o)
-                keep = np.isnan(done)
-                base = logit(self.map_model.predict_proba(nx[keep])[:, 1])
-                mw = rt.map_a_wins.reindex(pd.MultiIndex.from_frame(x[m][["game_id", "round"]])).to_numpy()[keep]
-                parts.append((e[keep], base, mw))
+            parts = self.eco_part(x, rt, 1.0)
+            if aug is not None and self.cfg["aug_weight"]:
+                parts += self.eco_part(*aug, self.cfg["aug_weight"])
             E = pd.concat([p[0] for p in parts]); base = np.concatenate([p[1] for p in parts]); yy = np.concatenate([p[2] for p in parts])
+            wt = np.concatenate([p[3] for p in parts])
             params = dict(objective="binary:logistic", n_jobs=8, random_state=self.seed, **self.cfg["eco_trees"])
             self.eco_model = xgb.XGBClassifier(**params)
-            self.eco_model.fit(E, yy, base_margin=base)
+            self.eco_model.fit(E, yy, base_margin=base, sample_weight=wt)
         return self
 
     def m_value(self, x, rt, o):
-        e, nx, done = eco_rows(x, rt, o)
+        e, nx, done = eco_rows(x, rt, o, ECO_SETS[self.cfg["eco_feats"]])
         base = logit(self.map_model.predict_proba(nx)[:, 1])
         if self.eco_model is None:
             p = 1 / (1 + np.exp(-base))

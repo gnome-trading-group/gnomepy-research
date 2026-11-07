@@ -35,7 +35,7 @@ def main(pkl, variants):
     for name, over in variants:
         cfg = {**DEFAULT, **over}
         key = cfg["round_extra"]
-        m = Model(cfg, 0).fit_rows(d["train"], d["legal"], d["x_tr"], d["rt_tr"], map_model=base.map_model, round_model=rm.get(key))
+        m = Model(cfg, 0).fit_rows(d["train"], d["legal"], d["x_tr"], d["rt_tr"], map_model=base.map_model, round_model=rm.get(key), aug=(d["x_aug"], d["rt_aug"]))
         rm[key] = m.round_model
         print(name, score(m.predict_rows(d["x_te"], d["rt_te"]), d, bm), flush=True)
 
