@@ -61,3 +61,8 @@ VARIANTS.update({
     "slow-all-ic": all_mono(dict(SLOW, interaction_constraints=IC)),
     "slow-all-q1slow": all_mono(SLOW, SLOW),
 })
+VARIANTS.update({
+    "slow-all-ens3": all_mono(SLOW, q_ens=[dict(interaction_constraints=IC), dict(max_depth=4, n_estimators=1500),
+                                           dict(max_depth=6, min_child_weight=300)]),
+    "slow-all-ens-ic": all_mono(SLOW, q_ens=[dict(interaction_constraints=IC)]),
+})

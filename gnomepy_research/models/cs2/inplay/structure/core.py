@@ -33,6 +33,7 @@ class Config:
     map_extra: bool = False
     round_seeds: int = 1
     half: bool = False
+    q_ens: list = field(default_factory=list)
     n_jobs: int = 8
 
 
@@ -87,6 +88,8 @@ def fit(train: Bundle, asof: pd.Timestamp, seed: int, cfg: Config):
         qkw["weight"] = 0.5 ** ((asof - rt.end).dt.days.to_numpy() / cfg.recency_half_life)
     QC = dp.QCOLS + cfg.extra + (dp.HALF if cfg.half else [])
     q = dp.fit_q(rt, seed, n_jobs=cfg.n_jobs, cols=QC, **qkw)
+    # Different q structures err differently, and the chain compounds each one's errors: average their map values.
+    qs = [q] + [dp.fit_q(rt, seed, n_jobs=cfg.n_jobs, cols=QC, **dict(qkw, **kw)) for kw in cfg.q_ens]
     q1 = None
     if cfg.lookahead:
         # The next round's win chance also depends on the money and equipment carried out of this round.
@@ -101,7 +104,7 @@ def fit(train: Bundle, asof: pd.Timestamp, seed: int, cfg: Config):
     x = state_rows(train, st, rt)
     y = np.where(x.a_ct, x.a_wins, 1 - x.a_wins)
     rm = dp.Avg([trees(seed * 1000 + i, cfg.n_jobs, **cfg.round_kw).fit(x[cfg.rcols], y) for i in range(cfg.round_seeds)])
-    return dict(q=q, q1=q1, map_model=mm, round_model=rm, cfg=cfg)
+    return dict(q=q, qs=qs, q1=q1, map_model=mm, round_model=rm, cfg=cfg)
 
 
 def components(model, ctx: Bundle, states: pd.DataFrame) -> pd.DataFrame:
@@ -112,36 +115,42 @@ def components(model, ctx: Bundle, states: pd.DataFrame) -> pd.DataFrame:
     statics = rt.groupby("game_id").head(1).reset_index(drop=True)
     QC = dp.QCOLS + cfg.extra + (dp.HALF if cfg.half else [])
     m = len(statics)
-    V = dp.values_half(model["q"], statics, cfg.extra) if cfg.half else dp.values(model["q"], statics, cfg.extra)
     mix = pd.Series(np.arange(m), index=statics.game_id)
     keys = pd.MultiIndex.from_frame(states[["game_id", "round"]])
     rr = rt.set_index(["game_id", "round"]).loc[keys].reset_index()
     half = rr.half_a.to_numpy(float) if cfg.half else None
-    d1, d0 = dp.next_values(V, mix.loc[rr.game_id].to_numpy(), rr.score_a.to_numpy(), rr.score_b.to_numpy(),
-                            rr.streak.to_numpy(), rr["round"].to_numpy(), half, m)
     mi = mix.loc[rr.game_id].to_numpy()
     n = rr["round"].to_numpy()
-    rx, ex = {}, {}
+    rx, nxt = {}, {}
     for a_won in (1, 0):
         X, done = feats.next_round_features(rr, a_won)
         for c in cfg.extra:
             X[c] = rr[c].to_numpy()
         p = model["map_model"].predict_proba(X[MC + (cfg.extra if cfg.map_extra else [])])[:, 1]
         rx[a_won] = np.where(np.isnan(done), p, done)
-        if model.get("q1") is not None:
-            k2 = np.where(resets(n + 1), 0, dp.step_streak(rr.streak.to_numpy(), a_won == 1))
-            X["streak"] = k2
-            sa2, sb2 = rr.score_a.to_numpy() + a_won, rr.score_b.to_numpy() + 1 - a_won
-            h2 = None
-            if cfg.half:
-                h2 = np.where(np.isnan(half), np.where(sa2 + sb2 >= 12, sa2, np.nan), half)
-                X["half_a"], X["sec_a"], X["sec_b"] = h2, sa2 - h2, sb2 - (12 - h2)
-            p1 = model["q1"].predict_proba(X[CARRY + QC])[:, 1]
+        k2 = np.where(resets(n + 1), 0, dp.step_streak(rr.streak.to_numpy(), a_won == 1))
+        X["streak"] = k2
+        sa2, sb2 = rr.score_a.to_numpy() + a_won, rr.score_b.to_numpy() + 1 - a_won
+        h2 = None
+        if cfg.half:
+            h2 = np.where(np.isnan(half), np.where(sa2 + sb2 >= 12, sa2, np.nan), half)
+            X["half_a"], X["sec_a"], X["sec_b"] = h2, sa2 - h2, sb2 - (12 - h2)
+        p1 = model["q1"].predict_proba(X[CARRY + QC])[:, 1] if model.get("q1") is not None else None
+        nxt[a_won] = (done, sa2, sb2, k2, h2, p1)
+    d = {1: 0.0, 0: 0.0}
+    qs = model.get("qs") or [model["q"]]
+    for q in qs:
+        V = dp.values_half(q, statics, cfg.extra) if cfg.half else dp.values(q, statics, cfg.extra)
+        if model.get("q1") is None:
+            a, b_ = dp.next_values(V, mi, rr.score_a.to_numpy(), rr.score_b.to_numpy(), rr.streak.to_numpy(), n, half, m)
+            d[1] += a / len(qs); d[0] += b_ / len(qs)
+            continue
+        for a_won in (1, 0):
+            done, sa2, sb2, k2, h2, p1 = nxt[a_won]
             ok = np.isnan(done)
             v1, v0 = dp.next_values(V, mi, np.where(ok, sa2, 0), np.where(ok, sb2, 0), np.where(ok, k2, 0), n + 1, h2, m)
-            ex[a_won] = np.where(ok, p1 * v1 + (1 - p1) * v0, done)
-    if ex:
-        d1, d0 = ex[1], ex[0]
+            d[a_won] += np.where(ok, p1 * v1 + (1 - p1) * v0, done) / len(qs)
+    d1, d0 = d[1], d[0]
     rt["q_a"] = model["q"].predict_proba(rt[QC])[:, 1]
     x = state_rows(ctx, states, rt)
     p_ct = model["round_model"].predict_proba(x[cfg.rcols])[:, 1]
