@@ -43,3 +43,21 @@ VARIANTS.update({
     "monop-slow": Config(extra=T, q_kw=dict(monotone_constraints=MONOP, learning_rate=0.02, n_estimators=1000)),
     "monop-d4": Config(extra=T, q_kw=dict(monotone_constraints=MONOP, max_depth=4, n_estimators=600)),
 })
+
+
+def all_mono(q_kw, q1_kw=None, **kw):
+    return Config(extra=T, q_kw=dict(monotone_constraints=MONOP, **q_kw), q1_kw=dict(monotone_constraints=MONOP, **(q1_kw or {})),
+                  map_kw=dict(min_child_weight=200, monotone_constraints=MONOP),
+                  round_kw=dict(max_depth=6, learning_rate=0.05, monotone_constraints={"ct_prior": 1}), **kw)
+
+
+SLOW = dict(learning_rate=0.02, n_estimators=1000)
+IC = [["prior_logit", "has_prior", "tier_code", "need_a", "need_b", "ot"],
+      ["ct_a", "map_code", "round_in_half", "pistol", "streak", "need_a", "need_b", "ot", "tier_code"]]
+VARIANTS.update({
+    "slow-all": all_mono(SLOW),
+    "slower-all": all_mono(dict(learning_rate=0.01, n_estimators=2000)),
+    "slow-all-mcw300": all_mono(dict(SLOW, min_child_weight=300)),
+    "slow-all-ic": all_mono(dict(SLOW, interaction_constraints=IC)),
+    "slow-all-q1slow": all_mono(SLOW, SLOW),
+})
