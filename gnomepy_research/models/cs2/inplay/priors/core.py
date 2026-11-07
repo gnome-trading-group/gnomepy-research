@@ -52,6 +52,7 @@ class Config:
     dp: bool = False
     map_from: str = ""
     halflife: float = 0.0
+    round_halflife: float = 0.0
     market_prior: bool = True
     market_mode: str = "lr"
     nm_set: str = "v1"
@@ -162,13 +163,14 @@ class Model:
     def map_cols(self):
         return MAPCOLS + (["edge"] if self.cfg.edge_map else []) + list(self.cfg.map_extra) + (["dp"] if self.cfg.dp else [])
 
-    def map_weights(self, rt: pd.DataFrame, g: pd.DataFrame, asof: pd.Timestamp):
-        if not self.cfg.halflife:
+    def map_weights(self, rt: pd.DataFrame, g: pd.DataFrame, asof: pd.Timestamp, halflife: float | None = None):
+        halflife = self.cfg.halflife if halflife is None else halflife
+        if not halflife:
             return None
         # The meta and the prior's quality drift; recent maps say more about the month being priced.
         t = rt.game_id.map(g.set_index("game_id").end)
         age = (asof - t).dt.total_seconds().fillna(0).to_numpy() / 86400
-        return np.power(0.5, age / self.cfg.halflife)
+        return np.power(0.5, age / halflife)
 
     def map_rows(self, rt: pd.DataFrame) -> pd.DataFrame:
         """Map-model features of rows at the start of their round."""
@@ -223,7 +225,8 @@ class Model:
         x, rti = self.round_rows(train, sts, prior)
         x = x.join(rti[["a_wins"]], on=["game_id", "round"])
         y = np.where(x.side_a == "CT", x.a_wins, 1 - x.a_wins)
-        self.round_model = trees(seed, max_depth=6, learning_rate=0.05).fit(x[self.round_cols()], y)
+        self.round_model = trees(seed, max_depth=6, learning_rate=0.05).fit(
+            x[self.round_cols()], y, sample_weight=self.map_weights(x, g, asof, self.cfg.round_halflife))
         return self
 
     def predict(self, ctx: Bundle, states: pd.DataFrame) -> np.ndarray:
