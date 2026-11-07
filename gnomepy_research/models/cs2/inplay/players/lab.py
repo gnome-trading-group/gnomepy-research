@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
 
 from gnomepy_research.models.cs2.inplay.baseline import MAPCOLS, ROUND, next_round, trees, with_prior
 from gnomepy_research.models.cs2.inplay.data import Bundle
@@ -38,7 +39,8 @@ def build(out: Path):
     rt = pd.concat([rt, E.map_skill(sub, rt, rates, team)], axis=1)
     done = b.games[b.games.map_a_wins.notna()]
     r2, t2 = E.strength(model, b, done.game_id)
-    pm = E.premap(b, done.game_id, r2, t2).join(b.games.set_index("game_id")[["map_a_wins", "begin", "end"]])
+    pm = E.premap(model, b, done.game_id, r2, t2).join(b.games.set_index("game_id")[["map_a_wins", "begin", "end"]])
+    pm = pm.join(b.priors.set_index("game_id")[["p_market", "p_e12"]])
     pm.to_parquet(out / "pm.parquet")
     rt = rt.merge(b.games[["game_id", "begin", "end", "match_begin"]], on="game_id")
     print("map rows", time.time() - t0, flush=True)
@@ -73,15 +75,23 @@ def price(rmodel, mmodel, rcols, mcols, xs, rt):
     return p_a * m[1].reindex(keys).to_numpy() + (1 - p_a) * m[0].reindex(keys).to_numpy(), p_ct
 
 
-def roster_prior(rt, xs, pm, cutoff):
+def roster_prior(rt, xs, pm, cutoff, stack):
+    """The entry's prior as of cutoff: roster LR where there is no market, market stacked with it where there is."""
+    E.CFG["stack"] = stack
     tr = pm[pm.end < cutoff]
     lr = E.fit_premap(tr, tr.map_a_wins)
-    ok = pm[E.PM].notna().all(axis=1)
-    z = pd.Series(np.nan, index=pm.index)
-    z[ok] = lr.decision_function(pm.loc[ok, E.PM])
+    z = E.premap_z(pm, lr)
     zz = z.reindex(rt.game_id).to_numpy()
+    p = rt.prior_logit.to_numpy().copy()
     use = (rt.has_prior.to_numpy() == 0) & ~np.isnan(zz)
-    rt = rt.assign(prior_logit=np.where(use, zz, rt.prior_logit))
+    p[use] = zz[use]
+    if stack in E.STACK:
+        d = tr.assign(z=z.reindex(tr.index)).dropna(subset=["p_market", "p_e12", "map_a_wins", "z"])
+        if len(d) >= 300:
+            st = LogisticRegression(C=1.0).fit(E.stack_x(d, d.z), d.map_a_wins)
+            ok = (rt.p_market.notna() & rt.p_e12.notna()).to_numpy() & ~np.isnan(zz)
+            p[ok] = st.decision_function(E.stack_x(rt[ok], zz[ok]))
+    rt = rt.assign(prior_logit=p)
     pl = rt.set_index(["game_id", "round"]).prior_logit.reindex(pd.MultiIndex.from_frame(xs[["game_id", "round"]])).to_numpy()
     return rt, xs.assign(ct_prior=np.where(xs.side_a == "CT", pl, -pl))
 
@@ -93,7 +103,11 @@ def evaluate(d: Path, variants: dict, months=MONTHS, seed=0):
     res = {k: [] for k in variants}
     for m in months:
         start = pd.Timestamp(m + "-01", tz="UTC"); end = start + pd.offsets.MonthBegin(1)
-        priors = {"elo": (rt0, xs0), "roster": roster_prior(rt0, xs0, pm, start)}
+        priors = {"elo": (rt0, xs0)}
+        for pr in {v[4] for v in variants.values()} - {"elo"}:
+            src, stack = pr.split(":")
+            E.CFG["pm"] = src
+            priors[pr] = roster_prior(rt0, xs0, pm, start, stack)
         fits = {}
         for name, (rc, mc, rkw, mkw, pr) in variants.items():
             rt, xs = priors[pr]
@@ -133,10 +147,13 @@ def default_variants():
     R, M, P = ROUND, MAPCOLS, ["ct_prior", "has_prior"]
     return {
         "base": (R, M, {}, {}, "elo"),
-        "roster_prior": (R, M, {}, {}, "roster"),
-        "round_prior": (R + P, M, {}, {}, "elo"),
-        "rskill+rprior": (R + E.ROUND_X + P, M, {}, {}, "elo"),
-        "all_roster": (R + E.ROUND_X + P, M, {}, {}, "roster"),
+        "base:none": (R, M, {}, {}, "base:none"),
+        "base:mz": (R, M, {}, {}, "base:mz"),
+        "pelo:none": (R, M, {}, {}, "pelo:none"),
+        "full:none": (R, M, {}, {}, "full:none"),
+        "full:mz": (R, M, {}, {}, "full:mz"),
+        "full:mez": (R, M, {}, {}, "full:mez"),
+        "full:mz+rskill": (R + E.ROUND_X, M, {}, {}, "full:mz"),
     }
 
 

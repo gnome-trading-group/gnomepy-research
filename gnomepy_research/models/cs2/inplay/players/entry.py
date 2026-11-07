@@ -24,10 +24,14 @@ CFG = dict(
     a_clutch=float(os.environ.get("PL_A_CLUTCH", 8)),
     a_team=float(os.environ.get("PL_A_TEAM", 30)),
     half_life=float(os.environ.get("PL_HALF_LIFE", 0)) or None,
+    elo_k=float(os.environ.get("PL_ELO_K", 0.3)),
+    elo_k_map=float(os.environ.get("PL_ELO_K_MAP", 0.1)),
+    pm=os.environ.get("PL_PM", "full"),
     round_feats=os.environ.get("PL_ROUND", "1") == "1",
     round_prior=os.environ.get("PL_ROUND_PRIOR", "1") == "1",
     map_feats=os.environ.get("PL_MAP", "0") == "1",
     map_prior=os.environ.get("PL_MAP_PRIOR", "roster"),
+    stack=os.environ.get("PL_STACK", "mz"),
 )
 
 PFEATS = ["net", "kpr", "dpr", "okr", "opr", "clr", "awr", "lgn"]
@@ -46,6 +50,22 @@ class History:
         ended = b.games.game_id[b.games.end.notna()]
         self.gids = set(ended)
         self.p_cum, self.t_cum, self.ta_cum = self._cums(b, ended)
+        res = S.map_results(b, ended)
+        self.elo = S.PlayerElo(CFG["elo_k"], CFG["elo_k_map"])
+        self.pelo = self.elo.run(res, res).set_axis(res.game_id)
+
+    def player_elo(self, b: Bundle, game_ids) -> pd.DataFrame:
+        """Player-Elo roster means as of each map's begin: stored for training maps; for others the ratings at the end
+        of training are carried forward through the maps that have ended since (results read from their timelines)."""
+        gids = pd.Index(sorted(set(game_ids)))
+        known = gids[gids.isin(self.pelo.index)]
+        out = [self.pelo.loc[known]]
+        rest = gids[~gids.isin(self.pelo.index)]
+        if len(rest):
+            new = b.games.game_id[b.games.end.notna() & ~b.games.game_id.isin(self.gids)]
+            tg = S.map_results(b, rest)
+            out.append(self.elo.copy().run(S.map_results(b, new), tg).set_axis(tg.game_id))
+        return pd.concat(out).reindex(gids)
 
     def _cums(self, b, gids):
         pc = S.stamp(S.player_map_counts(b, gids), b.games)
@@ -178,10 +198,17 @@ def map_skill(b: Bundle, rt: pd.DataFrame, rates: pd.DataFrame, team: pd.DataFra
     return x[MAP_X].set_axis(rt.index)
 
 
-PM = ["elo_logit", "d_net_mean", "d_net_max", "d_net_min", "d_okr_mean", "d_clr_mean", "d_kpr_mean", "d_dpr_mean", "d_all", "d_lgn_mean"]
+PM0 = ["elo_logit", "d_net_mean", "d_net_max", "d_net_min", "d_okr_mean", "d_clr_mean", "d_kpr_mean", "d_dpr_mean", "d_all", "d_lgn_mean"]
 
 
-def premap(b: Bundle, game_ids, rates: pd.DataFrame, team: pd.DataFrame) -> pd.DataFrame:
+PM_SETS = {"base": [], "pelo": ["d_pelo", "d_pn"], "full": ["d_pelo", "d_pn", "d_pmap", "d_share"], "share": ["d_share"]}
+
+
+def pm_cols():
+    return PM0 + PM_SETS[CFG["pm"]]
+
+
+def premap(model, b: Bundle, game_ids, rates: pd.DataFrame, team: pd.DataFrame) -> pd.DataFrame:
     """Per map: team A minus team B over the roster of the map's first round with player rows (mean/max/min net rating,
     opening, clutch, kills, deaths, experience) and overall round win rate. A scored state's round always has player
     rows, so its map's first such round is never after it."""
@@ -205,25 +232,62 @@ def premap(b: Bundle, game_ids, rates: pd.DataFrame, team: pd.DataFrame) -> pd.D
     zb = logit(tix.reindex(pd.MultiIndex.from_arrays([out.index, g.team_b.reindex(out.index)])).to_numpy())
     out["d_all"] = za - zb
     out["elo_logit"] = b.elo.set_index("game_id").elo_logit.reindex(out.index).fillna(0.0).to_numpy()
+    pe = model["hist"].player_elo(b, out.index).reindex(out.index)
+    out["d_pelo"] = pe.pelo_a - pe.pelo_b
+    out["d_pn"] = np.log1p(pe.pelo_na) - np.log1p(pe.pelo_nb)
+    out["d_pmap"] = pe.pmap_a - pe.pmap_b
+    out["d_share"] = np.log(pe.pshare_a) - np.log(pe.pshare_b)
     return out
 
 
 def fit_premap(pm: pd.DataFrame, y: pd.Series) -> LogisticRegression:
-    ok = pm[PM].notna().all(axis=1) & y.reindex(pm.index).notna()
-    return LogisticRegression(C=1.0, max_iter=2000).fit(pm.loc[ok, PM], y.reindex(pm.index)[ok])
+    cols = pm_cols()
+    ok = pm[cols].notna().all(axis=1) & y.reindex(pm.index).notna()
+    return LogisticRegression(C=1.0, max_iter=2000).fit(pm.loc[ok, cols], y.reindex(pm.index)[ok])
 
 
-def with_prior2(rt: pd.DataFrame, pm: pd.DataFrame, lr) -> pd.DataFrame:
-    """Benchmark prior (kickoff market, else Elo) with Elo replaced by the roster-strength prior where the map has one."""
-    rt = with_prior(rt)
-    if CFG["map_prior"] != "roster":
-        return rt
-    x = pm[PM]
+def premap_z(pm: pd.DataFrame, lr) -> pd.Series:
+    x = pm[pm_cols()]
     ok = x.notna().all(axis=1)
     z = pd.Series(np.nan, index=pm.index)
     if ok.any():
         z[ok] = lr.decision_function(x[ok])
-    zz = z.reindex(rt.game_id).to_numpy()
+    return z
+
+
+STACK = {"mz": ["m", "z"], "mez": ["m", "e", "z"], "me": ["m", "e"]}
+
+
+def stack_x(d: pd.DataFrame, z) -> pd.DataFrame:
+    x = pd.DataFrame(dict(m=logit(d.p_market), e=logit(d.p_e12), z=np.asarray(z, float)), index=d.index)
+    return x[STACK[CFG["stack"]]]
+
+
+def fit_stack(train: Bundle, z: pd.Series):
+    """The kickoff market (a series price turned into a map price, underconfident on its own) combined with the
+    roster prior; needs a few hundred market-listed maps to learn from, else the market is used as is."""
+    if CFG["stack"] not in STACK:
+        return None
+    d = train.priors.merge(train.games[["game_id", "map_a_wins"]], on="game_id")
+    d = d.assign(z=z.reindex(d.game_id).to_numpy()).dropna(subset=["p_market", "p_e12", "map_a_wins", "z"])
+    if len(d) < 300:
+        return None
+    return LogisticRegression(C=1.0).fit(stack_x(d, d.z), d.map_a_wins)
+
+
+def with_prior2(rt: pd.DataFrame, pm: pd.DataFrame, lr, stack=None) -> pd.DataFrame:
+    """Benchmark prior (kickoff market, else Elo) with Elo replaced by the roster-strength prior where the map has one,
+    and the market stacked with the roster prior once there is enough market history."""
+    rt = with_prior(rt)
+    if CFG["map_prior"] != "roster":
+        return rt
+    zz = premap_z(pm, lr).reindex(rt.game_id).to_numpy()
+    if stack is not None:
+        ok = (rt.p_market.notna() & rt.p_e12.notna()).to_numpy() & ~np.isnan(zz)
+        if ok.any():
+            z = rt.prior_logit.to_numpy().copy()
+            z[ok] = stack.decision_function(stack_x(rt[ok], zz[ok]))
+            rt = rt.assign(prior_logit=z)
     use = (rt.has_prior.to_numpy() == 0) & ~np.isnan(zz)
     return rt.assign(prior_logit=np.where(use, zz, rt.prior_logit))
 
@@ -241,8 +305,8 @@ def rows(model, b: Bundle, states: pd.DataFrame, rates=None, team=None, pm=None)
     rt = round_table(sub)
     if rates is None:
         rates, team = strength(model, b, rt.game_id.unique())
-        pm = premap(sub, rt.game_id.unique(), rates, team)
-    rt = with_prior2(rt, pm, model.get("premap"))
+        pm = premap(model, b, rt.game_id.unique(), rates, team)
+    rt = with_prior2(rt, pm, model.get("premap"), model.get("stack"))
     rt = pd.concat([rt, map_skill(sub, rt, rates, team)], axis=1).set_index(["game_id", "round"])
     x = states.join(state_features(sub, states))
     x = x.join(rt[["side_a", "a_equip", "b_equip", "need_a", "need_b", "map_code", "prior_logit", "has_prior"]], on=["game_id", "round"])
@@ -262,11 +326,12 @@ def fit(train: Bundle, asof: pd.Timestamp, seed: int):
     model["map_ct"] = pd.Series(ct_won).groupby(r["map"].to_numpy()).mean().to_dict()
     done = train.games[train.games.map_a_wins.notna()]
     rates, team = strength(model, train, done.game_id)
-    pm = premap(train, done.game_id, rates, team)
+    pm = premap(model, train, done.game_id, rates, team)
     model["premap"] = fit_premap(pm, done.set_index("game_id").map_a_wins)
+    model["stack"] = fit_stack(train, premap_z(pm, model["premap"]))
     legal = legal_maps(train)
     sub = train.subset(legal)
-    rt = with_prior2(round_table(sub), pm, model["premap"])
+    rt = with_prior2(round_table(sub), pm, model["premap"], model["stack"])
     rt = pd.concat([rt, map_skill(sub, rt, rates, team)], axis=1)
     rt = rt[rt.map_a_wins.notna()]
     model["map_model"] = trees(seed).fit(rt[map_cols()], rt.map_a_wins)
