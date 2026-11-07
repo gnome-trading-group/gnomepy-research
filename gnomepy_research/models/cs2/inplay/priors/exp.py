@@ -51,7 +51,7 @@ def score(map_model, cols, rt, states, p_ct, extra=None):
 
 def run_variant(name, train, ctx, states, asof, cfg: core.Config, seed=0):
     mdl = core.Model(cfg)
-    mdl.params = ratings.Params(**cfg_params(name))
+    mdl.params = ratings.Params(*cfg.k)
     info = ratings.game_info(train)
     feats, st = ratings.run(info, mdl.params)
     g = core.map_frame(info, feats, train)
@@ -64,13 +64,9 @@ def run_variant(name, train, ctx, states, asof, cfg: core.Config, seed=0):
     rt = core.with_prior(round_table(train.subset(legal)), prior_tr)
     rt = rt[rt.map_a_wins.notna()]
     cols = mdl.map_cols()
-    mm = baseline.trees(seed).fit(rt[cols], rt.map_a_wins)
+    mm = mdl.map_trees(seed).fit(rt[cols], rt.map_a_wins)
     rte = core.with_prior(round_table(ctx.subset(states.game_id)), prior_te).set_index(["game_id", "round"])
     return mm, cols, rte
-
-
-def cfg_params(name):
-    return {}
 
 
 VARIANTS = {
@@ -85,9 +81,19 @@ VARIANTS = {
     "avg_v1": core.Config(market_mode="avg"),
     "avg_p2": core.Config(market_mode="avg", nm_set="p2"),
     "avg_x1": core.Config(market_mode="avg", nm_set="x1", nm_kind="xgb"),
+    "avg_p2s": core.Config(market_mode="avg", nm_set="p2s"),
+    "avg_p2x": core.Config(market_mode="avg", nm_set="p2", nm_kind="blend"),
+    "avg3_p2": core.Config(market_mode="avg3", nm_set="p2"),
+    "e12w_p2": core.Config(market_mode="e12w", nm_set="p2"),
+    "avgnm_p2": core.Config(market_mode="avgnm", nm_set="p2"),
+    "avg_p2_k2": core.Config(market_mode="avg", nm_set="p2", k=(0.25, 0.12, 0.3, 1.2, 0.6, 1.5)),
+    "avg_p2_tier": core.Config(market_mode="avg", nm_set="p2", map_extra=("tier_c",)),
+    "avg_p2_tbn": core.Config(market_mode="avg", nm_set="p2", map_extra=("tier_c", "bo1", "npmin")),
+    "avgmap_p2": core.Config(market_mode="avgmap", nm_set="p2"),
+    "avg_p2_mono": core.Config(market_mode="avg", nm_set="p2", mono=True),
     "x1nooof": core.Config(nm_set="x1", nm_kind="xgb", folds=1),
 }
-SEEDS = {"v1s1": ("v1", 1), "v1s2": ("v1", 2), "nomks1": ("nomk", 1)}
+SEEDS = {"avg_p2s1": ("avg_p2", 1), "v1s1": ("v1", 1), "v1s2": ("v1", 2), "nomks1": ("nomk", 1)}
 
 
 def main():

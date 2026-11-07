@@ -29,10 +29,13 @@ NM_SETS = {
     "v1": BASIC + ["s_diff", "s_rd"],
     # Ratings of players with few maps are noise, so their weight scales with the roster's experience.
     "p2": BASIC + [f"{c}_p" for c in RAT] + ["npmin", "rest_a", "rest_b"],
+    "p2s": BASIC + [f"{c}_p" for c in RAT] + ["npmin", "rest_a", "rest_b", "s_diff", "s_rd"],
     "x1": BASIC + ["npmin", "nmin", "rest_a", "rest_b", "np_a", "np_b", "n_a", "n_b", "roster_known"],
     "x2": BASIC + ["npmin", "nmin", "rest_a", "rest_b", "np_a", "np_b", "n_a", "n_b", "roster_known", "s_diff", "s_rd"],
 }
 MK = ["l_market", "l_e12", "l_pool", "nm_logit", "s_diff", "s_rd"]
+# A series price does not know which map is played; team-on-map ratings carry the map pick.
+MK_MAP = ["l_avg", "q_map", "r_map"]
 EDGE = NM_SETS["v1"] + ["l_market", "l_e12", "has_m"]
 MIN_MARKET = 300
 
@@ -43,11 +46,14 @@ class Config:
     edge_round: bool = False
     edge_map: bool = False
     edge_from_prior: bool = False
+    map_extra: tuple = ()
+    mono: bool = False
     market_prior: bool = True
     market_mode: str = "lr"
     nm_set: str = "v1"
     nm_kind: str = "lr"
     folds: int = 5
+    k: tuple = ()
 
 
 def map_frame(info: pd.DataFrame, feats: pd.DataFrame, b: Bundle) -> pd.DataFrame:
@@ -75,6 +81,8 @@ class Model:
         self.cfg = cfg
 
     def nm_logit(self, g: pd.DataFrame) -> np.ndarray:
+        if self.cfg.nm_kind == "blend":
+            return (self.nm.decision_function(g[NM_SETS[self.cfg.nm_set]]) + self.nm2.predict(g[NM_SETS["x1"]], output_margin=True)) / 2
         x = g[NM_SETS[self.cfg.nm_set]]
         if self.cfg.nm_kind == "xgb":
             return self.nm.predict(x, output_margin=True)
@@ -92,6 +100,16 @@ class Model:
             # The kickoff market and e12 err differently; their logit average beats either and needs no fitting,
             # so it also covers the months before any market-listed map is in the training history.
             mk = ((g.l_market + g.l_e12) / 2).to_numpy()
+        elif self.cfg.market_mode == "avgmap":
+            mk = ((g.l_market + g.l_e12) / 2).to_numpy()
+            if self.mk is not None:
+                mk = self.mk.decision_function(g.assign(l_avg=mk)[MK_MAP])
+        elif self.cfg.market_mode == "avg3":
+            mk = ((g.l_market + g.l_e12 + g.l_pool) / 3).to_numpy()
+        elif self.cfg.market_mode == "e12w":
+            mk = (0.4 * g.l_market + 0.6 * g.l_e12).to_numpy()
+        elif self.cfg.market_mode == "avgnm":
+            mk = (0.85 * (g.l_market + g.l_e12) / 2 + 0.15 * nm).to_numpy()
         elif self.mk is not None and self.cfg.market_prior:
             mk = self.mk.decision_function(g.assign(nm_logit=nm)[MK])
         else:
@@ -101,6 +119,9 @@ class Model:
             out["edge"] = out.my_prior
         else:
             out["edge"] = self.edge.decision_function(g[EDGE]) if self.edge is not None else 0.0
+        out["tier_c"] = g.tier.map({t: i for i, t in enumerate(TIERS)}).fillna(4).to_numpy()
+        out["bo1"] = g.bo1.to_numpy()
+        out["npmin"] = g.npmin.to_numpy()
         return out
 
     def fit_prior(self, g: pd.DataFrame, train: Bundle, seed: int = 0) -> np.ndarray:
@@ -110,6 +131,9 @@ class Model:
         tr = g[use]
         cols = NM_SETS[self.cfg.nm_set]
         self.nm = self.nm_model(seed).fit(tr[cols], tr.result)
+        if self.cfg.nm_kind == "blend":
+            self.nm2 = xgb.XGBClassifier(n_estimators=500, max_depth=3, learning_rate=0.03, subsample=0.8, colsample_bytree=0.8,
+                                         min_child_weight=50, n_jobs=8, random_state=seed).fit(tr[NM_SETS["x1"]], tr.result)
         nm = self.nm_logit(g)
         if self.cfg.nm_kind == "xgb" and self.cfg.folds > 1:
             fold = (pd.util.hash_array(tr.match_id.to_numpy()) % self.cfg.folds).astype(int)
@@ -121,7 +145,10 @@ class Model:
         tm = tr.assign(nm_logit=nm[use])[tr.has_m.to_numpy() == 1]
         self.mk = None
         if len(tm) >= MIN_MARKET:
-            self.mk = LogisticRegression(C=1.0, max_iter=2000).fit(tm[MK], tm.result)
+            if self.cfg.market_mode == "avgmap":
+                self.mk = LogisticRegression(C=1.0, max_iter=2000).fit(tm.assign(l_avg=(tm.l_market + tm.l_e12) / 2)[MK_MAP], tm.result)
+            else:
+                self.mk = LogisticRegression(C=1.0, max_iter=2000).fit(tm[MK], tm.result)
         self.edge = None
         if (self.cfg.edge_round or self.cfg.edge_map) and not self.cfg.edge_from_prior:
             r = train.rounds[train.rounds.game_id.isin(set(tr.game_id))][["game_id", "a_wins"]].merge(tr[["game_id"] + EDGE], on="game_id")
@@ -129,7 +156,15 @@ class Model:
         return nm
 
     def map_cols(self):
-        return MAPCOLS + (["edge"] if self.cfg.edge_map else [])
+        return MAPCOLS + (["edge"] if self.cfg.edge_map else []) + list(self.cfg.map_extra)
+
+    def map_trees(self, seed):
+        if not self.cfg.mono:
+            return trees(seed)
+        # A stronger prior or fewer rounds still needed can only help team A; forcing that removes tree noise
+        # where data is thin (overtime, lopsided priors).
+        sign = {"prior_logit": 1, "need_a": -1, "need_b": 1}
+        return trees(seed, monotone_constraints="(" + ",".join(str(sign.get(c, 0)) for c in self.map_cols()) + ")")
 
     def round_cols(self):
         return ROUND + (["edge_ct"] if self.cfg.edge_round else [])
@@ -145,7 +180,7 @@ class Model:
         return x, rt
 
     def fit(self, train: Bundle, asof: pd.Timestamp, seed: int):
-        self.params = ratings.Params()
+        self.params = ratings.Params(*self.cfg.k)
         self.asof = asof
         info = ratings.game_info(train)
         feats, self.state = ratings.run(info, self.params)
@@ -154,7 +189,7 @@ class Model:
         legal = legal_maps(train)
         rt = with_prior(round_table(train.subset(legal)), prior)
         rt = rt[rt.map_a_wins.notna()]
-        self.map_model = trees(seed).fit(rt[self.map_cols()], rt.map_a_wins)
+        self.map_model = self.map_trees(seed).fit(rt[self.map_cols()], rt.map_a_wins)
         sts = map_states(train, legal)
         x, rti = self.round_rows(train, sts, prior)
         x = x.join(rti[["a_wins"]], on=["game_id", "round"])
@@ -175,8 +210,7 @@ class Model:
         m = {}
         for a_won in (1, 0):
             X, done = next_round(rr, a_won)
-            if self.cfg.edge_map:
-                X = X.assign(edge=rr.edge.to_numpy())
+            X = X.assign(**{c: rr[c].to_numpy() for c in self.map_cols() if c not in MAPCOLS})
             p = self.map_model.predict_proba(X[self.map_cols()])[:, 1]
             m[a_won] = pd.Series(np.where(np.isnan(done), p, done), index=pd.MultiIndex.from_frame(rr[["game_id", "round"]]))
         p_a = np.where(x.side_a == "CT", p_ct, 1 - p_ct)
