@@ -3,7 +3,8 @@
 **Entry:** `entry.py` (= `model.make()` with defaults; scored as `econ-v2t_soft03`, re-run as `econ-final`).
 **Full development (2026-04..08):** -0.00267 log loss vs the benchmark, map-bootstrap 95% interval
 [-0.00342, -0.00194], better in 5/5 months (-0.00283, -0.00300, -0.00106, -0.00237, -0.00338), round-start states
--0.00221. Audit passes on every run. ~24 min per 5-month run on 8 vCPU.
+-0.00221. Audit passes on every run (final: 300 states, max abs diff 0.0). Seeds 0 and 1 both give -0.00267. ~24 min per
+5-month run on 8 vCPU.
 
 ## Idea
 
@@ -90,6 +91,7 @@ Quick checks (August, cached features, `dev.py` + `sweep_local.py`):
 | econ-v2t_bag3 | -0.00276 | [-0.00373, -0.00185] | 5/5 | -0.00313 -0.00322 -0.00062 -0.00232 -0.00353 | -0.00230 |
 | econ-v2t_soft03_mono | -0.00266 | [-0.00343, -0.00192] | 5/5 | -0.00283 -0.00301 -0.00104 -0.00230 -0.00341 | -0.00218 |
 | econ-v2t_soft015 | -0.00271 | [-0.00356, -0.00189] | 5/5 | -0.00296 -0.00312 -0.00086 -0.00231 -0.00346 | -0.00224 |
+| econ-final (cleaned entry, seeds 0 and 1, audit 300 states) | -0.00267 | [-0.00342, -0.00194] | 5/5 | -0.00283 -0.00300 -0.00106 -0.00237 -0.00338 | -0.00221 |
 | econ-final_quick (entry, August only, local) | -0.00342 | [-0.00524, -0.00164] | 1/1 | -0.00342 | -0.00281 |
 
 The top configurations (v2t, v1t, v2t_t500, v2t_cs1, v2t_bag3, v2t_soft03) are within 0.0001 of each other, well inside
