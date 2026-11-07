@@ -91,6 +91,10 @@ VARIANTS = {
     "avg_p2_tbn": core.Config(market_mode="avg", nm_set="p2", map_extra=("tier_c", "bo1", "npmin")),
     "avgmap_p2": core.Config(market_mode="avgmap", nm_set="p2"),
     "avg_p2_mono": core.Config(market_mode="avg", nm_set="p2", mono=True),
+    "mono_tier": core.Config(market_mode="avg", nm_set="p2", mono=True, map_extra=("tier_c",)),
+    "mono_d6": core.Config(market_mode="avg", nm_set="p2", mono=True, map_kw=(("max_depth", 6),)),
+    "mono_n1200": core.Config(market_mode="avg", nm_set="p2", mono=True, map_kw=(("n_estimators", 1200),)),
+    "mono_mcw200": core.Config(market_mode="avg", nm_set="p2", mono=True, map_kw=(("min_child_weight", 200),)),
     "x1nooof": core.Config(nm_set="x1", nm_kind="xgb", folds=1),
 }
 SEEDS = {"avg_p2s1": ("avg_p2", 1), "v1s1": ("v1", 1), "v1s2": ("v1", 2), "nomks1": ("nomk", 1)}

@@ -48,6 +48,7 @@ class Config:
     edge_from_prior: bool = False
     map_extra: tuple = ()
     mono: bool = False
+    map_kw: tuple = ()
     market_prior: bool = True
     market_mode: str = "lr"
     nm_set: str = "v1"
@@ -159,12 +160,13 @@ class Model:
         return MAPCOLS + (["edge"] if self.cfg.edge_map else []) + list(self.cfg.map_extra)
 
     def map_trees(self, seed):
+        kw = dict(self.cfg.map_kw)
         if not self.cfg.mono:
-            return trees(seed)
+            return trees(seed, **kw)
         # A stronger prior or fewer rounds still needed can only help team A; forcing that removes tree noise
         # where data is thin (overtime, lopsided priors).
         sign = {"prior_logit": 1, "need_a": -1, "need_b": 1}
-        return trees(seed, monotone_constraints="(" + ",".join(str(sign.get(c, 0)) for c in self.map_cols()) + ")")
+        return trees(seed, **kw, monotone_constraints="(" + ",".join(str(sign.get(c, 0)) for c in self.map_cols()) + ")")
 
     def round_cols(self):
         return ROUND + (["edge_ct"] if self.cfg.edge_round else [])
