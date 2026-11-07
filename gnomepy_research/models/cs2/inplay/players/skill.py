@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
+from sklearn.linear_model import Ridge
 
 from ..data import Bundle
 
@@ -248,3 +250,51 @@ class PlayerElo:
         c = PlayerElo(self.k, self.k_map, self.mode)
         c.r, c.rm, c.n, c.nm = dict(self.r), dict(self.rm), dict(self.n), dict(self.nm)
         return c
+
+
+class PlusMinus:
+    """Adjusted plus-minus: a ridge regression of each map's round-share log odds on its rosters (+1/5 for team A's
+    players, -1/5 for team B's), refitted at every month start on the maps that ended before it. A map is rated with the
+    fit from the start of the month it began in, so it never sees itself or anything after its month began."""
+
+    def __init__(self, results: pd.DataFrame, until: pd.Timestamp, alpha=1.0):
+        self.alpha = alpha
+        res = results.dropna(subset=["end", "wa", "wb"])
+        self.res = res[res.ra.notna() & res.rb.notna()]
+        start = self.res.end.min()
+        self.fits = {}
+        if pd.isna(start):
+            return
+        for m in pd.date_range(start.floor("D") + pd.offsets.MonthBegin(1), until, freq="MS"):
+            self.fits[m] = self._fit(self.res[self.res.end < m])
+
+    def _fit(self, r: pd.DataFrame):
+        if len(r) < 500:
+            return None
+        players = sorted({p for t in r.ra for p in t} | {p for t in r.rb for p in t})
+        ix = {p: i for i, p in enumerate(players)}
+        X = _design(r.ra, r.rb, ix)
+        share = (r.wa + 1) / (r.wa + r.wb + 2)
+        m = Ridge(alpha=self.alpha).fit(X, np.log(share / (1 - share)))
+        return dict(zip(players, m.coef_))
+
+    def rate(self, targets: pd.DataFrame) -> pd.Series:
+        """targets: map_results rows (begin, ra, rb). Team A minus team B, from the fit at the start of its month."""
+        out = np.full(len(targets), np.nan)
+        month = targets.begin.dt.tz_convert("UTC").dt.floor("D") - pd.to_timedelta(targets.begin.dt.day - 1, unit="D")
+        for i, (m, a, bb) in enumerate(zip(month, targets.ra, targets.rb)):
+            w = self.fits.get(m) if not pd.isna(m) else None
+            if w is None or not isinstance(a, tuple) or not isinstance(bb, tuple):
+                continue
+            out[i] = 0.2 * (sum(w.get(p, 0.0) for p in a) - sum(w.get(p, 0.0) for p in bb))
+        return pd.Series(out, index=targets.index)
+
+
+def _design(ra, rb, ix):
+    rows, cols, vals = [], [], []
+    for i, (a, bb) in enumerate(zip(ra, rb)):
+        for p in a:
+            rows.append(i); cols.append(ix[p]); vals.append(0.2)
+        for p in bb:
+            rows.append(i); cols.append(ix[p]); vals.append(-0.2)
+    return sp.csr_matrix((vals, (rows, cols)), shape=(len(ra), len(ix)))

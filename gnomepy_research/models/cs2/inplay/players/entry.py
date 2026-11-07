@@ -7,8 +7,6 @@ record on the map. Strength is frozen per map at its start, so pricing a state n
 map beyond what the benchmark already uses."""
 from __future__ import annotations
 
-import os
-
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
@@ -20,23 +18,23 @@ from gnomepy_research.models.cs2.inplay.players import skill as S
 from gnomepy_research.models.cs2.inplay.players.dp import dp_value
 
 CFG = dict(
-    a_rate=float(os.environ.get("PL_A_RATE", 40)),
-    a_open=float(os.environ.get("PL_A_OPEN", 15)),
-    a_clutch=float(os.environ.get("PL_A_CLUTCH", 8)),
-    a_team=float(os.environ.get("PL_A_TEAM", 10)),
-    half_life=float(os.environ.get("PL_HALF_LIFE", 0)) or None,
-    elo_k=float(os.environ.get("PL_ELO_K", 0.3)),
-    elo_k_map=float(os.environ.get("PL_ELO_K_MAP", 0.1)),
-    pm=os.environ.get("PL_PM", "full2"),
-    round_feats=os.environ.get("PL_ROUND", "1") == "1",
-    round_prior=os.environ.get("PL_ROUND_PRIOR", "1") == "1",
+    a_rate=40,
+    a_open=15,
+    a_clutch=8,
+    a_team=10,
+    half_life=None,
+    elo_k=0.3,
+    elo_k_map=0.1,
+    pm="full2",
+    round_feats=False,
+    round_prior=False,
     map_x=[],
-    map_prior=os.environ.get("PL_MAP_PRIOR", "roster"),
-    stack=os.environ.get("PL_STACK", "memap"),
-    map_nohas=os.environ.get("PL_MAP_NOHAS", "1") == "1",
-    map_mono=os.environ.get("PL_MAP_MONO", "1") == "1",
-    dp=os.environ.get("PL_DP", "0") == "1",
-    map_bag=int(os.environ.get("PL_MAP_BAG", 1)),
+    map_prior="roster",
+    stack="memap",
+    map_nohas=True,
+    map_mono=True,
+    dp=False,
+    map_bag=1,
     map_kw=dict(max_depth=6, min_child_weight=300, learning_rate=0.05),
 )
 
@@ -52,7 +50,7 @@ MAP_X = ["d_net_roster", "a_net_roster", "b_net_roster", "a_ct_map", "a_t_map", 
 class History:
     """Per-map counts of the training maps plus their running totals, so pricing only adds the scored month's maps."""
 
-    def __init__(self, b: Bundle, hl):
+    def __init__(self, b: Bundle, hl, until: pd.Timestamp):
         self.hl = hl
         ended = b.games.game_id[b.games.end.notna()]
         self.gids = set(ended)
@@ -60,6 +58,7 @@ class History:
         res = S.map_results(b, ended)
         self.elo = S.PlayerElo(CFG["elo_k"], CFG["elo_k_map"])
         self.pelo = self.elo.run(res, res).set_axis(res.game_id)
+        self.apm = S.PlusMinus(res, until) if "d_apm" in pm_cols() else None
 
     def player_elo(self, b: Bundle, game_ids) -> pd.DataFrame:
         """Player-Elo roster means as of each map's begin: stored for training maps; for others the ratings at the end
@@ -235,7 +234,8 @@ PM0 = ["elo_logit", "d_net_mean", "d_net_max", "d_net_min", "d_okr_mean", "d_clr
 PM_SETS = {"base": [], "pelo": ["d_pelo", "d_pn"], "full": ["d_pelo", "d_pn", "d_pmap", "d_share"], "share": ["d_share"],
            "full2": ["d_pelo", "d_pn", "d_pmap", "d_share", "d_lstab_mean", "d_lstab_min", "d_teammap"],
            "full_stab": ["d_pelo", "d_pn", "d_pmap", "d_share", "d_lstab_mean", "d_lstab_min"],
-           "full_tm": ["d_pelo", "d_pn", "d_pmap", "d_share", "d_teammap"]}
+           "full_tm": ["d_pelo", "d_pn", "d_pmap", "d_share", "d_teammap"],
+           "full3": ["d_pelo", "d_pn", "d_pmap", "d_share", "d_lstab_mean", "d_lstab_min", "d_teammap", "d_apm"]}
 
 
 def pm_cols():
@@ -266,6 +266,8 @@ def premap(model, b: Bundle, game_ids, rates: pd.DataFrame, team: pd.DataFrame) 
     zb = logit(tix.reindex(pd.MultiIndex.from_arrays([out.index, g.team_b.reindex(out.index)])).to_numpy())
     out["d_all"] = za - zb
     tmall = team.set_index(["game_id", "team_id"]).map_all
+    if model["hist"].apm is not None:
+        out["d_apm"] = model["hist"].apm.rate(S.map_results(b, out.index).set_index("game_id")).reindex(out.index)
     out["d_teammap"] = (logit(tmall.reindex(pd.MultiIndex.from_arrays([out.index, g.team_a.reindex(out.index)])).to_numpy())
                         - logit(tmall.reindex(pd.MultiIndex.from_arrays([out.index, g.team_b.reindex(out.index)])).to_numpy()))
     out["elo_logit"] = b.elo.set_index("game_id").elo_logit.reindex(out.index).fillna(0.0).to_numpy()
@@ -365,6 +367,8 @@ class Bag:
         return np.mean([m.predict_proba(X) for m in self.models], axis=0)
 
 
+TIERS = {"s": 0, "a": 1, "b": 2, "c": 3, "d": 4}
+
 MONO = {"need_a": -1, "need_b": 1, "prior_logit": 1, "side_adv_ct": 1, "side_adv_t": 1, "kd_rate": 1, "dp": 1}
 
 
@@ -396,7 +400,7 @@ def rows(model, b: Bundle, states: pd.DataFrame, rates=None, team=None, pm=None)
 
 
 def fit(train: Bundle, asof: pd.Timestamp, seed: int):
-    hist = History(train, CFG["half_life"])
+    hist = History(train, CFG["half_life"], asof)
     model = dict(hist=hist, pri=priors_from(hist))
     r = train.rounds[train.rounds.a_wins.notna()]
     ct_won = np.where(r.side_a == "CT", r.a_wins, 1 - r.a_wins)

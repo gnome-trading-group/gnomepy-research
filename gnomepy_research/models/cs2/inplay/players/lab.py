@@ -28,7 +28,7 @@ def build(out: Path):
     E.CFG["map_prior"] = "elo"
     b = Bundle.load(DATA)
     t0 = time.time()
-    hist = E.History(b, E.CFG["half_life"])
+    hist = E.History(b, E.CFG["half_life"], pd.Timestamp("2026-09-01", tz="UTC"))
     model = dict(hist=hist, pri=E.priors_from(hist))
     r = b.rounds
     model["map_ct"] = pd.Series(np.where(r.side_a == "CT", r.a_wins, 1 - r.a_wins)).groupby(r["map"].to_numpy()).mean().to_dict()
@@ -103,6 +103,11 @@ def evaluate(d: Path, variants: dict, months=MONTHS, seed=0):
     rt0 = pd.read_parquet(d / "rt.parquet")
     xs0 = pd.read_parquet(d / "states.parquet")
     pm = pd.read_parquet(d / "pm.parquet")
+    if "tier_code" not in rt0:
+        g = pd.read_parquet(Path(DATA) / "games.parquet").set_index("game_id")
+        rt0["tier_code"] = rt0.game_id.map(g.tier.map(E.TIERS)).fillna(-1).to_numpy()
+        rt0["bo"] = rt0.game_id.map(g.bo).to_numpy()
+        rt0["decider"] = (rt0.game_id.map(g.map_no) == rt0.game_id.map(g.bo)).astype(int).to_numpy()
     if "kd_rate" not in rt0:
         rt0["kd_rate"] = E.kill_diff(Bundle.load(DATA), rt0)
     if "side_adv_ct" not in rt0:
@@ -128,7 +133,7 @@ def evaluate(d: Path, variants: dict, months=MONTHS, seed=0):
             uses_prior = "ct_prior" in rc
             k_r, k_m = (tuple(rc), tuple(sorted(rkw.items())), pr if uses_prior else ""), (tuple(mc), tuple(sorted(mkw.items())), pr)
             if k_r not in fits:
-                fits[k_r] = trees(seed, max_depth=6, learning_rate=0.05, **rkw).fit(xtr[rc], xtr.y_ct)
+                fits[k_r] = trees(seed, **dict(dict(max_depth=6, learning_rate=0.05), **rkw)).fit(xtr[rc], xtr.y_ct)
             if k_m not in fits:
                 kw = {k: v for k, v in mkw.items() if k != "bag"}
                 fits[k_m] = E.Bag(lambda sd: trees(sd, **kw), mkw.get("bag", 1), seed).fit(rtr[mc], rtr.map_a_wins)
@@ -157,12 +162,13 @@ def default_variants():
     R, M = ROUND, MAPCOLS
     NH = [c for c in M if c != "has_prior"]
     kw = dict(monotone_constraints="(-1,1,0,0,0,0,0,0,0,1)", max_depth=6, min_child_weight=300, learning_rate=0.05)
+    kw1 = dict(kw, monotone_constraints="(-1,1,0,0,0,0,0,0,0,1,0)")
+    kw3 = dict(kw, monotone_constraints="(-1,1,0,0,0,0,0,0,0,1,0,0,0)")
     return {
         "base": (R, M, {}, {}, "elo"),
-        "F": (R, NH, {}, kw, "full:mez"),
-        "F2 mez": (R, NH, {}, kw, "full2:mez"),
-        "F2 memap": (R, NH, {}, kw, "full2:memap"),
-        "F2 memap rskill": (R + E.ROUND_X, NH, {}, kw, "full2:memap"),
+        "F2": (R, NH, {}, kw, "full2:memap"),
+        "F2 tier": (R, NH + ["tier_code"], {}, kw1, "full2:memap"),
+        "F2 tier bo dec": (R, NH + ["tier_code", "bo", "decider"], {}, kw3, "full2:memap"),
     }
 
 
