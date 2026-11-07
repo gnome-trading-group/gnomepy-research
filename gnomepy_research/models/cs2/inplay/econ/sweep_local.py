@@ -9,9 +9,8 @@ import numpy as np
 import pandas as pd
 
 from .. import harness
-from .model import DEFAULT, TIERS, Model
+from .model import DEFAULT, Model
 
-DATA = "/Users/mprey/gnome-research-work/cs2/comp3/data"
 BENCH = "/Users/mprey/gnome-research-work/cs2/comp3/bench_cache/bench_89bd1ebdec_2026-08.parquet"
 
 
@@ -30,22 +29,11 @@ def score(p, d, bm):
 def main(pkl, variants):
     d = pickle.load(open(pkl, "rb"))
     bm = pd.read_parquet(BENCH)
-    g = pd.read_parquet(DATA + "/games.parquet").drop_duplicates("game_id").set_index("game_id")
-    for k in ("rt_tr", "rt_te", "rt_aug"):
-        gid = d[k].index.get_level_values("game_id")
-        for c in ("tier", "bo", "map_no"):
-            d[k][c] = g[c].reindex(gid).to_numpy()
-        d[k]["tier_code"] = d[k].tier.map(TIERS)
-    for k, r in (("x_tr", "rt_tr"), ("x_te", "rt_te")):
-        d[k]["tier_code"] = d[r].tier_code.reindex(pd.MultiIndex.from_frame(d[k][["game_id", "round"]])).to_numpy()
-    base = Model(dict(DEFAULT, eco=False, round_extra=False, map_tier=False), 0).fit_rows(d["train"], d["legal"], d["x_tr"], d["rt_tr"])
-    print("bench-repro", score(base.predict_rows(d["x_te"], d["rt_te"]), d, bm), flush=True)
-    rm = {}
+    first = None
     for name, over in variants:
-        cfg = {**DEFAULT, **over}
-        key = (cfg["round_extra"], cfg["round_tier"])
-        m = Model(cfg, 0).fit_rows(d["train"], d["legal"], d["x_tr"], d["rt_tr"], map_model=None if cfg["map_tier"] else base.map_model, round_model=rm.get(key), aug=(d["x_aug"], d["rt_aug"]))
-        rm[key] = m.round_model
+        m = Model({**DEFAULT, **over}, 0).fit_rows(d["train"], d["legal"], d["x_tr"], d["rt_tr"],
+                                                   map_model=first and first.map_model, round_model=first and first.round_model)
+        first = first or m
         print(name, score(m.predict_rows(d["x_te"], d["rt_te"]), d, bm), flush=True)
 
 

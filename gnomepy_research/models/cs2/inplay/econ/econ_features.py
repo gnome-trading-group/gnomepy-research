@@ -1,8 +1,8 @@
-"""Economy-aware state features for the in-play map price.
+"""Economy features for the in-play map price.
 
 Everything is computed from round-start information of the state's own round (players' money after the buy, loadouts),
 the score progression of earlier rounds and that round's events up to the state's event_seq, so a state never sees its
-round's outcome.
+round's outcome. post_table (a round's actual pre-buy economy) is used only to build training targets.
 
 Money rules, checked against players.money_pre/money (zero-kill losers of eliminated rounds, 2025-06 onward):
 - the loss counter starts at 1 at each half start (a pistol-round loser gets $1,900), a loss pays 1400 + 500 * counter
@@ -20,13 +20,10 @@ from ..features import resets
 RIFLES = {"ak47", "m4a1_s", "m4a4", "galilar", "famas", "aug", "sg553", "awp", "ssg08", "g3sg1", "scar20", "m249", "negev"}
 KILL_REWARD = {"awp": 100, "mp9": 600, "mac10": 600, "mp7": 600, "ump45": 600, "mp5": 600, "bizon": 600, "nova": 900,
                "mag7": 900, "xm1014": 900, "sawedoff": 900, "knife": 1500, "taser": 0}
-PRICE = {"ak47": 2700, "m4a4": 3100, "m4a1_s": 2900, "awp": 4750, "galilar": 1800, "famas": 2050, "mp9": 1250, "mac10": 1050,
-         "mp7": 1500, "ump45": 1200, "mp5": 1500, "p90": 2350, "bizon": 1400, "ssg08": 1700, "aug": 3300, "sg553": 3000,
-         "xm1014": 2000, "mag7": 1300, "nova": 1050, "sawedoff": 1100, "negev": 1700, "m249": 5200, "g3sg1": 5000, "scar20": 5000}
-ARMOR = {"kevlar": 650, "kevlar_and_helmet": 1000}
-SIDE_COLS = ["alive", "eq", "awp", "kits", "rifles", "helmets", "kills", "money_alive", "proj_w", "proj_l", "nbuy_w", "nbuy_l",
-             "nfull_w", "nfull_l", "util", "nbuy2_w", "nbuy2_l", "nrebuy_w", "nrebuy_l"]
+SIDE_COLS = ["alive", "eq", "awp", "kits", "rifles", "helmets", "kills", "proj_w", "proj_l", "nbuy_w", "nbuy_l", "nfull_w",
+             "nfull_l"]
 STATE_COLS = [f"{s}_{c}" for s in ("ct", "t") for c in SIDE_COLS] + ["planted", "since_plant", "t"]
+POST_COLS = [f"{t}_{c}" for t in ("a", "b") for c in ("mp", "eqp", "rif", "kawp", "nbuy")] + ["d_nbuy_post", "d_res_post"]
 MONEY_CAP = 16000
 WIN_PAY = 3250
 PLANT_BONUS = 800
@@ -34,15 +31,12 @@ FULL_BUY = 3900
 TOPUP = 1000
 # Side-specific full buys: AK + armor + utility vs M4 + armor + kit + utility.
 SIDE_FULL = {"T": 3700, "CT": 4300}
-MIN_LOSS_PAY = 1900
 
 
 def player_rounds(b: Bundle, game_ids) -> pd.DataFrame:
     p = b.players[b.players.game_id.isin(set(game_ids))]
     money = p.money.where(p.money < 20000)
-    # What the loadout holds besides the primary, armor and kit: grenades and pistol upgrades.
-    util = p.equip - p.prim.map(PRICE).fillna(0) - p.armor.map(ARMOR).fillna(0) - 400 * p.kit.fillna(False).astype(int)
-    return p.assign(money=money, util=util.clip(lower=0), rifle=p.prim.isin(RIFLES), awp=p.prim == "awp", helmet=p.armor == "kevlar_and_helmet",
+    return p.assign(money=money, rifle=p.prim.isin(RIFLES), awp=p.prim == "awp", helmet=p.armor == "kevlar_and_helmet",
                     kit=p.kit.fillna(False).astype(bool))
 
 
@@ -68,7 +62,7 @@ def state_table(b: Bundle, states: pd.DataFrame, ct_ctr: np.ndarray, t_ctr: np.n
     with full-buy money regardless of weapons (nfull). Dead players lose their weapons but keep their money."""
     gids = set(states.game_id)
     P = player_rounds(b, gids)
-    roster = {k: list(zip(x.player_id, x.side, x.equip, x.awp, x.kit, x.rifle, x.helmet, x.money.fillna(0), x.util))
+    roster = {k: list(zip(x.player_id, x.side, x.equip, x.awp, x.kit, x.rifle, x.helmet, x.money.fillna(0)))
               for k, x in P.groupby(["game_id", "round"])}
     ev = b.events[b.events.game_id.isin(gids) & b.events.type.isin(["kill", "bomb_planted"])]
     ev = ev.assign(kside=ev.killer_side.map({"counter_terrorists": "CT", "terrorists": "T"}),
@@ -78,7 +72,7 @@ def state_table(b: Bundle, states: pd.DataFrame, ct_ctr: np.ndarray, t_ctr: np.n
     out = np.full((len(states), len(STATE_COLS)), np.nan)
     for i, (gid, rnd, seq) in enumerate(zip(states.game_id, states["round"], states.event_seq)):
         players = roster.get((gid, rnd), [])
-        alive = {pid: True for pid, *_ in players}
+        alive = {pid for pid, *_ in players}
         planted, plant_t, t = 0, np.nan, 0.0
         kills = {"CT": 0, "T": 0}
         earned = {}
@@ -87,7 +81,7 @@ def state_table(b: Bundle, states: pd.DataFrame, ct_ctr: np.ndarray, t_ctr: np.n
                 break
             t = el
             if typ == "kill":
-                alive.pop(victim, None)
+                alive.discard(victim)
                 if ks in kills and tk is not True:
                     kills[ks] += 1
                     earned[killer] = earned.get(killer, 0) + reward
@@ -95,25 +89,19 @@ def state_table(b: Bundle, states: pd.DataFrame, ct_ctr: np.ndarray, t_ctr: np.n
                 planted, plant_t = 1, el
         loss_pay = {"CT": 1400 + 500 * min(ct_ctr[i], 4), "T": 1400 + 500 * min(t_ctr[i], 4) + PLANT_BONUS * planted}
         v = {"CT": [0.0] * len(SIDE_COLS), "T": [0.0] * len(SIDE_COLS)}
-        for pid, side, eq, awp, kit, rifle, helmet, money, util in players:
+        for pid, side, eq, awp, kit, rifle, helmet, money in players:
             if side not in v:
                 continue
             x = v[side]
             base = money + earned.get(pid, 0)
             w, l = min(base + WIN_PAY, MONEY_CAP), min(base + loss_pay[side], MONEY_CAP)
-            x[8] += w; x[9] += l
+            x[7] += w; x[8] += l
             keeps_rifle = pid in alive and rifle
-            x[10] += (w >= FULL_BUY) or (keeps_rifle and w >= TOPUP)
-            x[11] += (l >= FULL_BUY) or (keeps_rifle and l >= TOPUP)
-            x[12] += w >= FULL_BUY; x[13] += l >= FULL_BUY
-            full = SIDE_FULL[side]
-            x[15] += (w >= full) or (keeps_rifle and w >= TOPUP)
-            x[16] += (l >= full) or (keeps_rifle and l >= TOPUP)
-            # Could buy fully next round, lose it, and still buy fully the round after.
-            x[17] += w >= 2 * full - MIN_LOSS_PAY
-            x[18] += l >= 2 * full - MIN_LOSS_PAY
+            x[9] += (w >= FULL_BUY) or (keeps_rifle and w >= TOPUP)
+            x[10] += (l >= FULL_BUY) or (keeps_rifle and l >= TOPUP)
+            x[11] += w >= FULL_BUY; x[12] += l >= FULL_BUY
             if pid in alive:
-                x[0] += 1; x[1] += eq; x[2] += awp; x[3] += kit; x[4] += rifle; x[5] += helmet; x[7] += money; x[14] += util
+                x[0] += 1; x[1] += eq; x[2] += awp; x[3] += kit; x[4] += rifle; x[5] += helmet
         v["CT"][6], v["T"][6] = kills["CT"], kills["T"]
         out[i] = [*v["CT"], *v["T"], planted, (t - plant_t) if planted else np.nan, t]
     f = pd.DataFrame(out, columns=STATE_COLS, index=states.index)
@@ -121,32 +109,26 @@ def state_table(b: Bundle, states: pd.DataFrame, ct_ctr: np.ndarray, t_ctr: np.n
     return f
 
 
-def team_money(b: Bundle, game_ids) -> pd.DataFrame:
-    """Per round and team A/B: money after the buy (cleaned) summed and the poorest player's."""
-    P = player_rounds(b, game_ids)
+def is_team_a(b: Bundle, P: pd.DataFrame) -> np.ndarray:
     g = b.games.drop_duplicates("game_id").set_index("game_id").team_a
-    P = P.assign(is_a=P.team_id.to_numpy() == g.reindex(P.game_id).to_numpy())
-    agg = P.groupby(["game_id", "round", "is_a"]).agg(m=("money", "sum"), mmin=("money", "min")).unstack("is_a")
-    out = pd.DataFrame(index=agg.index)
-    for lab, flag in (("a", True), ("b", False)):
-        out[f"{lab}_mleft"] = agg[("m", flag)] if ("m", flag) in agg else np.nan
-        out[f"{lab}_mmin"] = agg[("mmin", flag)] if ("mmin", flag) in agg else np.nan
-    return out
+    return P.team_id.to_numpy() == g.reindex(P.game_id).to_numpy()
 
 
-POST_COLS = [f"{t}_{c}" for t in ("a", "b") for c in ("mp", "eqp", "rif", "kawp", "nbuy")] + ["d_nbuy_post", "d_res_post"]
+def team_money(b: Bundle, game_ids) -> pd.DataFrame:
+    """Per round and team A/B: money after the buy (cleaned), summed."""
+    P = player_rounds(b, game_ids)
+    agg = P.assign(is_a=is_team_a(b, P)).groupby(["game_id", "round", "is_a"]).money.sum().unstack("is_a")
+    return pd.DataFrame({"a_mleft": agg.get(True), "b_mleft": agg.get(False)}, index=agg.index)
 
 
 def post_table(b: Bundle, game_ids) -> pd.DataFrame:
     """Per round and team A/B, the economy before the buy: money, equipment kept from the previous round (survivors'
     weapons), kept rifles and AWPs, and players able to buy rifle + armor. Blank at half and overtime-half starts."""
     P = player_rounds(b, game_ids)
-    g = b.games.drop_duplicates("game_id").set_index("game_id").team_a
     mp = P.money_pre.where(P.money_pre < 20000)
     rifle = P.prim_pre.isin(RIFLES)
     P = P.assign(mp=mp, rifle_pre=rifle, awp_pre=P.prim_pre == "awp",
-                 nbuy=(mp >= P.side.map(SIDE_FULL)) | (rifle & (mp >= TOPUP)),
-                 is_a=P.team_id.to_numpy() == g.reindex(P.game_id).to_numpy())
+                 nbuy=(mp >= P.side.map(SIDE_FULL)) | (rifle & (mp >= TOPUP)), is_a=is_team_a(b, P))
     agg = P.groupby(["game_id", "round", "is_a"]).agg(mp=("mp", "sum"), eqp=("equip_pre", "sum"), rif=("rifle_pre", "sum"),
                                                      kawp=("awp_pre", "sum"), nbuy=("nbuy", "sum")).unstack("is_a")
     out = pd.DataFrame(index=agg.index)

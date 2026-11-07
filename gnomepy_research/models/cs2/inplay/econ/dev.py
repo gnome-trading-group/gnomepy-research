@@ -12,7 +12,7 @@ import pandas as pd
 from .. import harness
 from ..data import Bundle
 from ..features import legal_maps, map_states
-from .model import round_info, start_rows, state_rows
+from .model import round_info, state_rows
 
 DATA = "/Users/mprey/gnome-research-work/cs2/comp3/data"
 
@@ -26,10 +26,8 @@ def build(month: str, out: Path):
     x_tr = state_rows(train, st, rt_tr)
     rt_te = round_info(ctx, set(states.game_id))
     x_te = state_rows(ctx, states, rt_te)
-    x_aug, rt_aug = start_rows(train, legal - set(st.game_id))
     with open(out, "wb") as fh:
-        pickle.dump(dict(train=train, legal=legal, x_tr=x_tr, rt_tr=rt_tr, x_te=x_te, rt_te=rt_te, y=y, states=states,
-                         x_aug=x_aug, rt_aug=rt_aug), fh)
+        pickle.dump(dict(train=train, legal=legal, x_tr=x_tr, rt_tr=rt_tr, x_te=x_te, rt_te=rt_te, y=y, states=states), fh)
 
 
 if __name__ == "__main__":
