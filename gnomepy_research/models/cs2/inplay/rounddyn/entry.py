@@ -29,6 +29,9 @@ ROUND = baseline.ROUND + ["ct_rifles", "t_rifles", "ct_smgs", "t_smgs", "ct_helm
 ROUND_PARAMS = dict(n_estimators=600, max_depth=6, learning_rate=0.05)
 ECON = ["a_money", "b_money", "a_equip", "b_equip", "a_money_pre", "b_money_pre", "a_awp", "b_awp", "a_rifles", "b_rifles"]
 CONT = baseline.MAPCOLS + ECON + ["a_cash_next", "b_cash_next", "a_resid_prev"]
+SURV = ["a_alive_end", "b_alive_end"]
+SURV_PARAMS = dict(n_estimators=120, max_depth=5, learning_rate=0.15, subsample=0.8, colsample_bytree=0.8,
+                   min_child_weight=50, n_jobs=8)
 EXPECT = ["a_equip", "b_equip", "ct_a", "map_code", "pistol", "a_money_pre", "b_money_pre"]
 
 
@@ -83,6 +86,20 @@ def cont_rows(rt: pd.DataFrame, a_won: int):
     return X, done
 
 
+def survivor_models(x: pd.DataFrame, rti: pd.DataFrame, y_ct: np.ndarray, seed: int):
+    """P(survivors of each side at the round's end | state now, who wins the round): multiclass 0..5."""
+    end = x[["game_id", "round", "side_a"]].join(rti[["a_alive_end", "b_alive_end"]], on=["game_id", "round"])
+    a_ct = (end.side_a == "CT").to_numpy()
+    labels = {"ct": np.where(a_ct, end.a_alive_end, end.b_alive_end), "t": np.where(a_ct, end.b_alive_end, end.a_alive_end)}
+    X = x[ROUND].assign(ct_won=y_ct)
+    out = {}
+    for side, lab in labels.items():
+        ok = ~np.isnan(lab.astype(float))
+        out[side] = xgb.XGBClassifier(objective="multi:softprob", num_class=6, random_state=seed, **SURV_PARAMS).fit(
+            X[ok], np.clip(lab[ok], 0, 5).astype(int))
+    return out
+
+
 def fit(train: Bundle, asof: pd.Timestamp, seed: int):
     legal = legal_maps(train)
     rt = round_info(train.subset(legal))
@@ -94,27 +111,70 @@ def fit(train: Bundle, asof: pd.Timestamp, seed: int):
     for w in (1, 0):
         X, done = cont_rows(rt, w)
         keep = ((rt.a_wins == w) & np.isnan(done)).to_numpy()
-        Xs.append(X[keep][CONT]); ys.append(rt.map_a_wins[keep])
-    cont_model = baseline.trees(seed).fit(pd.concat(Xs), pd.concat(ys))
+        Xs.append(X[keep].assign(a_alive_end=rt.a_alive_end[keep].to_numpy(), b_alive_end=rt.b_alive_end[keep].to_numpy()))
+        ys.append(rt.map_a_wins[keep])
+    X, y = pd.concat(Xs), pd.concat(ys)
+    cont_model = baseline.trees(seed).fit(X[CONT], y)
+    grid_model = baseline.trees(seed).fit(X[CONT + SURV], y)
     st = map_states(train, legal)
     x, rti = rows(train, st, expect)
     x = x.join(rti[["a_wins"]], on=["game_id", "round"])
     y = np.where(x.side_a == "CT", x.a_wins, 1 - x.a_wins)
     round_model = baseline.trees(seed, **ROUND_PARAMS).fit(x[ROUND], y)
-    return dict(cont_model=cont_model, round_model=round_model, expect=expect)
+    surv = survivor_models(x, rti, y, seed)
+    return dict(cont_model=cont_model, grid_model=grid_model, round_model=round_model, expect=expect, surv=surv)
+
+
+def start_states(ctx: Bundle, states: pd.DataFrame) -> pd.DataFrame:
+    """The round-start state of every round in states (its round_start event), priced alongside to anchor the
+    survivor adjustment."""
+    ev = ctx.events[ctx.events.game_id.isin(set(states.game_id)) & (ctx.events.type == "round_start")]
+    ev = ev.merge(states[["game_id", "round"]].drop_duplicates(), on=["game_id", "round"])
+    ev = ev.sort_values("seq").groupby(["game_id", "round"]).head(1)
+    return pd.DataFrame(dict(game_id=ev.game_id.to_numpy(), round=ev["round"].to_numpy(), step=0, kind="start",
+                             event_seq=ev.seq.to_numpy(), ingame_ms=ev.ingame_ms.to_numpy(), elapsed=ev.elapsed.to_numpy()))
+
+
+def survivor_ev(model, x: pd.DataFrame, grid: np.ndarray, pos: np.ndarray, a_won: int) -> np.ndarray:
+    """E[M(survivors)] under P(survivors | state, A wins = a_won), survivors capped at those alive now."""
+    a_ct = (x.side_a == "CT").to_numpy()
+    X = x[ROUND].assign(ct_won=np.where(a_ct, a_won, 1 - a_won))
+    ks = np.arange(6)[None, :]
+    dist = {}
+    for side in ("ct", "t"):
+        p = model["surv"][side].predict_proba(X)
+        p = np.where(ks <= x[f"{side}_alive"].to_numpy()[:, None], p, 0.0)
+        dist[side] = p / np.maximum(p.sum(1, keepdims=True), 1e-12)
+    pa = np.where(a_ct[:, None], dist["ct"], dist["t"]); pb = np.where(a_ct[:, None], dist["t"], dist["ct"])
+    return np.einsum("nk,nkj,nj->n", pa, grid[pos], pb)
 
 
 def predict(model, ctx: Bundle, states: pd.DataFrame) -> np.ndarray:
-    x, rt = rows(ctx, states, model["expect"])
+    states = states.reset_index(drop=True)
+    st0 = start_states(ctx, states)
+    both = pd.concat([states, st0], ignore_index=True)
+    xb, rt = rows(ctx, both, model["expect"])
+    x, x0 = xb.iloc[:len(states)], xb.iloc[len(states):]
     p_ct = model["round_model"].predict_proba(x[ROUND])[:, 1]
     known = ((x.over == 1) & x.over_ct_won.notna()).to_numpy()
     p_ct = np.where(known, x.over_ct_won.to_numpy(), p_ct)
     keys = pd.MultiIndex.from_frame(states[["game_id", "round"]])
-    rr = rt.loc[keys.unique()].reset_index()
+    rk = keys.unique()
+    rr = rt.loc[rk].reset_index()
+    pos = rk.get_indexer(keys)
+    pos0 = rk.get_indexer(pd.MultiIndex.from_frame(x0[["game_id", "round"]]))
     m = {}
     for a_won in (1, 0):
         X, done = cont_rows(rr, a_won)
-        p = model["cont_model"].predict_proba(X[CONT])[:, 1]
-        m[a_won] = pd.Series(np.where(np.isnan(done), p, done), index=pd.MultiIndex.from_frame(rr[["game_id", "round"]]))
+        base = model["cont_model"].predict_proba(X[CONT])[:, 1]
+        grid = np.stack([np.stack([model["grid_model"].predict_proba(X.assign(a_alive_end=k, b_alive_end=j)[CONT + SURV])[:, 1]
+                                   for j in range(6)], axis=1) for k in range(6)], axis=1)
+        ev = survivor_ev(model, x, grid, pos, a_won)
+        ev0 = np.full(len(rk), np.nan)
+        ev0[pos0] = survivor_ev(model, x0, grid, pos0, a_won)
+        # The survivor term only moves M by how far this state's survivor outlook is from the round start's.
+        adj = np.where(np.isnan(ev0[pos]), 0.0, ev - ev0[pos])
+        mm = np.clip(base[pos] + adj, 1e-4, 1 - 1e-4)
+        m[a_won] = np.where(np.isnan(done[pos]), mm, done[pos])
     p_a = np.where(x.side_a == "CT", p_ct, 1 - p_ct)
-    return p_a * m[1].reindex(keys).to_numpy() + (1 - p_a) * m[0].reindex(keys).to_numpy()
+    return p_a * m[1] + (1 - p_a) * m[0]

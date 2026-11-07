@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from ..data import Bundle
+from ..features import need
 
 RIFLES = {"ak47", "m4a1_s", "m4a4", "galilar", "famas", "aug", "sg553"}
 SNIPERS = {"awp"}
@@ -58,7 +59,7 @@ def dyn_features(b: Bundle, states: pd.DataFrame) -> pd.DataFrame:
     E = E[[(g, r) in keys for g, r in zip(E.game_id, E["round"])]]
     want = {}
     for i, (g, s) in enumerate(zip(states.game_id, states.event_seq)):
-        want[(g, s)] = i
+        want.setdefault((g, s), []).append(i)
     out = np.full((len(states), len(DYN)), np.nan)
     E = E.assign(**{c: E[c].fillna(-1).astype("int64") for c in ("killer_id", "victim_id")},
                  **{c: E[c].eq(True).to_numpy() for c in ("headshot", "through_smoke", "attacker_blind", "flash_assist")})
@@ -112,8 +113,8 @@ def dyn_features(b: Bundle, states: pd.DataFrame) -> pd.DataFrame:
                 over_ct = 1.0
             elif wside in ("T", "terrorists"):
                 over_ct = 0.0
-        i = want.get((g, s))
-        if i is None:
+        idx = want.get((g, s))
+        if idx is None:
             continue
         v = np.zeros((2, len(SIDE_COLS)))
         mx = [0, 0]
@@ -127,7 +128,7 @@ def dyn_features(b: Bundle, states: pd.DataFrame) -> pd.DataFrame:
         since_plant = t - plant_t if planted else np.nan
         bomb_left = BOMB_SECONDS - since_plant if planted else np.nan
         recent = [k for k in kills if t - k[0] <= TRADE_WINDOW]
-        out[i] = [*v[0], *v[1], planted, since_plant, t, site_c, bomb_left,
+        out[idx] = [*v[0], *v[1], planted, since_plant, t, site_c, bomb_left,
                   np.nan if planted else ROUND_SECONDS - t,
                   float(planted and bomb_left >= 5 and v[0][3] > 0) if planted else np.nan,
                   float(planted and bomb_left >= 10) if planted else np.nan,
@@ -170,3 +171,79 @@ def form_features(b: Bundle, keys: pd.DataFrame) -> pd.DataFrame:
                  a_gun_wr_prev=(c.gun_win + 1) / (c.gun + 2))
     out = keys[["game_id", "round"]].merge(r[["game_id", "round"] + FORM], on=["game_id", "round"], how="left")
     return out[FORM].set_axis(keys.index)
+
+
+SERIES = ["s_maps", "s_w", "s_rd"]
+
+
+def series_features(b: Bundle, game_ids) -> pd.DataFrame:
+    """Earlier maps of the same series that ended before each map began: maps played, team A's maps won minus lost,
+    and rounds won minus lost. The final score is read from the last round's score: the map ends on the round that
+    gives one team its last needed round, so that team won it (outcome columns are not needed)."""
+    g = b.games[["game_id", "match_id", "begin", "end"]]
+    r = b.rounds.sort_values(["game_id", "round"]).groupby("game_id").tail(1)
+    nd = np.array([need(a, c) for a, c in zip(r.score_a, r.score_b)]).reshape(-1, 2)
+    a_last = np.where((nd[:, 0] == 1) & (nd[:, 1] > 1), 1.0, np.where((nd[:, 1] == 1) & (nd[:, 0] > 1), 0.0, np.nan))
+    fin = pd.DataFrame(dict(game_id=r.game_id.to_numpy(), rd=(r.score_a - r.score_b).to_numpy() + 2 * a_last - 1,
+                            w=2 * a_last - 1))
+    done = g.merge(fin, on="game_id")
+    tgt = g[g.game_id.isin(set(game_ids))]
+    pairs = tgt.merge(done, on="match_id", suffixes=("", "_p"))
+    pairs = pairs[(pairs.end_p < pairs.begin) & (pairs.game_id_p != pairs.game_id)]
+    agg = pairs.groupby("game_id").agg(s_maps=("w", "size"), s_w=("w", "sum"), s_rd=("rd", "sum"))
+    return agg.reindex(tgt.game_id).fillna(0.0).rename_axis("game_id").reset_index()
+
+
+TEAM_MAP = ["a_map_rwr", "b_map_rwr", "a_all_rwr", "b_all_rwr", "a_map_n", "b_map_n", "a_ct_map", "a_t_map",
+            "b_ct_map", "b_t_map"]
+
+
+def round_results(b: Bundle) -> pd.DataFrame:
+    """Every round's winner from the score progression alone (the map's last round goes to the team it gives its last
+    needed round), so maps whose outcome columns are blanked still count."""
+    r = b.rounds.sort_values(["game_id", "round"])[["game_id", "round", "score_a", "score_b", "side_a"]]
+    nxt = r.groupby("game_id").score_a.shift(-1)
+    nr = r.groupby("game_id")["round"].shift(-1)
+    won = np.where(nr == r["round"] + 1, nxt - r.score_a, np.nan)
+    nd = np.array([need(a, c) for a, c in zip(r.score_a, r.score_b)]).reshape(-1, 2)
+    last = nr.isna().to_numpy()
+    fin = np.where((nd[:, 0] == 1) & (nd[:, 1] > 1), 1.0, np.where((nd[:, 1] == 1) & (nd[:, 0] > 1), 0.0, np.nan))
+    return r.assign(a_won=np.where(last, fin, won))
+
+
+def team_map_features(b: Bundle, game_ids) -> pd.DataFrame:
+    """Each team's round-win rate on this map, on each side of it, and on all maps, over its maps that ended before
+    this map began (shrunk toward 0.5), and how many maps on this map that is."""
+    rr = round_results(b)
+    rr = rr[rr.a_won.notna()]
+    g = b.games[["game_id", "team_a", "team_b", "begin", "end"]]
+    mp = b.rounds.drop_duplicates("game_id")[["game_id", "map"]]
+    rr = rr.merge(g, on="game_id").merge(mp, on="game_id")
+    recs = []
+    for t, won, ct in (("team_a", rr.a_won, rr.side_a == "CT"), ("team_b", 1 - rr.a_won, rr.side_a != "CT")):
+        recs.append(pd.DataFrame(dict(team=rr[t].to_numpy(), map=rr["map"].to_numpy(), end=rr.end.to_numpy(),
+                                      game_id=rr.game_id.to_numpy(), w=won.to_numpy(), n=1.0,
+                                      ctw=np.where(ct, won, 0.0), ctn=ct.astype(float).to_numpy(),
+                                      tw=np.where(~ct, won, 0.0), tn=(~ct).astype(float).to_numpy())))
+    per = pd.concat(recs).groupby(["team", "map", "game_id", "end"], as_index=False)[["w", "n", "ctw", "ctn", "tw", "tn"]].sum()
+    per["maps"] = 1.0
+    per = per.sort_values("end")
+    vals = ["w", "n", "ctw", "ctn", "tw", "tn", "maps"]
+    cm = per.groupby(["team", "map"])[vals].cumsum().assign(team=per.team, map=per["map"], end=per.end)
+    allm = per.groupby(["team", "end"], as_index=False)[["w", "n"]].sum().sort_values("end")
+    ca = allm.groupby("team")[["w", "n"]].cumsum().assign(team=allm.team, end=allm.end)
+    tgt = g[g.game_id.isin(set(game_ids))].merge(mp, on="game_id").sort_values("begin")
+    out = tgt[["game_id"]].copy()
+    k = 20.0
+    for s in ("a", "b"):
+        q = tgt[["game_id", "begin", "map", f"team_{s}"]].rename(columns={f"team_{s}": "team"})
+        x = pd.merge_asof(q, cm.sort_values("end"), left_on="begin", right_on="end", by=["team", "map"],
+                          allow_exact_matches=False).fillna(0.0)
+        y = pd.merge_asof(q, ca.sort_values("end"), left_on="begin", right_on="end", by="team",
+                          allow_exact_matches=False).fillna(0.0)
+        out[f"{s}_map_rwr"] = ((x.w + k / 2) / (x.n + k)).to_numpy()
+        out[f"{s}_all_rwr"] = ((y.w + k / 2) / (y.n + k)).to_numpy()
+        out[f"{s}_map_n"] = x["maps"].to_numpy()
+        out[f"{s}_ct_map"] = ((x.ctw + k / 4) / (x.ctn + k / 2)).to_numpy()
+        out[f"{s}_t_map"] = ((x.tw + k / 4) / (x.tn + k / 2)).to_numpy()
+    return out
