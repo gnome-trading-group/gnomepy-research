@@ -15,8 +15,9 @@ from gnomepy_research.models.cs2.inplay.data import Bundle
 from gnomepy_research.models.cs2.inplay.features import legal_maps
 from gnomepy_research.models.cs2.inplay.rounddyn.exp import CACHE, ll
 
+MASK = True
 DATA = Path.home() / "gnome-research-work/cs2/comp3/data"
-FORM_C = ["a_upsets_prev", "a_gun_wr_prev", "gun_prev", "a_kd_prev"]
+FORM_C = ["a_upsets_prev", "a_gun_wr_prev", "gun_prev", "a_kd_prev", "a_resid_prev", "rounds_prev"]
 ECON = ["a_money", "b_money", "a_equip", "b_equip", "a_money_pre", "b_money_pre", "a_awp", "b_awp", "a_rifles", "b_rifles"]
 
 
@@ -24,6 +25,14 @@ def cont_rows(rt: pd.DataFrame, a_won):
     X, done = baseline.next_round(rt, a_won)
     extra = [c for c in ECON + FORM_C if c in rt]
     X = X.assign(**{c: rt[c].to_numpy() for c in extra}, won=a_won)
+    if MASK:
+        hp = rt.has_players.to_numpy()
+        for c in ECON:
+            X[c] = np.where(hp, X[c], np.nan)
+    def income(ctr, won):
+        return np.where(won, 3250.0, 1400.0 + 500.0 * np.clip(ctr - 1, 0, 4)) * 5
+    X["a_cash_next"] = X.a_money + income(X.a_loss_ctr.to_numpy(), a_won == 1)
+    X["b_cash_next"] = X.b_money + income(X.b_loss_ctr.to_numpy(), a_won == 0)
     return X, done
 
 
@@ -43,6 +52,7 @@ def main():
     ap.add_argument("--months", nargs="*", default=["2026-08"])
     ap.add_argument("--pred", default="dyn_prior")
     ap.add_argument("--feats", default="econ")
+    ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     rt = build()
     st = pd.read_parquet(CACHE / "states.parquet", columns=["game_id", "round", "event_seq", "side_a", "map_a_wins", "m1", "m0"])
@@ -56,8 +66,8 @@ def main():
             keep = (tr.a_wins == w) & np.isnan(done)
             rows.append((X[keep.to_numpy()], tr.map_a_wins[keep.to_numpy()]))
         X = pd.concat([r[0] for r in rows]); y = pd.concat([r[1] for r in rows])
-        cols = baseline.MAPCOLS + {"none": [], "econ": ECON, "econ_form": ECON + FORM_C[:3], "econ_kd": ECON + FORM_C}[a.feats]
-        mdl = baseline.trees(0, n_jobs=4).fit(X[cols], y)
+        cols = baseline.MAPCOLS + {"none": [], "econ": ECON, "econ_form": ECON + FORM_C[:3], "econ_kd": ECON + FORM_C[:4], "econ_resid": ECON + FORM_C[:3] + ["a_resid_prev"], "econ_r": ECON + ["a_resid_prev"], "econ2": ECON + FORM_C[:3] + ["a_cash_next", "b_cash_next"], "econ3": ECON + ["a_cash_next", "b_cash_next"], "econ4": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev"]}[a.feats]
+        mdl = baseline.trees(a.seed, n_jobs=4).fit(X[cols], y)
         te = rt[(rt.match_begin >= start) & (rt.match_begin < start + pd.offsets.MonthBegin(1))].reset_index(drop=True)
         mm = {}
         for w in (1, 0):

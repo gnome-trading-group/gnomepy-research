@@ -43,7 +43,7 @@ def main():
             X, done = cont_rows(tr, w)
             keep = ((tr.a_wins == w) & np.isnan(done)).to_numpy()
             rows.append((X[keep], tr.map_a_wins[keep]))
-        cols = baseline.MAPCOLS + ECON
+        cols = baseline.MAPCOLS + ECON + ["a_upsets_prev", "a_gun_wr_prev", "gun_prev"]
         X = pd.concat([r[0] for r in rows]); y = pd.concat([r[1] for r in rows])
         rmdl = baseline.trees(0, n_jobs=4).fit(X[cols], y)
 
