@@ -1,9 +1,12 @@
-"""Structure entry: round model x (DP map value blended with a regression map value). See NOTES.md."""
+"""Structure entry: round model x map value, the map value from a round-win chain (see NOTES.md).
+
+The configuration is variants.VARIANTS["slow-all"]; every other scored configuration is listed there and in NOTES.md."""
 import pandas as pd
 
 from gnomepy_research.models.cs2.inplay.structure import core
+from gnomepy_research.models.cs2.inplay.structure.variants import VARIANTS
 
-CFG = core.Config()
+CFG = VARIANTS["slow-all"]
 
 
 def fit(train, asof: pd.Timestamp, seed: int):

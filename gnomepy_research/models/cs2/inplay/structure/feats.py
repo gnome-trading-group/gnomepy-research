@@ -7,7 +7,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from ..baseline import MAPCOLS, logit, with_prior
+from ..baseline import with_prior
 from ..data import Bundle
 from ..features import loss_step, need, round_table, side_swaps_at
 

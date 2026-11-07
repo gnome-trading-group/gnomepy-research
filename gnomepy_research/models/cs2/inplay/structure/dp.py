@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 
-from ..features import need, resets, side_swaps_at
+from ..features import need, resets
 
 QCOLS = ["need_a", "need_b", "ct_a", "ot", "round_in_half", "pistol", "map_code", "prior_logit", "has_prior", "streak"]
 MAX_SCORE = 28
