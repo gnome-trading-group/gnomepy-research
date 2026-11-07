@@ -26,7 +26,7 @@ from gnomepy_research.models.cs2.inplay.data import Bundle
 from gnomepy_research.models.cs2.inplay.features import legal_maps, map_states, round_table
 
 TIER = {"s": 0, "a": 1, "b": 2, "c": 3, "d": 4}
-CFG = dict(map_extra=["res_mean", "kill_mean"], map_kw={}, round_kw={}, shrink=4.0, expect="basic", alive_end_kills=False, nop_fix=False, decay=0.0)
+CFG = dict(map_extra=["res_mean", "kill_mean"], map_kw={}, round_kw={}, shrink=4.0, expect="basic", alive_end_kills=False, nop_fix=False, decay=0.0, post_a=0.3)
 
 
 def exp_design(rt: pd.DataFrame) -> np.ndarray:
@@ -127,6 +127,7 @@ def history(b: Bundle, rt: pd.DataFrame, expect: LogisticRegression) -> pd.DataF
         rt["res_dec"] = S / (W + shrink)
         rt["kill_dec"] = np.where(has_ev, K / (KW + shrink), np.nan)
         rt["kill_dec_next"] = np.where(has_ev, Kn / (KWn + shrink), np.nan)
+    rt["post_logit"] = rt.prior_logit + CFG["post_a"] * rt.res_sum
     rt["last_pexp"] = rt.groupby("game_id").p_exp_a.shift(1).fillna(0.5)
     rt["last_won"] = a_won.groupby(g).shift(1).fillna(0.5)
     rt["tier_code"] = rt.tier.map(TIER).fillna(4).astype(int)
@@ -157,6 +158,8 @@ def next_ext(rr: pd.DataFrame, a_won: int, extra, kd_now=None):
         elif c == "res_dec":
             d = CFG["decay"]
             X[c] = ((d * rr.res_dec_S + a_won - rr.p_exp_a) / (d * rr.res_dec_W + 1 + shrink)).to_numpy()
+        elif c == "post_logit":
+            X[c] = (rr.prior_logit + CFG["post_a"] * (rr.res_sum + a_won - rr.p_exp_a)).to_numpy()
         elif c == "last_pexp":
             X[c] = rr.p_exp_a.to_numpy()
         elif c == "last_won":
