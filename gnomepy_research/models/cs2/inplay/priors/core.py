@@ -51,6 +51,7 @@ class Config:
     map_kw: tuple = ()
     dp: bool = False
     map_from: str = ""
+    halflife: float = 0.0
     market_prior: bool = True
     market_mode: str = "lr"
     nm_set: str = "v1"
@@ -161,6 +162,14 @@ class Model:
     def map_cols(self):
         return MAPCOLS + (["edge"] if self.cfg.edge_map else []) + list(self.cfg.map_extra) + (["dp"] if self.cfg.dp else [])
 
+    def map_weights(self, rt: pd.DataFrame, g: pd.DataFrame, asof: pd.Timestamp):
+        if not self.cfg.halflife:
+            return None
+        # The meta and the prior's quality drift; recent maps say more about the month being priced.
+        t = rt.game_id.map(g.set_index("game_id").end)
+        age = (asof - t).dt.total_seconds().fillna(0).to_numpy() / 86400
+        return np.power(0.5, age / self.cfg.halflife)
+
     def map_rows(self, rt: pd.DataFrame) -> pd.DataFrame:
         """Map-model features of rows at the start of their round."""
         if self.cfg.dp:
@@ -209,7 +218,7 @@ class Model:
         rt = rt[rt.map_a_wins.notna()]
         if self.cfg.map_from:
             rt = rt[rt.game_id.isin(set(g.game_id[g.begin.fillna(g.match_begin) >= pd.Timestamp(self.cfg.map_from, tz="UTC")]))]
-        self.map_model = self.map_trees(seed).fit(self.map_rows(rt), rt.map_a_wins)
+        self.map_model = self.map_trees(seed).fit(self.map_rows(rt), rt.map_a_wins, sample_weight=self.map_weights(rt, g, asof))
         sts = map_states(train, legal)
         x, rti = self.round_rows(train, sts, prior)
         x = x.join(rti[["a_wins"]], on=["game_id", "round"])

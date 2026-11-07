@@ -67,7 +67,7 @@ def run_variant(name, train, ctx, states, asof, cfg: core.Config, seed=0):
     if cfg.map_from:
         rt = rt[rt.game_id.isin(set(g.game_id[g.begin.fillna(g.match_begin) >= pd.Timestamp(cfg.map_from, tz="UTC")]))]
     cols = mdl.map_cols()
-    mm = mdl.map_trees(seed).fit(mdl.map_rows(rt), rt.map_a_wins)
+    mm = mdl.map_trees(seed).fit(mdl.map_rows(rt), rt.map_a_wins, sample_weight=mdl.map_weights(rt, g, asof))
     rte = core.with_prior(round_table(ctx.subset(states.game_id)), prior_te).set_index(["game_id", "round"])
     return mm, cols, rte, mdl
 
@@ -109,6 +109,11 @@ VARIANTS = {
     "tmcw_s1": core.Config(market_mode="avg", nm_set="p2", mono=True, map_extra=("tier_c",), map_kw=(("max_depth", 6), ("min_child_weight", 200))),
     "tmcw400": core.Config(market_mode="avg", nm_set="p2", mono=True, map_extra=("tier_c",), map_kw=(("max_depth", 6), ("min_child_weight", 400))),
     "tmcw_bo1": core.Config(market_mode="avg", nm_set="p2", mono=True, map_extra=("tier_c", "bo1"), map_kw=(("max_depth", 6), ("min_child_weight", 200))),
+    "tmcw_hl180": core.Config(market_mode="avg", nm_set="p2", mono=True, map_extra=("tier_c",), map_kw=(("max_depth", 6), ("min_child_weight", 200)), halflife=180),
+    "tmcw_hl365": core.Config(market_mode="avg", nm_set="p2", mono=True, map_extra=("tier_c",), map_kw=(("max_depth", 6), ("min_child_weight", 200)), halflife=365),
+    "tmcw_hl90": core.Config(market_mode="avg", nm_set="p2", mono=True, map_extra=("tier_c",), map_kw=(("max_depth", 6), ("min_child_weight", 200)), halflife=90),
+    "tmcw_hl60": core.Config(market_mode="avg", nm_set="p2", mono=True, map_extra=("tier_c",), map_kw=(("max_depth", 6), ("min_child_weight", 200)), halflife=60),
+    "tmcw_hl120_mcw50": core.Config(market_mode="avg", nm_set="p2", mono=True, map_extra=("tier_c",), map_kw=(("max_depth", 6),), halflife=120),
     "x1nooof": core.Config(nm_set="x1", nm_kind="xgb", folds=1),
 }
 SEEDS = {"tmcw_s1": ("tmcw_s1", 1), "mono_d6s1": ("mono_d6s1", 1), "avg_p2s1": ("avg_p2", 1), "v1s1": ("v1", 1), "v1s2": ("v1", 2), "nomks1": ("nomk", 1)}
