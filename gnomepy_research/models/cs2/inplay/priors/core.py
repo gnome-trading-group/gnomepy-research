@@ -20,7 +20,7 @@ from sklearn.linear_model import LogisticRegression
 from gnomepy_research.models.cs2.inplay.baseline import MAPCOLS, ROUND, logit, next_round, trees
 from gnomepy_research.models.cs2.inplay.data import Bundle
 from gnomepy_research.models.cs2.inplay.features import legal_maps, map_states, round_table, state_features
-from gnomepy_research.models.cs2.inplay.priors import ratings
+from gnomepy_research.models.cs2.inplay.priors import dp, ratings
 
 TIERS = ["s", "a", "b", "c", "d"]
 RAT = ["elo_logit", "r_team", "r_map", "r_player", "q_team", "q_map", "q_player"]
@@ -49,6 +49,8 @@ class Config:
     map_extra: tuple = ()
     mono: bool = False
     map_kw: tuple = ()
+    dp: bool = False
+    map_from: str = ""
     market_prior: bool = True
     market_mode: str = "lr"
     nm_set: str = "v1"
@@ -157,7 +159,21 @@ class Model:
         return nm
 
     def map_cols(self):
-        return MAPCOLS + (["edge"] if self.cfg.edge_map else []) + list(self.cfg.map_extra)
+        return MAPCOLS + (["edge"] if self.cfg.edge_map else []) + list(self.cfg.map_extra) + (["dp"] if self.cfg.dp else [])
+
+    def map_rows(self, rt: pd.DataFrame) -> pd.DataFrame:
+        """Map-model features of rows at the start of their round."""
+        if self.cfg.dp:
+            rt = rt.assign(dp=logit(dp.value(rt.score_a, rt.score_b, rt.prior_logit)))
+        return rt[self.map_cols()]
+
+    def next_rows(self, rr: pd.DataFrame, a_won: int):
+        """Map-model features of the round after each row given who wins it, and 1/0 where that ends the map."""
+        X, done = next_round(rr, a_won)
+        X = X.assign(**{c: rr[c].to_numpy() for c in self.map_cols() if c not in MAPCOLS and c != "dp"})
+        if self.cfg.dp:
+            X["dp"] = logit(dp.value(rr.score_a + a_won, rr.score_b + 1 - a_won, rr.prior_logit))
+        return X[self.map_cols()], done
 
     def map_trees(self, seed):
         kw = dict(self.cfg.map_kw)
@@ -165,7 +181,7 @@ class Model:
             return trees(seed, **kw)
         # A stronger prior or fewer rounds still needed can only help team A; forcing that removes tree noise
         # where data is thin (overtime, lopsided priors).
-        sign = {"prior_logit": 1, "need_a": -1, "need_b": 1}
+        sign = {"prior_logit": 1, "need_a": -1, "need_b": 1, "dp": 1}
         return trees(seed, **kw, monotone_constraints="(" + ",".join(str(sign.get(c, 0)) for c in self.map_cols()) + ")")
 
     def round_cols(self):
@@ -191,7 +207,9 @@ class Model:
         legal = legal_maps(train)
         rt = with_prior(round_table(train.subset(legal)), prior)
         rt = rt[rt.map_a_wins.notna()]
-        self.map_model = self.map_trees(seed).fit(rt[self.map_cols()], rt.map_a_wins)
+        if self.cfg.map_from:
+            rt = rt[rt.game_id.isin(set(g.game_id[g.begin.fillna(g.match_begin) >= pd.Timestamp(self.cfg.map_from, tz="UTC")]))]
+        self.map_model = self.map_trees(seed).fit(self.map_rows(rt), rt.map_a_wins)
         sts = map_states(train, legal)
         x, rti = self.round_rows(train, sts, prior)
         x = x.join(rti[["a_wins"]], on=["game_id", "round"])
@@ -211,9 +229,8 @@ class Model:
         rr = rt.loc[keys.unique()].reset_index()
         m = {}
         for a_won in (1, 0):
-            X, done = next_round(rr, a_won)
-            X = X.assign(**{c: rr[c].to_numpy() for c in self.map_cols() if c not in MAPCOLS})
-            p = self.map_model.predict_proba(X[self.map_cols()])[:, 1]
+            X, done = self.next_rows(rr, a_won)
+            p = self.map_model.predict_proba(X)[:, 1]
             m[a_won] = pd.Series(np.where(np.isnan(done), p, done), index=pd.MultiIndex.from_frame(rr[["game_id", "round"]]))
         p_a = np.where(x.side_a == "CT", p_ct, 1 - p_ct)
         return p_a * m[1].reindex(keys).to_numpy() + (1 - p_a) * m[0].reindex(keys).to_numpy()

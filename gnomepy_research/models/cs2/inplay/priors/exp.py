@@ -34,14 +34,15 @@ def round_preds(m, train, ctx, states):
     return p
 
 
-def score(map_model, cols, rt, states, p_ct, extra=None):
+def score(map_model, cols, rt, states, p_ct, mdl=None):
     keys = pd.MultiIndex.from_frame(states[["game_id", "round"]])
     rr = rt.loc[keys.unique()].reset_index()
     m = {}
     for a_won in (1, 0):
-        X, done = baseline.next_round(rr, a_won)
-        if extra is not None:
-            X = X.assign(**{c: rr[c].to_numpy() for c in extra})
+        if mdl is None:
+            X, done = baseline.next_round(rr, a_won)
+        else:
+            X, done = mdl.next_rows(rr, a_won)
         p = map_model.predict_proba(X[cols])[:, 1]
         m[a_won] = pd.Series(np.where(np.isnan(done), p, done), index=pd.MultiIndex.from_frame(rr[["game_id", "round"]]))
     side = rt.side_a.reindex(keys).to_numpy()
@@ -63,10 +64,12 @@ def run_variant(name, train, ctx, states, asof, cfg: core.Config, seed=0):
     legal = legal_maps(train)
     rt = core.with_prior(round_table(train.subset(legal)), prior_tr)
     rt = rt[rt.map_a_wins.notna()]
+    if cfg.map_from:
+        rt = rt[rt.game_id.isin(set(g.game_id[g.begin.fillna(g.match_begin) >= pd.Timestamp(cfg.map_from, tz="UTC")]))]
     cols = mdl.map_cols()
-    mm = mdl.map_trees(seed).fit(rt[cols], rt.map_a_wins)
+    mm = mdl.map_trees(seed).fit(mdl.map_rows(rt), rt.map_a_wins)
     rte = core.with_prior(round_table(ctx.subset(states.game_id)), prior_te).set_index(["game_id", "round"])
-    return mm, cols, rte
+    return mm, cols, rte, mdl
 
 
 VARIANTS = {
@@ -95,9 +98,17 @@ VARIANTS = {
     "mono_d6": core.Config(market_mode="avg", nm_set="p2", mono=True, map_kw=(("max_depth", 6),)),
     "mono_n1200": core.Config(market_mode="avg", nm_set="p2", mono=True, map_kw=(("n_estimators", 1200),)),
     "mono_mcw200": core.Config(market_mode="avg", nm_set="p2", mono=True, map_kw=(("min_child_weight", 200),)),
+    "mono_d6_tier": core.Config(market_mode="avg", nm_set="p2", mono=True, map_extra=("tier_c",), map_kw=(("max_depth", 6),)),
+    "mono_d7": core.Config(market_mode="avg", nm_set="p2", mono=True, map_kw=(("max_depth", 7),)),
+    "mono_d6s1": core.Config(market_mode="avg", nm_set="p2", mono=True, map_kw=(("max_depth", 6),)),
+    "mono_d6_mcw200": core.Config(market_mode="avg", nm_set="p2", mono=True, map_kw=(("max_depth", 6), ("min_child_weight", 200))),
+    "mono_dp": core.Config(market_mode="avg", nm_set="p2", mono=True, dp=True),
+    "mono_d6_dp": core.Config(market_mode="avg", nm_set="p2", mono=True, dp=True, map_kw=(("max_depth", 6),)),
+    "mono_d6_from": core.Config(market_mode="avg", nm_set="p2", mono=True, map_kw=(("max_depth", 6),), map_from="2025-04-01"),
+    "mono_d6_tier_mcw": core.Config(market_mode="avg", nm_set="p2", mono=True, map_extra=("tier_c",), map_kw=(("max_depth", 6), ("min_child_weight", 200))),
     "x1nooof": core.Config(nm_set="x1", nm_kind="xgb", folds=1),
 }
-SEEDS = {"avg_p2s1": ("avg_p2", 1), "v1s1": ("v1", 1), "v1s2": ("v1", 2), "nomks1": ("nomk", 1)}
+SEEDS = {"mono_d6s1": ("mono_d6s1", 1), "avg_p2s1": ("avg_p2", 1), "v1s1": ("v1", 1), "v1s2": ("v1", 2), "nomks1": ("nomk", 1)}
 
 
 def main():
@@ -121,9 +132,8 @@ def main():
         print(f"{m}: bench {lb.mean():.4f} ({time.time() - t0:.0f}s)", file=sys.stderr, flush=True)
         for v in a.variants:
             base, seed = SEEDS.get(v, (v, 0))
-            mm, cols, rte = run_variant(v, train, ctx, states, asof, VARIANTS[base], seed)
-            extra = [c for c in cols if c not in baseline.MAPCOLS]
-            p = score(mm, cols, rte, states, p_ct, extra)
+            mm, cols, rte, mdl = run_variant(v, train, ctx, states, asof, VARIANTS[base], seed)
+            p = score(mm, cols, rte, states, p_ct, mdl)
             d = ll(p, y) - lb
             start = states["round"].to_numpy() <= 6
             res.setdefault(v, []).append((m, d.sum(), len(d), d[start].mean()))
