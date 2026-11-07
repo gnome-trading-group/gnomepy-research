@@ -19,13 +19,13 @@ import xgboost as xgb
 from gnomepy_research.models.cs2.inplay import baseline
 from gnomepy_research.models.cs2.inplay.data import Bundle
 from gnomepy_research.models.cs2.inplay.features import legal_maps, map_states
-from gnomepy_research.models.cs2.inplay.rounddyn.feats import FORM, dyn_features, form_features
+from gnomepy_research.models.cs2.inplay.rounddyn.feats import FORM, dyn_features, form_features, player_ratings
 
 ROUND = baseline.ROUND + ["ct_rifles", "t_rifles", "ct_smgs", "t_smgs", "ct_helm", "t_helm", "ct_armor", "t_armor",
                           "site", "bomb_left", "clock_left", "defuse_kit_ok", "defuse_nokit_ok", "since_kill",
                           "last_dead", "ct_dead_5s", "t_dead_5s", "last_trade", "open_dead", "ct_max_cls", "t_max_cls",
                           "ct_prior", "has_prior", "ct_kd_prev", "ct_upsets_prev", "ct_gun_wr_prev", "rounds_prev",
-                          "gun_prev", "ct_resid_prev"]
+                          "gun_prev", "ct_resid_prev", "ct_skill", "t_skill"]
 ROUND_PARAMS = dict(n_estimators=600, max_depth=6, learning_rate=0.05)
 ECON = ["a_money", "b_money", "a_equip", "b_equip", "a_money_pre", "b_money_pre", "a_awp", "b_awp", "a_rifles", "b_rifles"]
 CONT = baseline.MAPCOLS + ECON + ["a_cash_next", "b_cash_next", "a_resid_prev"]
@@ -59,7 +59,7 @@ def rows(b: Bundle, states: pd.DataFrame, expect):
     sub = b.subset(states.game_id)
     x, _ = baseline.round_rows(sub, states)
     rt = add_resid(round_info(sub), expect).set_index(["game_id", "round"])
-    d = dyn_features(sub, states)
+    d = dyn_features(sub, states, player_ratings(b, set(states.game_id)))
     x = x.join(d.drop(columns=[c for c in d.columns if c in x.columns]))
     x = x.join(rt[["prior_logit", "has_prior", "a_resid_prev"] + FORM], on=["game_id", "round"])
     sg = np.where(x.side_a == "CT", 1.0, -1.0)

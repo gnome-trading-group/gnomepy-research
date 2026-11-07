@@ -50,6 +50,7 @@ SETS["dyn_all"] = SETS["dyn_prior"] + ["ct_dead_hs", "t_dead_hs", "ct_dead_util"
                                        "ct_pickup", "t_pickup", "ct_money", "t_money", "open_t", "n_kills", "alive_diff", "eq_share"]
 
 SETS["dyn_form"] = SETS["dyn_prior"] + ["ct_kd_prev", "ct_upsets_prev", "ct_gun_wr_prev", "rounds_prev", "gun_prev"]
+SETS["dyn_skill"] = SETS["dyn_form"] + ["ct_skill", "t_skill"]
 SETS["dyn_kd"] = SETS["dyn_prior"] + ["ct_kd_prev", "rounds_prev"]
 
 

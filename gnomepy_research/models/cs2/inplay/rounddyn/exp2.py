@@ -19,7 +19,7 @@ from gnomepy_research.models.cs2.inplay.rounddyn.exp import CACHE, ll
 
 MASK = True
 DATA = Path.home() / "gnome-research-work/cs2/comp3/data"
-FORM_C = ["a_upsets_prev", "a_gun_wr_prev", "gun_prev", "a_kd_prev", "a_resid_prev", "rounds_prev", "s_maps", "s_w", "s_rd", "a_alive_end", "b_alive_end", "elo_logit", "tier_code", "bo", "a_r500", "a_r1500", "a_r2500", "a_minm", "b_r500", "b_r1500", "b_r2500", "b_minm", "a_map_rwr", "b_map_rwr", "a_all_rwr", "b_all_rwr", "a_map_n", "b_map_n", "a_ct_map", "a_t_map", "b_ct_map", "b_t_map"]
+FORM_C = ["a_upsets_prev", "a_gun_wr_prev", "gun_prev", "a_kd_prev", "a_resid_prev", "rounds_prev", "s_maps", "s_w", "s_rd", "a_alive_end", "b_alive_end", "elo_logit", "tier_code", "bo", "relo", "a_r500", "a_r1500", "a_r2500", "a_minm", "b_r500", "b_r1500", "b_r2500", "b_minm", "a_map_rwr", "b_map_rwr", "a_all_rwr", "b_all_rwr", "a_map_n", "b_map_n", "a_ct_map", "a_t_map", "b_ct_map", "b_t_map"]
 ECON = ["a_money", "b_money", "a_equip", "b_equip", "a_money_pre", "b_money_pre", "a_awp", "b_awp", "a_rifles", "b_rifles"]
 
 
@@ -58,6 +58,7 @@ def main():
     ap.add_argument("--kw", default="{}")
     ap.add_argument("--adj", default="")
     ap.add_argument("--nseeds", type=int, default=1)
+    ap.add_argument("--relo", type=int, default=0)
     a = ap.parse_args()
     rt0 = build()
     st = pd.read_parquet(CACHE / "states.parquet", columns=["game_id", "round", "event_seq", "side_a", "map_a_wins", "m1", "m0"])
@@ -74,6 +75,11 @@ def main():
             lr = LogisticRegression(C=10, max_iter=1000).fit(Xl(g1), g1.map_a_wins)
             coef = lr.coef_[0]
             rt["prior_logit"] = rt.prior_logit + Xl(rt)[:, 2:] @ coef[2:] / coef[0]
+        if a.relo:
+            g1 = rt[(rt["round"] == 1) & (rt.end < start) & (rt.has_prior == 0)]
+            lr = LogisticRegression(C=10, max_iter=1000).fit(g1[["elo_logit", "relo"]], g1.map_a_wins)
+            comb = rt[["elo_logit", "relo"]].to_numpy() @ lr.coef_[0] + lr.intercept_[0]
+            rt["prior_logit"] = np.where(rt.has_prior == 1, rt.prior_logit, comb)
         tr = rt[(rt.end < start)].reset_index(drop=True)
         rows = []
         for w in (1, 0):
@@ -81,7 +87,7 @@ def main():
             keep = (tr.a_wins == w) & np.isnan(done)
             rows.append((X[keep.to_numpy()], tr.map_a_wins[keep.to_numpy()]))
         X = pd.concat([r[0] for r in rows]); y = pd.concat([r[1] for r in rows])
-        cols = baseline.MAPCOLS + {"none": [], "econ": ECON, "econ_form": ECON + FORM_C[:3], "econ_kd": ECON + FORM_C[:4], "econ_resid": ECON + FORM_C[:3] + ["a_resid_prev"], "econ_r": ECON + ["a_resid_prev"], "econ2": ECON + FORM_C[:3] + ["a_cash_next", "b_cash_next"], "econ3": ECON + ["a_cash_next", "b_cash_next"], "econ4": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev"], "econ5": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "s_maps", "s_w", "s_rd"], "econ6": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "s_w"], "econ7": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "elo_logit"], "econ8": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "tier_code"], "econ9": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "a_r500", "a_r1500", "a_r2500", "a_minm", "b_r500", "b_r1500", "b_r2500", "b_minm"], "econ10": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "a_map_rwr", "b_map_rwr", "a_all_rwr", "b_all_rwr"], "econ11": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "a_map_rwr", "b_map_rwr", "a_all_rwr", "b_all_rwr", "a_map_n", "b_map_n", "a_ct_map", "a_t_map", "b_ct_map", "b_t_map"], "oracle": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "a_alive_end", "b_alive_end"]}[a.feats]
+        cols = baseline.MAPCOLS + {"none": [], "econ": ECON, "econ_form": ECON + FORM_C[:3], "econ_kd": ECON + FORM_C[:4], "econ_resid": ECON + FORM_C[:3] + ["a_resid_prev"], "econ_r": ECON + ["a_resid_prev"], "econ2": ECON + FORM_C[:3] + ["a_cash_next", "b_cash_next"], "econ3": ECON + ["a_cash_next", "b_cash_next"], "econ4": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev"], "econ5": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "s_maps", "s_w", "s_rd"], "econ6": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "s_w"], "econ7": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "elo_logit"], "econ8": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "tier_code"], "econ9": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "a_r500", "a_r1500", "a_r2500", "a_minm", "b_r500", "b_r1500", "b_r2500", "b_minm"], "econ10": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "a_map_rwr", "b_map_rwr", "a_all_rwr", "b_all_rwr"], "econ11": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "a_map_rwr", "b_map_rwr", "a_all_rwr", "b_all_rwr", "a_map_n", "b_map_n", "a_ct_map", "a_t_map", "b_ct_map", "b_t_map"], "econ12": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "relo"], "oracle": ECON + ["a_cash_next", "b_cash_next", "a_resid_prev", "a_alive_end", "b_alive_end"]}[a.feats]
         mdls = [baseline.trees(a.seed + i, n_jobs=4, **json.loads(a.kw)).fit(X[cols], y) for i in range(a.nseeds)]
         te = rt[(rt.match_begin >= start) & (rt.match_begin < start + pd.offsets.MonthBegin(1))].reset_index(drop=True)
         mm = {}

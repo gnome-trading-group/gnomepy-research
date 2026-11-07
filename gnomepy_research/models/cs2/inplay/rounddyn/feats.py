@@ -21,7 +21,7 @@ ROUND_SECONDS = 115.0
 BOMB_SECONDS = 41.0
 TRADE_WINDOW = 5.0
 
-SIDE_COLS = ["alive", "eq", "awp", "kits", "rifles", "smgs", "noprim", "helm", "armor", "money"]
+SIDE_COLS = ["alive", "eq", "awp", "kits", "rifles", "smgs", "noprim", "helm", "armor", "money", "skill"]
 CT_T = {"CT": 0, "T": 1, "counter_terrorists": 0, "terrorists": 1}
 
 
@@ -43,8 +43,9 @@ DYN = ([f"{s}_{c}" for s in ("ct", "t") for c in SIDE_COLS] +
         "ct_pickup", "t_pickup", "over", "over_ct_won"])
 
 
-def dyn_features(b: Bundle, states: pd.DataFrame) -> pd.DataFrame:
+def dyn_features(b: Bundle, states: pd.DataFrame, ratings: pd.DataFrame | None = None) -> pd.DataFrame:
     gids = set(states.game_id)
+    rmap = {} if ratings is None else dict(zip(zip(ratings.game_id, ratings.player_id), ratings.rating))
     P = b.players[b.players.game_id.isin(gids)]
     keys = set(zip(states.game_id, states["round"]))
     roster = {}
@@ -52,7 +53,7 @@ def dyn_features(b: Bundle, states: pd.DataFrame) -> pd.DataFrame:
         if (g, r) not in keys:
             continue
         roster[(g, r)] = {int(pid): [CT_T.get(sd, -1), float(eq), weapon_class(pr), bool(kt), arm == "kevlar_and_helmet",
-                                     arm is not None, 0.0 if mn != mn else float(mn)]
+                                     arm is not None, 0.0 if mn != mn else float(mn), rmap.get((g, int(pid)), 0.0)]
                           for pid, sd, eq, pr, kt, arm, mn in zip(x.player_id, x.side, x.equip, x.prim,
                                                                   x.kit.fillna(False), x.armor, x.money)}
     E = b.events[b.events.game_id.isin(gids)].sort_values(["game_id", "seq"])
@@ -118,12 +119,12 @@ def dyn_features(b: Bundle, states: pd.DataFrame) -> pd.DataFrame:
             continue
         v = np.zeros((2, len(SIDE_COLS)))
         mx = [0, 0]
-        for side, eq, cls, kit, helm, arm, money in alive.values():
+        for side, eq, cls, kit, helm, arm, money, skill in alive.values():
             if side not in (0, 1):
                 continue
             x = v[side]
             x[0] += 1; x[1] += eq; x[2] += cls == 3; x[3] += kit; x[4] += cls == 2; x[5] += cls == 1
-            x[6] += cls == 0; x[7] += helm; x[8] += arm; x[9] += money
+            x[6] += cls == 0; x[7] += helm; x[8] += arm; x[9] += money; x[10] += skill
             mx[side] = max(mx[side], cls)
         since_plant = t - plant_t if planted else np.nan
         bomb_left = BOMB_SECONDS - since_plant if planted else np.nan
@@ -247,3 +248,55 @@ def team_map_features(b: Bundle, game_ids) -> pd.DataFrame:
         out[f"{s}_ct_map"] = ((x.ctw + k / 4) / (x.ctn + k / 2)).to_numpy()
         out[f"{s}_t_map"] = ((x.tw + k / 4) / (x.tn + k / 2)).to_numpy()
     return out
+
+
+def round_elo(b: Bundle, game_ids, k: float = 24.0, scale: float = 400.0) -> pd.DataFrame:
+    """A team rating from round shares: after each map, both teams move by k x (round share - expected share), the
+    expected share a logistic in the rating gap. Each map is priced with the ratings of maps that ended before it
+    began. Returns the gap for team A in logit units of a single round."""
+    rr = round_results(b)
+    sh = rr.groupby("game_id").agg(w=("a_won", "sum"), n=("a_won", "count"))
+    g = b.games[["game_id", "team_a", "team_b", "begin", "end"]].merge(sh, on="game_id", how="left")
+    want = set(game_ids)
+    ev = pd.concat([g.assign(t=g.begin, kind=0), g[g.n > 0].assign(t=g.end, kind=1)]).sort_values(["t", "kind"])
+    rating = {}
+    gap = {}
+    ln = np.log(10.0) / scale
+    for gid, ta, tb, kind, w, n in zip(ev.game_id, ev.team_a, ev.team_b, ev.kind, ev.w, ev.n):
+        ra, rb = rating.get(ta, 0.0), rating.get(tb, 0.0)
+        if kind == 0:
+            if gid in want:
+                gap[gid] = (ra - rb) * ln
+            continue
+        e = 1.0 / (1.0 + np.exp(-(ra - rb) * ln))
+        d = k * (w / n - e) * np.sqrt(n)
+        rating[ta] = ra + d
+        rating[tb] = rb - d
+    return pd.DataFrame(dict(game_id=list(gap), relo=list(gap.values())))
+
+
+def player_ratings(b: Bundle, game_ids, k: float = 60.0) -> pd.DataFrame:
+    """Each player's (kills - deaths) per round over maps that ended before each map began, shrunk toward 0 with k
+    pseudo-rounds. Kills and deaths come from the timeline where a map has one, else from the end-of-round player
+    rows (only maps without a timeline, all of them history)."""
+    g = b.games[["game_id", "begin", "end"]]
+    ev = b.events[b.events.type == "kill"]
+    k_ev = ev.groupby(["game_id", "killer_id"]).size().rename("k").rename_axis(["game_id", "player_id"])
+    d_ev = ev.groupby(["game_id", "victim_id"]).size().rename("d").rename_axis(["game_id", "player_id"])
+    P = b.players[["game_id", "round", "player_id", "kills", "alive_end"]]
+    n = P.groupby(["game_id", "player_id"]).size().rename("n")
+    has_ev = set(ev.game_id)
+    P2 = P[~P.game_id.isin(has_ev) & P.kills.notna() & P.alive_end.notna()]
+    k_pl = P2.groupby(["game_id", "player_id"]).kills.sum().rename("k")
+    d_pl = (~P2.alive_end.astype(bool)).groupby([P2.game_id, P2.player_id]).sum().rename("d")
+    kd = pd.concat([pd.concat([k_ev, k_pl]), pd.concat([d_ev, d_pl])], axis=1).fillna(0.0)
+    per = pd.concat([kd, n], axis=1).dropna(subset=["n"]).fillna(0.0).reset_index()
+    per = per[per.player_id.notna()].astype({"player_id": "int64"})
+    per = per[per.game_id.isin(set(g.game_id[g.game_id.isin(has_ev)]) | set(P2.game_id))]
+    per = per.merge(g[["game_id", "end"]], on="game_id").sort_values("end")
+    c = per.groupby("player_id")[["k", "d", "n"]].cumsum().assign(player_id=per.player_id, end=per.end)
+    tgt = P[P.game_id.isin(set(game_ids))][["game_id", "player_id"]].drop_duplicates().merge(g[["game_id", "begin"]], on="game_id")
+    tgt = tgt.astype({"player_id": "int64"}).sort_values("begin")
+    x = pd.merge_asof(tgt, c.sort_values("end"), left_on="begin", right_on="end", by="player_id",
+                      allow_exact_matches=False).fillna({"k": 0.0, "d": 0.0, "n": 0.0})
+    return x.assign(rating=(x.k - x.d) / (x.n + k))[["game_id", "player_id", "rating"]]
