@@ -26,7 +26,7 @@ from gnomepy_research.models.cs2.inplay.data import Bundle
 from gnomepy_research.models.cs2.inplay.features import legal_maps, map_states, round_table
 
 TIER = {"s": 0, "a": 1, "b": 2, "c": 3, "d": 4}
-CFG = dict(map_extra=["res_mean", "kill_mean"], map_kw={}, round_kw={}, shrink=4.0, expect="basic", alive_end_kills=False, nop_fix=False)
+CFG = dict(map_extra=["res_mean", "kill_mean"], map_kw={}, round_kw={}, shrink=4.0, expect="basic", alive_end_kills=False, nop_fix=False, decay=0.0)
 
 
 def exp_design(rt: pd.DataFrame) -> np.ndarray:
@@ -112,6 +112,21 @@ def history(b: Bundle, rt: pd.DataFrame, expect: LogisticRegression) -> pd.DataF
         rt[f"kill1_{side}_mean"] = rt[f"kill_{side}_next"]
         rt[f"kill_{side}_cs1"] = np.where(has_ev, kv.groupby(g).shift(1).fillna(0.0), np.nan)
         rt[f"kill_{side}_n1"] = kn.groupby(g).shift(1).fillna(0.0)
+    if CFG["decay"]:
+        d = CFG["decay"]
+        games, r_ = g.to_numpy(), res.fillna(0.0).to_numpy()
+        k_ = np.asarray(kd, float)
+        n = len(rt)
+        S, W, K, KW, Kn, KWn = (np.zeros(n) for _ in range(6))
+        for i in range(1, n):
+            if games[i] == games[i - 1]:
+                S[i], W[i] = d * S[i - 1] + r_[i - 1], d * W[i - 1] + 1
+                Kn[i], KWn[i] = d * Kn[i - 1] + k_[i - 1], d * KWn[i - 1] + 1
+                K[i], KW[i] = Kn[i - 1], KWn[i - 1]
+        rt["res_dec_S"], rt["res_dec_W"] = S, W
+        rt["res_dec"] = S / (W + shrink)
+        rt["kill_dec"] = np.where(has_ev, K / (KW + shrink), np.nan)
+        rt["kill_dec_next"] = np.where(has_ev, Kn / (KWn + shrink), np.nan)
     rt["tier_code"] = rt.tier.map(TIER).fillna(4).astype(int)
     return rt
 
@@ -137,6 +152,11 @@ def next_ext(rr: pd.DataFrame, a_won: int, extra, kd_now=None):
             continue
         if c == "res_mean":
             X[c] = ((rr.res_sum + a_won - rr.p_exp_a) / (rr.n_prev + 1 + shrink)).to_numpy()
+        elif c == "res_dec":
+            d = CFG["decay"]
+            X[c] = ((d * rr.res_dec_S + a_won - rr.p_exp_a) / (d * rr.res_dec_W + 1 + shrink)).to_numpy()
+        elif c == "kill_dec":
+            X[c] = rr.kill_dec_next.to_numpy()
         elif c in ("res_ct_mean", "res_t_mean"):
             side = c.split("_")[1]
             on = (rr.ct_a == (1 if side == "ct" else 0)).astype(float)
