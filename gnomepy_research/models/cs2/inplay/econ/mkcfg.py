@@ -15,7 +15,7 @@ def write(configs: dict, array_out: str):
         (HERE / "configs" / f"{name}.py").write_text(
             f'"""Sweep configuration {name}."""\nfrom gnomepy_research.models.cs2.inplay.econ.model import make\n\n'
             f"fit, predict = make(**{over!r})\n")
-        tasks.append([f"{REMOTE}/{name}.py", "--data", "/work/in/data", "--cache", "/work/out/bench",
+        tasks.append([f"{REMOTE}/{name}.py", "--data", "/work/in/data", "--cache", "/work/in/bench",
                       "--out", f"/work/out/{name}.json", "--name", f"econ-{name}"])
     Path(array_out).write_text(json.dumps(tasks, indent=1))
 

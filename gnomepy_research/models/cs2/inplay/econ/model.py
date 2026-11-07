@@ -39,6 +39,10 @@ ECO_SETS = {
     "v3": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "nbuy2_a", "nbuy2_b", "d_nbuy2", "nrebuy_a", "nrebuy_b", "tier", "base"],
     "v2btn": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "tier", "base", "p_next"],
     "v2bn": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "base", "p_next"],
+    "v1t": V1 + ["tier"],
+    "v2t": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "tier"],
+    "v2n": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "p_next"],
+    "v3nb": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "nbuy2_a", "nbuy2_b", "d_nbuy2", "nrebuy_a", "nrebuy_b"],
     "lean": SCORE + ["a_alive", "b_alive", "a_eq", "b_eq", "n_la", "n_lb", "proj_a", "proj_b", "nbuy_a", "nbuy_b", "d_res", "d_nbuy"],
 }
 
