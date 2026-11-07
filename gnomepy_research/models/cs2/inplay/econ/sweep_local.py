@@ -11,6 +11,7 @@ import pandas as pd
 from .. import harness
 from .model import DEFAULT, Model
 
+DATA = "/Users/mprey/gnome-research-work/cs2/comp3/data"
 BENCH = "/Users/mprey/gnome-research-work/cs2/comp3/bench_cache/bench_89bd1ebdec_2026-08.parquet"
 
 
@@ -29,13 +30,17 @@ def score(p, d, bm):
 def main(pkl, variants):
     d = pickle.load(open(pkl, "rb"))
     bm = pd.read_parquet(BENCH)
-    base = Model(dict(DEFAULT, eco=False, round_extra=False), 0).fit_rows(d["train"], d["legal"], d["x_tr"], d["rt_tr"])
+    tiers = pd.read_parquet(DATA + "/games.parquet").drop_duplicates("game_id").set_index("game_id").tier
+    for k in ("rt_tr", "rt_te", "rt_aug"):
+        if "tier" not in d[k]:
+            d[k]["tier"] = tiers.reindex(d[k].index.get_level_values("game_id")).to_numpy()
+    base = Model(dict(DEFAULT, eco=False, round_extra=False, map_tier=False), 0).fit_rows(d["train"], d["legal"], d["x_tr"], d["rt_tr"])
     print("bench-repro", score(base.predict_rows(d["x_te"], d["rt_te"]), d, bm), flush=True)
     rm = {}
     for name, over in variants:
         cfg = {**DEFAULT, **over}
         key = cfg["round_extra"]
-        m = Model(cfg, 0).fit_rows(d["train"], d["legal"], d["x_tr"], d["rt_tr"], map_model=base.map_model, round_model=rm.get(key), aug=(d["x_aug"], d["rt_aug"]))
+        m = Model(cfg, 0).fit_rows(d["train"], d["legal"], d["x_tr"], d["rt_tr"], map_model=None if cfg["map_tier"] else base.map_model, round_model=rm.get(key), aug=(d["x_aug"], d["rt_aug"]))
         rm[key] = m.round_model
         print(name, score(m.predict_rows(d["x_te"], d["rt_te"]), d, bm), flush=True)
 

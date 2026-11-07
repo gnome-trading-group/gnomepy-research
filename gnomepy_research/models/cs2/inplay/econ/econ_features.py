@@ -20,8 +20,12 @@ from ..features import resets
 RIFLES = {"ak47", "m4a1_s", "m4a4", "galilar", "famas", "aug", "sg553", "awp", "ssg08", "g3sg1", "scar20", "m249", "negev"}
 KILL_REWARD = {"awp": 100, "mp9": 600, "mac10": 600, "mp7": 600, "ump45": 600, "mp5": 600, "bizon": 600, "nova": 900,
                "mag7": 900, "xm1014": 900, "sawedoff": 900, "knife": 1500, "taser": 0}
+PRICE = {"ak47": 2700, "m4a4": 3100, "m4a1_s": 2900, "awp": 4750, "galilar": 1800, "famas": 2050, "mp9": 1250, "mac10": 1050,
+         "mp7": 1500, "ump45": 1200, "mp5": 1500, "p90": 2350, "bizon": 1400, "ssg08": 1700, "aug": 3300, "sg553": 3000,
+         "xm1014": 2000, "mag7": 1300, "nova": 1050, "sawedoff": 1100, "negev": 1700, "m249": 5200, "g3sg1": 5000, "scar20": 5000}
+ARMOR = {"kevlar": 650, "kevlar_and_helmet": 1000}
 SIDE_COLS = ["alive", "eq", "awp", "kits", "rifles", "helmets", "kills", "money_alive", "proj_w", "proj_l", "nbuy_w", "nbuy_l",
-             "nfull_w", "nfull_l"]
+             "nfull_w", "nfull_l", "util"]
 STATE_COLS = [f"{s}_{c}" for s in ("ct", "t") for c in SIDE_COLS] + ["planted", "since_plant", "t"]
 MONEY_CAP = 16000
 WIN_PAY = 3250
@@ -33,7 +37,9 @@ TOPUP = 1000
 def player_rounds(b: Bundle, game_ids) -> pd.DataFrame:
     p = b.players[b.players.game_id.isin(set(game_ids))]
     money = p.money.where(p.money < 20000)
-    return p.assign(money=money, rifle=p.prim.isin(RIFLES), awp=p.prim == "awp", helmet=p.armor == "kevlar_and_helmet",
+    # What the loadout holds besides the primary, armor and kit: grenades and pistol upgrades.
+    util = p.equip - p.prim.map(PRICE).fillna(0) - p.armor.map(ARMOR).fillna(0) - 400 * p.kit.fillna(False).astype(int)
+    return p.assign(money=money, util=util.clip(lower=0), rifle=p.prim.isin(RIFLES), awp=p.prim == "awp", helmet=p.armor == "kevlar_and_helmet",
                     kit=p.kit.fillna(False).astype(bool))
 
 
@@ -59,7 +65,7 @@ def state_table(b: Bundle, states: pd.DataFrame, ct_ctr: np.ndarray, t_ctr: np.n
     with full-buy money regardless of weapons (nfull). Dead players lose their weapons but keep their money."""
     gids = set(states.game_id)
     P = player_rounds(b, gids)
-    roster = {k: list(zip(x.player_id, x.side, x.equip, x.awp, x.kit, x.rifle, x.helmet, x.money.fillna(0)))
+    roster = {k: list(zip(x.player_id, x.side, x.equip, x.awp, x.kit, x.rifle, x.helmet, x.money.fillna(0), x.util))
               for k, x in P.groupby(["game_id", "round"])}
     ev = b.events[b.events.game_id.isin(gids) & b.events.type.isin(["kill", "bomb_planted"])]
     ev = ev.assign(kside=ev.killer_side.map({"counter_terrorists": "CT", "terrorists": "T"}),
@@ -86,7 +92,7 @@ def state_table(b: Bundle, states: pd.DataFrame, ct_ctr: np.ndarray, t_ctr: np.n
                 planted, plant_t = 1, el
         loss_pay = {"CT": 1400 + 500 * min(ct_ctr[i], 4), "T": 1400 + 500 * min(t_ctr[i], 4) + PLANT_BONUS * planted}
         v = {"CT": [0.0] * len(SIDE_COLS), "T": [0.0] * len(SIDE_COLS)}
-        for pid, side, eq, awp, kit, rifle, helmet, money in players:
+        for pid, side, eq, awp, kit, rifle, helmet, money, util in players:
             if side not in v:
                 continue
             x = v[side]
@@ -98,7 +104,7 @@ def state_table(b: Bundle, states: pd.DataFrame, ct_ctr: np.ndarray, t_ctr: np.n
             x[11] += (l >= FULL_BUY) or (keeps_rifle and l >= TOPUP)
             x[12] += w >= FULL_BUY; x[13] += l >= FULL_BUY
             if pid in alive:
-                x[0] += 1; x[1] += eq; x[2] += awp; x[3] += kit; x[4] += rifle; x[5] += helmet; x[7] += money
+                x[0] += 1; x[1] += eq; x[2] += awp; x[3] += kit; x[4] += rifle; x[5] += helmet; x[7] += money; x[14] += util
         v["CT"][6], v["T"][6] = kills["CT"], kills["T"]
         out[i] = [*v["CT"], *v["T"], planted, (t - plant_t) if planted else np.nan, t]
     f = pd.DataFrame(out, columns=STATE_COLS, index=states.index)

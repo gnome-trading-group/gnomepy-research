@@ -21,22 +21,30 @@ from ..data import Bundle
 from ..features import legal_maps, map_states, resets, round_table
 from .econ_features import SIDE_COLS, loss_counters, state_table, team_money
 
-ROUND_EXTRA = ["ct_rifles", "t_rifles", "ct_helmets", "t_helmets", "ct_mleft", "t_mleft", "ct_money_pre", "t_money_pre"]
+ROUND_EXTRA = ["ct_rifles", "t_rifles", "ct_helmets", "t_helmets", "ct_mleft", "t_mleft", "ct_util", "t_util"]
 SCORE = ["o", "n_need_a", "n_need_b", "n_ct_a"]
 V1 = SCORE + ["a_alive", "b_alive", "a_eq", "b_eq", "a_rifles", "b_rifles", "a_awp", "b_awp", "a_kills", "b_kills", "a_mleft",
               "b_mleft", "a_equip", "b_equip", "n_la", "n_lb", "proj_a", "proj_b", "res_a", "res_b", "d_res", "planted", "t"]
 ECO_SETS = {
     "v1": V1,
     "v2": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy"],
+    "v2p": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "prior_logit"],
+    "v2b": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "base"],
+    "v2bt": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "tier", "base"],
+    "v2btm": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "tier", "map_code", "base"],
+    "score_t": SCORE + ["tier", "base"],
     "score": SCORE,
     "score_alive": SCORE + ["a_alive", "b_alive", "a_eq", "b_eq"],
     "money_only": SCORE + ["a_mleft", "b_mleft", "a_equip", "b_equip", "n_la", "n_lb", "proj_a", "proj_b"],
     "lean": SCORE + ["a_alive", "b_alive", "a_eq", "b_eq", "n_la", "n_lb", "proj_a", "proj_b", "nbuy_a", "nbuy_b", "d_res", "d_nbuy"],
 }
 
-DEFAULT = dict(round_extra=False, eco=True, eco_feats="v2", aug_weight=0,
+DEFAULT = dict(round_extra=False, eco=True, eco_feats="v2bt", map_tier=False, aug_weight=0,
                eco_trees=dict(n_estimators=300, max_depth=4, learning_rate=0.03, subsample=0.7, colsample_bytree=0.8,
                               min_child_weight=300, reg_lambda=20))
+
+
+TIERS = {"s": 0, "a": 1, "b": 2, "c": 3, "d": 4}
 
 
 def logit(p):
@@ -59,6 +67,7 @@ def round_info(b: Bundle, game_ids) -> pd.DataFrame:
     tm = team_money(b, game_ids)
     rt = rt.join(tm, on=["game_id", "round"])
     rt["a_ctr"], rt["b_ctr"] = loss_counters(rt)
+    rt["tier"] = rt.game_id.map(b.games.drop_duplicates("game_id").set_index("game_id").tier)
     return rt.set_index(["game_id", "round"])
 
 
@@ -113,15 +122,21 @@ def eco_rows(x: pd.DataFrame, rt: pd.DataFrame, o: int, feats=V1):
     e["res_b"] = e.proj_b + x.b_eq.to_numpy()
     e["d_res"] = e.res_a - e.res_b
     e["planted"], e["t"] = x.planted.to_numpy(), x.t.to_numpy()
-    econ = [c for c in e.columns if c not in SCORE]
+    e["prior_logit"] = r.prior_logit.to_numpy()
+    e["map_code"] = r.map_code.to_numpy()
+    e["tier"] = r.tier.map(TIERS).to_numpy() if "tier" in r else np.nan
+    econ = [c for c in e.columns if c not in SCORE + ["prior_logit", "tier", "map_code"]]
     # At a half or overtime-half start money resets, so this round's economy says nothing about the next.
     e.loc[reset, econ] = np.nan
-    return e[feats], nxt[MAPCOLS], done
+    nx = nxt[MAPCOLS].assign(tier=e.tier.to_numpy() if "tier" in e else np.nan)
+    return e[[f for f in feats if f != "base"]], nx, done
 
 
 class Model:
     def __init__(self, cfg: dict, seed: int):
         self.cfg = cfg
+        self.feats = ECO_SETS[cfg["eco_feats"]]
+        self.mapcols = MAPCOLS + (["tier"] if cfg["map_tier"] else [])
         self.seed = seed
 
     def round_cols(self):
@@ -139,18 +154,20 @@ class Model:
         out = []
         for o in (1, 0):
             m = a_wins == o
-            e, nx, done = eco_rows(x[m], rt, o, ECO_SETS[self.cfg["eco_feats"]])
+            e, nx, done = eco_rows(x[m], rt, o, self.feats)
             keep = np.isnan(done)
-            base = logit(self.map_model.predict_proba(nx[keep])[:, 1])
+            base = logit(self.map_model.predict_proba(nx[self.mapcols][keep])[:, 1])
+            e = e[keep].assign(base=base) if "base" in self.feats else e[keep]
             mw = rt.map_a_wins.reindex(pd.MultiIndex.from_frame(x[m][["game_id", "round"]])).to_numpy()[keep]
-            out.append((e[keep], base, mw, np.full(keep.sum(), w)))
+            out.append((e, base, mw, np.full(keep.sum(), w)))
         return out
 
     def fit_rows(self, train: Bundle, legal, x: pd.DataFrame, rt: pd.DataFrame, map_model=None, round_model=None, aug=None):
         if map_model is None:
             rt_all = with_prior(round_table(train.subset(legal)))
             rt_all = rt_all[rt_all.map_a_wins.notna()]
-            map_model = trees(self.seed).fit(rt_all[MAPCOLS], rt_all.map_a_wins)
+            rt_all["tier"] = rt_all.game_id.map(train.games.drop_duplicates("game_id").set_index("game_id").tier).map(TIERS)
+            map_model = trees(self.seed).fit(rt_all[self.mapcols], rt_all.map_a_wins)
         self.map_model = map_model
         a_wins = rt.a_wins.reindex(pd.MultiIndex.from_frame(x[["game_id", "round"]])).to_numpy()
         y = np.where(x.side_a == "CT", a_wins, 1 - a_wins)
@@ -170,8 +187,10 @@ class Model:
         return self
 
     def m_value(self, x, rt, o):
-        e, nx, done = eco_rows(x, rt, o, ECO_SETS[self.cfg["eco_feats"]])
-        base = logit(self.map_model.predict_proba(nx)[:, 1])
+        e, nx, done = eco_rows(x, rt, o, self.feats)
+        base = logit(self.map_model.predict_proba(nx[self.mapcols])[:, 1])
+        if "base" in self.feats:
+            e = e.assign(base=base)
         if self.eco_model is None:
             p = 1 / (1 + np.exp(-base))
         else:
