@@ -19,7 +19,7 @@ import xgboost as xgb
 from ..baseline import MAPCOLS, ROUND, next_round, trees, with_prior
 from ..data import Bundle
 from ..features import legal_maps, map_states, resets, round_table
-from .econ_features import SIDE_COLS, loss_counters, state_table, team_money
+from .econ_features import POST_COLS, SIDE_COLS, loss_counters, post_table, state_table, team_money
 
 ROUND_EXTRA = ["ct_rifles", "t_rifles", "ct_helmets", "t_helmets", "ct_mleft", "t_mleft", "ct_util", "t_util"]
 SCORE = ["o", "n_need_a", "n_need_b", "n_ct_a"]
@@ -36,10 +36,18 @@ ECO_SETS = {
     "score": SCORE,
     "score_alive": SCORE + ["a_alive", "b_alive", "a_eq", "b_eq"],
     "money_only": SCORE + ["a_mleft", "b_mleft", "a_equip", "b_equip", "n_la", "n_lb", "proj_a", "proj_b"],
+    "v3": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "nbuy2_a", "nbuy2_b", "d_nbuy2", "nrebuy_a", "nrebuy_b", "tier", "base"],
+    "v2btn": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "tier", "base", "p_next"],
+    "v2bn": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "base", "p_next"],
     "lean": SCORE + ["a_alive", "b_alive", "a_eq", "b_eq", "n_la", "n_lb", "proj_a", "proj_b", "nbuy_a", "nbuy_b", "d_res", "d_nbuy"],
 }
 
-DEFAULT = dict(round_extra=False, eco=True, eco_feats="v2bt", map_tier=False, aug_weight=0,
+# The next round's winner is a far less noisy target than the map's, so a model of it turns the economy into one number.
+NEXT = V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "map_code", "tier"]
+
+DEFAULT = dict(round_extra=False, eco=True, eco_feats="v2bt", map_tier=False, aug_weight=0, next_folds=3, half_life=0, soft=False,
+               next_trees=dict(n_estimators=300, max_depth=5, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
+                               min_child_weight=100, reg_lambda=5),
                eco_trees=dict(n_estimators=300, max_depth=4, learning_rate=0.03, subsample=0.7, colsample_bytree=0.8,
                               min_child_weight=300, reg_lambda=20))
 
@@ -96,7 +104,7 @@ def start_rows(b: Bundle, game_ids) -> tuple[pd.DataFrame, pd.DataFrame]:
     return state_rows(b, st, rt), rt
 
 
-def eco_rows(x: pd.DataFrame, rt: pd.DataFrame, o: int, feats=V1):
+def eco_rows(x: pd.DataFrame, rt: pd.DataFrame, o: int):
     """M-correction features of each state given round outcome o (1 = A wins the round), the score-state map features
     of the next round and done (1/0 where o ends the map)."""
     keys = pd.MultiIndex.from_frame(x[["game_id", "round"]])
@@ -118,6 +126,9 @@ def eco_rows(x: pd.DataFrame, rt: pd.DataFrame, o: int, feats=V1):
     e["nbuy_a"], e["nbuy_b"] = x[f"a_nbuy_{wa}"].to_numpy(), x[f"b_nbuy_{wb}"].to_numpy()
     e["nfull_a"], e["nfull_b"] = x[f"a_nfull_{wa}"].to_numpy(), x[f"b_nfull_{wb}"].to_numpy()
     e["d_nbuy"] = e.nbuy_a - e.nbuy_b
+    for c in ("nbuy2", "nrebuy"):
+        e[f"{c}_a"], e[f"{c}_b"] = x[f"a_{c}_{wa}"].to_numpy(), x[f"b_{c}_{wb}"].to_numpy()
+    e["d_nbuy2"] = e.nbuy2_a - e.nbuy2_b
     e["res_a"] = e.proj_a + x.a_eq.to_numpy()
     e["res_b"] = e.proj_b + x.b_eq.to_numpy()
     e["d_res"] = e.res_a - e.res_b
@@ -129,7 +140,7 @@ def eco_rows(x: pd.DataFrame, rt: pd.DataFrame, o: int, feats=V1):
     # At a half or overtime-half start money resets, so this round's economy says nothing about the next.
     e.loc[reset, econ] = np.nan
     nx = nxt[MAPCOLS].assign(tier=e.tier.to_numpy() if "tier" in e else np.nan)
-    return e[[f for f in feats if f != "base"]], nx, done
+    return e, nx, done
 
 
 class Model:
@@ -150,17 +161,50 @@ class Model:
         return self.fit_rows(train, legal, state_rows(train, st, rt), rt, aug=aug)
 
     def eco_part(self, x, rt, w):
+        """Correction rows from states with their realised round outcome: features, base margin, map result, weight,
+        the next round's result (A view) and game id."""
         a_wins = rt.a_wins.reindex(pd.MultiIndex.from_frame(x[["game_id", "round"]])).to_numpy()
+        nxt_win = rt.a_wins.reindex(pd.MultiIndex.from_arrays([x.game_id, x["round"] + 1])).to_numpy()
         out = []
         for o in (1, 0):
             m = a_wins == o
-            e, nx, done = eco_rows(x[m], rt, o, self.feats)
+            e, nx, done = eco_rows(x[m], rt, o)
             keep = np.isnan(done)
             base = logit(self.map_model.predict_proba(nx[self.mapcols][keep])[:, 1])
-            e = e[keep].assign(base=base) if "base" in self.feats else e[keep]
             mw = rt.map_a_wins.reindex(pd.MultiIndex.from_frame(x[m][["game_id", "round"]])).to_numpy()[keep]
-            out.append((e, base, mw, np.full(keep.sum(), w)))
+            out.append((e[keep].assign(base=base), base, mw, np.full(keep.sum(), w), nxt_win[m][keep], x.game_id.to_numpy()[m][keep],
+                        x["round"].to_numpy()[m][keep]))
         return out
+
+    def fit_next(self, E, y, gids):
+        """Next-round model and its out-of-fold predictions on the training rows (so the correction model sees it as it
+        will at prediction time). Rows before a half or overtime-half start carry no economy and get none."""
+        ok = E.proj_a.notna().to_numpy() & ~np.isnan(y)
+        k = self.cfg["next_folds"]
+        fold = (np.asarray(gids) * 2654435761 % 2**32) % k
+        params = dict(objective="binary:logistic", n_jobs=8, random_state=self.seed, **self.cfg["next_trees"])
+        oof = np.full(len(E), np.nan)
+        for j in range(k):
+            tr, te = ok & (fold != j), ok & (fold == j)
+            oof[te] = xgb.XGBClassifier(**params).fit(E[NEXT][tr], y[tr]).predict_proba(E[NEXT][te])[:, 1]
+        self.next_model = xgb.XGBClassifier(**params).fit(E[NEXT][ok], y[ok])
+        return logit(oof)
+
+    def p_next(self, e):
+        p = logit(self.next_model.predict_proba(e[NEXT])[:, 1])
+        return np.where(e.proj_a.notna().to_numpy(), p, np.nan)
+
+    def post_values(self, train, legal, rt):
+        """M given the score and the actual pre-buy economy of each round, fitted on every map with player data; its
+        values on the timeline maps' rounds, indexed by (game_id, round)."""
+        ra = with_prior(round_table(train.subset(legal)))
+        ra = ra[ra.map_a_wins.notna()]
+        ra["tier"] = ra.game_id.map(train.games.drop_duplicates("game_id").set_index("game_id").tier).map(TIERS)
+        ra = ra.join(post_table(train, legal), on=["game_id", "round"])
+        cols = MAPCOLS + ["tier"] + POST_COLS
+        m = trees(self.seed).fit(ra[cols], ra.map_a_wins)
+        ev = ra[ra.game_id.isin(set(rt.index.get_level_values("game_id")))]
+        return pd.Series(m.predict_proba(ev[cols])[:, 1], index=pd.MultiIndex.from_frame(ev[["game_id", "round"]]))
 
     def fit_rows(self, train: Bundle, legal, x: pd.DataFrame, rt: pd.DataFrame, map_model=None, round_model=None, aug=None):
         if map_model is None:
@@ -169,6 +213,9 @@ class Model:
             rt_all["tier"] = rt_all.game_id.map(train.games.drop_duplicates("game_id").set_index("game_id").tier).map(TIERS)
             map_model = trees(self.seed).fit(rt_all[self.mapcols], rt_all.map_a_wins)
         self.map_model = map_model
+        soft = None
+        if self.cfg["soft"]:
+            soft = self.post_values(train, legal, rt)
         a_wins = rt.a_wins.reindex(pd.MultiIndex.from_frame(x[["game_id", "round"]])).to_numpy()
         y = np.where(x.side_a == "CT", a_wins, 1 - a_wins)
         if round_model is None:
@@ -181,20 +228,38 @@ class Model:
                 parts += self.eco_part(*aug, self.cfg["aug_weight"])
             E = pd.concat([p[0] for p in parts]); base = np.concatenate([p[1] for p in parts]); yy = np.concatenate([p[2] for p in parts])
             wt = np.concatenate([p[3] for p in parts])
+            if soft is not None:
+                # Distillation: M given the next round's actual pre-buy economy replaces the map result as the target,
+                # which removes the noise of every round after the next.
+                gid, rnd = np.concatenate([p[5] for p in parts]), np.concatenate([p[6] for p in parts])
+                sv = soft.reindex(pd.MultiIndex.from_arrays([gid, rnd + 1])).to_numpy()
+                ok = ~np.isnan(sv)
+                yy = self.cfg["soft"] * sv + (1 - self.cfg["soft"]) * yy
+                E, base, yy, wt = E[ok], base[ok], yy[ok], wt[ok]
+            if self.cfg["half_life"]:
+                g = train.games.drop_duplicates("game_id").set_index("game_id").begin
+                age = (g.max() - g.reindex(np.concatenate([p[5] for p in parts])).to_numpy()) / pd.Timedelta(days=30)
+                wt = wt * 0.5 ** (np.asarray(age, float) / self.cfg["half_life"])
+            if "p_next" in self.feats:
+                E["p_next"] = self.fit_next(E, np.concatenate([p[4] for p in parts]), np.concatenate([p[5] for p in parts]))
+            E = E[self.feats]
             params = dict(objective="binary:logistic", n_jobs=8, random_state=self.seed, **self.cfg["eco_trees"])
-            self.eco_model = xgb.XGBClassifier(**params)
+            # A regressor wrapper, because the distilled targets are probabilities rather than classes.
+            self.eco_model = xgb.XGBRegressor(**params)
             self.eco_model.fit(E, yy, base_margin=base, sample_weight=wt)
         return self
 
     def m_value(self, x, rt, o):
-        e, nx, done = eco_rows(x, rt, o, self.feats)
+        e, nx, done = eco_rows(x, rt, o)
         base = logit(self.map_model.predict_proba(nx[self.mapcols])[:, 1])
-        if "base" in self.feats:
-            e = e.assign(base=base)
+        e["base"] = base
+        if "p_next" in self.feats:
+            e["p_next"] = self.p_next(e)
+        e = e[self.feats]
         if self.eco_model is None:
             p = 1 / (1 + np.exp(-base))
         else:
-            p = self.eco_model.predict_proba(e, base_margin=base)[:, 1]
+            p = self.eco_model.predict(e, base_margin=base)
         return np.where(np.isnan(done), p, done)
 
     def predict(self, ctx: Bundle, states: pd.DataFrame) -> np.ndarray:

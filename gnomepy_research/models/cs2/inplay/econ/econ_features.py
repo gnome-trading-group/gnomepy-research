@@ -25,13 +25,16 @@ PRICE = {"ak47": 2700, "m4a4": 3100, "m4a1_s": 2900, "awp": 4750, "galilar": 180
          "xm1014": 2000, "mag7": 1300, "nova": 1050, "sawedoff": 1100, "negev": 1700, "m249": 5200, "g3sg1": 5000, "scar20": 5000}
 ARMOR = {"kevlar": 650, "kevlar_and_helmet": 1000}
 SIDE_COLS = ["alive", "eq", "awp", "kits", "rifles", "helmets", "kills", "money_alive", "proj_w", "proj_l", "nbuy_w", "nbuy_l",
-             "nfull_w", "nfull_l", "util"]
+             "nfull_w", "nfull_l", "util", "nbuy2_w", "nbuy2_l", "nrebuy_w", "nrebuy_l"]
 STATE_COLS = [f"{s}_{c}" for s in ("ct", "t") for c in SIDE_COLS] + ["planted", "since_plant", "t"]
 MONEY_CAP = 16000
 WIN_PAY = 3250
 PLANT_BONUS = 800
 FULL_BUY = 3900
 TOPUP = 1000
+# Side-specific full buys: AK + armor + utility vs M4 + armor + kit + utility.
+SIDE_FULL = {"T": 3700, "CT": 4300}
+MIN_LOSS_PAY = 1900
 
 
 def player_rounds(b: Bundle, game_ids) -> pd.DataFrame:
@@ -103,6 +106,12 @@ def state_table(b: Bundle, states: pd.DataFrame, ct_ctr: np.ndarray, t_ctr: np.n
             x[10] += (w >= FULL_BUY) or (keeps_rifle and w >= TOPUP)
             x[11] += (l >= FULL_BUY) or (keeps_rifle and l >= TOPUP)
             x[12] += w >= FULL_BUY; x[13] += l >= FULL_BUY
+            full = SIDE_FULL[side]
+            x[15] += (w >= full) or (keeps_rifle and w >= TOPUP)
+            x[16] += (l >= full) or (keeps_rifle and l >= TOPUP)
+            # Could buy fully next round, lose it, and still buy fully the round after.
+            x[17] += w >= 2 * full - MIN_LOSS_PAY
+            x[18] += l >= 2 * full - MIN_LOSS_PAY
             if pid in alive:
                 x[0] += 1; x[1] += eq; x[2] += awp; x[3] += kit; x[4] += rifle; x[5] += helmet; x[7] += money; x[14] += util
         v["CT"][6], v["T"][6] = kills["CT"], kills["T"]
@@ -123,3 +132,29 @@ def team_money(b: Bundle, game_ids) -> pd.DataFrame:
         out[f"{lab}_mleft"] = agg[("m", flag)] if ("m", flag) in agg else np.nan
         out[f"{lab}_mmin"] = agg[("mmin", flag)] if ("mmin", flag) in agg else np.nan
     return out
+
+
+POST_COLS = [f"{t}_{c}" for t in ("a", "b") for c in ("mp", "eqp", "rif", "kawp", "nbuy")] + ["d_nbuy_post", "d_res_post"]
+
+
+def post_table(b: Bundle, game_ids) -> pd.DataFrame:
+    """Per round and team A/B, the economy before the buy: money, equipment kept from the previous round (survivors'
+    weapons), kept rifles and AWPs, and players able to buy rifle + armor. Blank at half and overtime-half starts."""
+    P = player_rounds(b, game_ids)
+    g = b.games.drop_duplicates("game_id").set_index("game_id").team_a
+    mp = P.money_pre.where(P.money_pre < 20000)
+    rifle = P.prim_pre.isin(RIFLES)
+    P = P.assign(mp=mp, rifle_pre=rifle, awp_pre=P.prim_pre == "awp",
+                 nbuy=(mp >= P.side.map(SIDE_FULL)) | (rifle & (mp >= TOPUP)),
+                 is_a=P.team_id.to_numpy() == g.reindex(P.game_id).to_numpy())
+    agg = P.groupby(["game_id", "round", "is_a"]).agg(mp=("mp", "sum"), eqp=("equip_pre", "sum"), rif=("rifle_pre", "sum"),
+                                                     kawp=("awp_pre", "sum"), nbuy=("nbuy", "sum")).unstack("is_a")
+    out = pd.DataFrame(index=agg.index)
+    for lab, flag in (("a", True), ("b", False)):
+        for c in ("mp", "eqp", "rif", "kawp", "nbuy"):
+            out[f"{lab}_{c}"] = agg[(c, flag)] if (c, flag) in agg else np.nan
+    out["d_nbuy_post"] = out.a_nbuy - out.b_nbuy
+    out["d_res_post"] = out.a_mp + out.a_eqp - out.b_mp - out.b_eqp
+    rounds = out.index.get_level_values("round").to_numpy()
+    out.loc[resets(rounds), POST_COLS] = np.nan
+    return out[POST_COLS]
