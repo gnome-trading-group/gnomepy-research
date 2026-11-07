@@ -50,10 +50,14 @@ ECO_SETS = {
     "lean": SCORE + ["a_alive", "b_alive", "a_eq", "b_eq", "n_la", "n_lb", "proj_a", "proj_b", "nbuy_a", "nbuy_b", "d_res", "d_nbuy"],
 }
 
+# More of A's next-round resources can only help A; more of B's can only hurt.
+MONOTONE = {c: 1 for c in ("a_alive", "a_eq", "a_rifles", "a_awp", "a_mleft", "proj_a", "res_a", "nbuy_a", "nfull_a", "d_nbuy", "d_res")}
+MONOTONE.update({c: -1 for c in ("b_alive", "b_eq", "b_rifles", "b_awp", "b_mleft", "proj_b", "res_b", "nbuy_b", "nfull_b")})
+
 # The next round's winner is a far less noisy target than the map's, so a model of it turns the economy into one number.
 NEXT = V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "map_code", "tier"]
 
-DEFAULT = dict(round_extra=False, eco=True, eco_feats="v2t", map_tier=False, aug_weight=0, next_folds=3, half_life=0, soft=False, round_tier=False, mpost=None,
+DEFAULT = dict(round_extra=False, eco=True, eco_feats="v2t", map_tier=False, aug_weight=0, next_folds=3, half_life=0, soft=False, round_tier=False, mpost=None, monotone=False, bag=1,
                next_trees=dict(n_estimators=300, max_depth=5, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
                                min_child_weight=100, reg_lambda=5),
                eco_trees=dict(n_estimators=300, max_depth=4, learning_rate=0.03, subsample=0.7, colsample_bytree=0.8,
@@ -291,9 +295,11 @@ class Model:
                 E["p_next"] = self.fit_next(E, np.concatenate([p[4] for p in parts]), np.concatenate([p[5] for p in parts]))
             E = E[self.feats]
             params = dict(objective="binary:logistic", n_jobs=8, random_state=self.seed, **self.cfg["eco_trees"])
+            if self.cfg["monotone"]:
+                params["monotone_constraints"] = "(" + ",".join(str(MONOTONE.get(c, 0)) for c in self.feats) + ")"
             # A regressor wrapper, because the distilled targets are probabilities rather than classes.
-            self.eco_model = xgb.XGBRegressor(**params)
-            self.eco_model.fit(E, yy, base_margin=base, sample_weight=wt)
+            self.eco_model = [xgb.XGBRegressor(**{**params, "random_state": self.seed + 1000 * k}).fit(E, yy, base_margin=base, sample_weight=wt)
+                              for k in range(self.cfg["bag"])]
         return self
 
     def m_value(self, x, rt, o):
@@ -305,7 +311,8 @@ class Model:
         if self.eco_model is None:
             p = 1 / (1 + np.exp(-base))
         else:
-            p = self.eco_model.predict(e, base_margin=base)
+            z = np.mean([logit(m.predict(e, base_margin=base)) for m in self.eco_model], axis=0)
+            p = 1 / (1 + np.exp(-z))
         return np.where(np.isnan(done), p, done)
 
     def predict(self, ctx: Bundle, states: pd.DataFrame) -> np.ndarray:
