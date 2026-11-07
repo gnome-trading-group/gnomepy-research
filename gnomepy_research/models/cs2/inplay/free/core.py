@@ -127,6 +127,8 @@ def history(b: Bundle, rt: pd.DataFrame, expect: LogisticRegression) -> pd.DataF
         rt["res_dec"] = S / (W + shrink)
         rt["kill_dec"] = np.where(has_ev, K / (KW + shrink), np.nan)
         rt["kill_dec_next"] = np.where(has_ev, Kn / (KWn + shrink), np.nan)
+    rt["last_pexp"] = rt.groupby("game_id").p_exp_a.shift(1).fillna(0.5)
+    rt["last_won"] = a_won.groupby(g).shift(1).fillna(0.5)
     rt["tier_code"] = rt.tier.map(TIER).fillna(4).astype(int)
     return rt
 
@@ -155,6 +157,10 @@ def next_ext(rr: pd.DataFrame, a_won: int, extra, kd_now=None):
         elif c == "res_dec":
             d = CFG["decay"]
             X[c] = ((d * rr.res_dec_S + a_won - rr.p_exp_a) / (d * rr.res_dec_W + 1 + shrink)).to_numpy()
+        elif c == "last_pexp":
+            X[c] = rr.p_exp_a.to_numpy()
+        elif c == "last_won":
+            X[c] = float(a_won)
         elif c == "kill_dec":
             X[c] = rr.kill_dec_next.to_numpy()
         elif c in ("res_ct_mean", "res_t_mean"):
