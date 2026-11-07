@@ -100,6 +100,9 @@ def evaluate(d: Path, variants: dict, months=MONTHS, seed=0):
     rt0 = pd.read_parquet(d / "rt.parquet")
     xs0 = pd.read_parquet(d / "states.parquet")
     pm = pd.read_parquet(d / "pm.parquet")
+    if "side_adv_ct" not in rt0:
+        rt0["side_adv_ct"] = E.logit(rt0.a_ct_map) - E.logit(rt0.b_t_map)
+        rt0["side_adv_t"] = E.logit(rt0.a_t_map) - E.logit(rt0.b_ct_map)
     res = {k: [] for k in variants}
     for m in months:
         start = pd.Timestamp(m + "-01", tz="UTC"); end = start + pd.offsets.MonthBegin(1)
@@ -144,20 +147,21 @@ def report(res: dict, base="base"):
 
 
 def default_variants():
-    R, M = ROUND, MAPCOLS
+    R, M, P = ROUND, MAPCOLS, ["ct_prior", "has_prior"]
     NH = [c for c in M if c != "has_prior"]
-    mono = "(-1,1,0,0,0,0,0,0,0,1,0)"
-    mono_nh = "(-1,1,0,0,0,0,0,0,0,1)"
+    kw = dict(monotone_constraints="(-1,1,0,0,0,0,0,0,0,1)", max_depth=6, min_child_weight=300, learning_rate=0.05)
+    kw2 = dict(kw, monotone_constraints="(-1,1,0,0,0,0,0,0,0,1,1,1)")
+    SA = ["side_adv_ct", "side_adv_t"]
     return {
         "base": (R, M, {}, {}, "elo"),
-        "base:none": (R, M, {}, {}, "base:none"),
-        "base:mez": (R, M, {}, {}, "base:mez"),
-        "base:mez nohas": (R, NH, {}, {}, "base:mez"),
-        "full:mez": (R, M, {}, {}, "full:mez"),
-        "full:mez nohas": (R, NH, {}, {}, "full:mez"),
-        "full:mez mono": (R, M, {}, dict(monotone_constraints=mono), "full:mez"),
-        "full:mez nohas mono": (R, NH, {}, dict(monotone_constraints=mono_nh), "full:mez"),
-        "elo mono": (R, M, {}, dict(monotone_constraints=mono), "elo"),
+        "F": (R, NH, {}, kw, "full:mez"),
+        "F side": (R, NH + SA, {}, kw2, "full:mez"),
+        "F rskill": (R + E.ROUND_X, NH, {}, kw, "full:mez"),
+        "F rskill rprior": (R + E.ROUND_X + P, NH, {}, kw, "full:mez"),
+        "F me": (R, NH, {}, kw, "full:me"),
+        "F mz": (R, NH, {}, kw, "full:mz"),
+        "base-pm mez": (R, NH, {}, kw, "base:mez"),
+        "pelo mez": (R, NH, {}, kw, "pelo:mez"),
     }
 
 

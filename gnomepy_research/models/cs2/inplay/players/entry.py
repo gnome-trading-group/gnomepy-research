@@ -29,12 +29,12 @@ CFG = dict(
     pm=os.environ.get("PL_PM", "full"),
     round_feats=os.environ.get("PL_ROUND", "1") == "1",
     round_prior=os.environ.get("PL_ROUND_PRIOR", "1") == "1",
-    map_feats=os.environ.get("PL_MAP", "0") == "1",
+    map_x=[],
     map_prior=os.environ.get("PL_MAP_PRIOR", "roster"),
     stack=os.environ.get("PL_STACK", "mez"),
     map_nohas=os.environ.get("PL_MAP_NOHAS", "1") == "1",
     map_mono=os.environ.get("PL_MAP_MONO", "1") == "1",
-    map_kw={},
+    map_kw=dict(max_depth=6, min_child_weight=300, learning_rate=0.05),
 )
 
 PFEATS = ["net", "kpr", "dpr", "okr", "opr", "clr", "awr", "lgn"]
@@ -42,7 +42,8 @@ TCOUNTS = ["ct_n", "ct_w", "t_n", "t_w"]
 ROUND_X = ["ct_net_alive", "t_net_alive", "ct_net_max", "t_net_max", "ct_net_start", "t_net_start", "ct_okr", "t_okr",
            "ct_clutch", "t_clutch", "ct_best_dead", "t_best_dead", "ct_awper_dead", "t_awper_dead", "ct_lgn", "t_lgn",
            "ct_side_map", "t_side_map", "ct_team_all", "t_team_all"]
-MAP_X = ["d_net_roster", "a_net_roster", "b_net_roster", "a_ct_map", "a_t_map", "b_ct_map", "b_t_map", "a_team_all", "b_team_all", "lgn_roster"]
+MAP_X = ["d_net_roster", "a_net_roster", "b_net_roster", "a_ct_map", "a_t_map", "b_ct_map", "b_t_map", "a_team_all", "b_team_all", "lgn_roster",
+         "side_adv_ct", "side_adv_t"]
 
 
 class History:
@@ -198,6 +199,8 @@ def map_skill(b: Bundle, rt: pd.DataFrame, rates: pd.DataFrame, team: pd.DataFra
         tk = pd.MultiIndex.from_arrays([x.game_id.to_numpy(), g[f"team_{t}"].reindex(x.game_id).to_numpy()])
         v = tix.reindex(tk)
         x[f"{t}_ct_map"], x[f"{t}_t_map"], x[f"{t}_team_all"] = v.ct_map.to_numpy(), v.t_map.to_numpy(), v.all_.to_numpy()
+    x["side_adv_ct"] = logit(x.a_ct_map) - logit(x.b_t_map)
+    x["side_adv_t"] = logit(x.a_t_map) - logit(x.b_ct_map)
     return x[MAP_X].set_axis(rt.index)
 
 
@@ -301,10 +304,10 @@ def round_cols():
 
 def map_cols():
     base = [c for c in MAPCOLS if not (CFG["map_nohas"] and c == "has_prior")]
-    return base + (MAP_X if CFG["map_feats"] else [])
+    return base + list(CFG["map_x"])
 
 
-MONO = {"need_a": -1, "need_b": 1, "prior_logit": 1}
+MONO = {"need_a": -1, "need_b": 1, "prior_logit": 1, "side_adv_ct": 1, "side_adv_t": 1}
 
 
 def map_trees(seed):
