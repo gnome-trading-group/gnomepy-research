@@ -32,6 +32,7 @@ class Config:
     extra: list = field(default_factory=list)
     map_extra: bool = False
     round_seeds: int = 1
+    half: bool = False
     n_jobs: int = 8
 
 
@@ -52,6 +53,7 @@ def rounds(b: Bundle, game_ids) -> pd.DataFrame:
     rt["bo"] = rt.game_id.map(g.bo).to_numpy()
     rt["map_no"] = rt.game_id.map(g.map_no).to_numpy()
     rt["streak"] = dp.streaks(rt)
+    rt = dp.add_half(rt)
     cur = feats.current_round_map_features(rt)
     return pd.concat([rt, cur.add_prefix("m_")], axis=1)
 
@@ -83,7 +85,7 @@ def fit(train: Bundle, asof: pd.Timestamp, seed: int, cfg: Config):
     qkw = dict(cfg.q_kw)
     if cfg.recency_half_life:
         qkw["weight"] = 0.5 ** ((asof - rt.end).dt.days.to_numpy() / cfg.recency_half_life)
-    QC = dp.QCOLS + cfg.extra
+    QC = dp.QCOLS + cfg.extra + (dp.HALF if cfg.half else [])
     q = dp.fit_q(rt, seed, n_jobs=cfg.n_jobs, cols=QC, **qkw)
     q1 = None
     if cfg.lookahead:
@@ -108,13 +110,15 @@ def components(model, ctx: Bundle, states: pd.DataFrame) -> pd.DataFrame:
     cfg = model["cfg"]
     rt = rounds(ctx, set(states.game_id))
     statics = rt.groupby("game_id").head(1).reset_index(drop=True)
-    QC = dp.QCOLS + cfg.extra
-    V = dp.values(model["q"], statics, cfg.extra)
-    mix = pd.Series(np.arange(len(statics)), index=statics.game_id)
+    QC = dp.QCOLS + cfg.extra + (dp.HALF if cfg.half else [])
+    m = len(statics)
+    V = dp.values_half(model["q"], statics, cfg.extra) if cfg.half else dp.values(model["q"], statics, cfg.extra)
+    mix = pd.Series(np.arange(m), index=statics.game_id)
     keys = pd.MultiIndex.from_frame(states[["game_id", "round"]])
     rr = rt.set_index(["game_id", "round"]).loc[keys].reset_index()
+    half = rr.half_a.to_numpy(float) if cfg.half else None
     d1, d0 = dp.next_values(V, mix.loc[rr.game_id].to_numpy(), rr.score_a.to_numpy(), rr.score_b.to_numpy(),
-                            rr.streak.to_numpy(), rr["round"].to_numpy())
+                            rr.streak.to_numpy(), rr["round"].to_numpy(), half, m)
     mi = mix.loc[rr.game_id].to_numpy()
     n = rr["round"].to_numpy()
     rx, ex = {}, {}
@@ -127,10 +131,14 @@ def components(model, ctx: Bundle, states: pd.DataFrame) -> pd.DataFrame:
         if model.get("q1") is not None:
             k2 = np.where(resets(n + 1), 0, dp.step_streak(rr.streak.to_numpy(), a_won == 1))
             X["streak"] = k2
-            p1 = model["q1"].predict_proba(X[CARRY + QC])[:, 1]
             sa2, sb2 = rr.score_a.to_numpy() + a_won, rr.score_b.to_numpy() + 1 - a_won
+            h2 = None
+            if cfg.half:
+                h2 = np.where(np.isnan(half), np.where(sa2 + sb2 >= 12, sa2, np.nan), half)
+                X["half_a"], X["sec_a"], X["sec_b"] = h2, sa2 - h2, sb2 - (12 - h2)
+            p1 = model["q1"].predict_proba(X[CARRY + QC])[:, 1]
             ok = np.isnan(done)
-            v1, v0 = dp.next_values(V, mi, np.where(ok, sa2, 0), np.where(ok, sb2, 0), np.where(ok, k2, 0), n + 1)
+            v1, v0 = dp.next_values(V, mi, np.where(ok, sa2, 0), np.where(ok, sb2, 0), np.where(ok, k2, 0), n + 1, h2, m)
             ex[a_won] = np.where(ok, p1 * v1 + (1 - p1) * v0, done)
     if ex:
         d1, d0 = ex[1], ex[0]

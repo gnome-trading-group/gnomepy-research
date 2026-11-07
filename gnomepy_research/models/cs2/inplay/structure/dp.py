@@ -73,17 +73,49 @@ def q_rows(statics: pd.DataFrame, sa: int, sb: int, ks: np.ndarray, extra=()) ->
         ct_a=np.tile(ct_a_at(statics.ct_a.to_numpy(), statics["round"].to_numpy(), n), len(ks)),
         ot=ot, round_in_half=rih, pistol=int(n in (1, 13)), map_code=np.tile(statics.map_code.to_numpy(), len(ks)),
         prior_logit=np.tile(statics.prior_logit.to_numpy(), len(ks)), has_prior=np.tile(statics.has_prior.to_numpy(), len(ks)),
-        streak=np.repeat(ks, m), **{c: np.tile(statics[c].to_numpy(), len(ks)) for c in extra}))
+        streak=np.repeat(ks, m), **{c: np.tile(statics[c].to_numpy(), len(ks)) for c in extra}, **half_cols(statics, sa, sb, len(ks))))
 
 
-def values(q_model, statics: pd.DataFrame, extra=()) -> np.ndarray:
+HALF = ["half_a", "sec_a", "sec_b"]
+
+
+def half_cols(statics, sa, sb, reps):
+    """A's first-half score and each side's second-half score: in the second half and overtime they show which side
+    each team won its rounds on, which the total score hides."""
+    if "half_a" not in statics:
+        return {}
+    h = np.tile(statics.half_a.to_numpy(float), reps)
+    if sa + sb < 12:
+        h = np.full_like(h, np.nan)
+    return dict(half_a=h, sec_a=sa - h, sec_b=sb - (12 - h))
+
+
+def add_half(rt: pd.DataFrame) -> pd.DataFrame:
+    h = rt.score_a.where(rt["round"] == 13).groupby(rt.game_id).transform("max")
+    h = h.where(rt["round"] >= 13)
+    return rt.assign(half_a=h, sec_a=rt.score_a - h, sec_b=rt.score_b - (12 - h))
+
+
+def values_half(q_model, statics: pd.DataFrame, extra=()) -> np.ndarray:
+    """values() with A's first-half score as an extra state: V[h * m + map, ...] for h = 0..12 copies of each map.
+    First-half states are equal across copies; the step into round 13 routes to copy h = A's score after round 12."""
+    m = len(statics)
+    S2 = pd.concat([statics.assign(half_a=float(h)) for h in range(13)], ignore_index=True)
+    return values(q_model, S2, extra, cols=QCOLS + list(extra) + HALF, half_m=m)
+
+
+def values(q_model, statics: pd.DataFrame, extra=(), cols=None, half_m=None) -> np.ndarray:
     """V[map, score index, k + KMAX]: P(A wins the map) at the start of a round with that score and streak.
     statics: one row per map with ct_a/round (A's side at some known round), map_code, prior_logit, has_prior."""
     m = len(statics)
     V = np.full((m, len(SCORES), 2 * KMAX + 1), np.nan)
     ks_all = np.arange(-KMAX, KMAX + 1)
+    cols = cols or QCOLS + list(extra)
+    base = np.arange(m) % half_m if half_m else None
 
     def val(sa, sb, k):
+        if half_m and sa + sb == 12:
+            return V[sa * half_m + base, SCORE_IX[(sa, sb)], k + KMAX]
         na, nb = need(sa, sb)
         if na <= 0:
             return np.ones(m)
@@ -102,7 +134,7 @@ def values(q_model, statics: pd.DataFrame, extra=()) -> np.ndarray:
         for sa, sb in pairs:
             X.append(q_rows(statics, sa, sb, ks_all, extra))
             meta.append((sa, sb))
-        q = q_model.predict_proba(pd.concat(X, ignore_index=True)[QCOLS + list(extra)])[:, 1].reshape(len(pairs), len(ks_all), m)
+        q = q_model.predict_proba(pd.concat(X, ignore_index=True)[cols])[:, 1].reshape(len(pairs), len(ks_all), m)
         reset_next = bool(resets(np.array([n + 1]))[0])
         for j, (sa, sb) in enumerate(meta):
             for ki, k in enumerate(ks_all):
@@ -134,14 +166,19 @@ def fit_q(rt: pd.DataFrame, seed: int, n_seeds: int = 1, weight=None, cols=None,
     return Avg(models)
 
 
-def next_values(V: np.ndarray, map_ix: np.ndarray, sa, sb, k, n) -> tuple[np.ndarray, np.ndarray]:
-    """M(score if A wins this round), M(score if A loses) for rows (map index, score, streak) at round n."""
+def next_values(V: np.ndarray, map_ix: np.ndarray, sa, sb, k, n, half=None, m=None) -> tuple[np.ndarray, np.ndarray]:
+    """M(score if A wins this round), M(score if A loses) for rows (map index, score, streak) at round n.
+    With half (A's first-half score, NaN before round 13) V is values_half's, with m maps per copy."""
     sa, sb, k, n = (np.asarray(v, int) for v in (sa, sb, k, n))
+    map_ix0 = np.asarray(map_ix)
     reset_next = resets(n + 1)
     out = []
     for a_won in (1, 0):
         sa2, sb2 = sa + a_won, sb + 1 - a_won
         k2 = np.where(reset_next, 0, step_streak(k, a_won == 1))
+        if half is not None:
+            h = np.where(np.isnan(half), np.where(sa2 + sb2 >= 12, sa2, 0), np.nan_to_num(half)).astype(int)
+            map_ix = h * m + map_ix0
         nd = np.array([need(x, y) for x, y in zip(sa2, sb2)]).reshape(-1, 2)
         si = np.array([SCORE_IX.get((x, y), -1) for x, y in zip(sa2, sb2)], int)
         v = V[map_ix, np.maximum(si, 0), k2 + KMAX]

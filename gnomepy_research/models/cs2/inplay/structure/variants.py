@@ -23,3 +23,13 @@ VARIANTS.update({
     "look-tier-w1": Config(extra=T, w_dp=1.0),
     "look-tier-rs3": Config(extra=T, round_seeds=3),
 })
+VARIANTS.update({
+    "look-tier-half": Config(extra=T, half=True),
+})
+MONO = {"prior_logit": 1, "need_a": -1, "need_b": 1}
+MONOP = {"prior_logit": 1}
+VARIANTS.update({
+    "look-tier-mono": Config(extra=T, q_kw=dict(monotone_constraints=MONO)),
+    "look-tier-monop": Config(extra=T, q_kw=dict(monotone_constraints=MONOP)),
+    "look-tier-mono-half": Config(extra=T, half=True, q_kw=dict(monotone_constraints=MONO)),
+})
