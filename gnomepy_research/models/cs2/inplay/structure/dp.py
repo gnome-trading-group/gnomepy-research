@@ -112,11 +112,26 @@ def values(q_model, statics: pd.DataFrame) -> np.ndarray:
     return V
 
 
-def fit_q(rt: pd.DataFrame, seed: int, **kw) -> xgb.XGBClassifier:
+class Avg:
+    """Mean probability of several models: the DP compounds q's errors over many rounds, so q's variance matters."""
+
+    def __init__(self, models):
+        self.models = models
+
+    def predict_proba(self, X):
+        return np.mean([m.predict_proba(X) for m in self.models], axis=0)
+
+
+def fit_q(rt: pd.DataFrame, seed: int, n_seeds: int = 1, weight=None, cols=None, **kw):
     params = dict(n_estimators=400, max_depth=5, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, min_child_weight=100,
                   reg_lambda=5, n_jobs=8, random_state=seed, tree_method="hist")
     params.update(kw)
-    return xgb.XGBClassifier(**params).fit(rt[QCOLS], rt.a_wins)
+    cols = cols or QCOLS
+    models = []
+    for i in range(n_seeds):
+        params["random_state"] = seed * 1000 + i
+        models.append(xgb.XGBClassifier(**params).fit(rt[cols], rt.a_wins, sample_weight=weight))
+    return Avg(models)
 
 
 def next_values(V: np.ndarray, map_ix: np.ndarray, sa, sb, k, n) -> tuple[np.ndarray, np.ndarray]:
