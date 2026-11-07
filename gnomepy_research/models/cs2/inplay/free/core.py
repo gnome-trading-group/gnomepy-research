@@ -70,6 +70,15 @@ def history(b: Bundle, rt: pd.DataFrame, expect: LogisticRegression) -> pd.DataF
     lag1 = cs.groupby(g).shift(1).fillna(0.0)
     rt["kill_mean"] = np.where(has_ev, lag2 / ((rt["round"] - 2).clip(lower=0) + SHRINK), np.nan)
     rt["kill_next"] = np.where(has_ev, lag1 / (rt["round"] - 1 + SHRINK), np.nan)
+    for side, flag in (("ct", 1), ("t", 0)):
+        on = (rt.ct_a == flag).astype(float)
+        v = (res * on).fillna(0.0)
+        rt[f"res_{side}_sum"] = v.groupby(g).cumsum().groupby(g).shift(1).fillna(0.0)
+        rt[f"n_{side}"] = on.groupby(g).cumsum().groupby(g).shift(1).fillna(0.0)
+        rt[f"res_{side}_mean"] = rt[f"res_{side}_sum"] / (rt[f"n_{side}"] + SHRINK)
+        kv, kn = (kd * on).groupby(g).cumsum(), on.groupby(g).cumsum()
+        rt[f"kill_{side}_mean"] = np.where(has_ev, kv.groupby(g).shift(2).fillna(0.0) / (kn.groupby(g).shift(2).fillna(0.0) + SHRINK), np.nan)
+        rt[f"kill_{side}_next"] = np.where(has_ev, kv.groupby(g).shift(1).fillna(0.0) / (kn.groupby(g).shift(1).fillna(0.0) + SHRINK), np.nan)
     rt["tier_code"] = rt.tier.map(TIER).fillna(4).astype(int)
     return rt
 
@@ -84,8 +93,12 @@ def next_ext(rr: pd.DataFrame, a_won: int, extra):
     for c in extra:
         if c == "res_mean":
             X[c] = ((rr.res_sum + a_won - rr.p_exp_a) / (rr.n_prev + 1 + SHRINK)).to_numpy()
-        elif c == "kill_mean":
-            X[c] = rr.kill_next.to_numpy()
+        elif c in ("res_ct_mean", "res_t_mean"):
+            side = c.split("_")[1]
+            on = (rr.ct_a == (1 if side == "ct" else 0)).astype(float)
+            X[c] = ((rr[f"res_{side}_sum"] + on * (a_won - rr.p_exp_a)) / (rr[f"n_{side}"] + on + SHRINK)).to_numpy()
+        elif c.startswith("kill_"):
+            X[c] = rr[c.replace("_mean", "_next")].to_numpy()
         else:
             X[c] = rr[c].to_numpy()
     return X, done
