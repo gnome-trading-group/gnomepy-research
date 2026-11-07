@@ -44,13 +44,16 @@ ECO_SETS = {
     "v2n": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "p_next"],
     "v3nb": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "nbuy2_a", "nbuy2_b", "d_nbuy2", "nrebuy_a", "nrebuy_b"],
     "v2tc": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "tier", "bo", "map_no", "has_prior"],
+    "v2tq": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "tier", "mpost"],
+    "v2tne": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "tier", "nebase"],
+    "v2tqne": V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "tier", "mpost", "nebase"],
     "lean": SCORE + ["a_alive", "b_alive", "a_eq", "b_eq", "n_la", "n_lb", "proj_a", "proj_b", "nbuy_a", "nbuy_b", "d_res", "d_nbuy"],
 }
 
 # The next round's winner is a far less noisy target than the map's, so a model of it turns the economy into one number.
 NEXT = V1 + ["nbuy_a", "nbuy_b", "nfull_a", "nfull_b", "d_nbuy", "map_code", "tier"]
 
-DEFAULT = dict(round_extra=False, eco=True, eco_feats="v2t", map_tier=False, aug_weight=0, next_folds=3, half_life=0, soft=False, round_tier=False,
+DEFAULT = dict(round_extra=False, eco=True, eco_feats="v2t", map_tier=False, aug_weight=0, next_folds=3, half_life=0, soft=False, round_tier=False, mpost=None,
                next_trees=dict(n_estimators=300, max_depth=5, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
                                min_child_weight=100, reg_lambda=5),
                eco_trees=dict(n_estimators=300, max_depth=4, learning_rate=0.03, subsample=0.7, colsample_bytree=0.8,
@@ -150,6 +153,13 @@ def eco_rows(x: pd.DataFrame, rt: pd.DataFrame, o: int):
     # At a half or overtime-half start money resets, so this round's economy says nothing about the next.
     e.loc[reset, econ] = np.nan
     nx = nxt[MAPCOLS].assign(tier=e.tier.to_numpy() if "tier" in e else np.nan)
+    # The next round's pre-buy economy as it would stand if the round ended now: projected money, the living's
+    # equipment and rifles kept, players able to buy.
+    for t in ("a", "b"):
+        nx[f"{t}_mp"], nx[f"{t}_eqp"] = e[f"proj_{t}"].to_numpy(), e[f"{t}_eq"].to_numpy()
+        nx[f"{t}_rif"], nx[f"{t}_kawp"], nx[f"{t}_nbuy"] = e[f"{t}_rifles"].to_numpy(), e[f"{t}_awp"].to_numpy(), e[f"nbuy2_{t}"].to_numpy()
+    nx["d_nbuy_post"] = nx.a_nbuy - nx.b_nbuy
+    nx["d_res_post"] = nx.a_mp + nx.a_eqp - nx.b_mp - nx.b_eqp
     return e, nx, done
 
 
@@ -180,9 +190,9 @@ class Model:
             m = a_wins == o
             e, nx, done = eco_rows(x[m], rt, o)
             keep = np.isnan(done)
-            base = logit(self.map_model.predict_proba(nx[self.mapcols][keep])[:, 1])
+            base = self.margins(e, nx)[keep]
             mw = rt.map_a_wins.reindex(pd.MultiIndex.from_frame(x[m][["game_id", "round"]])).to_numpy()[keep]
-            out.append((e[keep].assign(base=base), base, mw, np.full(keep.sum(), w), nxt_win[m][keep], x.game_id.to_numpy()[m][keep],
+            out.append((e[keep], base, mw, np.full(keep.sum(), w), nxt_win[m][keep], x.game_id.to_numpy()[m][keep],
                         x["round"].to_numpy()[m][keep]))
         return out
 
@@ -216,6 +226,26 @@ class Model:
         ev = ra[ra.game_id.isin(set(rt.index.get_level_values("game_id")))]
         return pd.Series(m.predict_proba(ev[cols])[:, 1], index=pd.MultiIndex.from_frame(ev[["game_id", "round"]]))
 
+    def margins(self, e, nx):
+        """Adds the score-state M (base) and, when fitted, M at the projected next-round economy (mpost) to e; returns
+        the base margin of the correction."""
+        e["base"] = logit(self.map_model.predict_proba(nx[self.mapcols])[:, 1])
+        if self.ne_model is not None:
+            e["nebase"] = logit(self.ne_model.predict_proba(nx[MAPCOLS])[:, 1])
+        if self.post_model is None:
+            return e.base.to_numpy()
+        e["mpost"] = logit(self.post_model.predict_proba(nx[MAPCOLS + ["tier"] + POST_COLS])[:, 1])
+        return (e.mpost if self.cfg["mpost"] == "base" else e.base).to_numpy()
+
+    def fit_post(self, train, maps):
+        """M given the score and the actual pre-buy economy of each round, on maps without timelines only, so it is out of
+        sample on every timeline map the correction is trained or used on."""
+        ra = with_prior(round_table(train.subset(maps)))
+        ra = ra[ra.map_a_wins.notna()]
+        ra["tier"] = ra.game_id.map(train.games.drop_duplicates("game_id").set_index("game_id").tier).map(TIERS)
+        ra = ra.join(post_table(train, maps), on=["game_id", "round"])
+        return trees(self.seed).fit(ra[MAPCOLS + ["tier"] + POST_COLS], ra.map_a_wins)
+
     def fit_rows(self, train: Bundle, legal, x: pd.DataFrame, rt: pd.DataFrame, map_model=None, round_model=None, aug=None):
         if map_model is None:
             rt_all = with_prior(round_table(train.subset(legal)))
@@ -223,6 +253,13 @@ class Model:
             rt_all["tier"] = rt_all.game_id.map(train.games.drop_duplicates("game_id").set_index("game_id").tier).map(TIERS)
             map_model = trees(self.seed).fit(rt_all[self.mapcols], rt_all.map_a_wins)
         self.map_model = map_model
+        self.post_model = self.fit_post(train, legal - set(x.game_id)) if self.cfg["mpost"] else None
+        self.ne_model = None
+        if "nebase" in self.feats:
+            # Score-state M fitted without the timeline maps: out of sample on all of them, in training and prediction.
+            ra = with_prior(round_table(train.subset(legal - set(x.game_id))))
+            ra = ra[ra.map_a_wins.notna()]
+            self.ne_model = trees(self.seed).fit(ra[MAPCOLS], ra.map_a_wins)
         soft = None
         if self.cfg["soft"]:
             soft = self.post_values(train, legal, rt)
@@ -261,8 +298,7 @@ class Model:
 
     def m_value(self, x, rt, o):
         e, nx, done = eco_rows(x, rt, o)
-        base = logit(self.map_model.predict_proba(nx[self.mapcols])[:, 1])
-        e["base"] = base
+        base = self.margins(e, nx)
         if "p_next" in self.feats:
             e["p_next"] = self.p_next(e)
         e = e[self.feats]
