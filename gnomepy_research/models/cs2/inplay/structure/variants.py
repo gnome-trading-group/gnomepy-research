@@ -66,3 +66,9 @@ VARIANTS.update({
                                            dict(max_depth=6, min_child_weight=300)]),
     "slow-all-ens-ic": all_mono(SLOW, q_ens=[dict(interaction_constraints=IC)]),
 })
+RMONO = {"ct_prior": 1, "ct_alive": 1, "t_alive": -1, "ct_eq": 1, "t_eq": -1, "ct_kits": 1, "planted": -1}
+VARIANTS.update({
+    "slow-all-rmono": Config(extra=T, q_kw=dict(monotone_constraints=MONOP, **SLOW), q1_kw=dict(monotone_constraints=MONOP),
+                             map_kw=dict(min_child_weight=200, monotone_constraints=MONOP),
+                             round_kw=dict(max_depth=6, learning_rate=0.05, monotone_constraints=RMONO)),
+})
