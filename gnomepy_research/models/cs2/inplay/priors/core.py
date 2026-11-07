@@ -42,6 +42,7 @@ class Config:
     prior_from: str = "2025-04-01"
     edge_round: bool = False
     edge_map: bool = False
+    edge_from_prior: bool = False
     market_prior: bool = True
     market_mode: str = "lr"
     nm_set: str = "v1"
@@ -96,7 +97,10 @@ class Model:
         else:
             mk = g.l_market.to_numpy()
         out = pd.DataFrame(dict(game_id=g.game_id.to_numpy(), my_prior=np.where(g.has_m == 1, mk, nm), has_m=g.has_m.to_numpy()))
-        out["edge"] = self.edge.decision_function(g[EDGE]) if self.edge is not None else 0.0
+        if self.cfg.edge_from_prior:
+            out["edge"] = out.my_prior
+        else:
+            out["edge"] = self.edge.decision_function(g[EDGE]) if self.edge is not None else 0.0
         return out
 
     def fit_prior(self, g: pd.DataFrame, train: Bundle, seed: int = 0) -> np.ndarray:
@@ -119,7 +123,7 @@ class Model:
         if len(tm) >= MIN_MARKET:
             self.mk = LogisticRegression(C=1.0, max_iter=2000).fit(tm[MK], tm.result)
         self.edge = None
-        if self.cfg.edge_round or self.cfg.edge_map:
+        if (self.cfg.edge_round or self.cfg.edge_map) and not self.cfg.edge_from_prior:
             r = train.rounds[train.rounds.game_id.isin(set(tr.game_id))][["game_id", "a_wins"]].merge(tr[["game_id"] + EDGE], on="game_id")
             self.edge = LogisticRegression(C=1.0, max_iter=2000).fit(r[EDGE], r.a_wins)
         return nm
