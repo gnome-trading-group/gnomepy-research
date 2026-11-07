@@ -31,7 +31,10 @@ CFG = dict(
     round_prior=os.environ.get("PL_ROUND_PRIOR", "1") == "1",
     map_feats=os.environ.get("PL_MAP", "0") == "1",
     map_prior=os.environ.get("PL_MAP_PRIOR", "roster"),
-    stack=os.environ.get("PL_STACK", "mz"),
+    stack=os.environ.get("PL_STACK", "mez"),
+    map_nohas=os.environ.get("PL_MAP_NOHAS", "1") == "1",
+    map_mono=os.environ.get("PL_MAP_MONO", "1") == "1",
+    map_kw={},
 )
 
 PFEATS = ["net", "kpr", "dpr", "okr", "opr", "clr", "awr", "lgn"]
@@ -297,7 +300,20 @@ def round_cols():
 
 
 def map_cols():
-    return MAPCOLS + (MAP_X if CFG["map_feats"] else [])
+    base = [c for c in MAPCOLS if not (CFG["map_nohas"] and c == "has_prior")]
+    return base + (MAP_X if CFG["map_feats"] else [])
+
+
+MONO = {"need_a": -1, "need_b": 1, "prior_logit": 1}
+
+
+def map_trees(seed):
+    # Once the stacked prior is calibrated on outcomes either way, more rounds needed and a weaker prior can only hurt
+    # team A; the constraint keeps the per-round trees from fitting map-level noise in the opposite direction.
+    kw = dict(CFG["map_kw"])
+    if CFG["map_mono"]:
+        kw["monotone_constraints"] = "(" + ",".join(str(MONO.get(c, 0)) for c in map_cols()) + ")"
+    return trees(seed, **kw)
 
 
 def rows(model, b: Bundle, states: pd.DataFrame, rates=None, team=None, pm=None):
@@ -334,7 +350,7 @@ def fit(train: Bundle, asof: pd.Timestamp, seed: int):
     rt = with_prior2(round_table(sub), pm, model["premap"], model["stack"])
     rt = pd.concat([rt, map_skill(sub, rt, rates, team)], axis=1)
     rt = rt[rt.map_a_wins.notna()]
-    model["map_model"] = trees(seed).fit(rt[map_cols()], rt.map_a_wins)
+    model["map_model"] = map_trees(seed).fit(rt[map_cols()], rt.map_a_wins)
     st = map_states(train, legal)
     x, rti = rows(model, sub, st, rates, team, pm)
     x = x.join(rti[["a_wins"]], on=["game_id", "round"])

@@ -144,16 +144,20 @@ def report(res: dict, base="base"):
 
 
 def default_variants():
-    R, M, P = ROUND, MAPCOLS, ["ct_prior", "has_prior"]
+    R, M = ROUND, MAPCOLS
+    NH = [c for c in M if c != "has_prior"]
+    mono = "(-1,1,0,0,0,0,0,0,0,1,0)"
+    mono_nh = "(-1,1,0,0,0,0,0,0,0,1)"
     return {
         "base": (R, M, {}, {}, "elo"),
         "base:none": (R, M, {}, {}, "base:none"),
-        "base:mz": (R, M, {}, {}, "base:mz"),
-        "pelo:none": (R, M, {}, {}, "pelo:none"),
-        "full:none": (R, M, {}, {}, "full:none"),
-        "full:mz": (R, M, {}, {}, "full:mz"),
+        "base:mez": (R, M, {}, {}, "base:mez"),
+        "base:mez nohas": (R, NH, {}, {}, "base:mez"),
         "full:mez": (R, M, {}, {}, "full:mez"),
-        "full:mz+rskill": (R + E.ROUND_X, M, {}, {}, "full:mz"),
+        "full:mez nohas": (R, NH, {}, {}, "full:mez"),
+        "full:mez mono": (R, M, {}, dict(monotone_constraints=mono), "full:mez"),
+        "full:mez nohas mono": (R, NH, {}, dict(monotone_constraints=mono_nh), "full:mez"),
+        "elo mono": (R, M, {}, dict(monotone_constraints=mono), "elo"),
     }
 
 
