@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+import xgboost as xgb
 from sklearn.linear_model import LogisticRegression
 
 from gnomepy_research.models.cs2.inplay.baseline import MAPCOLS, ROUND, logit, next_round, trees
@@ -22,9 +23,17 @@ from gnomepy_research.models.cs2.inplay.features import legal_maps, map_states, 
 from gnomepy_research.models.cs2.inplay.priors import ratings
 
 TIERS = ["s", "a", "b", "c", "d"]
-NM = ["elo_logit", "r_team", "r_map", "r_player", "q_team", "q_map", "q_player", "s_diff", "s_rd", "bo1"] + [f"tier_{t}" for t in TIERS]
+RAT = ["elo_logit", "r_team", "r_map", "r_player", "q_team", "q_map", "q_player"]
+BASIC = RAT + ["bo1"] + [f"tier_{t}" for t in TIERS]
+NM_SETS = {
+    "v1": BASIC + ["s_diff", "s_rd"],
+    # Ratings of players with few maps are noise, so their weight scales with the roster's experience.
+    "p2": BASIC + [f"{c}_p" for c in RAT] + ["npmin", "rest_a", "rest_b"],
+    "x1": BASIC + ["npmin", "nmin", "rest_a", "rest_b", "np_a", "np_b", "n_a", "n_b", "roster_known"],
+    "x2": BASIC + ["npmin", "nmin", "rest_a", "rest_b", "np_a", "np_b", "n_a", "n_b", "roster_known", "s_diff", "s_rd"],
+}
 MK = ["l_market", "l_e12", "l_pool", "nm_logit", "s_diff", "s_rd"]
-EDGE = NM + ["l_market", "l_e12", "has_m"]
+EDGE = NM_SETS["v1"] + ["l_market", "l_e12", "has_m"]
 MIN_MARKET = 300
 
 
@@ -34,6 +43,10 @@ class Config:
     edge_round: bool = False
     edge_map: bool = False
     market_prior: bool = True
+    market_mode: str = "lr"
+    nm_set: str = "v1"
+    nm_kind: str = "lr"
+    folds: int = 5
 
 
 def map_frame(info: pd.DataFrame, feats: pd.DataFrame, b: Bundle) -> pd.DataFrame:
@@ -47,6 +60,12 @@ def map_frame(info: pd.DataFrame, feats: pd.DataFrame, b: Bundle) -> pd.DataFram
     g["bo1"] = (g.bo == 1).astype(int)
     for t in TIERS:
         g[f"tier_{t}"] = (g.tier == t).astype(int)
+    g["nmin"] = np.log1p(np.minimum(g.n_a, g.n_b))
+    g["npmin"] = np.log1p(np.minimum(g.np_a, g.np_b))
+    for c in RAT:
+        g[f"{c}_p"] = g[c] * g.npmin
+    for c in ("rest_a", "rest_b"):
+        g[c] = np.log1p(g[c].fillna(60).clip(0, 60))
     return g
 
 
@@ -54,27 +73,56 @@ class Model:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
-    def prior_table(self, g: pd.DataFrame) -> pd.DataFrame:
-        nm = self.nm.decision_function(g[NM])
-        if self.mk is not None and self.cfg.market_prior:
-            mk = self.mk.decision_function(g[MK].assign(nm_logit=nm))
+    def nm_logit(self, g: pd.DataFrame) -> np.ndarray:
+        x = g[NM_SETS[self.cfg.nm_set]]
+        if self.cfg.nm_kind == "xgb":
+            return self.nm.predict(x, output_margin=True)
+        return self.nm.decision_function(x)
+
+    def nm_model(self, seed=0):
+        if self.cfg.nm_kind == "xgb":
+            return xgb.XGBClassifier(n_estimators=500, max_depth=3, learning_rate=0.03, subsample=0.8, colsample_bytree=0.8,
+                                     min_child_weight=50, n_jobs=8, random_state=seed)
+        return LogisticRegression(C=1.0, max_iter=3000)
+
+    def prior_table(self, g: pd.DataFrame, nm: np.ndarray | None = None) -> pd.DataFrame:
+        nm = self.nm_logit(g) if nm is None else nm
+        if self.cfg.market_mode == "avg":
+            # The kickoff market and e12 err differently; their logit average beats either and needs no fitting,
+            # so it also covers the months before any market-listed map is in the training history.
+            mk = ((g.l_market + g.l_e12) / 2).to_numpy()
+        elif self.mk is not None and self.cfg.market_prior:
+            mk = self.mk.decision_function(g.assign(nm_logit=nm)[MK])
         else:
             mk = g.l_market.to_numpy()
         out = pd.DataFrame(dict(game_id=g.game_id.to_numpy(), my_prior=np.where(g.has_m == 1, mk, nm), has_m=g.has_m.to_numpy()))
         out["edge"] = self.edge.decision_function(g[EDGE]) if self.edge is not None else 0.0
         return out
 
-    def fit_prior(self, g: pd.DataFrame, train: Bundle):
-        tr = g[g.result.notna() & (g.begin.fillna(g.match_begin) >= pd.Timestamp(self.cfg.prior_from, tz="UTC"))]
-        self.nm = LogisticRegression(C=1.0, max_iter=2000).fit(tr[NM], tr.result)
-        tm = tr[tr.has_m == 1]
+    def fit_prior(self, g: pd.DataFrame, train: Bundle, seed: int = 0) -> np.ndarray:
+        """Fits the prior models and returns the rating prior for every row of g: out-of-fold (by match) for the
+        rows it was fitted on, so the map model learns how much to trust a prior it has not seen the answer of."""
+        use = (g.result.notna() & (g.begin.fillna(g.match_begin) >= pd.Timestamp(self.cfg.prior_from, tz="UTC"))).to_numpy()
+        tr = g[use]
+        cols = NM_SETS[self.cfg.nm_set]
+        self.nm = self.nm_model(seed).fit(tr[cols], tr.result)
+        nm = self.nm_logit(g)
+        if self.cfg.nm_kind == "xgb" and self.cfg.folds > 1:
+            fold = (pd.util.hash_array(tr.match_id.to_numpy()) % self.cfg.folds).astype(int)
+            oof = np.zeros(len(tr))
+            for k in range(self.cfg.folds):
+                m = self.nm_model(seed).fit(tr[cols][fold != k], tr.result[fold != k])
+                oof[fold == k] = m.predict(tr[cols][fold == k], output_margin=True)
+            nm[use] = oof
+        tm = tr.assign(nm_logit=nm[use])[tr.has_m.to_numpy() == 1]
         self.mk = None
         if len(tm) >= MIN_MARKET:
-            self.mk = LogisticRegression(C=1.0, max_iter=2000).fit(tm[MK].assign(nm_logit=self.nm.decision_function(tm[NM])), tm.result)
+            self.mk = LogisticRegression(C=1.0, max_iter=2000).fit(tm[MK], tm.result)
         self.edge = None
         if self.cfg.edge_round or self.cfg.edge_map:
             r = train.rounds[train.rounds.game_id.isin(set(tr.game_id))][["game_id", "a_wins"]].merge(tr[["game_id"] + EDGE], on="game_id")
             self.edge = LogisticRegression(C=1.0, max_iter=2000).fit(r[EDGE], r.a_wins)
+        return nm
 
     def map_cols(self):
         return MAPCOLS + (["edge"] if self.cfg.edge_map else [])
@@ -98,8 +146,7 @@ class Model:
         info = ratings.game_info(train)
         feats, self.state = ratings.run(info, self.params)
         g = map_frame(info, feats, train)
-        self.fit_prior(g, train)
-        prior = self.prior_table(g)
+        prior = self.prior_table(g, self.fit_prior(g, train, seed))
         legal = legal_maps(train)
         rt = with_prior(round_table(train.subset(legal)), prior)
         rt = rt[rt.map_a_wins.notna()]
