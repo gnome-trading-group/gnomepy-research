@@ -135,8 +135,9 @@ def evaluate(d: Path, variants: dict, months=MONTHS, seed=0):
             if k_r not in fits:
                 fits[k_r] = trees(seed, **dict(dict(max_depth=6, learning_rate=0.05), **rkw)).fit(xtr[rc], xtr.y_ct)
             if k_m not in fits:
-                kw = {k: v for k, v in mkw.items() if k != "bag"}
-                fits[k_m] = E.Bag(lambda sd: trees(sd, **kw), mkw.get("bag", 1), seed).fit(rtr[mc], rtr.map_a_wins)
+                kw = {k: v for k, v in mkw.items() if k not in ("bag", "since")}
+                rf = rtr[rtr.begin >= pd.Timestamp(mkw["since"], tz="UTC")] if "since" in mkw else rtr
+                fits[k_m] = E.Bag(lambda sd: trees(sd, **kw), mkw.get("bag", 1), seed).fit(rf[mc], rf.map_a_wins)
             p, p_ct = price(fits[k_r], fits[k_m], rc, mc, xte, rte)
             res[name].append(pd.DataFrame(dict(month=m, game_id=xte.game_id.to_numpy(), kind=xte.kind.to_numpy(), ll=ll(p, y),
                                                rll=ll(p_ct, xte.y_ct.to_numpy()))))
@@ -163,12 +164,11 @@ def default_variants():
     NH = [c for c in M if c != "has_prior"]
     kw = dict(monotone_constraints="(-1,1,0,0,0,0,0,0,0,1)", max_depth=6, min_child_weight=300, learning_rate=0.05)
     kw1 = dict(kw, monotone_constraints="(-1,1,0,0,0,0,0,0,0,1,0)")
-    kw3 = dict(kw, monotone_constraints="(-1,1,0,0,0,0,0,0,0,1,0,0,0)")
     return {
         "base": (R, M, {}, {}, "elo"),
-        "F2": (R, NH, {}, kw, "full2:memap"),
-        "F2 tier": (R, NH + ["tier_code"], {}, kw1, "full2:memap"),
-        "F2 tier bo dec": (R, NH + ["tier_code", "bo", "decider"], {}, kw3, "full2:memap"),
+        "F3": (R, NH, {}, kw, "full3:memap"),
+        "F3 lgn": (R, NH + ["lgn_roster"], {}, kw1, "full3:memap"),
+        "F3 from 2025-06": (R, NH, {}, dict(kw, since="2025-06-01"), "full3:memap"),
     }
 
 
