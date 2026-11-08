@@ -13,4 +13,5 @@ VARIANTS = {
     "sp-map": Combo(structure=SMAP),
     "spe": Combo(econ=True),
     "spe-map": Combo(structure=SMAP, econ=True),
+    "spe-map-mp": Combo(structure=SMAP, econ=True, map_price=True),
 }

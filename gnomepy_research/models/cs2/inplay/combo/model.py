@@ -27,6 +27,7 @@ class Combo:
     structure: core.Config = field(default_factory=lambda: VARIANTS["slow-all"])
     roster_prior: bool = True
     econ: bool = False
+    map_price: bool = False
     econ_cfg: dict = field(default_factory=lambda: dict(E.DEFAULT))
 
 
@@ -67,7 +68,7 @@ def fit_econ(train: Bundle, smodel, seed: int, cfg: dict):
 
 
 def fit(train: Bundle, asof: pd.Timestamp, seed: int, cfg: Combo):
-    prior = RosterPrior(train, asof) if cfg.roster_prior else None
+    prior = RosterPrior(train, asof, cfg.map_price) if cfg.roster_prior else None
     smodel = core.fit(train, asof, seed, cfg.structure, prior)
     eco = fit_econ(train, smodel, seed, cfg.econ_cfg) if cfg.econ else None
     if prior is not None:
