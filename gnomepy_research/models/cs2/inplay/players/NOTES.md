@@ -116,7 +116,10 @@ loss, map-bootstrap 95% interval, per-month differences; audit 100 states, all p
 | players-F2_rskill | + alive-player strength | -0.00616 | [-0.0090, -0.0036] | 5/5 | -0.0061 -0.0110 -0.0020 -0.0058 -0.0028 |
 | players-F2_seeds2 | F2, two seeds (fit noise) | -0.00623 | [-0.0090, -0.0037] | 5/5 | seeds: -0.00623, -0.00637 |
 | **players-F3** | **F2 + adjusted plus-minus in the roster prior (the entry)** | **-0.00680** | **[-0.0095, -0.0043]** | **5/5** | -0.0068 -0.0113 -0.0031 -0.0073 -0.0029 |
-FINAL_ROW
+| players-F3_entry_seeds2 | `entry.py` itself (F3 defaults), two seeds | -0.00680 | [-0.0095, -0.0043] | 5/5 | seeds: -0.00680, -0.00686; round-start part -0.0072 |
+
+Development result of the entry: **-0.00680 [-0.00953, -0.00426], better in 5/5 months, audit passed**. Configurations
+scored with the harness: 15.
 
 Lab-only comparisons (approximate harness, same five months) are listed under "Did not help" above; lab runs `lab1`–`lab4`
 predate the NaT fix and their player-Elo numbers are void.
