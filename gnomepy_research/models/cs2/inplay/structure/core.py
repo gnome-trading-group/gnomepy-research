@@ -83,13 +83,23 @@ def state_rows(b: Bundle, states: pd.DataFrame, rt: pd.DataFrame) -> pd.DataFram
     return x
 
 
+def recency_weights(train: Bundle, game_ids: pd.Series, asof: pd.Timestamp, half_life_days: float | None):
+    """Per-row training weight halving every half_life_days before asof, by the row's map end; None when unweighted.
+    Older maps come from a different meta and map pool, so with long histories they should count for less."""
+    if not half_life_days:
+        return None
+    end = game_ids.map(train.games.set_index("game_id").end)
+    return 0.5 ** ((asof - end).dt.days.to_numpy() / half_life_days)
+
+
 def fit(train: Bundle, asof: pd.Timestamp, seed: int, cfg: Config, prior=None):
     legal = legal_maps(train)
     rt = rounds(train, legal, prior).merge(train.games[["game_id", "end"]], on="game_id")
     rt = rt[rt.map_a_wins.notna()]
     qkw = dict(cfg.q_kw)
-    if cfg.recency_half_life:
-        qkw["weight"] = 0.5 ** ((asof - rt.end).dt.days.to_numpy() / cfg.recency_half_life)
+    w_rt = recency_weights(train, rt.game_id, asof, cfg.recency_half_life)
+    if w_rt is not None:
+        qkw["weight"] = w_rt
     QC = dp.QCOLS + cfg.extra + (dp.HALF if cfg.half else [])
     q = dp.fit_q(rt, seed, n_jobs=cfg.n_jobs, cols=QC, **qkw)
     # Different q structures err differently, and the chain compounds each one's errors: average their map values.
@@ -98,17 +108,19 @@ def fit(train: Bundle, asof: pd.Timestamp, seed: int, cfg: Config, prior=None):
     if cfg.lookahead:
         # The next round's win chance also depends on the money and equipment carried out of this round.
         X1 = rt[["m_" + c for c in CARRY]].set_axis(CARRY, axis=1).join(rt[QC])
-        q1 = trees(seed, cfg.n_jobs, **dict(dict(n_estimators=400, learning_rate=0.05, min_child_weight=100), **cfg.q1_kw)).fit(X1, rt.a_wins)
+        q1 = trees(seed, cfg.n_jobs, **dict(dict(n_estimators=400, learning_rate=0.05, min_child_weight=100), **cfg.q1_kw)).fit(X1, rt.a_wins, sample_weight=w_rt)
     X = rt[["m_" + c for c in MC]].set_axis(MC, axis=1)
     if cfg.map_extra:
         X = X.join(rt[cfg.extra])
     X = X[cfg.map_cols()]
-    mm = trees(seed, cfg.n_jobs, **cfg.map_kw).fit(X, rt.map_a_wins)
+    mm = trees(seed, cfg.n_jobs, **cfg.map_kw).fit(X, rt.map_a_wins, sample_weight=w_rt)
     rt["q_a"] = q.predict_proba(rt[QC])[:, 1]
     st = map_states(train, legal)
     x = state_rows(train, st, rt)
     y = np.where(x.a_ct, x.a_wins, 1 - x.a_wins)
-    rm = dp.Avg([trees(seed * 1000 + i, cfg.n_jobs, **cfg.round_kw).fit(x[cfg.rcols], y) for i in range(cfg.round_seeds)])
+    w_x = recency_weights(train, x.game_id, asof, cfg.recency_half_life)
+    rm = dp.Avg([trees(seed * 1000 + i, cfg.n_jobs, **cfg.round_kw).fit(x[cfg.rcols], y, sample_weight=w_x)
+                 for i in range(cfg.round_seeds)])
     return dict(q=q, qs=qs, q1=q1, map_model=mm, round_model=rm, cfg=cfg, prior=prior)
 
 

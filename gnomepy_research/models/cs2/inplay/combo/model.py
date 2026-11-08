@@ -36,7 +36,7 @@ def map_values(model, c: pd.DataFrame) -> dict:
     return {1: (w * c.d1 + (1 - w) * c.r1).to_numpy(), 0: (w * c.d0 + (1 - w) * c.r0).to_numpy()}
 
 
-def fit_econ(train: Bundle, smodel, seed: int, cfg: dict):
+def fit_econ(train: Bundle, smodel, seed: int, cfg: dict, asof: pd.Timestamp):
     """The econ correction trained on every in-round state of the training maps, conditioned on the realised round
     outcome, on top of the structure map value for that outcome."""
     legal = legal_maps(train)
@@ -57,20 +57,22 @@ def fit_econ(train: Bundle, smodel, seed: int, cfg: dict):
         y.append(map_wins[sel][keep])
         nk.append((x.game_id.to_numpy()[sel][keep], x["round"].to_numpy()[sel][keep] + 1))
     F, base, y = pd.concat(F), np.concatenate(base), np.concatenate(y)
+    w = core.recency_weights(train, pd.Series(np.concatenate([k[0] for k in nk])), asof, smodel["cfg"].recency_half_life)
     if cfg["soft"]:
         post = E.Model(cfg, seed).post_values(train, legal, set(x.game_id))
         gid, rnd = (np.concatenate([k[i] for k in nk]) for i in (0, 1))
         pv = post.reindex(pd.MultiIndex.from_arrays([gid, rnd])).to_numpy()
         ok = ~np.isnan(pv) & ~np.isnan(y)
         F, base, y = F[ok], base[ok], cfg["soft"] * pv[ok] + (1 - cfg["soft"]) * y[ok]
+        w = None if w is None else w[ok]
     params = dict(objective="binary:logistic", n_jobs=8, random_state=seed, **cfg["eco_trees"])
-    return xgb.XGBRegressor(**params).fit(F, y, base_margin=base)
+    return xgb.XGBRegressor(**params).fit(F, y, base_margin=base, sample_weight=w)
 
 
 def fit(train: Bundle, asof: pd.Timestamp, seed: int, cfg: Combo):
     prior = RosterPrior(train, asof, cfg.map_price) if cfg.roster_prior else None
     smodel = core.fit(train, asof, seed, cfg.structure, prior)
-    eco = fit_econ(train, smodel, seed, cfg.econ_cfg) if cfg.econ else None
+    eco = fit_econ(train, smodel, seed, cfg.econ_cfg, asof) if cfg.econ else None
     if prior is not None:
         prior.release_training()
     return dict(s=smodel, eco=eco)

@@ -14,4 +14,7 @@ VARIANTS = {
     "spe": Combo(econ=True),
     "spe-map": Combo(structure=SMAP, econ=True),
     "spe-map-mp": Combo(structure=SMAP, econ=True, map_price=True),
+    "spe-map-h90": Combo(structure=replace(SMAP, recency_half_life=90), econ=True),
+    "spe-map-h180": Combo(structure=replace(SMAP, recency_half_life=180), econ=True),
+    "spe-map-h365": Combo(structure=replace(SMAP, recency_half_life=365), econ=True),
 }
