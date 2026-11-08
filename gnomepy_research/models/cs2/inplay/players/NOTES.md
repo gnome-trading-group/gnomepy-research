@@ -7,21 +7,30 @@ many) and in the map model's pre-map prior.
 
 - `skill.py`: per-map player counts (rounds, kills, deaths, opening duels, clutches, AWP use; from the event timeline
   where there is one, else the end-of-round player columns), per-map team counts (rounds won by side and map), as-of
-  lookups (`merge_asof`, strictly before the target map's begin), and `PlayerElo` (online player ratings: overall, per
-  map, and how often each player has played the map).
-- `entry.py`: the entry. Benchmark round + map models plus
-  - round model: strength of the players still alive on each side (sum and max of shrunk net kill rating, opening-duel
-    rate, the clutch rate of a last player alive, whether the best player / the AWPer is dead, experience) and each
-    team's side record on the map (`round_feats`);
-  - pre-map prior: a logistic regression on Elo and roster strength (team A minus team B: mean/max/min net rating,
-    opening, clutch, kills, deaths, overall round win rate, experience; optionally player Elo, per-map player Elo and
-    map share), fitted on every finished training map. Replaces Elo where the map has no kickoff market; where it does,
-    the market, e12 and this prior are stacked by a second logistic regression once 300+ market-listed maps exist;
-  - map model: benchmark trees, without the `has_prior` flag (the prior is calibrated either way) and monotone in
-    rounds needed and in the prior.
+  lookups (`merge_asof`, strictly before the target map's begin), `PlayerElo` (online player ratings: overall, per map,
+  and how often each player has played the map), `PlusMinus` (ridge adjusted plus-minus refitted each month start).
+- `entry.py`: the entry (configuration F2 as defaults in `CFG`). Benchmark round + map models plus
+  - pre-map prior, team A minus team B over the roster of the map's first round with player rows: mean/max/min net
+    kill rating (kills minus deaths per round, shrunk 40 rounds to the global rate), opening-duel win rate, clutch
+    rate, kills and deaths per round, experience (log rounds), roster stability (log maps each player has played for
+    this team, mean and min), overall round win rate, round win rate on this map, player Elo (overall and per map), how
+    often the roster plays this map; plus Elo. A logistic regression on these, fitted on every finished training map,
+    replaces Elo where the map has no kickoff market. Where it does, the market, e12 and the map-specific roster terms
+    (per-map Elo, map share, team map rate) are stacked by a second logistic regression once 300+ market-listed maps
+    exist (the market price is a series price turned into a map price: it cannot know which map is played or whose
+    pick it is);
+  - map model: benchmark features without `has_prior` (the prior is calibrated either way), monotone in rounds needed
+    and in the prior, depth 6 / min_child_weight 300 / learning rate 0.05 (more capacity only helps once monotone);
+  - round model: unchanged from the benchmark in the final entry. `round_feats=True` adds the strength of the players
+    still alive on each side (sum and max of net rating, opening rate, clutch rate of a last player alive, best player
+    dead, AWPer dead, experience, each team's side record on the map); it improves round log loss slightly but not the
+    map price, so it is off.
+- `dp.py`: map value from the score under a constant per-round probability matched to the prior (tried as a map model
+  feature; off).
 - `lab.py`: fast walk-forward lab. Builds every legal map's rows once and refits only the trees per month. Its `base`
-  reproduces the harness benchmark exactly on August (0.46560) and its numbers matched the harness within ~0.0002.
-- `variants/*.py`: one file per scored configuration (sets `CFG`).
+  reproduces the harness benchmark exactly on August (0.46560) and its full-dev numbers match the harness within
+  ~0.0002.
+- `variants/*.py`: one file per scored configuration (each sets `CFG`).
 
 ## Point-in-time
 

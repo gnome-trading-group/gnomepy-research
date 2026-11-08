@@ -1,10 +1,12 @@
 """Benchmark round + map models with point-in-time player and team strength.
 
-Player strength (kills, deaths, opening duels, clutches, AWP use) and team strength (round win rates by side and map)
-come from maps that ended strictly before each map began (skill.py). The round model sees the strength of the players
-still alive on each side, not just their count; the map model sees the two rosters' strength and each team's side
-record on the map. Strength is frozen per map at its start, so pricing a state never depends on anything inside the
-map beyond what the benchmark already uses."""
+Strength comes only from maps that ended strictly before each map began (skill.py): per-player kill/death/opening/
+clutch rates, player Elo (overall and per map), how often a roster plays the map, roster stability, team round win
+rates overall and on the map. It enters the price through the pre-map prior: a logistic regression on Elo and these
+roster terms where the map has no kickoff market, and the market and e12 stacked with the map-specific roster terms
+where it does (a series price cannot know which map is played). The map model is the benchmark's, without the
+has-prior flag and monotone in rounds needed and in the prior, with more capacity. The round model can also take the
+strength of the players still alive (round_feats), which did not help the map price and is off."""
 from __future__ import annotations
 
 import numpy as np
@@ -25,7 +27,7 @@ CFG = dict(
     half_life=None,
     elo_k=0.3,
     elo_k_map=0.1,
-    pm="full2",
+    pm="full3",
     round_feats=False,
     round_prior=False,
     map_x=[],
