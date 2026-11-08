@@ -15,9 +15,11 @@ RIFLES = {"ak47", "m4a1_s", "m4a4", "galilar", "famas", "aug", "sg553"}
 SIDE = {"counter_terrorists": "CT", "terrorists": "T"}
 
 
-def rounds_frame(b: Bundle, game_ids) -> pd.DataFrame:
-    """round_table plus the prior oriented to team A, economy left after the buy, and per-round derived columns."""
-    rt = with_prior(round_table(b.subset(game_ids)))
+def rounds_frame(b: Bundle, game_ids, prior=None) -> pd.DataFrame:
+    """round_table plus the prior oriented to team A, economy left after the buy, and per-round derived columns.
+    prior(b, rt) replaces the benchmark prior (kickoff market, else Elo) when given."""
+    rt = round_table(b.subset(game_ids))
+    rt = prior(b, rt) if prior is not None else with_prior(rt)
     rt["score_diff"] = rt.score_a - rt.score_b
     rt["round_no"] = rt["round"]
     rt["d_need"] = rt.need_a - rt.need_b

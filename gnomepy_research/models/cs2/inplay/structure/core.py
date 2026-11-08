@@ -34,7 +34,11 @@ class Config:
     round_seeds: int = 1
     half: bool = False
     q_ens: list = field(default_factory=list)
+    map_drop: list = field(default_factory=list)
     n_jobs: int = 8
+
+    def map_cols(self):
+        return [c for c in MC if c not in self.map_drop] + (self.extra if self.map_extra else [])
 
 
 def trees(seed, n_jobs, **kw):
@@ -47,8 +51,8 @@ def trees(seed, n_jobs, **kw):
 TIERS = {"s": 0, "a": 1, "b": 2, "c": 3, "d": 4}
 
 
-def rounds(b: Bundle, game_ids) -> pd.DataFrame:
-    rt = feats.rounds_frame(b, game_ids)
+def rounds(b: Bundle, game_ids, prior=None) -> pd.DataFrame:
+    rt = feats.rounds_frame(b, game_ids, prior)
     g = b.games.set_index("game_id")
     rt["tier_code"] = rt.game_id.map(g.tier.map(TIERS)).fillna(5).to_numpy()
     rt["bo"] = rt.game_id.map(g.bo).to_numpy()
@@ -79,9 +83,9 @@ def state_rows(b: Bundle, states: pd.DataFrame, rt: pd.DataFrame) -> pd.DataFram
     return x
 
 
-def fit(train: Bundle, asof: pd.Timestamp, seed: int, cfg: Config):
+def fit(train: Bundle, asof: pd.Timestamp, seed: int, cfg: Config, prior=None):
     legal = legal_maps(train)
-    rt = rounds(train, legal).merge(train.games[["game_id", "end"]], on="game_id")
+    rt = rounds(train, legal, prior).merge(train.games[["game_id", "end"]], on="game_id")
     rt = rt[rt.map_a_wins.notna()]
     qkw = dict(cfg.q_kw)
     if cfg.recency_half_life:
@@ -98,20 +102,21 @@ def fit(train: Bundle, asof: pd.Timestamp, seed: int, cfg: Config):
     X = rt[["m_" + c for c in MC]].set_axis(MC, axis=1)
     if cfg.map_extra:
         X = X.join(rt[cfg.extra])
+    X = X[cfg.map_cols()]
     mm = trees(seed, cfg.n_jobs, **cfg.map_kw).fit(X, rt.map_a_wins)
     rt["q_a"] = q.predict_proba(rt[QC])[:, 1]
     st = map_states(train, legal)
     x = state_rows(train, st, rt)
     y = np.where(x.a_ct, x.a_wins, 1 - x.a_wins)
     rm = dp.Avg([trees(seed * 1000 + i, cfg.n_jobs, **cfg.round_kw).fit(x[cfg.rcols], y) for i in range(cfg.round_seeds)])
-    return dict(q=q, qs=qs, q1=q1, map_model=mm, round_model=rm, cfg=cfg)
+    return dict(q=q, qs=qs, q1=q1, map_model=mm, round_model=rm, cfg=cfg, prior=prior)
 
 
 def components(model, ctx: Bundle, states: pd.DataFrame) -> pd.DataFrame:
     """Per state: P(A wins this round), and the map value after an A win / loss from the DP (d1, d0) and the
     regression (r1, r0)."""
     cfg = model["cfg"]
-    rt = rounds(ctx, set(states.game_id))
+    rt = rounds(ctx, set(states.game_id), model.get("prior"))
     statics = rt.groupby("game_id").head(1).reset_index(drop=True)
     QC = dp.QCOLS + cfg.extra + (dp.HALF if cfg.half else [])
     m = len(statics)
@@ -126,7 +131,7 @@ def components(model, ctx: Bundle, states: pd.DataFrame) -> pd.DataFrame:
         X, done = feats.next_round_features(rr, a_won)
         for c in cfg.extra:
             X[c] = rr[c].to_numpy()
-        p = model["map_model"].predict_proba(X[MC + (cfg.extra if cfg.map_extra else [])])[:, 1]
+        p = model["map_model"].predict_proba(X[cfg.map_cols()])[:, 1]
         rx[a_won] = np.where(np.isnan(done), p, done)
         k2 = np.where(resets(n + 1), 0, dp.step_streak(rr.streak.to_numpy(), a_won == 1))
         X["streak"] = k2
