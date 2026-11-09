@@ -9,7 +9,7 @@ import pytest
 from gnomepy import OrderStatus, Scales, Side
 from gnomepy_research.sessions.cs2_cross_venue_arb.decision import Level, team_ladder
 from gnomepy_research.sessions.cs2_cross_venue_arb__pm_maker import strategy as mod
-from gnomepy_research.sessions.cs2_cross_venue_arb__pm_maker.quoting import maker_bid
+from gnomepy_research.sessions.cs2_cross_venue_arb__pm_maker.quoting import MoveWindow, maker_bid
 from tests.sessions.conftest import FakePositions, FakeStreams
 from tests.sessions.test_cs2_cross_venue_arb import LEGS, LISTINGS, RATES, _Book, _Registry
 
@@ -28,6 +28,15 @@ def test_bid_leaves_min_edge_after_the_hedge():
 def test_bid_stays_under_the_ask():
     hedge = team_ladder(302, [Level(0.30, 50)], 301, [], 0.0695, False)
     assert maker_bid(hedge, 200, 0.01, 0.0, 0.01, best_ask=0.55, depth_band=0.01)[0] == pytest.approx(0.54)
+
+
+def test_move_window_forgets_old_prices():
+    w = MoveWindow(5)
+    w.add(0, 0.60)
+    w.add(int(2e9), 0.50)
+    assert w.range() == pytest.approx(0.10)
+    w.add(int(6e9), 0.52)
+    assert w.range() == pytest.approx(0.02)
 
 
 def test_no_bid_without_a_hedge():
@@ -56,10 +65,10 @@ BOOKS = [
 ]
 
 
-def feed(s, books):
+def feed(s, books, t=0):
     out = []
     for listing_id, asks, bids in books:
-        out += s.on_market_data(_Book(listing_id, asks, bids, 0))
+        out += s.on_market_data(_Book(listing_id, asks, bids, t))
     return out
 
 
@@ -103,3 +112,19 @@ def test_rejected_bid_is_not_resent_unchanged(make):
                                                   filled_qty=0, timestamp_recv=0))
     assert sid not in quotes(again)
     assert 1101 in sent
+
+
+def test_jumping_hedge_pulls_the_bid_until_it_settles(make):
+    s = make(calm_move=0.03, calm_seconds=5)
+    assert 1101 in quotes(feed(s, BOOKS))
+    moved = [b if b[0] != 302 else (302, [(0.40, 60)], [(0.38, 100)]) for b in BOOKS]
+    pulled = quotes(feed(s, moved, t=int(1e9)))
+    assert pulled[1101][1] == 0
+    assert 1101 in quotes(feed(s, moved, t=int(7e9))) and quotes(feed(s, moved, t=int(7e9))) == {}
+
+
+def test_without_calm_move_the_bid_follows_the_hedge(make):
+    s = make()
+    feed(s, BOOKS)
+    moved = [b if b[0] != 302 else (302, [(0.40, 60)], [(0.38, 100)]) for b in BOOKS]
+    assert quotes(feed(s, moved, t=int(1e9)))[1101][1] > 0

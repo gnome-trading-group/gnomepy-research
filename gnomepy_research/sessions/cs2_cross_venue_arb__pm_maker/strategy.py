@@ -15,6 +15,10 @@ never takes on its own.
 Bids are rounded onto the tick the engine says is in force (Polymarket International moves a market from a cent to a
 tenth of one as its price nears the ends, so the spec read at start can be wrong later). A bid the venue rejects is not
 sent again at the same price and size: the reject would only repeat.
+
+Bids are pulled, and stay down, while either price they hang on has moved more than calm_move within the last
+calm_seconds: the cost of the hedge, or the quoted team's own best bid. Books that jump on a round's result run through
+a resting bid faster than any cancel, and the hedge priced a moment before is gone by the time the fill arrives.
 """
 from __future__ import annotations
 
@@ -24,7 +28,7 @@ from gnomepy import ExecutionReport, Intent, OrderStatus, Scales, Side
 
 from gnomepy_research.sessions.cs2_cross_venue_arb.decision import plan_completion
 from gnomepy_research.sessions.cs2_cross_venue_arb.strategy import COMPLETION, TERMINAL, CS2CrossVenueArb
-from gnomepy_research.sessions.cs2_cross_venue_arb__pm_maker.quoting import maker_bid
+from gnomepy_research.sessions.cs2_cross_venue_arb__pm_maker.quoting import MoveWindow, maker_bid
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +43,13 @@ class CS2CrossVenueArbPMMaker(CS2CrossVenueArb):
         quote_size: the most contracts bid on one team.
         depth_band: how far past the best hedge level the size may reach.
         requote_size_change: how far the hedge must shrink below a resting bid's size before it is resent smaller.
+        calm_seconds, calm_move: no bid while the hedge cost or the quoted team's best bid has ranged more than
+            calm_move over the last calm_seconds; calm_move of None quotes through every move.
     """
 
     def __init__(self, legs: list[dict], maker_venue: str = "polymarket", quote_size: float = 200.0,
-                 depth_band: float = 0.01, requote_size_change: float = 0.5, **kwargs):
+                 depth_band: float = 0.01, requote_size_change: float = 0.5, calm_seconds: float = 5.0,
+                 calm_move: float | None = None, **kwargs):
         super().__init__(legs, **kwargs)
         if maker_venue not in self._venue_legs:
             raise ValueError(f"maker_venue {maker_venue} is not one of the legs' venues")
@@ -50,6 +57,9 @@ class CS2CrossVenueArbPMMaker(CS2CrossVenueArb):
         self.quote_size = quote_size
         self.depth_band = depth_band
         self.requote_size_change = requote_size_change
+        self.calm_move = calm_move
+        self._moves = {leg.listing_id: (MoveWindow(calm_seconds), MoveWindow(calm_seconds))
+                       for leg in self._venue_legs[maker_venue]}
         self._quoted: dict[int, tuple[float, float] | None] = {leg.listing_id: None
                                                                for leg in self._venue_legs[maker_venue]}
         self._rejected: dict[int, tuple[float, float] | None] = {}
@@ -71,6 +81,9 @@ class CS2CrossVenueArbPMMaker(CS2CrossVenueArb):
         return []
 
     def _decide(self, now_ns: int) -> list[Intent]:
+        hedges = {leg.listing_id: self._hedge(leg) for leg in self._venue_legs[self.maker_venue]}
+        for leg in self._venue_legs[self.maker_venue]:
+            self._sample(leg, now_ns, hedges[leg.listing_id])
         if any(leg.in_flight for leg in self._legs):
             return []
         pays_a, pays_b = self._exposure()
@@ -81,7 +94,7 @@ class CS2CrossVenueArbPMMaker(CS2CrossVenueArb):
             return self._pull_quotes()
         intents = []
         for leg in self._venue_legs[self.maker_venue]:
-            want = self._target(leg)
+            want = self._target(leg, hedges[leg.listing_id])
             have = self._quoted[leg.listing_id]
             if want is not None and want == self._rejected.get(leg.listing_id):
                 continue
@@ -93,11 +106,13 @@ class CS2CrossVenueArbPMMaker(CS2CrossVenueArb):
             intents.append(self._quote(leg, want))
         return intents
 
-    def _target(self, leg) -> tuple[float, float] | None:
-        if leg.bad:
+    def _hedge(self, leg) -> list:
+        return sorted((lv for venue in self._venue_legs if venue != self.maker_venue
+                       for lv in self._ladder(venue, 1 - leg.team)), key=lambda r: (r.all_in, r.direction))
+
+    def _target(self, leg, hedge) -> tuple[float, float] | None:
+        if leg.bad or self._jumpy(leg):
             return None
-        hedge = sorted((lv for venue in self._venue_legs if venue != self.maker_venue
-                        for lv in self._ladder(venue, 1 - leg.team)), key=lambda r: (r.all_in, r.direction))
         maker_rate = self._fee_rates(leg.listing_id)[1]
         best_ask = leg.asks[0].price if leg.asks else None
         size = min(self.quote_size, self.max_locked_usd)
@@ -109,6 +124,18 @@ class CS2CrossVenueArbPMMaker(CS2CrossVenueArb):
         if price <= 0 or (best_ask is not None and price >= best_ask):
             return None
         return price, bid[1]
+
+    def _sample(self, leg, now_ns: int, hedge) -> None:
+        hedge_moves, own_moves = self._moves[leg.listing_id]
+        if hedge:
+            hedge_moves.add(now_ns, hedge[0].all_in)
+        if leg.bids and not leg.bad:
+            own_moves.add(now_ns, leg.bids[0].price)
+
+    def _jumpy(self, leg) -> bool:
+        if self.calm_move is None:
+            return False
+        return max(m.range() for m in self._moves[leg.listing_id]) > self.calm_move + 1e-9
 
     def _quote(self, leg, want: tuple[float, float] | None) -> Intent:
         self._quoted[leg.listing_id] = want

@@ -8,9 +8,12 @@ last minute any of its streams collected.
 
     python -m gnomepy_research.sessions.cs2_cross_venue_arb.make_config MARKETS PS_MAP OUT.yaml \
         [--from 2026-11-05] [--to 2026-11-08] [--limit N] [--arg key=value ...] [--taker-delay-ms VENUE=MS ...]
+        [--strategy module:Class] [--scope match] [--require-venue polymarket] [--record-depth 10]
+        [--sweep key=[v1, v2] ...]
 
 --taker-delay-ms overrides an exchange's simulated taker delay (Polymarket International holds marketable orders on
-these markets for its secondsDelay, 1 s); unset, the registry's simulation parameters apply.
+these markets for its secondsDelay, 1 s); unset, the registry's simulation parameters apply. --scope keeps markets of
+one scope (match, or map for every map); --require-venue keeps markets that venue lists, for strategies that need it.
 
 MARKETS is a JSON list of {teams: [a, b], scope, start, legs: [{venue, side, listing, s3last}]} (side is the team
 name); PS_MAP maps "a|b|start" to {status, forfeit, begin, games: {"1": {begin, forfeit}}} with times in ns.
@@ -50,10 +53,12 @@ def iso(ns: int) -> str:
     return datetime.fromtimestamp(ns / 1e9, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def scenario(market: dict, ps: dict, delay_s: float) -> tuple[str, dict] | None:
+def scenario(market: dict, ps: dict, delay_s: float, require_venue: str | None = None) -> tuple[str, dict] | None:
     begin = begin_ns(market, ps)
     legs = legs_of(market)
     if begin is None or len(legs) < 2:
+        return None
+    if require_venue and require_venue not in {leg["venue"] for leg in legs}:
         return None
     last = max(datetime.strptime(leg["s3last"], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
                for leg in market["legs"]) + timedelta(minutes=1)
@@ -86,6 +91,11 @@ def main() -> None:
     p.add_argument("--delay-seconds", type=float, default=30.0)
     p.add_argument("--arg", action="append", default=[], type=parse_arg)
     p.add_argument("--taker-delay-ms", action="append", default=[], type=parse_arg)
+    p.add_argument("--strategy", default=STRATEGY)
+    p.add_argument("--scope", choices=["match", "map"])
+    p.add_argument("--require-venue")
+    p.add_argument("--record-depth", type=int, default=10)
+    p.add_argument("--sweep", action="append", default=[], type=parse_arg)
     args = p.parse_args()
 
     markets = json.load(open(args.markets))
@@ -95,7 +105,9 @@ def main() -> None:
         day = m["start"][:10]
         if (args.day_from and day < args.day_from) or (args.day_to and day > args.day_to):
             continue
-        s = scenario(m, ps, args.delay_seconds)
+        if args.scope and m["scope"].split(":")[0] != args.scope:
+            continue
+        s = scenario(m, ps, args.delay_seconds, args.require_venue)
         if s is None:
             skipped += 1
             continue
@@ -103,10 +115,12 @@ def main() -> None:
         if args.limit and len(scenarios) >= args.limit:
             break
     config = {
-        "strategy": {"class_name": STRATEGY, "args": {"legs": [], **dict(args.arg)}},
-        "record_depth": 10,
+        "strategy": {"class_name": args.strategy, "args": {"legs": [], **dict(args.arg)}},
+        "record_depth": args.record_depth,
         "scenarios": scenarios,
     }
+    if args.sweep:
+        config["sweep"] = {"strategy": dict(args.sweep)}
     if args.taker_delay_ms:
         config["exchanges"] = {
             venue: {"order_processing_latency": {"type": "maker_taker", "base_nanos": 5_000_000,
@@ -115,7 +129,8 @@ def main() -> None:
         }
     with open(args.out, "w") as f:
         yaml.safe_dump(config, f, sort_keys=False)
-    print(f"{len(scenarios)} scenarios, {skipped} markets skipped (not begun per PandaScore or one venue)")
+    print(f"{len(scenarios)} scenarios, {skipped} markets skipped (not begun per PandaScore, one venue, or without "
+          f"the required venue)")
 
 
 if __name__ == "__main__":

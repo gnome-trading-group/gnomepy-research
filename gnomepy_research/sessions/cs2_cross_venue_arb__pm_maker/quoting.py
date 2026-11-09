@@ -5,6 +5,7 @@ the other team elsewhere at today's prices still locks min_edge per pair.
 from __future__ import annotations
 
 import math
+from collections import deque
 
 from gnomepy_research.sessions.cs2_cross_venue_arb.decision import RouteLevel
 
@@ -37,3 +38,23 @@ def maker_bid(hedge: list[RouteLevel], quote_size: float, min_edge: float, maker
     if price < tick or size < 1:
         return None
     return round(price, 10), size
+
+
+class MoveWindow:
+    """How far a price has ranged over the last `seconds`: a book that has just jumped is likely to jump again, and a
+    bid resting through the next jump is filled by whoever saw it first."""
+
+    def __init__(self, seconds: float):
+        self.window_ns = int(seconds * 1e9)
+        self._points: deque[tuple[int, float]] = deque()
+
+    def add(self, now_ns: int, price: float) -> None:
+        self._points.append((now_ns, price))
+        while self._points and self._points[0][0] < now_ns - self.window_ns:
+            self._points.popleft()
+
+    def range(self) -> float:
+        if not self._points:
+            return 0.0
+        prices = [p for _, p in self._points]
+        return max(prices) - min(prices)
