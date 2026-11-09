@@ -1,6 +1,7 @@
 """Named combinations scored in development."""
 from dataclasses import replace
 
+from ..structure.core import RC
 from ..structure.variants import VARIANTS as S
 from .model import Combo
 
@@ -17,4 +18,6 @@ VARIANTS = {
     "spe-map-h90": Combo(structure=replace(SMAP, recency_half_life=90), econ=True),
     "spe-map-h180": Combo(structure=replace(SMAP, recency_half_life=180), econ=True),
     "spe-map-h365": Combo(structure=replace(SMAP, recency_half_life=365), econ=True),
+    # Second-pistol and side context: A's first-half score in the chain, and rifles still alive in the round model.
+    "spe-map-side": Combo(structure=replace(SMAP, half=True, rcols=RC + ["ct_rifles", "t_rifles"]), econ=True),
 }
