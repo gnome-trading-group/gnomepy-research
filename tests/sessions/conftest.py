@@ -211,6 +211,11 @@ class FakePositions:
     def get_effective_quantity(self, exchange_id, security_id):
         return self._pos.get((exchange_id, security_id), 0)
 
+    def compliant_price(self, exchange_id, security_id, price, side):
+        """Rounds onto a cent, bids down and asks up, as the engine does on a one-cent tick."""
+        cent = PRICE_SCALE // 100
+        return (price // cent) * cent if str(side).endswith("BID") else -((-price) // cent) * cent
+
 
 @pytest.fixture
 def positions():
