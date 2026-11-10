@@ -38,6 +38,8 @@ SIZE_SCALE = Scales.SIZE
 
 class CS2CrossVenueArbPMMaker(CS2CrossVenueArb):
     """
+    A session whose legs don't include maker_venue ends itself, as one with a single venue does.
+
     Args (beyond the parent's, which keep their meaning; cooldown_seconds and taker_delay_seconds go unused):
         maker_venue: the venue quoted.
         quote_size: the most contracts bid on one team.
@@ -52,19 +54,21 @@ class CS2CrossVenueArbPMMaker(CS2CrossVenueArb):
                  calm_move: float | None = None, **kwargs):
         super().__init__(legs, **kwargs)
         if maker_venue not in self._venue_legs:
-            raise ValueError(f"maker_venue {maker_venue} is not one of the legs' venues")
+            self._unusable = self._unusable or f"{maker_venue} doesn't list this market; nothing to quote"
         self.maker_venue = maker_venue
         self.quote_size = quote_size
         self.depth_band = depth_band
         self.requote_size_change = requote_size_change
         self.calm_move = calm_move
         self._moves = {leg.listing_id: (MoveWindow(calm_seconds), MoveWindow(calm_seconds))
-                       for leg in self._venue_legs[maker_venue]}
+                       for leg in self._venue_legs.get(maker_venue, ())}
         self._quoted: dict[int, tuple[float, float] | None] = {leg.listing_id: None
-                                                               for leg in self._venue_legs[maker_venue]}
+                                                               for leg in self._venue_legs.get(maker_venue, ())}
         self._rejected: dict[int, tuple[float, float] | None] = {}
 
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
+        if self._exit_if_unusable():
+            return []
         leg = self._leg_of.get(self.streams.listing_id_for(report.exchange_id, report.security_id))
         if leg is None:
             return []

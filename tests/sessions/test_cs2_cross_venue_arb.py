@@ -135,8 +135,9 @@ class _Book:
 def make():
     def _make(**kwargs):
         kwargs.setdefault("taker_delay_seconds", {})
+        kwargs.setdefault("legs", LEGS)
         with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry()):
-            s = mod.CS2CrossVenueArb(legs=LEGS, **kwargs)
+            s = mod.CS2CrossVenueArb(**kwargs)
         s._position_view = FakePositions(fee_rates=RATES)
         s._streams = FakeStreams(LISTINGS)
         return s
@@ -271,7 +272,19 @@ def test_no_stagger_without_a_delayed_venue(make):
     assert {i.exchange_id for i in sent} == {KAL, PMUS}
 
 
-def test_requires_two_venues():
+def test_one_venue_ends_the_session_instead_of_failing(make):
+    s = make(legs=LEGS[:1], match_id=2380001)
+    exits = []
+    s.request_exit = lambda reason, **kw: exits.append(reason) or True
+    assert feed(s, [(101, [(0.40, 100)], [(0.38, 100)])]) == []
+    assert len(exits) == 1 and "nothing to arb" in exits[0]
+
+
+def test_a_venue_named_twice_is_a_config_error():
     with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry()):
         with pytest.raises(ValueError):
-            mod.CS2CrossVenueArb(legs=LEGS[:1])
+            mod.CS2CrossVenueArb(legs=[LEGS[0], LEGS[0]])
+
+
+def test_launcher_match_id_is_accepted(make):
+    assert make(match_id=2380001).match_id == 2380001

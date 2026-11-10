@@ -92,6 +92,10 @@ class CS2CrossVenueArb(Strategy):
         sell_rival_venues: venues where a team may also be held by selling the rival team's listing.
         taker_delay_seconds: how long each venue holds a taker order before matching it; legs are staggered by it.
         book_depth: book levels read from each update.
+        match_id: the HLTV match the launcher launched this session for; recorded, not used.
+
+    A session given fewer than two venues has nothing to arb: the launcher launches whatever venues have the match's
+    listings registered, so this ends the session on its first callback rather than failing it.
     """
 
     def __init__(
@@ -106,10 +110,13 @@ class CS2CrossVenueArb(Strategy):
         taker_delay_seconds: dict[str, float] | None = None,
         book_depth: int = 10,
         processing_time_ns: int = 0,
+        match_id: int | None = None,
     ):
         venues = [leg["venue"] for leg in legs]
-        if len(venues) < 2 or len(set(venues)) != len(venues):
-            raise ValueError(f"legs must name at least two venues, each once, got {venues}")
+        if len(set(venues)) != len(venues):
+            raise ValueError(f"legs must name each venue once, got {venues}")
+        self.match_id = match_id
+        self._unusable = None if len(venues) >= 2 else f"only {venues} list this market; nothing to arb"
         if min_edge <= 0:
             raise ValueError(f"min_edge must be positive, got {min_edge}")
         self.min_edge = min_edge
@@ -169,7 +176,15 @@ class CS2CrossVenueArb(Strategy):
 
     # ---- engine callbacks ----------------------------------------------------------------
 
+    def _exit_if_unusable(self) -> bool:
+        if self._unusable is None:
+            return False
+        self.request_exit(self._unusable)
+        return True
+
     def on_market_data(self, data: StreamRecord) -> list[Intent]:
+        if self._exit_if_unusable():
+            return []
         leg = self._leg_of.get(self.streams.listing_id(data.stream_id))
         if leg is None:
             return []
@@ -181,6 +196,8 @@ class CS2CrossVenueArb(Strategy):
         return self._decide(data.event_timestamp)
 
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
+        if self._exit_if_unusable():
+            return []
         leg = self._leg_of.get(self.streams.listing_id_for(report.exchange_id, report.security_id))
         if leg is None or report.order_status not in TERMINAL:
             return []

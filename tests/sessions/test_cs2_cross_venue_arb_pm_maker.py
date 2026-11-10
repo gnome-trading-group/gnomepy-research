@@ -48,7 +48,7 @@ def make():
     def _make(**kwargs):
         with patch("gnomepy_research.sessions.cs2_cross_venue_arb.strategy.RegistryClient",
                    lambda *a, **k: _Registry()):
-            s = mod.CS2CrossVenueArbPMMaker(legs=LEGS, **kwargs)
+            s = mod.CS2CrossVenueArbPMMaker(**{"legs": LEGS, **kwargs})
         s._position_view = FakePositions(fee_rates=RATES)
         s._streams = FakeStreams(LISTINGS)
         return s
@@ -128,3 +128,11 @@ def test_without_calm_move_the_bid_follows_the_hedge(make):
     feed(s, BOOKS)
     moved = [b if b[0] != 302 else (302, [(0.40, 60)], [(0.38, 100)]) for b in BOOKS]
     assert quotes(feed(s, moved, t=int(1e9)))[1101][1] > 0
+
+
+def test_no_maker_venue_ends_the_session_instead_of_failing(make):
+    s = make(legs=LEGS[1:], match_id=2380001)
+    exits = []
+    s.request_exit = lambda reason, **kw: exits.append(reason) or True
+    assert feed(s, BOOKS) == []
+    assert exits and "polymarket doesn't list this market" in exits[0]
