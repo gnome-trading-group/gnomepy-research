@@ -8,7 +8,7 @@ record_depth: 1
 scenarios:
   b8academy_bangergang_match_2026-11-06:
     start_date: '2026-11-06T18:21:02'
-    end_date: '2026-11-06T23:16:00'
+    end_date: '2026-11-06T19:32:00'
     listings:
     - listing_id: 2055380
     - listing_id: 2055381
@@ -29,7 +29,7 @@ scenarios:
         listing_team_b: 2235810
   firefluxesports_illyrians_match_2026-11-07:
     start_date: '2026-11-07T12:11:52'
-    end_date: '2026-11-07T16:38:00'
+    end_date: '2026-11-07T14:41:00'
     listings:
     - listing_id: 2394030
     - listing_id: 2394031
@@ -50,7 +50,7 @@ scenarios:
         listing_team_b: 2394031
   dramaesports_johnnyspeeds_match_2026-11-05:
     start_date: '2026-11-05T18:05:36'
-    end_date: '2026-11-05T21:32:00'
+    end_date: '2026-11-05T19:41:00'
     listings:
     - listing_id: 2186304
     - listing_id: 2186305
@@ -71,7 +71,7 @@ scenarios:
         listing_team_b: 2206898
   dramaesports_johnnyspeeds_match_2026-11-07:
     start_date: '2026-11-07T09:04:03'
-    end_date: '2026-11-07T13:53:00'
+    end_date: '2026-11-07T12:01:00'
     listings:
     - listing_id: 2398161
     - listing_id: 2398162
@@ -92,7 +92,7 @@ scenarios:
         listing_team_b: 2398161
   basementboys_misaesports_match_2026-11-05:
     start_date: '2026-11-05T15:05:51'
-    end_date: '2026-11-05T18:34:00'
+    end_date: '2026-11-05T16:26:00'
     listings:
     - listing_id: 2186316
     - listing_id: 2186317
@@ -113,7 +113,7 @@ scenarios:
         listing_team_b: 2206897
   boyband_nordicvalor_match_2026-11-05:
     start_date: '2026-11-05T18:04:24'
-    end_date: '2026-11-06T00:30:00'
+    end_date: '2026-11-05T20:21:00'
     listings:
     - listing_id: 2206842
     - listing_id: 2206843
@@ -134,7 +134,7 @@ scenarios:
         listing_team_b: 2206842
   kuusamogg_prestige_match_2026-11-05:
     start_date: '2026-11-05T15:31:22'
-    end_date: '2026-11-05T20:56:00'
+    end_date: '2026-11-05T16:26:00'
     listings:
     - listing_id: 2206882
     - listing_id: 2206883
@@ -155,7 +155,7 @@ scenarios:
         listing_team_b: 2206882
   kuusamogg_prestige_match_2026-11-08:
     start_date: '2026-11-08T12:07:13'
-    end_date: '2026-11-08T15:48:00'
+    end_date: '2026-11-08T14:02:00'
     listings:
     - listing_id: 2355895
     - listing_id: 2355896
@@ -176,7 +176,7 @@ scenarios:
         listing_team_b: 2355895
   bebop_illyrians_match_2026-11-08:
     start_date: '2026-11-08T09:22:42'
-    end_date: '2026-11-08T13:48:00'
+    end_date: '2026-11-08T12:02:00'
     listings:
     - listing_id: 2347195
     - listing_id: 2347196
@@ -197,7 +197,7 @@ scenarios:
         listing_team_b: 2347196
   sanctum_thechampiongg_match_2026-11-05:
     start_date: '2026-11-05T14:09:32'
-    end_date: '2026-11-05T20:36:00'
+    end_date: '2026-11-05T16:26:00'
     listings:
     - listing_id: 2223919
     - listing_id: 2223920
@@ -218,7 +218,7 @@ scenarios:
         listing_team_b: 2223999
   copenhagenwolves_passionacademy_match_2026-11-06:
     start_date: '2026-11-06T12:09:15'
-    end_date: '2026-11-06T17:37:00'
+    end_date: '2026-11-06T13:31:00'
     listings:
     - listing_id: 2223923
     - listing_id: 2223924
@@ -239,7 +239,7 @@ scenarios:
         listing_team_b: 2227554
   badbeavers_thechosenfew_match_2026-11-06:
     start_date: '2026-11-06T09:13:50'
-    end_date: '2026-11-06T15:54:00'
+    end_date: '2026-11-06T11:51:00'
     listings:
     - listing_id: 2223943
     - listing_id: 2223944
@@ -260,7 +260,7 @@ scenarios:
         listing_team_b: 2224935
   dramaesports_ryvex_match_2026-11-06:
     start_date: '2026-11-06T15:38:57'
-    end_date: '2026-11-06T20:32:00'
+    end_date: '2026-11-06T18:41:00'
     listings:
     - listing_id: 2224326
     - listing_id: 2224327
@@ -281,7 +281,7 @@ scenarios:
         listing_team_b: 2231641
   dramaesports_ryvex_match_2026-11-08:
     start_date: '2026-11-08T18:30:01'
-    end_date: '2026-11-08T23:21:00'
+    end_date: '2026-11-08T21:41:00'
     listings:
     - listing_id: 2500242
     - listing_id: 2500243
@@ -302,7 +302,7 @@ scenarios:
         listing_team_b: 2500242
   masonic_sokerorg_match_2026-11-06:
     start_date: '2026-11-06T12:06:47'
-    end_date: '2026-11-06T19:16:00'
+    end_date: '2026-11-06T15:31:00'
     listings:
     - listing_id: 2224352
     - listing_id: 2224353
@@ -323,7 +323,7 @@ scenarios:
         listing_team_b: 2228082
   fourmagic_sawyoungsters_match_2026-11-06:
     start_date: '2026-11-06T09:09:31'
-    end_date: '2026-11-06T13:47:00'
+    end_date: '2026-11-06T12:01:00'
     listings:
     - listing_id: 2224389
     - listing_id: 2224390
@@ -344,7 +344,7 @@ scenarios:
         listing_team_b: 2224941
   forzereload_g2ares_match_2026-11-05:
     start_date: '2026-11-05T15:13:51'
-    end_date: '2026-11-05T18:26:00'
+    end_date: '2026-11-05T17:51:00'
     listings:
     - listing_id: 2242192
     - listing_id: 2242193
@@ -365,7 +365,7 @@ scenarios:
         listing_team_b: 2242193
   butterfly_megoshort_match_2026-11-05:
     start_date: '2026-11-05T18:11:11'
-    end_date: '2026-11-05T22:26:00'
+    end_date: '2026-11-05T21:51:00'
     listings:
     - listing_id: 2242198
     - listing_id: 2242199
@@ -386,7 +386,7 @@ scenarios:
         listing_team_b: 2242199
   forzereload_navijunior_match_2026-11-06:
     start_date: '2026-11-06T09:08:29'
-    end_date: '2026-11-06T14:06:00'
+    end_date: '2026-11-06T12:21:00'
     listings:
     - listing_id: 2246864
     - listing_id: 2246865
@@ -407,7 +407,7 @@ scenarios:
         listing_team_b: 2246865
   lunacyteam_maybe_match_2026-11-07:
     start_date: '2026-11-07T11:37:31'
-    end_date: '2026-11-07T15:43:00'
+    end_date: '2026-11-07T14:02:00'
     listings:
     - listing_id: 2251792
     - listing_id: 2251793
@@ -428,7 +428,7 @@ scenarios:
         listing_team_b: 2256595
   gremioesports_quintessencia_match_2026-11-05:
     start_date: '2026-11-05T19:11:11'
-    end_date: '2026-11-06T01:44:00'
+    end_date: '2026-11-05T21:29:00'
     listings:
     - listing_id: 2253846
     - listing_id: 2253847
@@ -449,7 +449,7 @@ scenarios:
         listing_team_b: 2253846
   meianoite_rush_match_2026-11-05:
     start_date: '2026-11-05T21:37:27'
-    end_date: '2026-11-06T04:44:00'
+    end_date: '2026-11-06T00:31:00'
     listings:
     - listing_id: 2253852
     - listing_id: 2253853
@@ -470,7 +470,7 @@ scenarios:
         listing_team_b: 2253852
   meianoite_rush_match_2026-11-06:
     start_date: '2026-11-06T22:11:36'
-    end_date: '2026-11-07T01:55:00'
+    end_date: '2026-11-07T00:11:00'
     listings:
     - listing_id: 2319849
     - listing_id: 2319850
@@ -491,7 +491,7 @@ scenarios:
         listing_team_b: 2319850
   brute_genone_match_2026-11-05:
     start_date: '2026-11-05T15:32:04'
-    end_date: '2026-11-05T22:15:00'
+    end_date: '2026-11-05T18:22:00'
     listings:
     - listing_id: 2254169
     - listing_id: 2254170
@@ -507,7 +507,7 @@ scenarios:
         listing_team_b: 2254169
   9ineacademy_gothboiclique_match_2026-11-07:
     start_date: '2026-11-07T09:13:28'
-    end_date: '2026-11-07T15:32:00'
+    end_date: '2026-11-07T11:32:00'
     listings:
     - listing_id: 2254173
     - listing_id: 2254174
@@ -528,7 +528,7 @@ scenarios:
         listing_team_b: 2254782
   teletubisie_xiesport_match_2026-11-07:
     start_date: '2026-11-07T11:43:53'
-    end_date: '2026-11-07T17:30:00'
+    end_date: '2026-11-07T13:21:00'
     listings:
     - listing_id: 2254189
     - listing_id: 2254190
@@ -549,7 +549,7 @@ scenarios:
         listing_team_b: 2256597
   natusvincere_parivision_match_2026-11-06:
     start_date: '2026-11-06T06:35:15'
-    end_date: '2026-11-06T10:30:00'
+    end_date: '2026-11-06T10:21:00'
     listings:
     - listing_id: 2258773
     - listing_id: 2258774
@@ -570,7 +570,7 @@ scenarios:
         listing_team_b: 2258813
   betboomteam_furia_match_2026-11-06:
     start_date: '2026-11-06T11:07:34'
-    end_date: '2026-11-06T14:42:00'
+    end_date: '2026-11-06T14:31:00'
     listings:
     - listing_id: 2258783
     - listing_id: 2258784
@@ -591,7 +591,7 @@ scenarios:
         listing_team_b: 2258807
   honved_illyrians_match_2026-11-05:
     start_date: '2026-11-05T15:19:50'
-    end_date: '2026-11-05T19:33:00'
+    end_date: '2026-11-05T17:51:00'
     listings:
     - listing_id: 2259566
     - listing_id: 2259567
@@ -612,7 +612,7 @@ scenarios:
         listing_team_b: 2259566
   honved_illyrians_match_2026-11-06:
     start_date: '2026-11-06T12:12:10'
-    end_date: '2026-11-06T16:36:00'
+    end_date: '2026-11-06T14:41:00'
     listings:
     - listing_id: 2340683
     - listing_id: 2340684
@@ -633,7 +633,7 @@ scenarios:
         listing_team_b: 2340694
   brutesq_esportacademycopenhagen_match_2026-11-08:
     start_date: '2026-11-08T09:12:09'
-    end_date: '2026-11-08T14:58:00'
+    end_date: '2026-11-08T10:51:00'
     listings:
     - listing_id: 2261026
     - listing_id: 2261027
@@ -654,7 +654,7 @@ scenarios:
         listing_team_b: 2331956
   eyeballers_innercircleprospect_match_2026-11-08:
     start_date: '2026-11-08T11:38:42'
-    end_date: '2026-11-08T17:27:00'
+    end_date: '2026-11-08T13:22:00'
     listings:
     - listing_id: 2261030
     - listing_id: 2261031
@@ -670,7 +670,7 @@ scenarios:
         listing_team_b: 2261031
   monkeys_unityesports_match_2026-11-05:
     start_date: '2026-11-05T17:07:27'
-    end_date: '2026-11-05T23:36:00'
+    end_date: '2026-11-05T19:41:00'
     listings:
     - listing_id: 2312725
     - listing_id: 2312726
@@ -686,7 +686,7 @@ scenarios:
         listing_team_b: 2315745
   brutesq_esuba_match_2026-11-05:
     start_date: '2026-11-05T20:11:32'
-    end_date: '2026-11-06T02:48:00'
+    end_date: '2026-11-05T22:51:00'
     listings:
     - listing_id: 2315752
     - listing_id: 2315753
@@ -702,7 +702,7 @@ scenarios:
         listing_team_b: 2315752
   partizan_pensioners_match_2026-11-05:
     start_date: '2026-11-05T17:21:22'
-    end_date: '2026-11-05T22:15:00'
+    end_date: '2026-11-05T18:11:00'
     listings:
     - listing_id: 2316849
     - listing_id: 2316850
@@ -723,7 +723,7 @@ scenarios:
         listing_team_b: 2316849
   hermineesportsclub_imaproblem_match_2026-11-05:
     start_date: '2026-11-05T17:19:20'
-    end_date: '2026-11-05T22:15:00'
+    end_date: '2026-11-05T18:01:00'
     listings:
     - listing_id: 2316853
     - listing_id: 2316854
@@ -744,7 +744,7 @@ scenarios:
         listing_team_b: 2316854
   dimonixesports_enrage_match_2026-11-05:
     start_date: '2026-11-05T17:19:24'
-    end_date: '2026-11-05T21:49:00'
+    end_date: '2026-11-05T17:48:00'
     listings:
     - listing_id: 2316855
     - listing_id: 2316856
@@ -763,30 +763,9 @@ scenarios:
       - venue: polymarket_us
         listing_team_a: 2316856
         listing_team_b: 2316855
-  revise_wnt_match_2026-11-05:
-    start_date: '2026-11-05T16:46:15'
-    end_date: '2026-11-05T21:34:00'
-    listings:
-    - listing_id: 2316859
-    - listing_id: 2316860
-    - listing_id: 2318339
-    - listing_id: 2318340
-    - listing_id: 2323081
-    - listing_id: 2323082
-    strategy_args:
-      legs:
-      - venue: kalshi
-        listing_team_a: 2323082
-        listing_team_b: 2323081
-      - venue: polymarket
-        listing_team_a: 2318339
-        listing_team_b: 2318340
-      - venue: polymarket_us
-        listing_team_a: 2316859
-        listing_team_b: 2316860
   growthlabesports_vitalityacademy_match_2026-11-05:
     start_date: '2026-11-05T17:27:25'
-    end_date: '2026-11-05T22:05:00'
+    end_date: '2026-11-05T18:01:00'
     listings:
     - listing_id: 2316861
     - listing_id: 2316862
@@ -807,7 +786,7 @@ scenarios:
         listing_team_b: 2316862
   99firepower1utility_gamerslabesports_match_2026-11-05:
     start_date: '2026-11-05T17:19:18'
-    end_date: '2026-11-05T22:02:00'
+    end_date: '2026-11-05T17:51:00'
     listings:
     - listing_id: 2316863
     - listing_id: 2316864
@@ -828,7 +807,7 @@ scenarios:
         listing_team_b: 2316863
   glitchtechesports_hermineesportsclub_match_2026-11-05:
     start_date: '2026-11-05T19:47:36'
-    end_date: '2026-11-06T00:37:00'
+    end_date: '2026-11-05T20:41:00'
     listings:
     - listing_id: 2317293
     - listing_id: 2317294
@@ -849,7 +828,7 @@ scenarios:
         listing_team_b: 2318417
   aimers_innercircleprospect_match_2026-11-05:
     start_date: '2026-11-05T19:47:31'
-    end_date: '2026-11-06T00:33:00'
+    end_date: '2026-11-05T20:21:00'
     listings:
     - listing_id: 2317295
     - listing_id: 2317296
@@ -870,7 +849,7 @@ scenarios:
         listing_team_b: 2318423
   fortress_gamerslabesports_match_2026-11-05:
     start_date: '2026-11-05T19:47:34'
-    end_date: '2026-11-06T00:24:00'
+    end_date: '2026-11-05T20:13:00'
     listings:
     - listing_id: 2317297
     - listing_id: 2317298
@@ -891,7 +870,7 @@ scenarios:
         listing_team_b: 2318422
   99firepower1utility_y23_match_2026-11-05:
     start_date: '2026-11-05T19:52:33'
-    end_date: '2026-11-06T00:34:00'
+    end_date: '2026-11-05T20:41:00'
     listings:
     - listing_id: 2317299
     - listing_id: 2317300
@@ -912,7 +891,7 @@ scenarios:
         listing_team_b: 2318409
   oldboys_roundsgg_match_2026-11-05:
     start_date: '2026-11-05T19:21:18'
-    end_date: '2026-11-05T23:47:00'
+    end_date: '2026-11-05T19:51:00'
     listings:
     - listing_id: 2317301
     - listing_id: 2317302
@@ -928,7 +907,7 @@ scenarios:
         listing_team_b: 2317302
   bojong_vitalityacademy_match_2026-11-05:
     start_date: '2026-11-05T18:43:26'
-    end_date: '2026-11-05T23:08:00'
+    end_date: '2026-11-05T19:11:00'
     listings:
     - listing_id: 2317305
     - listing_id: 2317306
@@ -949,7 +928,7 @@ scenarios:
         listing_team_b: 2318414
   dnk_thechosenfew_match_2026-11-05:
     start_date: '2026-11-05T19:44:36'
-    end_date: '2026-11-06T00:33:00'
+    end_date: '2026-11-05T20:21:00'
     listings:
     - listing_id: 2317307
     - listing_id: 2317308
@@ -970,7 +949,7 @@ scenarios:
         listing_team_b: 2318428
   fraternity_imaproblem_match_2026-11-05:
     start_date: '2026-11-05T19:52:30'
-    end_date: '2026-11-06T00:30:00'
+    end_date: '2026-11-05T20:21:00'
     listings:
     - listing_id: 2317309
     - listing_id: 2317310
@@ -991,7 +970,7 @@ scenarios:
         listing_team_b: 2318425
   phantomacademy_spirithu_match_2026-11-05:
     start_date: '2026-11-05T18:14:49'
-    end_date: '2026-11-05T22:49:00'
+    end_date: '2026-11-05T18:44:00'
     listings:
     - listing_id: 2318325
     - listing_id: 2318326
@@ -1012,7 +991,7 @@ scenarios:
         listing_team_b: 2318398
   teamgelo_xiesport_match_2026-11-05:
     start_date: '2026-11-05T18:18:51'
-    end_date: '2026-11-05T23:12:00'
+    end_date: '2026-11-05T19:02:00'
     listings:
     - listing_id: 2318327
     - listing_id: 2318328
@@ -1033,7 +1012,7 @@ scenarios:
         listing_team_b: 2318396
   glitchtechesports_imaproblem_match_2026-11-05:
     start_date: '2026-11-05T18:18:56'
-    end_date: '2026-11-05T22:52:00'
+    end_date: '2026-11-05T18:44:00'
     listings:
     - listing_id: 2318345
     - listing_id: 2318346
@@ -1054,7 +1033,7 @@ scenarios:
         listing_team_b: 2318400
   dinero_roundsgg_match_2026-11-05:
     start_date: '2026-11-05T18:14:54'
-    end_date: '2026-11-05T22:55:00'
+    end_date: '2026-11-05T18:52:00'
     listings:
     - listing_id: 2318347
     - listing_id: 2318348
@@ -1070,7 +1049,7 @@ scenarios:
         listing_team_b: 2318348
   bangaranga_thechosenfew_match_2026-11-05:
     start_date: '2026-11-05T18:18:58'
-    end_date: '2026-11-05T23:14:00'
+    end_date: '2026-11-05T19:11:00'
     listings:
     - listing_id: 2318349
     - listing_id: 2318350
@@ -1091,7 +1070,7 @@ scenarios:
         listing_team_b: 2318391
   privateergaming_regnum4games_match_2026-11-05:
     start_date: '2026-11-05T19:11:55'
-    end_date: '2026-11-05T23:46:00'
+    end_date: '2026-11-05T19:41:00'
     listings:
     - listing_id: 2318351
     - listing_id: 2318352
@@ -1112,7 +1091,7 @@ scenarios:
         listing_team_b: 2318403
   dnk_xcity_match_2026-11-05:
     start_date: '2026-11-05T18:18:53'
-    end_date: '2026-11-05T22:45:00'
+    end_date: '2026-11-05T18:47:00'
     listings:
     - listing_id: 2318353
     - listing_id: 2318354
@@ -1128,7 +1107,7 @@ scenarios:
         listing_team_b: 2318389
   damajuana_redcanidsacademy_match_2026-11-05:
     start_date: '2026-11-05T19:18:24'
-    end_date: '2026-11-05T22:32:00'
+    end_date: '2026-11-05T20:41:00'
     listings:
     - listing_id: 2319059
     - listing_id: 2319060
@@ -1149,7 +1128,7 @@ scenarios:
         listing_team_b: 2319836
   gremioesports_underw0rld_match_2026-11-05:
     start_date: '2026-11-05T22:13:28'
-    end_date: '2026-11-06T01:44:00'
+    end_date: '2026-11-05T23:51:00'
     listings:
     - listing_id: 2319063
     - listing_id: 2319064
@@ -1170,7 +1149,7 @@ scenarios:
         listing_team_b: 2319838
   isurus_zettagames_match_2026-11-06:
     start_date: '2026-11-06T13:08:11'
-    end_date: '2026-11-06T16:51:00'
+    end_date: '2026-11-06T15:02:00'
     listings:
     - listing_id: 2319839
     - listing_id: 2319840
@@ -1191,7 +1170,7 @@ scenarios:
         listing_team_b: 2319840
   quintessencia_taotoma_match_2026-11-06:
     start_date: '2026-11-06T16:15:49'
-    end_date: '2026-11-06T21:38:00'
+    end_date: '2026-11-06T19:51:00'
     listings:
     - listing_id: 2319841
     - listing_id: 2319842
@@ -1212,7 +1191,7 @@ scenarios:
         listing_team_b: 2319842
   bline_dynamoeclotphoenix_match_2026-11-06:
     start_date: '2026-11-06T20:05:56'
-    end_date: '2026-11-07T01:27:00'
+    end_date: '2026-11-06T21:31:00'
     listings:
     - listing_id: 2319907
     - listing_id: 2319908
@@ -1228,7 +1207,7 @@ scenarios:
         listing_team_b: 2330891
   sinnerslegacy_thousand_match_2026-11-06:
     start_date: '2026-11-06T17:01:57'
-    end_date: '2026-11-06T23:48:00'
+    end_date: '2026-11-06T19:51:00'
     listings:
     - listing_id: 2321597
     - listing_id: 2321598
@@ -1244,7 +1223,7 @@ scenarios:
         listing_team_b: 2329962
   darkmoon_revise_match_2026-11-05:
     start_date: '2026-11-05T18:39:03'
-    end_date: '2026-11-06T02:09:00'
+    end_date: '2026-11-05T21:32:00'
     listings:
     - listing_id: 2325694
     - listing_id: 2325695
@@ -1260,7 +1239,7 @@ scenarios:
         listing_team_b: 2328374
   baksesports_firefluxesports_match_2026-11-06:
     start_date: '2026-11-06T09:05:59'
-    end_date: '2026-11-06T13:56:00'
+    end_date: '2026-11-06T12:11:00'
     listings:
     - listing_id: 2340687
     - listing_id: 2340688
@@ -1281,7 +1260,7 @@ scenarios:
         listing_team_b: 2340692
   rebelsgaming_wraithpcific_match_2026-11-05:
     start_date: '2026-11-05T18:04:11'
-    end_date: '2026-11-05T22:15:00'
+    end_date: '2026-11-05T21:21:00'
     listings:
     - listing_id: 2343823
     - listing_id: 2343824
@@ -1302,7 +1281,7 @@ scenarios:
         listing_team_b: 2343824
   basementboys_johnnyspeeds_match_2026-11-06:
     start_date: '2026-11-06T15:10:34'
-    end_date: '2026-11-06T18:51:00'
+    end_date: '2026-11-06T17:02:00'
     listings:
     - listing_id: 2349607
     - listing_id: 2349608
@@ -1323,7 +1302,7 @@ scenarios:
         listing_team_b: 2349608
   dramaesports_misaesports_match_2026-11-06:
     start_date: '2026-11-06T18:32:51'
-    end_date: '2026-11-06T22:16:00'
+    end_date: '2026-11-06T20:31:00'
     listings:
     - listing_id: 2349609
     - listing_id: 2349610
@@ -1344,7 +1323,7 @@ scenarios:
         listing_team_b: 2349609
   borracheiros_gremioesports_match_2026-11-06:
     start_date: '2026-11-06T21:43:44'
-    end_date: '2026-11-07T03:52:00'
+    end_date: '2026-11-06T23:42:00'
     listings:
     - listing_id: 2356832
     - listing_id: 2356833
@@ -1365,7 +1344,7 @@ scenarios:
         listing_team_b: 2356833
   borracheiros_gremioesports_match_2026-11-07:
     start_date: '2026-11-07T22:21:27'
-    end_date: '2026-11-08T02:00:00'
+    end_date: '2026-11-08T00:41:00'
     listings:
     - listing_id: 2433846
     - listing_id: 2433847
@@ -1386,7 +1365,7 @@ scenarios:
         listing_team_b: 2435091
   butterfly_maybe_match_2026-11-07:
     start_date: '2026-11-07T09:03:38'
-    end_date: '2026-11-07T11:59:00'
+    end_date: '2026-11-07T11:12:00'
     listings:
     - listing_id: 2362791
     - listing_id: 2362792
@@ -1407,7 +1386,7 @@ scenarios:
         listing_team_b: 2362792
   exzerotenacity_leoteam_match_2026-11-07:
     start_date: '2026-11-07T15:10:01'
-    end_date: '2026-11-07T18:53:00'
+    end_date: '2026-11-07T18:11:00'
     listings:
     - listing_id: 2362795
     - listing_id: 2362796
@@ -1428,7 +1407,7 @@ scenarios:
         listing_team_b: 2362796
   forzereload_nexus_match_2026-11-07:
     start_date: '2026-11-07T18:10:53'
-    end_date: '2026-11-07T21:15:00'
+    end_date: '2026-11-07T20:31:00'
     listings:
     - listing_id: 2362797
     - listing_id: 2362798
@@ -1449,7 +1428,7 @@ scenarios:
         listing_team_b: 2362797
   g2ares_thelastresort_match_2026-11-06:
     start_date: '2026-11-06T09:07:01'
-    end_date: '2026-11-06T11:35:00'
+    end_date: '2026-11-06T10:51:00'
     listings:
     - listing_id: 2362799
     - listing_id: 2362800
@@ -1470,7 +1449,7 @@ scenarios:
         listing_team_b: 2362800
   quazar_revise_match_2026-11-06:
     start_date: '2026-11-06T12:13:30'
-    end_date: '2026-11-06T19:35:00'
+    end_date: '2026-11-06T15:41:00'
     listings:
     - listing_id: 2363886
     - listing_id: 2363887
@@ -1486,7 +1465,7 @@ scenarios:
         listing_team_b: 2363887
   brute_honved_match_2026-11-06:
     start_date: '2026-11-06T15:48:12'
-    end_date: '2026-11-06T23:10:00'
+    end_date: '2026-11-06T19:11:00'
     listings:
     - listing_id: 2363898
     - listing_id: 2363899
@@ -1502,7 +1481,7 @@ scenarios:
         listing_team_b: 2363898
   eternalpremium_notime_match_2026-11-06:
     start_date: '2026-11-06T16:17:36'
-    end_date: '2026-11-06T20:57:00'
+    end_date: '2026-11-06T17:02:00'
     listings:
     - listing_id: 2363966
     - listing_id: 2363967
@@ -1523,7 +1502,7 @@ scenarios:
         listing_team_b: 2363966
   glitchtechesports_maybe_match_2026-11-06:
     start_date: '2026-11-06T19:30:50'
-    end_date: '2026-11-07T00:06:00'
+    end_date: '2026-11-06T20:24:00'
     listings:
     - listing_id: 2364549
     - listing_id: 2364550
@@ -1544,7 +1523,7 @@ scenarios:
         listing_team_b: 2365978
   maybe_regnum4games_match_2026-11-06:
     start_date: '2026-11-06T18:21:00'
-    end_date: '2026-11-06T23:34:00'
+    end_date: '2026-11-06T19:32:00'
     listings:
     - listing_id: 2364555
     - listing_id: 2364556
@@ -1565,7 +1544,7 @@ scenarios:
         listing_team_b: 2365977
   redcanidsacademy_rush_match_2026-11-06:
     start_date: '2026-11-06T19:17:32'
-    end_date: '2026-11-07T01:04:00'
+    end_date: '2026-11-06T21:01:00'
     listings:
     - listing_id: 2365972
     - listing_id: 2365973
@@ -1586,7 +1565,7 @@ scenarios:
         listing_team_b: 2365973
   natusvincere_themongolz_match_2026-11-07:
     start_date: '2026-11-07T06:34:46'
-    end_date: '2026-11-07T09:03:00'
+    end_date: '2026-11-07T08:51:00'
     listings:
     - listing_id: 2385572
     - listing_id: 2385573
@@ -1607,7 +1586,7 @@ scenarios:
         listing_team_b: 2385610
   betboomteam_mouz_match_2026-11-07:
     start_date: '2026-11-07T09:50:57'
-    end_date: '2026-11-07T11:52:00'
+    end_date: '2026-11-07T11:41:00'
     listings:
     - listing_id: 2392998
     - listing_id: 2392999
@@ -1628,7 +1607,7 @@ scenarios:
         listing_team_b: 2392999
   sawyoungsters_sokerorg_match_2026-11-07:
     start_date: '2026-11-07T15:11:32'
-    end_date: '2026-11-07T20:07:00'
+    end_date: '2026-11-07T16:41:00'
     listings:
     - listing_id: 2394745
     - listing_id: 2394746
@@ -1649,7 +1628,7 @@ scenarios:
         listing_team_b: 2394746
   fourmagic_masonic_match_2026-11-07:
     start_date: '2026-11-07T09:06:58'
-    end_date: '2026-11-07T12:29:00'
+    end_date: '2026-11-07T10:41:00'
     listings:
     - listing_id: 2394753
     - listing_id: 2394754
@@ -1670,7 +1649,7 @@ scenarios:
         listing_team_b: 2394754
   acend_ryvex_match_2026-11-07:
     start_date: '2026-11-07T14:10:53'
-    end_date: '2026-11-07T16:28:00'
+    end_date: '2026-11-07T15:42:00'
     listings:
     - listing_id: 2396184
     - listing_id: 2396185
@@ -1691,7 +1670,7 @@ scenarios:
         listing_team_b: 2396185
   acend_ryvex_match_2026-11-08:
     start_date: '2026-11-08T14:03:58'
-    end_date: '2026-11-08T16:14:00'
+    end_date: '2026-11-08T15:31:00'
     listings:
     - listing_id: 2500246
     - listing_id: 2500247
@@ -1712,7 +1691,7 @@ scenarios:
         listing_team_b: 2500247
   6yubojlbl_9ine_match_2026-11-07:
     start_date: '2026-11-07T14:01:18'
-    end_date: '2026-11-07T18:32:00'
+    end_date: '2026-11-07T17:51:00'
     listings:
     - listing_id: 2396188
     - listing_id: 2396189
@@ -1733,7 +1712,7 @@ scenarios:
         listing_team_b: 2396189
   6yubojlbl_9ine_match_2026-11-08:
     start_date: '2026-11-08T14:04:13'
-    end_date: '2026-11-08T18:11:00'
+    end_date: '2026-11-08T17:22:00'
     listings:
     - listing_id: 2497685
     - listing_id: 2497686
@@ -1754,7 +1733,7 @@ scenarios:
         listing_team_b: 2497686
   alliance_maybe_match_2026-11-07:
     start_date: '2026-11-07T14:23:53'
-    end_date: '2026-11-07T18:25:00'
+    end_date: '2026-11-07T17:32:00'
     listings:
     - listing_id: 2396190
     - listing_id: 2396191
@@ -1775,7 +1754,7 @@ scenarios:
         listing_team_b: 2396191
   aimclub_lphgaming_match_2026-11-07:
     start_date: '2026-11-07T14:03:17'
-    end_date: '2026-11-07T16:34:00'
+    end_date: '2026-11-07T15:51:00'
     listings:
     - listing_id: 2396198
     - listing_id: 2396199
@@ -1796,7 +1775,7 @@ scenarios:
         listing_team_b: 2396198
   dnk_fokus_match_2026-11-07:
     start_date: '2026-11-07T14:07:46'
-    end_date: '2026-11-07T17:43:00'
+    end_date: '2026-11-07T17:02:00'
     listings:
     - listing_id: 2403047
     - listing_id: 2403048
@@ -1817,7 +1796,7 @@ scenarios:
         listing_team_b: 2411410
   honved_quazar_match_2026-11-06:
     start_date: '2026-11-06T19:41:10'
-    end_date: '2026-11-07T18:40:00'
+    end_date: '2026-11-07T01:30:00'
     listings:
     - listing_id: 2404394
     - listing_id: 2404395
@@ -1833,7 +1812,7 @@ scenarios:
         listing_team_b: 2404394
   g2ares_og_match_2026-11-07:
     start_date: '2026-11-07T14:07:19'
-    end_date: '2026-11-07T16:38:00'
+    end_date: '2026-11-07T15:42:00'
     listings:
     - listing_id: 2409539
     - listing_id: 2409540
@@ -1854,7 +1833,7 @@ scenarios:
         listing_team_b: 2409539
   balkanoutlaws_thelastresort_match_2026-11-07:
     start_date: '2026-11-07T14:02:01'
-    end_date: '2026-11-07T16:29:00'
+    end_date: '2026-11-07T15:42:00'
     listings:
     - listing_id: 2409613
     - listing_id: 2409614
@@ -1875,7 +1854,7 @@ scenarios:
         listing_team_b: 2409614
   balkanoutlaws_thelastresort_match_2026-11-08:
     start_date: '2026-11-08T14:05:24'
-    end_date: '2026-11-08T16:27:00'
+    end_date: '2026-11-08T15:42:00'
     listings:
     - listing_id: 2500258
     - listing_id: 2500259
@@ -1896,7 +1875,7 @@ scenarios:
         listing_team_b: 2500259
   optibet_private_match_2026-11-07:
     start_date: '2026-11-07T14:10:51'
-    end_date: '2026-11-07T17:01:00'
+    end_date: '2026-11-07T16:11:00'
     listings:
     - listing_id: 2410222
     - listing_id: 2410223
@@ -1917,7 +1896,7 @@ scenarios:
         listing_team_b: 2410222
   dramaesports_phantomacademy_match_2026-11-07:
     start_date: '2026-11-07T18:14:38'
-    end_date: '2026-11-07T22:59:00'
+    end_date: '2026-11-07T21:11:00'
     listings:
     - listing_id: 2413001
     - listing_id: 2413002
@@ -1938,7 +1917,7 @@ scenarios:
         listing_team_b: 2413002
   brutesq_dynamoeclotphoenix_match_2026-11-07:
     start_date: '2026-11-07T20:53:07'
-    end_date: '2026-11-08T03:38:00'
+    end_date: '2026-11-07T23:41:00'
     listings:
     - listing_id: 2416174
     - listing_id: 2416175
@@ -1954,7 +1933,7 @@ scenarios:
         listing_team_b: 2432267
   monkeys_sinnerslegacy_match_2026-11-07:
     start_date: '2026-11-07T17:07:14'
-    end_date: '2026-11-08T00:27:00'
+    end_date: '2026-11-07T20:31:00'
     listings:
     - listing_id: 2416949
     - listing_id: 2416950
@@ -1970,7 +1949,7 @@ scenarios:
         listing_team_b: 2432219
   rcave_spirithu_match_2026-11-07:
     start_date: '2026-11-07T18:10:17'
-    end_date: '2026-11-07T23:06:00'
+    end_date: '2026-11-07T19:02:00'
     listings:
     - listing_id: 2433218
     - listing_id: 2433219
@@ -1991,7 +1970,7 @@ scenarios:
         listing_team_b: 2433403
   quintessencia_yourend_match_2026-11-07:
     start_date: '2026-11-07T19:06:14'
-    end_date: '2026-11-08T00:05:00'
+    end_date: '2026-11-07T22:11:00'
     listings:
     - listing_id: 2433840
     - listing_id: 2433841
@@ -2012,7 +1991,7 @@ scenarios:
         listing_team_b: 2435090
   bestiaacademy_redcanidsacademy_match_2026-11-08:
     start_date: '2026-11-08T16:06:19'
-    end_date: '2026-11-08T20:30:00'
+    end_date: '2026-11-08T18:41:00'
     listings:
     - listing_id: 2434899
     - listing_id: 2434900
@@ -2033,7 +2012,7 @@ scenarios:
         listing_team_b: 2435095
   lowcortisol_rush_match_2026-11-08:
     start_date: '2026-11-08T22:08:37'
-    end_date: '2026-11-09T01:33:00'
+    end_date: '2026-11-08T23:41:00'
     listings:
     - listing_id: 2434945
     - listing_id: 2434946
@@ -2054,7 +2033,7 @@ scenarios:
         listing_team_b: 2435100
   isurus_taotoma_match_2026-11-08:
     start_date: '2026-11-08T19:09:03'
-    end_date: '2026-11-08T23:07:00'
+    end_date: '2026-11-08T21:41:00'
     listings:
     - listing_id: 2434951
     - listing_id: 2434952
@@ -2075,7 +2054,7 @@ scenarios:
         listing_team_b: 2435098
   meianoite_zettagames_match_2026-11-08:
     start_date: '2026-11-08T13:09:08'
-    end_date: '2026-11-08T16:40:00'
+    end_date: '2026-11-08T15:01:00'
     listings:
     - listing_id: 2435093
     - listing_id: 2435094
@@ -2096,7 +2075,7 @@ scenarios:
         listing_team_b: 2435094
   feet67_marsborne_match_2026-11-07:
     start_date: '2026-11-07T23:27:32'
-    end_date: '2026-11-08T02:28:00'
+    end_date: '2026-11-08T00:35:00'
     listings:
     - listing_id: 2442519
     - listing_id: 2442520
@@ -2117,7 +2096,7 @@ scenarios:
         listing_team_b: 2444112
   crimsonvortex_elusive_match_2026-11-07:
     start_date: '2026-11-07T20:37:27'
-    end_date: '2026-11-08T00:00:00'
+    end_date: '2026-11-07T22:11:00'
     listings:
     - listing_id: 2442523
     - listing_id: 2442524
@@ -2138,7 +2117,7 @@ scenarios:
         listing_team_b: 2444093
   detonate_keeptalking_match_2026-11-07:
     start_date: '2026-11-07T23:20:25'
-    end_date: '2026-11-08T02:48:00'
+    end_date: '2026-11-08T00:52:00'
     listings:
     - listing_id: 2442535
     - listing_id: 2442536
@@ -2159,7 +2138,7 @@ scenarios:
         listing_team_b: 2444094
   betboomteam_natusvincere_match_2026-11-08:
     start_date: '2026-11-08T04:06:30'
-    end_date: '2026-11-08T06:10:00'
+    end_date: '2026-11-08T06:02:00'
     listings:
     - listing_id: 2455007
     - listing_id: 2455008
@@ -2180,7 +2159,7 @@ scenarios:
         listing_team_b: 2455007
   mouz_themongolz_match_2026-11-08:
     start_date: '2026-11-08T07:33:00'
-    end_date: '2026-11-08T10:26:00'
+    end_date: '2026-11-08T10:11:00'
     listings:
     - listing_id: 2455009
     - listing_id: 2455010
@@ -2201,7 +2180,7 @@ scenarios:
         listing_team_b: 2455009
   acend_aimclub_match_2026-11-07:
     start_date: '2026-11-07T18:04:43'
-    end_date: '2026-11-07T20:55:00'
+    end_date: '2026-11-07T20:11:00'
     listings:
     - listing_id: 2473649
     - listing_id: 2473650
@@ -2222,7 +2201,7 @@ scenarios:
         listing_team_b: 2473650
   lphgaming_ryvex_match_2026-11-07:
     start_date: '2026-11-07T18:01:41'
-    end_date: '2026-11-07T21:47:00'
+    end_date: '2026-11-07T21:02:00'
     listings:
     - listing_id: 2473651
     - listing_id: 2473652
@@ -2243,7 +2222,7 @@ scenarios:
         listing_team_b: 2473651
   g2ares_optibet_match_2026-11-07:
     start_date: '2026-11-07T18:07:00'
-    end_date: '2026-11-07T20:39:00'
+    end_date: '2026-11-07T19:41:00'
     listings:
     - listing_id: 2476259
     - listing_id: 2476260
@@ -2264,7 +2243,7 @@ scenarios:
         listing_team_b: 2476260
   og_private_match_2026-11-07:
     start_date: '2026-11-07T18:33:26'
-    end_date: '2026-11-07T22:02:00'
+    end_date: '2026-11-07T21:11:00'
     listings:
     - listing_id: 2476269
     - listing_id: 2476270
@@ -2285,7 +2264,7 @@ scenarios:
         listing_team_b: 2476270
   masonic_sawyoungsters_match_2026-11-08:
     start_date: '2026-11-08T15:17:07'
-    end_date: '2026-11-08T19:58:00'
+    end_date: '2026-11-08T18:31:00'
     listings:
     - listing_id: 2477645
     - listing_id: 2477646
@@ -2306,7 +2285,7 @@ scenarios:
         listing_team_b: 2477646
   dnk_thelastresort_match_2026-11-07:
     start_date: '2026-11-07T17:58:59'
-    end_date: '2026-11-07T22:02:00'
+    end_date: '2026-11-07T21:02:00'
     listings:
     - listing_id: 2477649
     - listing_id: 2477650
@@ -2327,7 +2306,7 @@ scenarios:
         listing_team_b: 2477649
   balkanoutlaws_fokus_match_2026-11-07:
     start_date: '2026-11-07T18:01:40'
-    end_date: '2026-11-07T21:03:00'
+    end_date: '2026-11-07T20:11:00'
     listings:
     - listing_id: 2477651
     - listing_id: 2477652
@@ -2348,7 +2327,7 @@ scenarios:
         listing_team_b: 2477651
   9ine_alliance_match_2026-11-07:
     start_date: '2026-11-07T18:07:53'
-    end_date: '2026-11-07T21:23:00'
+    end_date: '2026-11-07T20:31:00'
     listings:
     - listing_id: 2481299
     - listing_id: 2481300
@@ -2369,7 +2348,7 @@ scenarios:
         listing_team_b: 2481299
   6yubojlbl_maybe_match_2026-11-07:
     start_date: '2026-11-07T18:19:19'
-    end_date: '2026-11-07T20:44:00'
+    end_date: '2026-11-07T19:51:00'
     listings:
     - listing_id: 2481311
     - listing_id: 2481312
@@ -2390,7 +2369,7 @@ scenarios:
         listing_team_b: 2481311
   g2ares_private_match_2026-11-08:
     start_date: '2026-11-08T14:06:19'
-    end_date: '2026-11-09T06:20:00'
+    end_date: '2026-11-08T16:57:00'
     listings:
     - listing_id: 2501821
     - listing_id: 2501822
@@ -2411,7 +2390,7 @@ scenarios:
         listing_team_b: 2501822
   basementboys_spiritacademy_match_2026-11-08:
     start_date: '2026-11-08T09:09:13'
-    end_date: '2026-11-08T12:48:00'
+    end_date: '2026-11-08T11:01:00'
     listings:
     - listing_id: 2505978
     - listing_id: 2505979
@@ -2432,7 +2411,7 @@ scenarios:
         listing_team_b: 2505979
   exence_illyrians_match_2026-11-08:
     start_date: '2026-11-08T15:02:50'
-    end_date: '2026-11-08T18:44:00'
+    end_date: '2026-11-08T17:11:00'
     listings:
     - listing_id: 2505982
     - listing_id: 2505983
@@ -2453,7 +2432,7 @@ scenarios:
         listing_team_b: 2505983
   imaproblem_y23_match_2026-11-08:
     start_date: '2026-11-08T20:25:43'
-    end_date: '2026-11-09T00:51:00'
+    end_date: '2026-11-08T21:11:00'
     listings:
     - listing_id: 2507466
     - listing_id: 2507467
@@ -2474,7 +2453,7 @@ scenarios:
         listing_team_b: 2507836
   g2ares_innercircleacademy_match_2026-11-08:
     start_date: '2026-11-08T09:02:00'
-    end_date: '2026-11-08T13:19:00'
+    end_date: '2026-11-08T12:31:00'
     listings:
     - listing_id: 2507830
     - listing_id: 2507831
@@ -2495,7 +2474,7 @@ scenarios:
         listing_team_b: 2507831
   elusive_marsborne_match_2026-11-08:
     start_date: '2026-11-08T20:34:37'
-    end_date: '2026-11-09T00:10:00'
+    end_date: '2026-11-08T22:21:00'
     listings:
     - listing_id: 2513271
     - listing_id: 2513272
@@ -2516,7 +2495,7 @@ scenarios:
         listing_team_b: 2513272
   brutesq_unityesports_match_2026-11-08:
     start_date: '2026-11-08T20:38:31'
-    end_date: '2026-11-09T03:09:00'
+    end_date: '2026-11-08T23:11:00'
     listings:
     - listing_id: 2522901
     - listing_id: 2522902
@@ -2532,7 +2511,7 @@ scenarios:
         listing_team_b: 2522901
   esuba_monkeys_match_2026-11-08:
     start_date: '2026-11-08T17:09:03'
-    end_date: '2026-11-09T00:21:00'
+    end_date: '2026-11-08T20:21:00'
     listings:
     - listing_id: 2522905
     - listing_id: 2522906
@@ -2548,7 +2527,7 @@ scenarios:
         listing_team_b: 2522905
   alliance_private_match_2026-11-08:
     start_date: '2026-11-08T18:11:26'
-    end_date: '2026-11-08T21:36:00'
+    end_date: '2026-11-08T20:51:00'
     listings:
     - listing_id: 2558554
     - listing_id: 2558555
@@ -2569,7 +2548,7 @@ scenarios:
         listing_team_b: 2558555
   aimclub_balkanoutlaws_match_2026-11-08:
     start_date: '2026-11-08T18:10:34'
-    end_date: '2026-11-08T21:50:00'
+    end_date: '2026-11-08T21:01:00'
     listings:
     - listing_id: 2558556
     - listing_id: 2558557
@@ -2590,7 +2569,7 @@ scenarios:
         listing_team_b: 2558557
   acend_fokus_match_2026-11-08:
     start_date: '2026-11-08T18:03:18'
-    end_date: '2026-11-08T21:22:00'
+    end_date: '2026-11-08T20:51:00'
     listings:
     - listing_id: 2558564
     - listing_id: 2558565
@@ -2611,7 +2590,7 @@ scenarios:
         listing_team_b: 2558564
   9ine_og_match_2026-11-08:
     start_date: '2026-11-08T18:04:17'
-    end_date: '2026-11-08T22:11:00'
+    end_date: '2026-11-08T21:41:00'
     listings:
     - listing_id: 2562038
     - listing_id: 2562039

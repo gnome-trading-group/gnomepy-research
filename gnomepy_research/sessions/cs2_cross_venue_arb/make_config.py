@@ -3,8 +3,9 @@ Write a multi-scenario backtest config for CS2CrossVenueArb, one scenario per ma
 PandaScore's match times.
 
 Each scenario starts when PandaScore says the series (or the market's map) began, plus a feed delay, as the launcher
-will start a live session; markets PandaScore shows cancelled, forfeited or never begun are left out. It ends at the
-last minute any of its streams collected.
+will start a live session; markets PandaScore shows cancelled, forfeited or never begun are left out. It ends when
+fewer than two venues are still collecting: Polymarket International keeps recording a market for hours after the
+other venues close it, and nothing can be hedged across venues in that tail.
 
     python -m gnomepy_research.sessions.cs2_cross_venue_arb.make_config MARKETS PS_MAP OUT.yaml \
         [--from 2026-11-05] [--to 2026-11-08] [--limit N] [--arg key=value ...] [--taker-delay-ms VENUE=MS ...]
@@ -60,8 +61,13 @@ def scenario(market: dict, ps: dict, delay_s: float, require_venue: str | None =
         return None
     if require_venue and require_venue not in {leg["venue"] for leg in legs}:
         return None
-    last = max(datetime.strptime(leg["s3last"], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
-               for leg in market["legs"]) + timedelta(minutes=1)
+    used = {v for v, name in VENUES.items() if name in {leg["venue"] for leg in legs}}
+    venue_last: dict[str, datetime] = {}
+    for leg in market["legs"]:
+        if leg["venue"] in used:
+            t = datetime.strptime(leg["s3last"], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+            venue_last[leg["venue"]] = max(venue_last.get(leg["venue"], t), t)
+    last = sorted(venue_last.values())[-2] + timedelta(minutes=1)
     start = begin + int(delay_s * 1e9)
     if last.timestamp() * 1e9 <= start:
         return None
