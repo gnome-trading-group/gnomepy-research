@@ -3,7 +3,7 @@ CS2 series winner at kickoff, on every venue listing one HLTV match.
 
 gnome-launcher starts one session per match holding each venue's two team listings (Polymarket International,
 Kalshi, Polymarket US), so the match is sized and capped once, wherever its liquidity is. The session prices the match
-from each cs2_upcoming_features row as the pipeline writes it (match_feed.py): e12-wide-mm, the weekly series model,
+from each cs2_upcoming_features row as the pipeline writes it (match_feed.py): e12-wide-mm, the series model fitted every morning,
 prices the two announced fives as q, P(team A wins). On every book update the fair price is the market's own mid
 blended with q (MarketBlend, weights fitted on past kickoff prices and outcomes), so the model only moves the market's
 price by as much as it has earned.
@@ -26,8 +26,11 @@ and only into bids whose proceeds after the fee beat the new fair price by min_e
 holding. A move in the market alone never sells, since the market moving is what the blend already prices. Once the
 held team is sold out, the other team is bought on the usual rule if it now clears the edge.
 
-The mid is Polymarket International's when it has a two-sided book, since the blend was fitted on its prices, else
-the tightest two-sided book elsewhere; team B's book stands in (as 1 - its mid) where team A's is one-sided.
+The mid is Polymarket International's when its book is liquid (spread at most liquid_spread), since the blend was fitted
+on its prices, else the tightest liquid book elsewhere; team B's book stands in (as 1 - its mid) where team A's is not
+liquid. A wide book's mid is the midpoint of nobody's prices: on lower-tier matches Polymarket International's book can
+be 57c wide while Polymarket US quotes a cent apart. With no liquid book anywhere there is no fair price, and nothing is
+bought or sold.
 
 At kickoff (entry_cutoff_hours before it) the session ends itself, keeping what it holds, once no order is in flight;
 it also ends early if HLTV lists the match live or drops it. Positions settle in the ledger. A stalled pipeline still
@@ -149,9 +152,10 @@ class CS2Series(Strategy):
         legs: one {venue, listing_team_a, listing_team_b} per venue with a series market for the match: the venue's
             registry listings for each HLTV team winning the series. Set by the launcher.
         bankroll_usd: the money the strategy sizes its bets on one match against.
-        model_path: the e12-wide-mm model (cs2_e12_fit, weekly), an artifact URI or path; unpinned means the latest.
+        model_path: the e12-wide-mm model (cs2_e12_fit, daily), an artifact URI or path; unpinned means the latest.
         blend_path: the weights blending the market's mid with the model (JSON), likewise.
-        max_model_age_days: the oldest model it trades on, counted from the model's cutoff.
+        max_model_age_days: the oldest model it trades on, counted from the model's cutoff; one missed daily fit still
+            trades on the day before's, two in a row stop it.
         min_edge: the least edge after the fee worth buying, and the least a sale must beat holding by.
         kelly_fraction: the share of the Kelly size to hold; under 1 because the fair price is an estimate, and
             betting full Kelly on an estimate over-bets.
@@ -160,6 +164,7 @@ class CS2Series(Strategy):
         max_stake_usd: most the match may commit across every venue, fees included, however large the Kelly size.
         min_order_usd: smallest order worth sending.
         max_state_age_minutes: the oldest match state it trades on; the pipeline writes one every 15 minutes.
+        liquid_spread: the widest spread at which a venue's book can give the mid.
         reload_minutes: how often to re-read the match's rows (0 = once, for replays).
         near_kickoff_reload_minutes, near_kickoff_hours: re-read this often inside this long before the cutoff,
             so a lineup change, a kickoff HLTV brings forward or a match it lists live reaches the session within a
@@ -174,7 +179,7 @@ class CS2Series(Strategy):
         bankroll_usd: float,
         model_path: str = DEFAULT_MODEL,
         blend_path: str = DEFAULT_BLEND,
-        max_model_age_days: float = 8.0,
+        max_model_age_days: float = 2.0,
         min_edge: float = 0.02,
         kelly_fraction: float = 0.5,
         window_hours: float = 1.0,
@@ -184,6 +189,7 @@ class CS2Series(Strategy):
         book_depth: int = 10,
         processing_time_ns: int = 0,
         max_state_age_minutes: float = 30.0,
+        liquid_spread: float = 0.05,
         reload_minutes: float = 5.0,
         near_kickoff_reload_minutes: float = 1.0,
         near_kickoff_hours: float = 1.0,
@@ -209,6 +215,7 @@ class CS2Series(Strategy):
         self.book_depth = book_depth
         self._processing_time_ns = processing_time_ns
         self.max_state_age_ns = int(max_state_age_minutes * 60 * 1e9)
+        self.liquid_spread = liquid_spread
         self._metrics_buf = None
         self._model_buf = None
         # The model price the position was last bought at; a change from it is what lets the session sell.
@@ -390,12 +397,14 @@ class CS2Series(Strategy):
                            take.shares, take.cost, held[leg.team], kelly_bankroll, levels=e.levels)
 
     def _mid_team_a(self) -> float | None:
-        """Team A's mid: Polymarket International's when it has one, else the tightest two-sided book elsewhere."""
+        """Team A's mid from a liquid book: Polymarket International's when it has one, else the tightest elsewhere;
+        None when no venue has a liquid book."""
         best = None
         for venue, (a, b) in self._venues:
             m = _mid(a)
-            if m is None and (mb := _mid(b)) is not None:
-                m = (1.0 - mb[0], mb[1])
+            if m is None or m[1] > self.liquid_spread + 1e-9:
+                mb = _mid(b)
+                m = (1.0 - mb[0], mb[1]) if mb is not None and mb[1] <= self.liquid_spread + 1e-9 else None
             if m is None:
                 continue
             if venue == MID_VENUE:

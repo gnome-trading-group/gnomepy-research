@@ -289,3 +289,67 @@ def test_a_venue_named_twice_is_a_config_error():
 def test_launcher_ids_are_accepted(make):
     s = make(league="valorant", subject_id=120378)
     assert (s.league, s.subject_id) == ("valorant", 120378)
+
+
+# ---- limits on the engine's tick, and completions that don't fill ---------------------------
+
+def short_b(s, books, t=0):
+    """Books in, then 20 contracts long team A on Polymarket International: 20 short on team B."""
+    feed(s, books, t)
+    s.positions.set(LISTINGS[101], 20 * S)
+
+
+def sent(intents):
+    return [(i.security_id, i.take_side, i.take_size, i.take_limit_price) for i in intents]
+
+
+def test_a_finer_book_than_the_tick_is_taken_at_the_next_tick_toward_it(make):
+    s = make()
+    # Polymarket US quotes team B at 0.445 on a finer tick than the engine's cent: the buy goes at 0.45.
+    intents = feed(s, QUIET + [(302, [(0.445, 30)], [(0.43, 30)])])
+    assert sorted(sent(intents)) == [(1101, Side.BID, 30 * S, round(0.50 * P)),
+                                     (1302, Side.BID, 30 * S, round(0.45 * P))]
+
+
+def test_no_attempt_with_a_leg_that_rounds_to_a_dollar(make):
+    s = make(legs=[LEGS[0], LEGS[2]], min_edge=0.001)
+    # Team A at 0.004 here and team B at 0.993 there clear the edge, but 0.993 goes to the next cent up: $1.
+    books = [(101, [(0.004, 100)], [(0.003, 100)]), (102, [(0.997, 100)], [(0.996, 100)]),
+             (301, [(0.99, 100)], [(0.98, 100)]), (302, [(0.993, 100)], [(0.98, 100)])]
+    assert feed(s, books) == []
+
+
+def test_a_rejected_completion_is_not_resent_until_the_book_changes(make):
+    s = make()
+    short_b(s, QUIET + [GONE_B])
+    first = feed(s, [GONE_B], t=0)
+    assert sent(first) == [(1201, Side.ASK, 20 * S, round(0.48 * P))]
+    assert s.on_execution_report(report(201, OrderStatus.REJECTED, t=0)) == []
+    assert feed(s, [GONE_B], t=5 * SEC) == []
+    moved = (201, [(0.50, 100)], [(0.49, 100)])
+    assert sent(feed(s, [moved], t=6 * SEC)) == [(1201, Side.ASK, 20 * S, round(0.49 * P))]
+
+
+def test_an_unfilled_completion_waits_before_the_next(make):
+    s = make(completion_retry_seconds=1.0)
+    short_b(s, QUIET + [GONE_B])
+    feed(s, [GONE_B], t=0)
+    assert s.on_execution_report(report(201, OrderStatus.CANCELED, t=0)) == []
+    assert feed(s, [GONE_B], t=SEC // 2) == []
+    assert sent(feed(s, [GONE_B], t=SEC)) == [(1201, Side.ASK, 20 * S, round(0.48 * P))]
+
+
+def test_completion_prefers_venues_without_a_taker_delay(make):
+    s = make(taker_delay_seconds={"polymarket": 1.0})
+    # Polymarket International offers team B cheapest all-in, but holds a take for a second; Kalshi completes at once.
+    short_b(s, [(101, [(0.62, 100)], [(0.60, 100)]), (102, [(0.51, 100)], [(0.38, 100)])] + QUIET[2:] + [GONE_B])
+    assert sent(feed(s, [GONE_B])) == [(1201, Side.ASK, 20 * S, round(0.48 * P))]
+
+
+def test_completion_falls_back_to_a_delayed_venue(make):
+    s = make(legs=LEGS[:2], taker_delay_seconds={"polymarket": 1.0})
+    short_b(s, [(101, [(0.62, 100)], [(0.60, 100)]), (102, [(0.40, 100)], [(0.38, 100)])])
+    # Kalshi's books are bad, so it has nothing to complete with.
+    out = s.on_market_data(_Book(201, [(0.50, 100)], [(0.48, 100)], 0, bad=True))
+    out += s.on_market_data(_Book(202, [(0.52, 100)], [(0.49, 100)], 0, bad=True))
+    assert sent(out) == [(1102, Side.BID, 20 * S, round(0.40 * P))]

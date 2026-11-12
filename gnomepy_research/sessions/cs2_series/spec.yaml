@@ -3,7 +3,7 @@ name: cs2_series
 description: >
   CS2 series winner (BO3) in the last hour before kickoff, one session per HLTV match holding
   every venue's listings: Polymarket International, Kalshi and Polymarket US. The session prices
-  the announced fives with e12-wide-mm (the weekly cs2_e12_fit artifact) and blends that with the
+  the announced fives with e12-wide-mm (the daily cs2_e12_fit artifact) and blends that with the
   market's own mid (the cs2_e12_blend weights). It buys whichever listing is underpriced by at
   least the threshold after its taker fee, sized by fractional Kelly on the bankroll and capped
   at max_stake_usd per match across venues, holding to settlement. When the model's price
@@ -34,7 +34,7 @@ constraints:
   notes:
     - Model (Nov 2026) - e12-wide-mm, e12 plus 0.406 x the FACEIT matchmaking-skill gap of the announced fives, replaced the XGB pre-veto + Bayesian series blend
     - The fair price is fitted on kickoff prices only, so the session trades the last hour; 12h-out comparisons carry lineup lookahead and say nothing about this window
-    - Mid from Polymarket International when it has a two-sided book (the blend was fitted on its prices), else the tightest two-sided book on another venue
+    - Mid from Polymarket International when its book is liquid (spread at most liquid_spread; the blend was fitted on its prices), else the tightest liquid book elsewhere; no liquid book anywhere, no trade (lower-tier Polymarket International books can be 57c wide)
     - November 2026 is pre-registered as a test of the blend (Test 2, scored in December); paper trading runs alongside it
     - Capacity (prod cs2_upcoming_books, Oct 21) - when a side clears 5c at the best ask, the median $ still clearing it is ~$1,750 on PM Intl, ~$615 Kalshi, ~$500 PM US; one session across venues reaches all of it under the single $250 cap
     - The price band and adverse-move stop of the XGB-era strategy are gone; judge whether long shots or late moves need them again from paper fills

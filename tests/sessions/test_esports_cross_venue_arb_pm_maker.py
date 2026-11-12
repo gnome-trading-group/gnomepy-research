@@ -14,6 +14,7 @@ from tests.sessions.conftest import FakePositions, FakeStreams
 from tests.sessions.test_esports_cross_venue_arb import LEGS, LISTINGS, RATES, _Book, _Registry
 
 P, S = Scales.PRICE, Scales.SIZE
+SEC = 1_000_000_000
 
 
 def test_bid_leaves_min_edge_after_the_hedge():
@@ -136,3 +137,19 @@ def test_no_maker_venue_ends_the_session_instead_of_failing(make):
     s.request_exit = lambda reason, **kw: exits.append(reason) or True
     assert feed(s, BOOKS) == []
     assert exits and "polymarket doesn't list this market" in exits[0]
+
+
+def test_a_rejected_hedge_waits_and_is_not_resent_unchanged(make):
+    s = make()
+    feed(s, BOOKS)
+    s.positions.set(LISTINGS[101], 20 * S)
+    eid, sid = LISTINGS[101]
+    s.on_execution_report(SimpleNamespace(exchange_id=eid, security_id=sid, order_status=OrderStatus.PARTIALLY_FILLED,
+                                          filled_qty=20 * S, timestamp_recv=0))
+    eid, sid = LISTINGS[302]
+    s.on_execution_report(SimpleNamespace(exchange_id=eid, security_id=sid, order_status=OrderStatus.REJECTED,
+                                          filled_qty=0, timestamp_recv=0))
+    assert [i for i in feed(s, BOOKS[-1:], t=5 * SEC) if i.take_size] == []
+    moved = (302, [(0.47, 60)], [(0.44, 100)])
+    takes = [i for i in feed(s, [moved], t=6 * SEC) if i.take_size]
+    assert [(i.security_id, i.take_size, i.take_limit_price) for i in takes] == [(1302, 20 * S, round(0.47 * P))]

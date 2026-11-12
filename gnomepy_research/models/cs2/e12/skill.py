@@ -1,6 +1,6 @@
 """
-Round-level player skills on HLTV and FACEIT maps (penalised maximum likelihood, one fit per weekly cutoff on a
-trailing window):
+Round-level player skills on HLTV and FACEIT maps (penalised maximum likelihood, one fit per cutoff on a trailing
+window):
 
     rounds_A ~ Binomial(n, sigmoid(mean(s_A) - mean(s_B))),   each map weighted by 0.5^(age / half_life) * w_source
     s_p ~ N(x_p . gamma, sigma^2)
@@ -30,6 +30,8 @@ from gnomepy_research.models.cs2.e12.data import DIVISIONS, FIVE, UNRANKED, Inpu
 from gnomepy_research.models.cs2.hltv.player_skill import regulation_map_win
 
 LOG_UNRANKED = np.log(UNRANKED)
+# A fit whose largest gradient component is above this has not reached its optimum.
+CONVERGED_GRAD = 1e-4
 PRIOR_DIVISIONS = DIVISIONS[:-1]
 
 
@@ -155,8 +157,13 @@ class SkillFit:
         res = minimize(objective, np.zeros(P + K), jac=True, hessp=hessp, method="trust-krylov",
                        options={"maxiter": 200, "gtol": 1e-6})
         played = np.bincount(np.concatenate([ia.ravel(), ib.ravel()]), minlength=P)
+        grad_max = float(np.abs(res.jac).max())
+        # Converged by the gradient, not scipy's flag: on objectives of ~1e5-1e6 trust-krylov stops at the floating-point
+        # floor ("a bad approximation caused failure to predict improvement") with the gradient near 1e-6, a hair over
+        # gtol, and a restart from there takes no step at all.
         return cls(players, res.x[:P], played, res.x[P:],
-                   {"maps": M, "players": P, "iters": int(res.nit), "converged": bool(res.success)})
+                   {"maps": M, "players": P, "iters": int(res.nit), "converged": grad_max <= CONVERGED_GRAD,
+                    "grad_max": grad_max, "stop": str(res.message)})
 
     def unknown_prior(self, team_rank: float) -> float:
         """A player the window never saw, on a team with this HLTV rank."""

@@ -1,5 +1,5 @@
 """
-e12-wide-mm, fitted at a weekly cutoff and priced from announced fives.
+e12-wide-mm, fitted at a cutoff (daily in production) and priced from announced fives.
 
     e12      = sigmoid(LAYER . [zh, zh*thin_h, standin, idle, zf, zf*thin_f])
     logit(q) = logit(e12) + GAMMA * (mm(five A) - mm(five B))
@@ -67,7 +67,7 @@ class E12Model:
 
     @classmethod
     def build(cls, tables: Tables, cutoff: pd.Timestamp) -> E12Model:
-        """The fit at `cutoff` (naive UTC, a Monday 00:00 by convention) from rows known before it."""
+        """The fit at `cutoff` (naive UTC, any time of day) from rows known before it."""
         cutoff = pd.Timestamp(cutoff)
         inputs = Inputs(tables, cutoff)
         hltv = SkillFit.fit(inputs, cutoff, CONFIG, False)

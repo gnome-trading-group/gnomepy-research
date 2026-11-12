@@ -1,0 +1,43 @@
+end_date: '2026-11-08T15:51:00'
+exchanges:
+  KALSHI:
+    order_processing_latency:
+      base_nanos: 5000000
+      maker_delay_nanos: 0
+      taker_delay_nanos: 0
+      type: maker_taker
+  POLYMARKET_INTL:
+    order_processing_latency:
+      base_nanos: 5000000
+      maker_delay_nanos: 0
+      taker_delay_nanos: 1000000000
+      type: maker_taker
+  POLYMARKET_US:
+    order_processing_latency:
+      base_nanos: 5000000
+      maker_delay_nanos: 0
+      taker_delay_nanos: 0
+      type: maker_taker
+listings:
+- listing_id: 2502511
+- listing_id: 2502512
+- listing_id: 2506273
+- listing_id: 2506274
+- listing_id: 2506769
+- listing_id: 2506770
+record_depth: 10
+start_date: '2026-11-08T14:06:20'
+strategy:
+  args:
+    legs:
+    - listing_team_a: 2506770
+      listing_team_b: 2506769
+      venue: kalshi
+    - listing_team_a: 2506273
+      listing_team_b: 2506274
+      venue: polymarket
+    - listing_team_a: 2502511
+      listing_team_b: 2502512
+      venue: polymarket_us
+    max_locked_usd: 100000
+  class_name: gnomepy_research.sessions.cs2_cross_venue_arb__pm_maker.strategy:CS2CrossVenueArbPMMaker

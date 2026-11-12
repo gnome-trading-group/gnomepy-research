@@ -154,7 +154,7 @@ from `gnomepy_research/models/`; a live strategy is its session's `strategy.py`,
 models/cs2/hltv/             HLTV point-in-time features and priors (base-only)
 models/cs2/win_probability/  pre-map, round and series models
 models/cs2/prematch/         Polymarket market lookup, HLTV team identity
-models/cs2/e12/              e12-wide-mm series model: weekly fit (HLTV + FACEIT skills, matchmaking skill) saved as
+models/cs2/e12/              e12-wide-mm series model: daily fit (HLTV + FACEIT skills, matchmaking skill) saved as
                              an artifact, and the pricer sessions use on announced fives (base-only)
 models/cfb/features/         CFB point-in-time features
 models/cfb/efficiency/       dynamic efficiency model and posteriors
@@ -171,12 +171,13 @@ A session's `strategy.class` is `gnomepy_research.sessions.<name>.strategy:<Clas
 config entries reach the instance as one `STRATEGY_ARGS_JSON` env var, and gnomepy's runner passes them to the
 class constructor as keyword arguments, so arg names must match `__init__` exactly.
 
-Only `cs2_series` is launched live today (gnome-launcher's `cs2` rule). The rest are backtest/paper research
+`cs2_series` (gnome-launcher's `cs2` rule) and `rt_review_wave` (its `rt` rule) are launched by the launcher. The rest are backtest/paper research
 whose strategies could be launched the same way.
 
 | Package | Class | Trades | Key args |
 |---|---|---|---|
-| `cs2_series` | `CS2Series` | CS2 BO3 series winner in the last hour before kickoff, one session per HLTV match holding every venue's listings (Polymarket Intl, Kalshi, PM US); e12-wide-mm blended with the market mid, Kelly-sized taker buys of the underpriced team, sold only when the model's price changes and a sale beats holding; held to settlement | `match_id`, `legs` (`[{venue, listing_team_a, listing_team_b}]`, set by the launcher), `bankroll_usd` (required), `min_edge`, `kelly_fraction`, `max_stake_usd` (per match), `window_hours`, `entry_cutoff_hours`, `max_model_age_days`, `model_path`/`blend_path` (artifact URIs; unpinned = latest) |
+| `cs2_series` | `CS2Series` | CS2 BO3 series winner in the last hour before kickoff, one session per HLTV match holding every venue's listings (Polymarket Intl, Kalshi, PM US); e12-wide-mm blended with the market mid, Kelly-sized taker buys of the underpriced team, sold only when the model's price changes and a sale beats holding; held to settlement | `match_id`, `legs` (`[{venue, listing_team_a, listing_team_b}]`, set by the launcher), `bankroll_usd` (required), `min_edge`, `kelly_fraction`, `max_stake_usd` (per match), `window_hours`, `entry_cutoff_hours`, `max_model_age_days`, `liquid_spread` (widest book the mid may come from), `model_path`/`blend_path` (artifact URIs; unpinned = latest) |
+| `rt_review_wave` | `RtReviewWave` | A film's first wave of outlet reviews on Rotten Tomatoes "at least X" markets, one session per film holding every venue's strikes (Kalshi, PM Intl, PM US); from the third review of a cluster for 15 min, buys YES on every strike priced 3-97c when Claude's fresh share (gnome-pipelines' `rt_reviews`, re-read every 5 s) is 0.10 above the 0.667 baseline, NO when below; IOC at most 3c through, side locked once held, held to settlement; ends itself after the window | `film_id`, `legs` (`[{venue, strike, yes_listing, no_listing}]`, set by the launcher), `baseline`, `threshold`, `min_reviews`, `window_minutes`, `max_contracts_per_strike`, `max_usd_per_venue`, `max_through`, `min_price`/`max_price` |
 | `cs2_win_probability` | `CS2WinProbability` | In-play CS2 map/match on Polymarket/Kalshi from GRID telemetry; maker quotes around model fair value | `listing_id_yes`, `listing_id_no`, `model_path`, `level`, `grid_api_key`/`grid_series_id` (live) or `fair_value_series_path` (backtest), `edge_threshold`, `max_position` |
 | `cfb_win_probability` | none | CFB pregame model work; `live/` is a parked drive-level simulator, not a strategy | - |
 | `cross_prediction_arb` | `CrossPredictionArb` | Cross- and intra-venue binary arb (Polymarket/Kalshi) | `outcomes` (list of `{pm, k}` listing pairs), `max_position`, `min_edge_cents`, `price_model` |

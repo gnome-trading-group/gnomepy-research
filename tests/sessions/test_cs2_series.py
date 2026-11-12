@@ -189,7 +189,7 @@ def test_a_sale_is_whole_lots():
 class _Model:
     """Prices team A at 0.40 with its usual five, 0.25 with a stand-in, 0.60 when team B has one."""
 
-    def __init__(self, cutoff=pd.Timestamp("2026-10-05") - pd.Timedelta(days=3)):
+    def __init__(self, cutoff=pd.Timestamp("2026-10-05 08:30")):
         self.cutoff = cutoff
         self.priced = []
 
@@ -628,9 +628,9 @@ def test_the_mid_is_polymarket_internationals_else_the_tightest_elsewhere(make):
     _tick(s, 201, [(0.61, 10)], 90, bids=[(0.60, 10)])
     _tick(s, 302, [(0.42, 10)], 90, bids=[(0.38, 10)])
     assert s._mid_team_a() == pytest.approx(0.605), "Kalshi's team A book is the tightest"
-    _tick(s, 101, [(0.53, 10)], 90, bids=[(0.47, 10)])
-    assert s._mid_team_a() == pytest.approx(0.50), "Polymarket's, though wider: the blend was fitted on it"
-    _tick(s, 101, [(0.53, 10)], 90, bids=[])
+    _tick(s, 101, [(0.52, 10)], 90, bids=[(0.48, 10)])
+    assert s._mid_team_a() == pytest.approx(0.50), "Polymarket's, though wider (but still liquid): the blend was fitted on it"
+    _tick(s, 101, [(0.52, 10)], 90, bids=[])
     _tick(s, 102, [(0.51, 10)], 90, bids=[(0.49, 10)])
     assert s._mid_team_a() == pytest.approx(0.50), "Polymarket's team B book, where team A's is one-sided"
     _tick(s, 102, [(0.51, 10)], 90, bids=[])
@@ -648,10 +648,12 @@ def test_the_market_mid_pulls_the_fair_price(make):
     assert _tick(s, 102, B_ASK, 28, bids=[(0.48, 10)]) == [], "the market says team A at 0.65: team B is no bargain"
 
 
+# Kickoff 2026-10-05 18:00; the tick is 30 minutes before it. The daily fit is two days old at most.
 @pytest.mark.parametrize("cutoff, trades", [
-    (pd.Timestamp("2026-09-28"), True),
-    (pd.Timestamp("2026-09-26"), False),
-    (pd.Timestamp("2026-10-06"), False),
+    (pd.Timestamp("2026-10-05 08:30"), True),
+    (pd.Timestamp("2026-10-04 08:30"), True),
+    (pd.Timestamp("2026-10-03 17:00"), False),
+    (pd.Timestamp("2026-10-06 08:30"), False),
 ])
 def test_no_trading_on_a_stale_or_future_model(make, cutoff, trades):
     s = make(models=_models(_Model(cutoff=cutoff)))
@@ -787,7 +789,7 @@ def test_once_sold_out_the_other_team_is_bought(make):
 
 def test_a_model_move_in_the_positions_favour_tops_it_up_and_becomes_the_new_reference(make):
     s = _holding_b(make, [_feature(EARLY), _feature(_before(20), lineup_a=STANDIN_A)])
-    o = _tick(s, 102, [(0.70, 1000)], 10, bids=[(0.30, 1000)])[0]
+    o = _tick(s, 102, [(0.70, 1000)], 10, bids=[(0.68, 1000)])[0]
     assert o.take_side == Side.BID, "team B is now worth 0.75"
     s.positions.fill(102, shares=o.take_size / S, price=0.70)
     _done(s, 102)
@@ -872,7 +874,7 @@ def test_each_new_model_price_is_recorded_once(make):
     rows = s.metrics.streams["cs2_series_model"].rows
     assert [r["q"] for r in rows] == pytest.approx([0.40, 0.60])
     assert rows[0]["lineups_hash"] != rows[1]["lineups_hash"] and rows[1]["lineup_known"] == 1
-    assert rows[1]["model_cutoff"] == pd.Timestamp("2026-10-02").value
+    assert rows[1]["model_cutoff"] == pd.Timestamp("2026-10-05 08:30").value
 
 
 # ---- retries: back off after a miss, decide only on what changed ------------------------------------------------
@@ -1020,3 +1022,29 @@ def test_a_prod_paper_sessions_books_no_longer_draw_an_order_per_update(make):
     assert orders[0][0] == 301 and orders[0][2] == orders[0][1], "Polymarket US's Azuolas ask, filled in full"
     assert len(orders) <= 25, f"{len(orders)} orders for {len(books)} book updates"
     assert sum(got > 0 for _, _, got in orders) >= len(orders) // 4, "orders go out when the book has something new, so a fair share of them fill"
+
+
+# ---- the mid comes from a liquid book -----------------------------------------------------------------------------
+
+WIDE = [(0.10, 500)]
+
+
+def test_a_wide_polymarket_book_gives_way_to_a_liquid_venue(make):
+    s = make()
+    _tick(s, 101, [(0.88, 500)], 30.5, bids=WIDE)
+    _tick(s, 301, [(0.33, 500)], 30.4, bids=[(0.32, 500)])
+    assert s._mid_team_a() == pytest.approx(0.325), "Polymarket 78c wide: its midpoint is nobody's price"
+
+
+def test_team_bs_book_gives_the_mid_where_team_as_is_wide(make):
+    s = make()
+    _tick(s, 101, [(0.88, 500)], 30.5, bids=WIDE)
+    _tick(s, 102, [(0.53, 500)], 30.4, bids=[(0.51, 500)])
+    assert s._mid_team_a() == pytest.approx(0.48)
+
+
+def test_no_liquid_book_anywhere_means_no_fair_price_and_no_trade(make):
+    s = make()
+    _tick(s, 101, [(0.88, 500)], 30.5, bids=WIDE)
+    assert s._mid_team_a() is None
+    assert _tick(s, 102, B_ASK, 30, bids=[(0.12, 500)]) == [], "team B at 0.50 looks cheap, but against no market price"

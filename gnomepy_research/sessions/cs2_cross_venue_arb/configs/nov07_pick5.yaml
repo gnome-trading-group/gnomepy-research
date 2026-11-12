@@ -1,0 +1,111 @@
+strategy:
+  class_name: gnomepy_research.sessions.cs2_cross_venue_arb.strategy:CS2CrossVenueArb
+  args:
+    legs: []
+record_depth: 10
+scenarios:
+  teletubisie_xiesport_map2_2026-11-07:
+    start_date: '2026-11-07T12:33:41'
+    end_date: '2026-11-07T17:30:00'
+    listings:
+    - listing_id: 2254187
+    - listing_id: 2254188
+    - listing_id: 2256654
+    - listing_id: 2256655
+    - listing_id: 2316811
+    - listing_id: 2316812
+    strategy_args:
+      legs:
+      - venue: kalshi
+        listing_team_a: 2316812
+        listing_team_b: 2316811
+      - venue: polymarket
+        listing_team_a: 2254187
+        listing_team_b: 2254188
+      - venue: polymarket_us
+        listing_team_a: 2256654
+        listing_team_b: 2256655
+  exzerotenacity_leoteam_match_2026-11-07:
+    start_date: '2026-11-07T15:10:01'
+    end_date: '2026-11-07T18:53:00'
+    listings:
+    - listing_id: 2362795
+    - listing_id: 2362796
+    - listing_id: 2363412
+    - listing_id: 2363413
+    - listing_id: 2389380
+    - listing_id: 2389381
+    strategy_args:
+      legs:
+      - venue: kalshi
+        listing_team_a: 2363413
+        listing_team_b: 2363412
+      - venue: polymarket
+        listing_team_a: 2389380
+        listing_team_b: 2389381
+      - venue: polymarket_us
+        listing_team_a: 2362795
+        listing_team_b: 2362796
+  natusvincere_themongolz_map1_2026-11-07:
+    start_date: '2026-11-07T06:34:46'
+    end_date: '2026-11-07T07:50:00'
+    listings:
+    - listing_id: 2385582
+    - listing_id: 2385583
+    - listing_id: 2385606
+    - listing_id: 2385607
+    - listing_id: 2386470
+    - listing_id: 2386471
+    strategy_args:
+      legs:
+      - venue: kalshi
+        listing_team_a: 2386471
+        listing_team_b: 2386470
+      - venue: polymarket
+        listing_team_a: 2385583
+        listing_team_b: 2385582
+      - venue: polymarket_us
+        listing_team_a: 2385607
+        listing_team_b: 2385606
+  betboomteam_mouz_map1_2026-11-07:
+    start_date: '2026-11-07T09:50:58'
+    end_date: '2026-11-07T10:52:00'
+    listings:
+    - listing_id: 2393000
+    - listing_id: 2393001
+    - listing_id: 2394010
+    - listing_id: 2394011
+    - listing_id: 2394723
+    - listing_id: 2394724
+    strategy_args:
+      legs:
+      - venue: kalshi
+        listing_team_a: 2394724
+        listing_team_b: 2394723
+      - venue: polymarket
+        listing_team_a: 2394011
+        listing_team_b: 2394010
+      - venue: polymarket_us
+        listing_team_a: 2393000
+        listing_team_b: 2393001
+  6yubojlbl_9ine_match_2026-11-07:
+    start_date: '2026-11-07T14:01:18'
+    end_date: '2026-11-07T18:32:00'
+    listings:
+    - listing_id: 2396188
+    - listing_id: 2396189
+    - listing_id: 2413950
+    - listing_id: 2413951
+    - listing_id: 2415066
+    - listing_id: 2415067
+    strategy_args:
+      legs:
+      - venue: kalshi
+        listing_team_a: 2413951
+        listing_team_b: 2413950
+      - venue: polymarket
+        listing_team_a: 2415066
+        listing_team_b: 2415067
+      - venue: polymarket_us
+        listing_team_a: 2396188
+        listing_team_b: 2396189

@@ -1,0 +1,71 @@
+{
+  "sweep_id": "01a1c176-a8f1-77e6-8f6c-e11b55251fae",
+  "job_count": 5,
+  "completed_count": 5,
+  "sweep_params": {},
+  "jobs": [
+    {
+      "job_index": 0,
+      "job_id": "01a1c176-a8f1-77e6-8f6c-e11b55251fae-0000",
+      "scenario": "teletubisie_xiesport_map2_2026-11-07",
+      "config_params": {},
+      "status": "COMPLETED",
+      "warnings": [
+        "Market data missing: 978.2 minutes across 4 streams (mark)"
+      ],
+      "output": "../gnomepy-research/gnomepy_research/sessions/cs2_cross_venue_arb/results/nov07_pick5_delay/jobs/0000"
+    },
+    {
+      "job_index": 1,
+      "job_id": "01a1c176-a8f1-77e6-8f6c-e11b55251fae-0001",
+      "scenario": "exzerotenacity_leoteam_match_2026-11-07",
+      "config_params": {},
+      "status": "COMPLETED",
+      "warnings": [
+        "Market data missing: 149.6 minutes across 4 streams (mark)"
+      ],
+      "output": "../gnomepy-research/gnomepy_research/sessions/cs2_cross_venue_arb/results/nov07_pick5_delay/jobs/0001"
+    },
+    {
+      "job_index": 2,
+      "job_id": "01a1c176-a8f1-77e6-8f6c-e11b55251fae-0002",
+      "scenario": "natusvincere_themongolz_map1_2026-11-07",
+      "config_params": {},
+      "status": "COMPLETED",
+      "warnings": [
+        "Market data missing: 7.2 minutes across 2 streams (mark)"
+      ],
+      "output": "../gnomepy-research/gnomepy_research/sessions/cs2_cross_venue_arb/results/nov07_pick5_delay/jobs/0002"
+    },
+    {
+      "job_index": 3,
+      "job_id": "01a1c176-a8f1-77e6-8f6c-e11b55251fae-0003",
+      "scenario": "betboomteam_mouz_map1_2026-11-07",
+      "config_params": {},
+      "status": "COMPLETED",
+      "warnings": [
+        "Market data missing: 14.9 minutes across 2 streams (mark)",
+        "Dropping MBP_10 record at 1794047645730797948, filed after the run passed its time; further ones are only counted"
+      ],
+      "output": "../gnomepy-research/gnomepy_research/sessions/cs2_cross_venue_arb/results/nov07_pick5_delay/jobs/0003"
+    },
+    {
+      "job_index": 4,
+      "job_id": "01a1c176-a8f1-77e6-8f6c-e11b55251fae-0004",
+      "scenario": "6yubojlbl_9ine_match_2026-11-07",
+      "config_params": {},
+      "status": "COMPLETED",
+      "warnings": [
+        "Market data missing: 167.7 minutes across 4 streams (mark)"
+      ],
+      "output": "../gnomepy-research/gnomepy_research/sessions/cs2_cross_venue_arb/results/nov07_pick5_delay/jobs/0004"
+    }
+  ],
+  "scenarios": [
+    "teletubisie_xiesport_map2_2026-11-07",
+    "exzerotenacity_leoteam_match_2026-11-07",
+    "natusvincere_themongolz_map1_2026-11-07",
+    "betboomteam_mouz_map1_2026-11-07",
+    "6yubojlbl_9ine_match_2026-11-07"
+  ]
+}

@@ -9,7 +9,8 @@ so a fill locks min_edge per pair if the hedge is still there (quoting.py). Bids
 the hedge books move; they are pulled while a fill is being hedged and once the session holds max_locked_usd.
 
 A fill is hedged through the parent's completion, limited to the other venues (a Polymarket International take would
-wait out its delay), no dearer than the best hedge plus completion_slippage, retried until the two teams match. It
+wait out its delay), no dearer than the best hedge plus completion_slippage, retried until the two teams match (no
+sooner than completion_retry_seconds after one came back unfilled, and never resent unchanged after a reject). It
 never takes on its own.
 
 Bids are rounded onto the tick the engine says is in force (Polymarket International moves a market from a cent to a
@@ -30,7 +31,6 @@ import logging
 
 from gnomepy import ExecutionReport, Intent, OrderStatus, Scales, Side
 
-from gnomepy_research.sessions.esports_cross_venue_arb.decision import plan_completion
 from gnomepy_research.sessions.esports_cross_venue_arb.strategy import (
     COMPLETION,
     ENDING,
@@ -95,6 +95,7 @@ class EsportsCrossVenueArbPMMaker(EsportsCrossVenueArb):
                 self._quoted[leg.listing_id] = None
         elif terminal:
             leg.in_flight = False
+            self._note_outcome(leg, report)
         if terminal or report.filled_qty:
             return self._decide(report.timestamp_recv)
         return []
@@ -189,11 +190,12 @@ class EsportsCrossVenueArbPMMaker(EsportsCrossVenueArb):
         return [self._quote(leg, None) for leg in self._venue_legs[self.maker_venue]
                 if self._quoted[leg.listing_id] is not None]
 
+    def _completion_venue_sets(self) -> list[list[str]]:
+        return [[venue for venue in self._venue_legs if venue != self.maker_venue]]
+
     def _complete(self, now_ns: int, team: int, contracts: float, gap: float) -> list[Intent]:
-        ladder = sorted((lv for venue in self._venue_legs if venue != self.maker_venue
-                         for lv in self._ladder(venue, team)), key=lambda r: (r.all_in, r.direction))
-        orders = plan_completion(ladder, contracts, self.completion_slippage, self._min_sizes())
-        if orders:
+        sends = self._completion(now_ns, team, contracts)
+        if sends:
             logger.info("hedging %.0f contracts of team %s (gap %.2f) over %d orders", contracts, "AB"[team], gap,
-                        len(orders))
-        return [self._send(now_ns, COMPLETION, o, float("nan"), float("nan"), gap) for o in orders]
+                        len(sends))
+        return [self._send(now_ns, COMPLETION, o, limit, float("nan"), float("nan"), gap) for o, limit in sends]

@@ -1,0 +1,40 @@
+{
+  "backtest_id": "01a1c3f1-30f0-745d-a34c-991ca1154d24",
+  "duration_seconds": 10475.261479,
+  "market_record_count": 875091,
+  "intent_record_count": 1780,
+  "fill_count": 13,
+  "total_volume": 378.66999999999996,
+  "total_notional": 187.12104,
+  "final_position": NaN,
+  "final_positions": {
+    "2403048": 0.0,
+    "2403047": 0.0,
+    "2433810": 189.34,
+    "2433811": 0.0,
+    "2411410": 0.0,
+    "2411411": 189.32999999999998
+  },
+  "total_fees": 1.45,
+  "final_pnl": 2.8515499999999996,
+  "final_pnl_by_symbol": {
+    "2403048": 0.0,
+    "2403047": 0.0,
+    "2433810": 25.214100000000002,
+    "2433811": 0.0,
+    "2411410": 0.0,
+    "2411411": -22.362550000000002
+  },
+  "max_drawdown": 10.412900000000036,
+  "sharpe": 0.008031237720410983,
+  "sortino": 0.011563645577072148,
+  "sharpe_std": 0.007220106573130017,
+  "pct_positive_buckets": 0.4,
+  "oms_rejects": {},
+  "oms_reject_count": 0,
+  "warnings": [
+    "Market data missing: 15.0 minutes across 2 streams (mark)",
+    "Dropping MBP_10 record at 1794063344294899912, filed after the run passed its time; further ones are only counted"
+  ],
+  "market_data_missing_fraction": 0.014338133921911867
+}

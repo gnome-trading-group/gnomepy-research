@@ -1,0 +1,39 @@
+{
+  "backtest_id": "01a1c3d6-d3c4-7601-81a9-c83ed27b2c9e",
+  "duration_seconds": 2691.323317,
+  "market_record_count": 114828,
+  "intent_record_count": 463,
+  "fill_count": 4,
+  "total_volume": 20.0,
+  "total_notional": 9.75,
+  "final_position": NaN,
+  "final_positions": {
+    "2369161": 0.0,
+    "2363966": 5.0,
+    "2363967": 5.0,
+    "2364551": 5.0,
+    "2364552": 5.0,
+    "2369162": 0.0
+  },
+  "total_fees": 0.09,
+  "final_pnl": 0.15999999999999914,
+  "final_pnl_by_symbol": {
+    "2369161": 0.0,
+    "2363966": 0.5099999999999998,
+    "2363967": -0.7000000000000002,
+    "2364551": 0.9399999999999995,
+    "2364552": -0.59,
+    "2369162": 0.0
+  },
+  "max_drawdown": 0.7250000000000003,
+  "sharpe": 0.01090869367256237,
+  "sortino": 0.01593045605083565,
+  "sharpe_std": 0.06496140905404384,
+  "pct_positive_buckets": 0.6,
+  "oms_rejects": {},
+  "oms_reject_count": 0,
+  "warnings": [
+    "Dropping MBP_10 record at 1793984066953400796, filed after the run passed its time; further ones are only counted"
+  ],
+  "market_data_missing_fraction": 0.0
+}

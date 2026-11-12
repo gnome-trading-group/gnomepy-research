@@ -33,8 +33,16 @@ NO on it.
 The legs land at different venues at different times, so they can come back unequal. Once neither is in flight, any
 difference between what pays if team A wins and what pays if team B wins is completed by buying the short team
 wherever it is cheapest, no dearer than its best level plus completion_slippage, retried on later updates until the
-two match. Completion never waits for the cooldown and never stops for the stake cap: an unhedged position is the one
-risk the strategy exists not to hold.
+two match. A completion goes to the venues that match a taker order at once, and to a delayed one (Polymarket
+International) only when they have nothing within the cap. One that comes back unfilled is retried no sooner than
+completion_retry_seconds later, and an order the venue rejected is never sent again unchanged: the reject would only
+repeat, once per book update. Completion never waits for the cooldown and never stops for the stake cap: an unhedged
+position is the one risk the strategy exists not to hold.
+
+Every limit is put on the tick the engine enforces, rounded toward the book (a buy up, a sale down), so it still
+reaches the level it was costed on: Polymarket International moves a market between a cent and a tenth of one, and a
+book quoted on the finer tick than the listing's spec says would otherwise be rejected order after order. A limit
+that rounds to 0 or $1 is not sent; an attempt with such a leg is not made.
 
 A venue may hold a taker order before matching it (Polymarket International delays marketable orders on these
 markets by about a second, its secondsDelay, during which makers can pull quotes). An attempt sends the slowest
@@ -84,6 +92,10 @@ OPEN, CLOSED, ENDING, EXIT = "open", "closed", "ending", "exit"
 DEFAULT_POLYMARKET_DELAY = 1.0
 
 
+def _key(order: Order, limit: int) -> tuple[int, int, float, int]:
+    return order.listing_id, order.direction, order.contracts, limit
+
+
 def make_watch(polymarket_slug: str | None, kalshi_event_ticker: str | None, game_states: list | None):
     """How the session follows the match: the rows a session recorded (a replay), the venues' live feeds, or none."""
     if game_states is not None:
@@ -108,6 +120,8 @@ class _Leg:
     bids: list[Level] = field(default_factory=list)
     bad: bool = True  # no book yet is no book to trust
     in_flight: bool = False
+    # What the order in flight is: its kind (ARB, COMPLETION) and (listing, direction, contracts, scaled limit).
+    sent: tuple[int, tuple[int, int, float, int]] | None = None
 
     def top(self) -> tuple:
         return (self.asks[0] if self.asks else None, self.bids[0] if self.bids else None)
@@ -122,6 +136,7 @@ class EsportsCrossVenueArb(Strategy):
         max_contracts: the most pairs one attempt sends.
         max_locked_usd: the most pairs (each paying $1) the session holds; no new attempt starts past it.
         completion_slippage: how far above the short team's best level a completion may pay.
+        completion_retry_seconds: the least wait after a completion came back unfilled before the next.
         cooldown_seconds: the least time between two attempts.
         sell_rival_venues: venues where a team may also be held by selling the rival team's listing.
         taker_delay_seconds: how long each venue holds a taker order before matching it; legs are staggered by it.
@@ -151,6 +166,7 @@ class EsportsCrossVenueArb(Strategy):
         max_contracts: float = 1000.0,
         max_locked_usd: float = 2000.0,
         completion_slippage: float = 0.05,
+        completion_retry_seconds: float = 1.0,
         cooldown_seconds: float = 10.0,
         sell_rival_venues: tuple[str, ...] = ("kalshi",),
         taker_delay_seconds: dict[str, float] | None = None,
@@ -192,11 +208,15 @@ class EsportsCrossVenueArb(Strategy):
         self.max_contracts = max_contracts
         self.max_locked_usd = max_locked_usd
         self.completion_slippage = completion_slippage
+        self._completion_retry_ns = int(completion_retry_seconds * 1e9)
+        self._completion_wait_until = 0
+        # Completions the venue rejected, as (listing, direction, contracts, scaled limit): never resent unchanged.
+        self._rejected_completions: set[tuple[int, int, float, int]] = set()
         self.cooldown_ns = int(cooldown_seconds * 1e9)
         self.sell_rival_venues = set(sell_rival_venues)
         self._delay_ns: dict[str, int] = {}
-        # Legs of the current attempt waiting for their send time: (send at, order, edge, profit).
-        self._held: list[tuple[int, Order, float, float]] = []
+        # Legs of the current attempt waiting for their send time: (send at, order, scaled limit, edge, profit).
+        self._held: list[tuple[int, Order, int, float, float]] = []
         self.book_depth = book_depth
         self._processing_time_ns = processing_time_ns
         self._fee_rates = registry_fee_rates(self)
@@ -334,9 +354,21 @@ class EsportsCrossVenueArb(Strategy):
         if leg is None or report.order_status not in TERMINAL:
             return []
         leg.in_flight = False
-        if report.order_status != OrderStatus.FILLED and self._last_pair is not None:
-            self._backoff[self._last_pair] = self._pair_tops(self._last_pair)
+        self._note_outcome(leg, report)
         return self._decide(report.timestamp_recv)
+
+    def _note_outcome(self, leg: _Leg, report: ExecutionReport) -> None:
+        """What a terminal report on a taker order means for the next one: a pair that came back short backs off
+        until its tops move, a completion that came back unfilled waits, and one rejected is not sent again."""
+        if leg.sent is None or report.order_status == OrderStatus.FILLED:
+            return
+        kind, key = leg.sent
+        if kind == COMPLETION:
+            self._completion_wait_until = report.timestamp_recv + self._completion_retry_ns
+            if report.order_status == OrderStatus.REJECTED:
+                self._rejected_completions.add(key)
+        elif self._last_pair is not None:
+            self._backoff[self._last_pair] = self._pair_tops(self._last_pair)
 
     # ---- decisions -----------------------------------------------------------------------
 
@@ -347,7 +379,7 @@ class EsportsCrossVenueArb(Strategy):
         if self._held:
             due = [h for h in self._held if h[0] <= now_ns]
             self._held = [h for h in self._held if h[0] > now_ns]
-            return [self._send(now_ns, ARB, order, edge, profit, 0.0) for _, order, edge, profit in due]
+            return [self._send(now_ns, ARB, order, limit, edge, profit, 0.0) for _, order, limit, edge, profit in due]
         if any(leg.in_flight for leg in self._legs):
             return []
         pays_a, pays_b = self._exposure()
@@ -371,6 +403,8 @@ class EsportsCrossVenueArb(Strategy):
             ladder_a, ladder_b = self._ladder(va, 0), self._ladder(vb, 1)
             plan = plan_pair(ladder_a, ladder_b, self.min_edge, room)
             plan = whole(plan, self._min_sizes()) if plan else None
+            if plan and any(self._take_limit(o) is None for o in plan.orders_a + plan.orders_b):
+                plan = None
             if plan and (best is None or plan.profit > best[1].profit):
                 best = ((va, vb), plan)
         if best is None:
@@ -387,20 +421,39 @@ class EsportsCrossVenueArb(Strategy):
         for o in orders:
             wait = slowest - self._delay_ns.get(self._leg_of[o.listing_id].venue, 0)
             if wait > 0:
-                self._held.append((now_ns + wait, o, plan.edge_first, plan.profit))
+                self._held.append((now_ns + wait, o, self._take_limit(o), plan.edge_first, plan.profit))
             else:
                 now_orders.append(o)
-        return [self._send(now_ns, ARB, o, plan.edge_first, plan.profit, 0.0) for o in now_orders]
+        return [self._send(now_ns, ARB, o, self._take_limit(o), plan.edge_first, plan.profit, 0.0) for o in now_orders]
 
     def _complete(self, now_ns: int, team: int, contracts: float, gap: float) -> list[Intent]:
-        ladder = sorted((lv for venue in self._venue_legs for lv in self._ladder(venue, team)),
-                        key=lambda r: (r.all_in, r.direction))
-        orders = plan_completion(ladder, contracts, self.completion_slippage, self._min_sizes())
-        if not orders:
+        sends = self._completion(now_ns, team, contracts)
+        if not sends:
             return []
         logger.info("completing %.0f contracts of team %s (gap %.2f) over %d orders", contracts, "AB"[team], gap,
-                    len(orders))
-        return [self._send(now_ns, COMPLETION, o, math.nan, math.nan, gap) for o in orders]
+                    len(sends))
+        return [self._send(now_ns, COMPLETION, o, limit, math.nan, math.nan, gap) for o, limit in sends]
+
+    def _completion_venue_sets(self) -> list[list[str]]:
+        """The venues a completion may use, in order of preference: those matching a taker order at once, then all."""
+        fast = [venue for venue in self._venue_legs if self._delay_ns.get(venue, 0) <= 0]
+        return [fast] if len(fast) == len(self._venue_legs) else [fast, list(self._venue_legs)]
+
+    def _completion(self, now_ns: int, team: int, contracts: float) -> list[tuple[Order, int]]:
+        """The orders, with their scaled limits, that buy the short team now: none while a retry waits."""
+        if now_ns < self._completion_wait_until:
+            return []
+        for venues in self._completion_venue_sets():
+            ladder = sorted((lv for venue in venues for lv in self._ladder(venue, team)),
+                            key=lambda r: (r.all_in, r.direction))
+            sends = []
+            for o in plan_completion(ladder, contracts, self.completion_slippage, self._min_sizes()):
+                limit = self._take_limit(o)
+                if limit is not None and _key(o, limit) not in self._rejected_completions:
+                    sends.append((o, limit))
+            if sends:
+                return sends
+        return []
 
     # ---- state ---------------------------------------------------------------------------
 
@@ -428,13 +481,24 @@ class EsportsCrossVenueArb(Strategy):
 
     # ---- orders --------------------------------------------------------------------------
 
-    def _send(self, now_ns: int, kind: int, order: Order, edge: float, profit: float, gap: float) -> Intent:
+    def _take_limit(self, order: Order) -> int | None:
+        """The order's scaled limit on the engine's tick, rounded toward the book; None where that leaves no price."""
+        leg = self._leg_of[order.listing_id]
+        # compliant_price rounds an ask up and a bid down: the way toward the book for a buy and a sale.
+        side = Side.ASK if order.direction == BUY else Side.BID
+        limit = self.positions.compliant_price(leg.exchange_id, leg.security_id, round(order.limit * PRICE_SCALE),
+                                               side)
+        return limit if 0 < limit < PRICE_SCALE else None
+
+    def _send(self, now_ns: int, kind: int, order: Order, limit: int, edge: float, profit: float,
+              gap: float) -> Intent:
         leg = self._leg_of[order.listing_id]
         leg.in_flight = True
+        leg.sent = (kind, _key(order, limit))
         self._record(now_ns, kind, order, edge, profit, gap)
         return Intent(leg.exchange_id, leg.security_id, take_side=Side.BID if order.direction == BUY else Side.ASK,
                       take_size=round(order.contracts * SIZE_SCALE), take_order_type=OrderType.LIMIT,
-                      take_limit_price=round(order.limit * PRICE_SCALE))
+                      take_limit_price=limit)
 
     def _record(self, now_ns: int, kind: int, order: Order, edge: float, profit: float, gap: float) -> None:
         if self._metrics_buf is None:

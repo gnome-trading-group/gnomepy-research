@@ -1,0 +1,23 @@
+end_date: '2026-11-07T07:50:00'
+listings:
+- listing_id: 2385582
+- listing_id: 2385583
+- listing_id: 2385606
+- listing_id: 2385607
+- listing_id: 2386470
+- listing_id: 2386471
+record_depth: 10
+start_date: '2026-11-07T06:34:46'
+strategy:
+  args:
+    legs:
+    - listing_team_a: 2386471
+      listing_team_b: 2386470
+      venue: kalshi
+    - listing_team_a: 2385583
+      listing_team_b: 2385582
+      venue: polymarket
+    - listing_team_a: 2385607
+      listing_team_b: 2385606
+      venue: polymarket_us
+  class_name: gnomepy_research.sessions.cs2_cross_venue_arb.strategy:CS2CrossVenueArb

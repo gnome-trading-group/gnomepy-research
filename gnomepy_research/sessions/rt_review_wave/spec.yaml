@@ -1,0 +1,36 @@
+# DRAFT written by Claude on 2026-11-12 for review - spec.yaml is user-authored, so edit freely.
+name: rt_review_wave
+description: >
+  A film's first wave of outlet reviews on Rotten Tomatoes "at least X" markets, one session per film holding every
+  venue's strikes (Kalshi, Polymarket International, Polymarket US). The rt_reviews polling source (gnome-pipelines)
+  finds each outlet's review within about a minute and Claude calls it fresh or rotten. From the wave's start (the third
+  review of a cluster seen within 6 hours) for 15 minutes the session buys YES on every strike priced 3-97c when the
+  fresh share is at least 0.10 above the past films' median (0.667), NO when it is that far below, with IOC limits at
+  most 3c through the best ask, and holds to settlement.
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">0"
+
+constraints:
+  strategy_type: directional
+  avoid:
+    - trading before the wave starts or after its window
+    - trading with fewer than min_reviews reviews known
+    - holding YES and NO of one film - once a side is held a flipped signal stops the buying
+    - more than max_contracts_per_strike per strike per venue, or max_usd_per_venue per venue
+    - resting orders - IOC only
+    - sending again to a listing whose last order came back short before its top of book moves
+    - sizing from the book alone - holdings come from the engine's positions
+  notes:
+    - Research (Jan-Nov 2026, ~/gnome-research-work/rt/outlets/wave_trade.py) - Claude's fresh share at +5 min minus the other films' median, traded at |signal| >= 0.10 on every strike at the next taker price, +11.0c/contract net on Kalshi (se 3.5c, 51 films), +3.5c by +60 min; Polymarket +8.1c (20 films, ~25x less size)
+    - The research dated the wave by its first review with hindsight (two more followed within 6 h); live, the wave starts when the third is seen. Embargoes lift at once (median 9 reviews known by +5 min), so the two mostly agree
+    - Baseline 0.667 is the median fresh share at +5 min over the research's 74 films (the same over the 68 with at least 3 reviews, and at +15 min)
+    - Paper first (100 contracts per strike, $1,000 per film per venue); go-live criteria in the plan doc (https://claude.ai/artifact/QW6HKebnozpWCu5QuXeVJn)
+
+meta:
+  execution_mode: local
+  interaction_mode: interactive

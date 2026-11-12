@@ -226,3 +226,13 @@ def test_market_blend_matches_the_research_formula_and_round_trips(tmp_path):
     assert b.fair(0.0, 0.5) == b.fair(1e-4, 0.5)
     b.save(tmp_path / "blend.json")
     assert MarketBlend.load(tmp_path / "blend.json") == b
+
+
+def test_a_fit_at_any_time_of_day_converges_by_its_gradient(tmp_path_factory):
+    """A daily fit's cutoff is a morning, not a Monday midnight; its fits reach the optimum, judged by the gradient
+    (scipy's own flag reports trust-krylov's floating-point stop as a failure)."""
+    morning = E12Model.build(BundleTables(_bundle(tmp_path_factory.mktemp("morning"))), CUTOFF + pd.Timedelta(hours=8.5))
+    assert morning.cutoff == CUTOFF + pd.Timedelta(hours=8.5)
+    for fit in ("hltv", "faceit"):
+        info = morning.info[fit]
+        assert info["converged"] and info["grad_max"] <= 1e-4 and info["stop"]

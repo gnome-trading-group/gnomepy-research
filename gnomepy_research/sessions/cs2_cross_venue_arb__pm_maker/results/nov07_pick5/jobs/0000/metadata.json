@@ -1,0 +1,348 @@
+{
+  "backtest_id": "01a1c1ce-84a7-734e-b887-bcf1ce904a2b-0000",
+  "created_at": "2026-11-09T19:36:27.910260+00:00",
+  "start_date": "2026-11-07 12:33:41",
+  "end_date": "2026-11-07 17:30:00",
+  "wall_time_seconds": 88.218,
+  "event_count": 475280,
+  "config_path": "../gnomepy-research/gnomepy_research/sessions/cs2_cross_venue_arb__pm_maker/configs/nov07_pick5.yaml",
+  "config": {
+    "end_date": "2026-11-07T17:30:00",
+    "exchanges": {
+      "KALSHI": {
+        "order_processing_latency": {
+          "base_nanos": 5000000,
+          "maker_delay_nanos": 0,
+          "taker_delay_nanos": 0,
+          "type": "maker_taker"
+        }
+      },
+      "POLYMARKET_INTL": {
+        "order_processing_latency": {
+          "base_nanos": 5000000,
+          "maker_delay_nanos": 0,
+          "taker_delay_nanos": 1000000000,
+          "type": "maker_taker"
+        }
+      },
+      "POLYMARKET_US": {
+        "order_processing_latency": {
+          "base_nanos": 5000000,
+          "maker_delay_nanos": 0,
+          "taker_delay_nanos": 0,
+          "type": "maker_taker"
+        }
+      }
+    },
+    "listings": [
+      {
+        "listing_id": 2254187
+      },
+      {
+        "listing_id": 2254188
+      },
+      {
+        "listing_id": 2256654
+      },
+      {
+        "listing_id": 2256655
+      },
+      {
+        "listing_id": 2316811
+      },
+      {
+        "listing_id": 2316812
+      }
+    ],
+    "record_depth": 10,
+    "start_date": "2026-11-07T12:33:41",
+    "strategy": {
+      "args": {
+        "legs": [
+          {
+            "listing_team_a": 2316812,
+            "listing_team_b": 2316811,
+            "venue": "kalshi"
+          },
+          {
+            "listing_team_a": 2254187,
+            "listing_team_b": 2254188,
+            "venue": "polymarket"
+          },
+          {
+            "listing_team_a": 2256654,
+            "listing_team_b": 2256655,
+            "venue": "polymarket_us"
+          }
+        ],
+        "max_locked_usd": 100000
+      },
+      "class_name": "gnomepy_research.sessions.cs2_cross_venue_arb__pm_maker.strategy:CS2CrossVenueArbPMMaker"
+    }
+  },
+  "simulation_as_of": "2026-11-09T19:35:05.184974Z",
+  "seed": -7046029254386353131,
+  "simulation": {
+    "2254187": {
+      "fee_model": {
+        "type": "registry"
+      },
+      "network_latency": {
+        "type": "lognormal",
+        "floor_nanos": 5000000,
+        "median_nanos": 12000000,
+        "p99_nanos": 200000000,
+        "seed": null
+      },
+      "order_processing_latency": {
+        "type": "maker_taker",
+        "base_nanos": 5000000,
+        "taker_delay_nanos": 1000000000,
+        "maker_delay_nanos": 0
+      },
+      "market_data_latency": {
+        "type": "recorded",
+        "fallback": {
+          "type": "static",
+          "latency_nanos": 50000000
+        }
+      },
+      "queue_model": {
+        "type": "risk_averse"
+      },
+      "self_trade_prevention": "CANCEL_INCOMING"
+    },
+    "2254188": {
+      "fee_model": {
+        "type": "registry"
+      },
+      "network_latency": {
+        "type": "lognormal",
+        "floor_nanos": 5000000,
+        "median_nanos": 12000000,
+        "p99_nanos": 200000000,
+        "seed": null
+      },
+      "order_processing_latency": {
+        "type": "maker_taker",
+        "base_nanos": 5000000,
+        "taker_delay_nanos": 1000000000,
+        "maker_delay_nanos": 0
+      },
+      "market_data_latency": {
+        "type": "recorded",
+        "fallback": {
+          "type": "static",
+          "latency_nanos": 50000000
+        }
+      },
+      "queue_model": {
+        "type": "risk_averse"
+      },
+      "self_trade_prevention": "CANCEL_INCOMING"
+    },
+    "2256654": {
+      "fee_model": {
+        "type": "registry"
+      },
+      "network_latency": {
+        "type": "lognormal",
+        "floor_nanos": 5000000,
+        "median_nanos": 12000000,
+        "p99_nanos": 200000000,
+        "seed": null
+      },
+      "order_processing_latency": {
+        "type": "maker_taker",
+        "base_nanos": 5000000,
+        "taker_delay_nanos": 0,
+        "maker_delay_nanos": 0
+      },
+      "market_data_latency": {
+        "type": "recorded",
+        "fallback": {
+          "type": "static",
+          "latency_nanos": 50000000
+        }
+      },
+      "queue_model": {
+        "type": "risk_averse"
+      },
+      "self_trade_prevention": "CANCEL_INCOMING"
+    },
+    "2256655": {
+      "fee_model": {
+        "type": "registry"
+      },
+      "network_latency": {
+        "type": "lognormal",
+        "floor_nanos": 5000000,
+        "median_nanos": 12000000,
+        "p99_nanos": 200000000,
+        "seed": null
+      },
+      "order_processing_latency": {
+        "type": "maker_taker",
+        "base_nanos": 5000000,
+        "taker_delay_nanos": 0,
+        "maker_delay_nanos": 0
+      },
+      "market_data_latency": {
+        "type": "recorded",
+        "fallback": {
+          "type": "static",
+          "latency_nanos": 50000000
+        }
+      },
+      "queue_model": {
+        "type": "risk_averse"
+      },
+      "self_trade_prevention": "CANCEL_INCOMING"
+    },
+    "2316811": {
+      "fee_model": {
+        "type": "registry"
+      },
+      "network_latency": {
+        "type": "lognormal",
+        "floor_nanos": 5000000,
+        "median_nanos": 12000000,
+        "p99_nanos": 200000000,
+        "seed": null
+      },
+      "order_processing_latency": {
+        "type": "maker_taker",
+        "base_nanos": 5000000,
+        "taker_delay_nanos": 0,
+        "maker_delay_nanos": 0
+      },
+      "market_data_latency": {
+        "type": "recorded",
+        "fallback": {
+          "type": "static",
+          "latency_nanos": 50000000
+        }
+      },
+      "queue_model": {
+        "type": "risk_averse"
+      },
+      "self_trade_prevention": "CANCEL_INCOMING"
+    },
+    "2316812": {
+      "fee_model": {
+        "type": "registry"
+      },
+      "network_latency": {
+        "type": "lognormal",
+        "floor_nanos": 5000000,
+        "median_nanos": 12000000,
+        "p99_nanos": 200000000,
+        "seed": null
+      },
+      "order_processing_latency": {
+        "type": "maker_taker",
+        "base_nanos": 5000000,
+        "taker_delay_nanos": 0,
+        "maker_delay_nanos": 0
+      },
+      "market_data_latency": {
+        "type": "recorded",
+        "fallback": {
+          "type": "static",
+          "latency_nanos": 50000000
+        }
+      },
+      "queue_model": {
+        "type": "risk_averse"
+      },
+      "self_trade_prevention": "CANCEL_INCOMING"
+    }
+  },
+  "gnomepy_version": "2.24.5",
+  "gnomepy_commit": "8a31714",
+  "java_version": "(17, 0, 10)",
+  "python_version": "3.13.11",
+  "os_info": "macOS-14.3-arm64-arm-64bit-Mach-O",
+  "data_scaled": true,
+  "warnings": [
+    "Market data missing: 978.2 minutes across 4 streams (mark)"
+  ],
+  "oms_rejects": {},
+  "market_data": {
+    "on_missing": "mark",
+    "missing_ns": 58689871514334,
+    "untracked_ns": 0,
+    "missing_fraction": 0.5501797205910907,
+    "marks_sent": 4,
+    "marks_without_book": 0,
+    "streams": [
+      {
+        "stream_id": 2237543,
+        "listing_id": 2254187,
+        "missing_ns": 0,
+        "untracked_ns": 0,
+        "missing": []
+      },
+      {
+        "stream_id": 2237544,
+        "listing_id": 2254188,
+        "missing_ns": 0,
+        "untracked_ns": 0,
+        "missing": []
+      },
+      {
+        "stream_id": 2240010,
+        "listing_id": 2256654,
+        "missing_ns": 14672467866013,
+        "untracked_ns": 0,
+        "missing": [
+          {
+            "from_ns": 1794057927532133987,
+            "to_ns": 1794072600000000000,
+            "reason": "NOT_COLLECTED"
+          }
+        ]
+      },
+      {
+        "stream_id": 2240011,
+        "listing_id": 2256655,
+        "missing_ns": 14672467857053,
+        "untracked_ns": 0,
+        "missing": [
+          {
+            "from_ns": 1794057927532142947,
+            "to_ns": 1794072600000000000,
+            "reason": "NOT_COLLECTED"
+          }
+        ]
+      },
+      {
+        "stream_id": 2300167,
+        "listing_id": 2316811,
+        "missing_ns": 14672467904734,
+        "untracked_ns": 0,
+        "missing": [
+          {
+            "from_ns": 1794057927532095266,
+            "to_ns": 1794072600000000000,
+            "reason": "NOT_COLLECTED"
+          }
+        ]
+      },
+      {
+        "stream_id": 2300168,
+        "listing_id": 2316812,
+        "missing_ns": 14672467886534,
+        "untracked_ns": 0,
+        "missing": [
+          {
+            "from_ns": 1794057927532113466,
+            "to_ns": 1794072600000000000,
+            "reason": "NOT_COLLECTED"
+          }
+        ]
+      }
+    ]
+  },
+  "extra": {}
+}
