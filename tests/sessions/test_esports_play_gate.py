@@ -93,6 +93,38 @@ def test_ends_a_match_never_live_past_its_start_plus_never_live_hours():
     assert s.exits == ["the match wasn't live by its scheduled start plus never_live_hours"]
 
 
+def test_ends_at_once_when_the_match_ends_without_being_played():
+    forfeit = [START_NS - 120 * SEC, gs.ENDED, "polymarket_event"]
+    s = _session(game_states=[NOT_STARTED, forfeit], never_live_hours=3)
+    assert feed(s, QUIET + [CHEAP_B], t=START_NS) == []
+    assert s.exits == ["the match ended without being played (polymarket_event)"]
+
+
+def test_a_restarted_session_still_completes_what_it_holds_when_it_first_hears_the_end():
+    s = _session(game_states=[ENDED], never_live_hours=3)
+    s.positions.set(LISTINGS[101], 20 * mod.SIZE_SCALE)
+    out = feed(s, QUIET + [(302, [(0.45, 30)], [(0.43, 30)])], t=ENDED[0] + 1 * SEC)
+    assert out and s.exits == [], "it completes the gap rather than leaving"
+
+
+def test_a_match_live_between_two_callbacks_still_counts_as_played():
+    watch = gs.ReplayWatch([tuple(NOT_STARTED), tuple(LIVE), tuple(ENDED)])
+    assert not watch.was_live(LIVE[0] - 1) and watch.was_live(ENDED[0] + 1)
+    live = gs.GameWatch()
+    live._set("polymarket", gs.LIVE)
+    live._set("polymarket", gs.ENDED)
+    assert live.was_live()
+
+
+def test_polymarkets_event_is_polled_until_it_says_the_match_is_over():
+    answers = iter([[{"ended": False, "closed": False}], [{"ended": True, "closed": False}]])
+    watch = gs.GameWatch()
+    with patch.object(gs, "_get_json", side_effect=lambda url: next(answers)), \
+            patch.object(gs, "EVENT_POLL_SECONDS", 0.01):
+        watch._poll_polymarket_event("cs2-zerote-nicetr-2026-11-12")
+    assert watch.state().status == gs.ENDED and watch.state().source == "polymarket_event"
+
+
 def test_completion_is_never_held_back_by_the_match_state():
     s = _session(game_states=[NOT_STARTED, LIVE, [START_NS + 300 * SEC, gs.NOT_STARTED, "polymarket"]])
     feed(s, QUIET + [CHEAP_B], t=START_NS + 100 * SEC)
@@ -111,6 +143,9 @@ class _QuietWatch:
 
     def heard_ns(self, now_ns=None):
         return START_NS
+
+    def was_live(self, now_ns=None):
+        return True
 
     def close(self):
         pass
@@ -233,7 +268,7 @@ def test_kalshi_live_data_is_found_by_ticker_and_polled():
     assert polled == [gs.LIVE] and watch.state().status == gs.LIVE
 
 
-@pytest.mark.parametrize("row", [NOT_STARTED, LIVE, ENDED])
+@pytest.mark.parametrize("row", [NOT_STARTED, LIVE, ENDED, [0, gs.ENDED, "polymarket_event"]])
 def test_recorded_codes_cover_every_state(row):
     assert row[1] in gs.STATUS_CODES and row[2] in gs.SOURCE_CODES
 

@@ -2,12 +2,15 @@
 Whether a match is being played, from the venues' own live feeds, for a session launched before play that must not
 trade until it starts (a match never played settles differently by venue) and must leave once it is over.
 
-Two sources, each followed by a daemon thread that swaps in an immutable state, so trading callbacks never wait on
+Three sources, each followed by a daemon thread that swaps in an immutable state, so trading callbacks never wait on
 the network:
 
 - Polymarket's sports websocket (wss://sports-api.polymarket.com/ws, public): pushes every game's `live` and `ended`
   by `gameId`; the match's gameId is read from its Polymarket event (gamma, by slug). Measured on CS2 (2026-11-11) at
   11-20 s behind PandaScore's low-latency feed. A forfeit never appears on it.
+- Polymarket's event (gamma, by slug), polled every EVENT_POLL_SECONDS until it says the match is over (`ended` or
+  `closed`): the only Polymarket signal for a match never played (a forfeit or a cancellation), which the sports
+  websocket never sends. Reported as its own source, and only once it says ended.
 - Kalshi's live data for the match's milestone (`GET /live_data/esports_match/milestone/{id}`, public, polled): its
   `status` goes unplayed -> live -> complete. The milestone is found by the event ticker.
 
@@ -36,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 UNKNOWN, NOT_STARTED, LIVE, ENDED = "unknown", "not_started", "live", "ended"
 STATUS_CODES = {UNKNOWN: 0, NOT_STARTED: 1, LIVE: 2, ENDED: 3}
-SOURCE_CODES = {"": 0, "polymarket": 1, "kalshi": 2}
+SOURCE_CODES = {"": 0, "polymarket": 1, "kalshi": 2, "polymarket_event": 3}
 
 SPORTS_WS = "wss://sports-api.polymarket.com/ws"
 GAMMA_EVENT = "https://gamma-api.polymarket.com/events?slug={slug}"
@@ -44,6 +47,7 @@ KALSHI_API = "https://api.elections.kalshi.com/trade-api/v2"
 USER_AGENT = "gnome-session"
 TIMEOUT_SECONDS = 15
 MAX_BACKOFF_SECONDS = 60
+EVENT_POLL_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,10 @@ def polymarket_status(message: dict) -> str:
     return LIVE if message.get("live") else NOT_STARTED
 
 
+def polymarket_event_ended(event: dict) -> bool:
+    return bool(event.get("ended") or event.get("closed"))
+
+
 def kalshi_status(details: dict) -> str:
     status = (details.get("status") or "").lower()
     if status in ("complete", "completed", "closed", "final"):
@@ -100,6 +108,7 @@ class GameWatch:
                  poll_seconds: float = 3.0):
         self._states: dict[str, GameState] = {}
         self._heard: dict[str, int] = {}
+        self._was_live = False
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._poll_seconds = poll_seconds
@@ -107,6 +116,8 @@ class GameWatch:
         if polymarket_slug:
             self._threads.append(threading.Thread(target=self._follow_polymarket, args=(polymarket_slug,),
                                                   name="game-state-polymarket", daemon=True))
+            self._threads.append(threading.Thread(target=self._poll_polymarket_event, args=(polymarket_slug,),
+                                                  name="game-state-polymarket-event", daemon=True))
         if kalshi_event_ticker:
             self._threads.append(threading.Thread(target=self._follow_kalshi, args=(kalshi_event_ticker,),
                                                   name="game-state-kalshi", daemon=True))
@@ -120,6 +131,11 @@ class GameWatch:
     def state(self, now_ns: int | None = None) -> GameState:
         with self._lock:
             return combine(list(self._states.values()))
+
+    def was_live(self, now_ns: int | None = None) -> bool:
+        """Whether any source has reported the match live, though the strategy may not have looked while it was."""
+        with self._lock:
+            return self._was_live
 
     def heard_ns(self, now_ns: int | None = None) -> int:
         """When a source that has reported the match last answered; any source's answer before one has."""
@@ -136,6 +152,7 @@ class GameWatch:
             self._heard[source] = now
             if status is None:
                 return
+            self._was_live = self._was_live or status == LIVE
             old = self._states.get(source)
             if old is None or old.status != status:
                 self._states[source] = GameState(status, source, now)
@@ -174,6 +191,17 @@ class GameWatch:
             self._attempt += 1
             logger.warning("Polymarket sports websocket closed; reconnecting")
             self._retry(self._attempt)
+
+    def _poll_polymarket_event(self, slug: str) -> None:
+        while not self._stop.is_set():
+            try:
+                events = _get_json(GAMMA_EVENT.format(slug=urllib.parse.quote(slug)))
+                if events and polymarket_event_ended(events[0]):
+                    self._set("polymarket_event", ENDED)
+                    return
+            except Exception:
+                logger.warning("Polymarket event %s unreadable", slug, exc_info=True)
+            self._stop.wait(EVENT_POLL_SECONDS)
 
     def _on_sports_message(self, raw: str, game_id: int, ws=None) -> None:
         if raw == "ping":
@@ -239,6 +267,10 @@ class ReplayWatch:
             return GameState()
         at, status, source = self._rows[i - 1]
         return GameState(status, source, at)
+
+    def was_live(self, now_ns: int | None = None) -> bool:
+        i = bisect.bisect_right(self._at, now_ns if now_ns is not None else 2 ** 63 - 1)
+        return any(status == LIVE for _, status, _ in self._rows[:i])
 
     def heard_ns(self, now_ns: int | None = None) -> int:
         return now_ns or 0

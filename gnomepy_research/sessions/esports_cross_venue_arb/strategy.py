@@ -13,7 +13,8 @@ which turns a locked pair into a loss. Two ways a session knows play has started
   pairs until it says live again. Once one says the match is over it opens nothing more, sends the legs it was
   holding back and completes any unequal position, and ends itself once nothing is in flight and ended_settle_seconds
   have passed (a fill racing the end still arrives), or ended_max_seconds after the end whatever it holds. A match
-  never live never_live_hours after its scheduled start (a forfeit or a postponement: nothing was traded) ends it;
+  that ends without ever having been live (a forfeit or a cancellation: nothing was traded) ends it at once, and one
+  never live never_live_hours after its scheduled start (a postponement no feed reports) ends it then;
 - given recorded states (game_states), a replay follows them as of each event;
 - given neither, it trades from its first callback: for backtests whose scenarios start once play has begun.
 
@@ -312,7 +313,11 @@ class EsportsCrossVenueArb(Strategy):
         if state != self._game:
             self._game = state
             self._record_game(now_ns, state)
+        self._was_live = self._was_live or self._watch.was_live(now_ns)
         if state.status == gs.ENDED:
+            if not self._was_live and not self._holds_anything():
+                self._exit(f"the match ended without being played ({state.source})")
+                return EXIT
             if self._ended_ns is None:
                 # From when the feed said so, not when a callback first came: books can be quiet after the end.
                 self._ended_ns = min(now_ns, state.observed_ns) if state.observed_ns else now_ns
@@ -328,6 +333,11 @@ class EsportsCrossVenueArb(Strategy):
         if state.status != gs.LIVE or now_ns - self._watch.heard_ns(now_ns) > self._stale_ns:
             return CLOSED
         return OPEN
+
+    def _holds_anything(self) -> bool:
+        """Whether the session holds a position or has an order out or waiting: a restarted session that first hears
+        the match ended must still complete what it holds."""
+        return bool(self._held) or any(leg.in_flight for leg in self._legs) or any(self._exposure())
 
     def _leave_once_settled(self, now_ns: int) -> None:
         """Ends the session once the match is over, settle time has passed, and the caller found nothing left to do."""
