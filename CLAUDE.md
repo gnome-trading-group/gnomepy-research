@@ -314,7 +314,8 @@ route. The instance and its disk are terminated when the session ends, so CloudW
   constructor failure (the fatal handler is installed by the Java orchestrator, which starts after the class is built).
 - A strategy ending itself calls `self.request_exit(reason, flatten=...)` (`cs2_series` does at its entry cutoff
   or when the match leaves UPCOMING): quotes are cancelled, optionally flattened, a `SESSION_EXITED` alert is
-  raised (WARNING if positions it was asked to close remain), and the session ends STOPPED with that reason.
+  raised (WARNING if positions it was asked to close remain; a clean exit is only posted to Slack with
+  `notify=True`, otherwise just recorded on the Alerts page), and the session ends STOPPED with that reason.
 
 **Research jobs on Batch.** `research jobs` (above) calls the controller API's `research-jobs` routes (`POST`
 submit, `GET` list, `GET`/`DELETE` `{runId}`, `inputs`, `{runId}/tasks/{index}/logs`; logged-in people only).

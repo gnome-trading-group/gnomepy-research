@@ -194,7 +194,7 @@ class FakeControl:
     def __init__(self):
         self.exits = []
 
-    def requestExit(self, reason, flatten, timeout_millis):
+    def requestExit(self, reason, flatten, timeout_millis, notify=False):
         self.exits.append((reason, flatten, timeout_millis))
         return len(self.exits) == 1
 

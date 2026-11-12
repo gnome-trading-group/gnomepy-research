@@ -153,7 +153,7 @@ class _Control:
     def __init__(self):
         self.exits = []
 
-    def requestExit(self, reason, flatten, timeout_millis):
+    def requestExit(self, reason, flatten, timeout_millis, notify=False):
         self.exits.append((reason, flatten))
         return len(self.exits) == 1
 
