@@ -20,8 +20,14 @@ wave starting. Each strike has at most one order in flight, and an order that co
 until that listing's top of book moves, so a paper session, whose feed never shows its own fills, can't send the same
 order over and over.
 
-The session ends itself, keeping what it holds, once the window has passed and no order is in flight; a session
-started after its film's wave ends at once. State that must survive a restart (what it holds, money committed) is read
+It trades only while the film's Tomatometer (rt_scores, the source's reading of the public RT page) counts fewer than
+max_rt_reviews: the research measured waves the market met knowing no reviews, and once RT shows a score the market
+prices it, so a handful of reviews against a baseline that assumes nothing is known says nothing it doesn't. A film
+whose Tomatometer has that many already (its wave came and went with too few of the outlets' reviews to see it) ends
+the session.
+
+The session ends itself, keeping what it holds, once the window has passed or the Tomatometer has a score, and no order
+is in flight; a session started after its film's wave ends at once. State that must survive a restart (what it holds, money committed) is read
 from the engine's positions, so a restarted session resumes instead of buying again.
 
 The session is woken by market data: its strikes' books and any extra stream it reads (`streams` in the session
@@ -39,7 +45,7 @@ from gnomepy.registry import RegistryClient
 
 from gnomepy_research.fees import registry_fee_rates
 from gnomepy_research.sessions.rt_review_wave.decision import NO, YES, Level, Signal, signal, take, wave_start
-from gnomepy_research.sessions.rt_review_wave.review_feed import REVIEWS, ReviewFeed
+from gnomepy_research.sessions.rt_review_wave.review_feed import REVIEWS, SCORES, ReviewFeed
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +103,9 @@ class RtReviewWave(Strategy):
         max_contracts_per_strike: most it holds of one strike on one venue.
         max_usd_per_venue: most it commits on one venue, fees included.
         min_order_usd: smallest order worth sending.
+        max_rt_reviews: the Tomatometer review count from which the market is taken to know the score: no trading.
         reload_seconds: how often to re-read the film's reviews (0 = once, for replays).
-        reviews_source: the rt_reviews table, or a parquet extract of it.
+        reviews_source, scores_source: the rt_reviews and rt_scores tables, or parquet extracts of them.
     """
 
     def __init__(
@@ -117,10 +124,12 @@ class RtReviewWave(Strategy):
         max_contracts_per_strike: float = 100.0,
         max_usd_per_venue: float = 1000.0,
         min_order_usd: float = 1.0,
+        max_rt_reviews: int = 5,
         book_depth: int = 10,
         processing_time_ns: int = 0,
         reload_seconds: float = 5.0,
         reviews_source: str = REVIEWS,
+        scores_source: str = SCORES,
     ):
         if not legs:
             raise ValueError("legs must name at least one strike")
@@ -141,6 +150,7 @@ class RtReviewWave(Strategy):
         self.max_contracts_per_strike = max_contracts_per_strike
         self.max_usd_per_venue = max_usd_per_venue
         self.min_order_usd = min_order_usd
+        self.max_rt_reviews = max_rt_reviews
         self.book_depth = book_depth
         self._processing_time_ns = processing_time_ns
         self._fee_rates = registry_fee_rates(self)
@@ -157,7 +167,7 @@ class RtReviewWave(Strategy):
             for side, key in ((YES, "yes_listing"), (NO, "no_listing")):
                 self._books.append(self._resolve(registry, leg["venue"], int(leg["strike"]), side, leg[key]))
         self._book_of = {b.listing_id: b for b in self._books}
-        self._feed = ReviewFeed(film_id, reviews_source, reload_seconds)
+        self._feed = ReviewFeed(film_id, reviews_source, reload_seconds, scores_source)
 
     @staticmethod
     def _resolve(registry, venue: str, strike: int, side: int, listing_id: int) -> _Book:
@@ -242,6 +252,12 @@ class RtReviewWave(Strategy):
     def _evaluate(self, now_ns: int) -> list[Intent]:
         if self.is_exiting:
             return []
+        in_flight = any(b.in_flight for b in self._books)
+        counted = self._feed.counted(now_ns)
+        if counted >= self.max_rt_reviews:
+            if not in_flight:
+                self.request_exit(f"film {self.film_id}: its Tomatometer already counts {counted} reviews")
+            return []
         reviews = self._feed.known(now_ns)
         start = wave_start(reviews, self.min_reviews, self.cluster_ns, self.max_lag_ns)
         if start is None:
@@ -250,7 +266,6 @@ class RtReviewWave(Strategy):
             self._wave_ns = start
             self._dirty = True
             logger.info("film %s: wave started at %d with %d reviews known", self.film_id, start, len(reviews))
-        in_flight = any(b.in_flight for b in self._books)
         if now_ns >= start + self.window_ns:
             if not in_flight:
                 self.request_exit(f"film {self.film_id}: its wave's {self.window_ns // MINUTE_NS} min window passed")

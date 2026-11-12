@@ -1,10 +1,13 @@
 """
-The reviews of one film known at any moment, from the rt_reviews table gnome-pipelines' rt_reviews source writes.
+The reviews of one film known at any moment, from the rt_reviews table gnome-pipelines' rt_reviews source writes, and
+how many reviews its Tomatometer counted (rt_scores, the same source's reading of the film's public RT page).
 
 A row is a review once Claude has read it: is_review true and a fresh/rotten call. Its first_seen_at is when that
 became known (a verdict that came after the page's first row brings a newer version of the row, seen when the verdict
 was), so every lookup is as of an event time and a replay never trades on a review before it was seen. Backfilled rows
 were seen when published.
+
+A Tomatometer reading is likewise as of when it was seen (a row is written when the counts change).
 
 Live, a daemon thread re-reads the film's rows every reload_seconds and swaps in a new snapshot, so trading callbacks
 never wait on S3. A reload interval of 0 loads once, for replays against a fixed extract.
@@ -25,10 +28,11 @@ from gnomepy_research.sessions.rt_review_wave.decision import Review
 logger = logging.getLogger(__name__)
 
 REVIEWS = "rt_reviews"
+SCORES = "rt_scores"
 
 
 def read_rows(source: str, film_id: str) -> pd.DataFrame:
-    """One film's rows of the rt_reviews table (the newest version of each), or of a parquet extract (for replays)."""
+    """One film's rows of a table (the newest version per key), or of a parquet extract of it (for replays)."""
     if source.endswith(".parquet"):
         rows = pd.read_parquet(source)
         return rows[rows.film_id == film_id].reset_index(drop=True)
@@ -58,20 +62,34 @@ def reviews_of(rows: pd.DataFrame) -> list[Review]:
     return sorted(out, key=lambda x: x.seen_ns)
 
 
+def counts_of(rows: pd.DataFrame) -> list[tuple[int, int]]:
+    """(seen, reviews the Tomatometer counted) per reading, by when it was seen."""
+    out = [(_ns(r.first_seen_at), int(r.liked) + int(r.not_liked)) for r in rows.itertuples()
+           if _ns(r.first_seen_at) is not None and not pd.isna(r.liked) and not pd.isna(r.not_liked)]
+    return sorted(out)
+
+
 class Snapshot:
-    def __init__(self, reviews: list[Review]) -> None:
+    def __init__(self, reviews: list[Review], counts: list[tuple[int, int]] = ()) -> None:
         self._reviews = reviews
         self._seen = [r.seen_ns for r in reviews]
-        self.key = tuple(reviews)
+        self._counts = list(counts)
+        self._counted_at = [t for t, _ in self._counts]
 
     def known(self, now_ns: int) -> list[Review]:
         return self._reviews[:bisect.bisect_right(self._seen, now_ns)]
 
+    def counted(self, now_ns: int) -> int:
+        i = bisect.bisect_right(self._counted_at, now_ns)
+        return self._counts[i - 1][1] if i else 0
+
 
 class ReviewFeed:
-    def __init__(self, film_id: str, source: str = REVIEWS, reload_seconds: float = 5.0) -> None:
+    def __init__(self, film_id: str, source: str = REVIEWS, reload_seconds: float = 5.0,
+                 scores_source: str = SCORES) -> None:
         self._film_id = film_id
         self._source = source
+        self._scores_source = scores_source
         self._reload_seconds = reload_seconds
         self._snapshot = self._load()
         if reload_seconds > 0:
@@ -79,6 +97,10 @@ class ReviewFeed:
 
     def known(self, now_ns: int) -> list[Review]:
         return self._snapshot.known(now_ns)
+
+    def counted(self, now_ns: int) -> int:
+        """How many reviews the film's Tomatometer counted, as last seen by now (0 before any reading)."""
+        return self._snapshot.counted(now_ns)
 
     def _reload_forever(self) -> None:
         while True:
@@ -90,4 +112,5 @@ class ReviewFeed:
                 logger.exception("reloading the reviews of %s failed", self._film_id)
 
     def _load(self) -> Snapshot:
-        return Snapshot(reviews_of(read_rows(self._source, self._film_id)))
+        return Snapshot(reviews_of(read_rows(self._source, self._film_id)),
+                        counts_of(read_rows(self._scores_source, self._film_id)))

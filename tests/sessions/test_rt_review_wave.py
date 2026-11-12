@@ -86,7 +86,12 @@ def test_the_feed_keeps_reviews_with_a_verdict_as_of_when_their_verdict_was_seen
     rows.loc[len(rows)] = {**_row("x", 0), "film_id": "other-film"}
     path = tmp_path / "rt_reviews.parquet"
     rows.to_parquet(path)
-    feed = ReviewFeed(FILM, str(path), reload_seconds=0)
+    scores = tmp_path / "rt_scores.parquet"
+    pd.DataFrame([{"film_id": FILM, "liked": 3, "not_liked": 1, "first_seen_at": pd.Timestamp(T0 + 4 * MINUTE, tz="UTC")},
+                  {"film_id": "other-film", "liked": 90, "not_liked": 9,
+                   "first_seen_at": pd.Timestamp(T0, tz="UTC")}]).to_parquet(scores)
+    feed = ReviewFeed(FILM, str(path), reload_seconds=0, scores_source=str(scores))
+    assert (feed.counted(T0 + 3 * MINUTE), feed.counted(T0 + 4 * MINUTE)) == (0, 4)
     assert [x.url for x in feed.known(T0 + 4 * MINUTE)] == ["b"]
     assert [(x.url, x.fresh) for x in feed.known(T0 + 5 * MINUTE)] == [("b", False), ("a", True)]
     assert reviews_of(pd.DataFrame()) == []
@@ -181,12 +186,13 @@ WAVE = [_row("a", 0), _row("b", 1), _row("c", 2)]  # three fresh: the wave start
 
 @pytest.fixture
 def make(tmp_path):
-    def _make(rows=WAVE, **kw):
-        path = tmp_path / "rt_reviews.parquet"
+    def _make(rows=WAVE, scores=(), **kw):
+        path, scores_path = tmp_path / "rt_reviews.parquet", tmp_path / "rt_scores.parquet"
         pd.DataFrame(rows).to_parquet(path)
+        pd.DataFrame(list(scores), columns=["film_id", "liked", "not_liked", "first_seen_at"]).to_parquet(scores_path)
         with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry()):
             s = mod.RtReviewWave(film_id=FILM, legs=kw.pop("legs", LEGS), reload_seconds=0,
-                                 reviews_source=str(path), **kw)
+                                 reviews_source=str(path), scores_source=str(scores_path), **kw)
         s._position_view = _Positions()
         s._streams = FakeStreams(LISTINGS)
         s._control = _Control()
@@ -336,3 +342,24 @@ def test_unknown_venues_and_empty_legs_are_refused(make):
         make(legs=[])
     with pytest.raises(ValueError):
         make(legs=[{**LEGS[0], "venue": "betfair"}])
+
+
+def _score(liked, not_liked, minute):
+    return {"film_id": FILM, "liked": liked, "not_liked": not_liked,
+            "first_seen_at": pd.Timestamp(T0 + minute * MINUTE, tz="UTC")}
+
+
+def test_a_film_whose_tomatometer_already_has_a_score_is_not_traded_and_its_session_ends(make):
+    # Victorian Psycho on 2026-11-12: RT counted 60 reviews while only two of the outlets' were seen.
+    s = make(scores=[_score(47, 13, -60)])
+    assert book_all(s, 3) == [] and len(s._control.exits) == 1
+
+
+def test_a_few_reviews_on_rt_still_trade_but_rt_reaching_the_limit_mid_window_stops_new_orders(make):
+    s = make(scores=[_score(2, 0, -60), _score(30, 5, 8)])
+    first = book_all(s, 3)
+    assert len(first) == 6, "2 reviews counted: the market can't know the score yet"
+    for o in first:
+        report(s, o, OrderStatus.CANCELED, filled=0)
+    assert book_all(s, 9, yes_ask=0.45) == [], "RT counted 35 at T0 + 8 min"
+    assert len(s._control.exits) == 1
