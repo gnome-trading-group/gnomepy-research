@@ -9,6 +9,9 @@ requires-python = ">=3.13,<3.14"
 # so a session or pipeline installs only what its code uses (see "Dependency families" in CLAUDE.md).
 dependencies = [
     "gnomepy[strategy,live-data] (>=3.1.0,<4.0.0)",
+    # 1.7.x leaks a Python type on every callback from a Java thread, which is how live sessions call strategies
+    # (jpype-project/jpype#1576). Move past 1.6.0 only to a release whose fix the issue's repro confirms.
+    "jpype1 (==1.6.0)",
 ]
 
 [project.optional-dependencies]
