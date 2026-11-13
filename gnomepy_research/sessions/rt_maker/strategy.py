@@ -14,7 +14,8 @@ re-read every reload_seconds), and signal_mode says what a review does:
 - pull: for pull_minutes after any review, every quote is pulled, then both sides come back.
 - skew: the review signal (models/rt/signal.py: Claude's fresh share against the baseline) leans the quotes. A review
   with a side quotes only that side, the YES bid for YES and the YES ask for NO, for skew_hours (None: until the next
-  review); a review without a side, or one that flips the last side leaned, pulls both for pull_minutes first.
+  review); a review without a side, or one that flips the last side leaned, pulls both for pull_minutes first. With
+  pull_every_review, every review pulls both for pull_minutes, and the side is quoted alone only after that.
 In both, a change in the Tomatometer's count (rt_scores) pulls every quote for pull_minutes.
 
 Why skew: after a film's reviews arrive, Kalshi under-reacts in their direction, so both sides at the touch sell to
@@ -91,6 +92,8 @@ class RtMaker(Strategy):
         baseline, threshold, min_reviews: the signal's, as rt_review_wave's: the fresh share it is measured from, how
             far from it a side needs, and the reviews needed for any side.
         skew_hours: how long a review's side is quoted alone; None quotes it until the next review.
+        pull_every_review: in skew mode, pull both sides for pull_minutes after every review, even one with a side
+            (the side is quoted alone after the pull): the first minutes of a wave are when the market overshoots.
         min_price, max_price: a side priced outside them isn't quoted: the strike is all but settled.
         min_join_size: least size of others' a level needs to be joined.
         own_orders_in_book: whether the book this session reads shows its own orders (live) or not (paper).
@@ -113,6 +116,7 @@ class RtMaker(Strategy):
         threshold: float = 0.10,
         min_reviews: int = 3,
         skew_hours: float | None = None,
+        pull_every_review: bool = False,
         min_price: float = 0.03,
         max_price: float = 0.97,
         min_join_size: float = 1.0,
@@ -144,6 +148,7 @@ class RtMaker(Strategy):
         self.signal_mode = signal_mode
         self.baseline, self.threshold, self.min_reviews = baseline, threshold, min_reviews
         self.skew_ns = None if skew_hours is None else int(skew_hours * HOUR_NS)
+        self.pull_every_review = pull_every_review
         self._state_key: tuple[int, int] | None = None
         self._state: ReviewState | None = None
         self._mode: str | int | None = None
@@ -241,7 +246,7 @@ class RtMaker(Strategy):
     def _skew(self, now_ns: int) -> tuple[bool, int, float]:
         """(pulled, the side to quote alone or 0, the latest signal) in skew mode."""
         state = self._review_state(now_ns)
-        mode = lean(state, now_ns, self.pull_ns, self.skew_ns)
+        mode = lean(state, now_ns, self.pull_ns, self.skew_ns, self.pull_every_review)
         if mode != self._mode:
             logger.info("film %s: quoting %s (signal %s)", self.film_id, mode,
                         "none" if state is None else f"{state.signal.signal:+.3f} from {state.signal.reviews} reviews")

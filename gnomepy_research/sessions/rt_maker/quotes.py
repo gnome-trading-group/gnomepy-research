@@ -11,7 +11,8 @@ film may commit. Prices are plain probabilities in [0, 1] and sizes contracts; t
 With the review signal leaning the quotes (lean()), the latest review decides what is quoted. A review the signal
 gives no side, or one whose side flips from the last side leaned, pulls both sides for pull_ns; a review with a side
 quotes only that side (the YES bid for YES, the YES ask for NO) for skew_ns, or until the next review when skew_ns is
-None, then both. Reviews seen at the same moment count as one. This is the rule ~/gnome-research-work/rt/outlets/
+None, then both. With pull_every_review, every review pulls both sides for pull_ns first, whatever its side, and the
+side is quoted alone only after that. Reviews seen at the same moment count as one. This is the rule ~/gnome-research-work/rt/outlets/
 maker_skew.py scored, so a change here should be scored there first.
 """
 from __future__ import annotations
@@ -75,10 +76,13 @@ def review_state(reviews: list[Review], baseline: float, threshold: float, min_r
     return ReviewState(side, flip, reviews[-1].seen_ns, sig)
 
 
-def lean(state: ReviewState | None, now_ns: int, pull_ns: int, skew_ns: int | None) -> str | int:
+def lean(state: ReviewState | None, now_ns: int, pull_ns: int, skew_ns: int | None,
+         pull_every_review: bool = False) -> str | int:
     """What to quote now: BOTH, PULL, YES or NO."""
     if state is None:
         return BOTH
+    if pull_every_review and now_ns < state.seen_ns + pull_ns:
+        return PULL
     if (state.side == 0 or state.flip) and now_ns < state.seen_ns + pull_ns:
         return PULL
     if state.side != 0 and (skew_ns is None or now_ns < state.seen_ns + skew_ns):

@@ -79,9 +79,10 @@ def rv(i, seen_min, fresh=True):
     return Review(f"u{i}", T0 + seen_min * MINUTE, T0 + seen_min * MINUTE, fresh)
 
 
-def mode(reviews, minute, skew_hours=None):
+def mode(reviews, minute, skew_hours=None, pull_every_review=False):
     state = review_state(reviews, 0.667, 0.10, 3)
-    return lean(state, T0 + minute * MINUTE, PULL_NS, None if skew_hours is None else int(skew_hours * HOUR))
+    return lean(state, T0 + minute * MINUTE, PULL_NS, None if skew_hours is None else int(skew_hours * HOUR),
+                pull_every_review)
 
 
 def test_before_any_review_both_sides_are_quoted():
@@ -148,6 +149,17 @@ def test_reviews_seen_at_the_same_moment_count_as_one():
     assert review_state(same[:3], 0.667, 0.10, 3).side == NO, "one by one, the third review alone says NO"
     state = review_state(same, 0.667, 0.10, 3)
     assert (state.side, state.flip) == (YES, False)
+
+
+def test_pulling_on_every_review_pulls_even_a_review_with_a_side_then_leans():
+    fresh = [rv(1, 0), rv(2, 1), rv(3, 2)]
+    assert mode(fresh, 2, pull_every_review=True) == PULL
+    assert mode(fresh, 31, pull_every_review=True) == PULL
+    assert mode(fresh, 32, pull_every_review=True) == YES, "30 min after the review that gave the side"
+    assert mode(fresh + [rv(4, 300)], 301, pull_every_review=True) == PULL, "a later review of the same side pulls too"
+    assert mode(fresh + [rv(4, 300)], 330, pull_every_review=True) == YES
+    no_side = [rv(1, 0), rv(2, 5)]
+    assert mode(no_side, 35, pull_every_review=True) == BOTH
 
 
 def test_one_side_keeps_the_bid_for_yes_and_the_ask_for_no():
@@ -400,3 +412,11 @@ def test_an_unknown_signal_mode_or_skew_hours_is_refused(make):
         make(signal_mode="lean")
     with pytest.raises(ValueError):
         make(signal_mode="skew", skew_hours=0)
+
+
+def test_skew_pulling_on_every_review_sits_out_the_wave_then_leans(make):
+    s = make(reviews=[_review("a", 10), _review("b", 11), _review("c", 12)], signal_mode="skew",
+             pull_every_review=True)
+    books(s, 5)
+    assert _all_pulled(books(s, 12)), "the review that gave the side pulls too"
+    assert sides(by_listing(books(s, 43))[YES40]) == pytest.approx((0.45, 500, 0, 0)), "then the bid alone"
