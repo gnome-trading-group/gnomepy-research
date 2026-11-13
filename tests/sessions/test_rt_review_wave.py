@@ -10,6 +10,7 @@ import pytest
 
 from gnomepy import OrderStatus, Scales, Side
 from gnomepy_research.sessions.rt_review_wave import strategy as mod
+from gnomepy_research.models.rt import review_feed as feed_mod
 from gnomepy_research.models.rt.review_feed import ReviewFeed, reviews_of
 from gnomepy_research.sessions.rt_review_wave.decision import Level, take
 from tests.sessions.conftest import FakeFeeSchedule, FakeStreams, stream_of
@@ -60,6 +61,28 @@ def test_the_feed_keeps_reviews_with_a_verdict_as_of_when_their_verdict_was_seen
     assert [x.url for x in feed.known(T0 + 4 * MINUTE)] == ["b"]
     assert [(x.url, x.fresh) for x in feed.known(T0 + 5 * MINUTE)] == [("b", False), ("a", True)]
     assert reviews_of(pd.DataFrame()) == []
+
+
+def test_the_feed_opens_the_catalog_once_and_reads_every_reload_through_it():
+    opened, loads = [], []
+
+    class _Store:
+        def __init__(self):
+            opened.append(self)
+
+        def load(self, source, row_filter=None):
+            loads.append(source)
+            if source == "rt_scores":
+                return pd.DataFrame(columns=["film_id", "liked", "not_liked", "first_seen_at"])
+            return pd.DataFrame([_row("a", 0)])
+
+    with patch.object(feed_mod, "DatasetStore", _Store):
+        feed = ReviewFeed(FILM, reload_seconds=0)
+        feed._snapshot = feed._load()
+        feed._snapshot = feed._load()
+    assert len(opened) == 1
+    assert loads == ["rt_reviews", "rt_scores"] * 3
+    assert [x.url for x in feed.known(T0 + MINUTE)] == ["a"]
 
 
 # ---- the session ---------------------------------------------------------------------------------------------------

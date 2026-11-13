@@ -10,7 +10,10 @@ were seen when published.
 A Tomatometer reading is likewise as of when it was seen (a row is written when the counts change).
 
 Live, a daemon thread re-reads the film's rows every reload_seconds and swaps in a new snapshot, so trading callbacks
-never wait on S3. A reload interval of 0 loads once, for replays against a fixed extract.
+never wait on S3. A reload interval of 0 loads once, for replays against a fixed extract. The feed opens the catalog
+once and keeps it: opening it reads its configuration and looks up AWS credentials, which every few seconds for the
+life of a session is needless calls to the instance's metadata service and SSM. A kept catalog still signs with
+current credentials, since its signer asks its boto3 session for them on every request.
 """
 from __future__ import annotations
 
@@ -38,12 +41,13 @@ class Review:
     fresh: bool
 
 
-def read_rows(source: str, film_id: str) -> pd.DataFrame:
-    """One film's rows of a table (the newest version per key), or of a parquet extract of it (for replays)."""
+def read_rows(source: str, film_id: str, store: DatasetStore | None = None) -> pd.DataFrame:
+    """One film's rows of a table (the newest version per key), or of a parquet extract of it (for replays). A table
+    is read through store, or a new one when none is given."""
     if source.endswith(".parquet"):
         rows = pd.read_parquet(source)
         return rows[rows.film_id == film_id].reset_index(drop=True)
-    return DatasetStore().load(source, row_filter=EqualTo("film_id", film_id))
+    return (store or DatasetStore()).load(source, row_filter=EqualTo("film_id", film_id))
 
 
 def _ns(ts) -> int | None:
@@ -103,6 +107,7 @@ class ReviewFeed:
         self._source = source
         self._scores_source = scores_source
         self._reload_seconds = reload_seconds
+        self._store: DatasetStore | None = None
         self._snapshot = self._load()
         if reload_seconds > 0:
             threading.Thread(target=self._reload_forever, name=f"rt-feed-{film_id}", daemon=True).start()
@@ -128,5 +133,7 @@ class ReviewFeed:
                 logger.exception("reloading the reviews of %s failed", self._film_id)
 
     def _load(self) -> Snapshot:
-        return Snapshot(reviews_of(read_rows(self._source, self._film_id)),
-                        counts_of(read_rows(self._scores_source, self._film_id)))
+        if self._store is None and not (self._source.endswith(".parquet") and self._scores_source.endswith(".parquet")):
+            self._store = DatasetStore()
+        return Snapshot(reviews_of(read_rows(self._source, self._film_id, self._store)),
+                        counts_of(read_rows(self._scores_source, self._film_id, self._store)))
