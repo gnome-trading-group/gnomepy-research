@@ -9,11 +9,19 @@ and quotes that would commit more of max_film_usd than is left are cut back to t
 towards flat. Positions are held; nothing is ever taken.
 
 Kalshi pays the rewards for resting size near the touch on both sides; the risk is being filled by a taker who knows
-something the book hasn't priced. On these markets that is mostly a critic's review: for pull_minutes after any review
-of the film is seen (gnome-pipelines' rt_reviews, re-read every reload_seconds) or the Tomatometer's count changes
-(rt_scores), every quote is pulled. The research behind it (~/gnome-research-work/rt/lip/maker_guard_books.py): on the
-prod books of Nov 10-12, 2026, 500 contracts a side at the touch on 145 rewarded strikes earned about $2.5k a day in
-rewards while its fills lost about nothing to the mid an hour later; pulling for 30 minutes after a review did best.
+something the book hasn't priced. On these markets that is mostly a critic's review (gnome-pipelines' rt_reviews,
+re-read every reload_seconds), and signal_mode says what a review does:
+- pull: for pull_minutes after any review, every quote is pulled, then both sides come back.
+- skew: the review signal (models/rt/signal.py: Claude's fresh share against the baseline) leans the quotes. A review
+  with a side quotes only that side, the YES bid for YES and the YES ask for NO, for skew_hours (None: until the next
+  review); a review without a side, or one that flips the last side leaned, pulls both for pull_minutes first.
+In both, a change in the Tomatometer's count (rt_scores) pulls every quote for pull_minutes.
+
+Why skew: after a film's reviews arrive, Kalshi under-reacts in their direction, so both sides at the touch sell to
+the takers who read them. Over 62 settled films (Apr-Nov 2026, ~/gnome-research-work/rt/outlets/maker_skew.py, trades
+only, held to settlement) quoting the signal's side until the next review beat pulling for 30 minutes by $40k (+5.8
+standard errors, better on 32 films, worse on 7); about half of that is from not quoting both sides after the wave
+and half from the side the signal picks (the opposite side gains nothing).
 
 Which strikes pay comes from the registry's incentive programs (Kalshi's, synced every 15 minutes), re-read every
 programs_reload_seconds; with rewarded_only off, every strike is quoted.
@@ -27,6 +35,7 @@ engine, so a restarted session picks up what it holds.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from dataclasses import dataclass, field
@@ -37,7 +46,8 @@ from gnomepy.java.schemas import StreamRecord
 from gnomepy.registry import RegistryClient
 
 from gnomepy_research.models.rt.review_feed import REVIEWS, SCORES, ReviewFeed
-from gnomepy_research.sessions.rt_maker.quotes import NONE, Level, Quote, adds, held_cost, quote, reducing
+from gnomepy_research.sessions.rt_maker.quotes import (NONE, PULL, Level, Quote, ReviewState, adds, held_cost, lean,
+                                                       one_side, quote, reducing, review_state)
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +56,10 @@ SIZE_SCALE = Scales.SIZE
 MINUTE_NS = 60_000_000_000
 TERMINAL = {OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED}
 VENUE = "kalshi"
+HOUR_NS = 60 * MINUTE_NS
+PULL_MODE, SKEW_MODE = "pull", "skew"
 # Why a strike's quote is what it is, in the quotes metric.
-QUOTING, PULLED, NOT_REWARDED, CAPPED = 0, 1, 2, 3
+QUOTING, PULLED, NOT_REWARDED, CAPPED, LEANING = 0, 1, 2, 3, 4
 
 
 @dataclass
@@ -73,7 +85,12 @@ class RtMaker(Strategy):
         quote_size: contracts rested on each side.
         max_position: most YES contracts held, or sold, on one strike.
         max_film_usd: most money the film's positions and quotes may commit.
-        pull_minutes: how long every quote stays pulled after a review is seen or the Tomatometer's count changes.
+        pull_minutes: how long every quote stays pulled after a review is seen (one the signal gives a side doesn't
+            pull in skew mode) or the Tomatometer's count changes.
+        signal_mode: "pull" or "skew", what a review does (above).
+        baseline, threshold, min_reviews: the signal's, as rt_review_wave's: the fresh share it is measured from, how
+            far from it a side needs, and the reviews needed for any side.
+        skew_hours: how long a review's side is quoted alone; None quotes it until the next review.
         min_price, max_price: a side priced outside them isn't quoted: the strike is all but settled.
         min_join_size: least size of others' a level needs to be joined.
         own_orders_in_book: whether the book this session reads shows its own orders (live) or not (paper).
@@ -91,6 +108,11 @@ class RtMaker(Strategy):
         max_position: float = 500.0,
         max_film_usd: float = 10_000.0,
         pull_minutes: float = 30.0,
+        signal_mode: str = PULL_MODE,
+        baseline: float = 0.667,
+        threshold: float = 0.10,
+        min_reviews: int = 3,
+        skew_hours: float | None = None,
         min_price: float = 0.03,
         max_price: float = 0.97,
         min_join_size: float = 1.0,
@@ -110,11 +132,21 @@ class RtMaker(Strategy):
             raise ValueError(f"need 0 < min_price < max_price < 1, got {min_price}, {max_price}")
         if quote_size <= 0 or max_position <= 0:
             raise ValueError("quote_size and max_position must be positive")
+        if signal_mode not in (PULL_MODE, SKEW_MODE):
+            raise ValueError(f"signal_mode must be {PULL_MODE!r} or {SKEW_MODE!r}, got {signal_mode!r}")
+        if skew_hours is not None and skew_hours <= 0:
+            raise ValueError(f"skew_hours must be positive or None, got {skew_hours}")
         self.film_id = film_id
         self.quote_size = quote_size
         self.max_position = max_position
         self.max_film_usd = max_film_usd
         self.pull_ns = int(pull_minutes * MINUTE_NS)
+        self.signal_mode = signal_mode
+        self.baseline, self.threshold, self.min_reviews = baseline, threshold, min_reviews
+        self.skew_ns = None if skew_hours is None else int(skew_hours * HOUR_NS)
+        self._state_key: tuple[int, int] | None = None
+        self._state: ReviewState | None = None
+        self._mode: str | int | None = None
         self.min_price, self.max_price = min_price, max_price
         self.min_join_size = min_join_size
         self.own_orders_in_book = own_orders_in_book
@@ -172,6 +204,7 @@ class RtMaker(Strategy):
         self._q_ask_size = quotes.add_double_column("ask_size")
         self._q_position = quotes.add_double_column("position")
         self._q_reason = quotes.add_long_column("reason")
+        self._q_signal = quotes.add_double_column("signal")
         quotes.freeze()
         self._quotes_buf = quotes
 
@@ -195,6 +228,28 @@ class RtMaker(Strategy):
         known = self._feed.known(now_ns)
         seen = [t for t in (known[-1].seen_ns if known else None, self._feed.count_changed(now_ns)) if t is not None]
         return max(seen) + self.pull_ns if seen else None
+
+    def _review_state(self, now_ns: int) -> ReviewState | None:
+        """The latest review's state, recomputed only when a review has been seen since the last call."""
+        known = self._feed.known(now_ns)
+        key = (len(known), known[-1].seen_ns) if known else (0, 0)
+        if key != self._state_key:
+            self._state_key = key
+            self._state = review_state(known, self.baseline, self.threshold, self.min_reviews)
+        return self._state
+
+    def _skew(self, now_ns: int) -> tuple[bool, int, float]:
+        """(pulled, the side to quote alone or 0, the latest signal) in skew mode."""
+        state = self._review_state(now_ns)
+        mode = lean(state, now_ns, self.pull_ns, self.skew_ns)
+        if mode != self._mode:
+            logger.info("film %s: quoting %s (signal %s)", self.film_id, mode,
+                        "none" if state is None else f"{state.signal.signal:+.3f} from {state.signal.reviews} reviews")
+            self._mode = mode
+        changed = self._feed.count_changed(now_ns)
+        counting = changed is not None and now_ns < changed + self.pull_ns
+        side = mode if isinstance(mode, int) else 0
+        return mode == PULL or counting, side, math.nan if state is None else state.signal.signal
 
     # ---- engine callbacks ---------------------------------------------------------------------
 
@@ -221,12 +276,16 @@ class RtMaker(Strategy):
     def _evaluate(self, now_ns: int) -> list[Intent]:
         if self.is_exiting:
             return []
-        until = self._pull_until(now_ns)
-        pulled = until is not None and now_ns < until
-        if pulled and until != self._pulled_until:
-            logger.info("film %s: a review or a Tomatometer change; quotes pulled for %d min", self.film_id,
-                        self.pull_ns // MINUTE_NS)
-        self._pulled_until = until
+        side, sig = 0, math.nan
+        if self.signal_mode == SKEW_MODE:
+            pulled, side, sig = self._skew(now_ns)
+        else:
+            until = self._pull_until(now_ns)
+            pulled = until is not None and now_ns < until
+            if pulled and until != self._pulled_until:
+                logger.info("film %s: a review or a Tomatometer change; quotes pulled for %d min", self.film_id,
+                            self.pull_ns // MINUTE_NS)
+            self._pulled_until = until
         positions = {s.listing_id: self._position(s) for s in self._strikes}
         budget = self.max_film_usd - sum(held_cost(*p) for p in positions.values())
         intents = []
@@ -240,25 +299,27 @@ class RtMaker(Strategy):
             else:
                 q = quote(s.bids, s.asks, position, s.sent if self.own_orders_in_book else None, self.quote_size,
                           self.max_position, self.min_price, self.max_price, self.min_join_size, s.lot, s.min_size)
+                if side:
+                    q, reason = one_side(q, side), LEANING
                 cost = adds(q, position)
                 if cost > budget:
                     q, reason = reducing(q, position, s.lot, s.min_size), CAPPED
                     cost = adds(q, position)
                 budget -= cost
             if q != s.sent:
-                intents.append(self._send(now_ns, s, q, position, reason))
+                intents.append(self._send(now_ns, s, q, position, reason, sig))
         return intents
 
-    def _send(self, now_ns: int, s: _Strike, q: Quote, position: float, reason: int) -> Intent:
+    def _send(self, now_ns: int, s: _Strike, q: Quote, position: float, reason: int, sig: float) -> Intent:
         s.sent = q
-        self._record(now_ns, s, q, position, reason)
+        self._record(now_ns, s, q, position, reason, sig)
         return Intent(s.exchange_id, s.security_id,
                       bid_price=round(q.bid_price * PRICE_SCALE) if q.bid_size else 0,
                       bid_size=round(q.bid_size * SIZE_SCALE),
                       ask_price=round(q.ask_price * PRICE_SCALE) if q.ask_size else 0,
                       ask_size=round(q.ask_size * SIZE_SCALE))
 
-    def _record(self, now_ns: int, s: _Strike, q: Quote, position: float, reason: int) -> None:
+    def _record(self, now_ns: int, s: _Strike, q: Quote, position: float, reason: int, sig: float) -> None:
         if self._quotes_buf is None:
             return
         buf = self._quotes_buf
@@ -272,4 +333,5 @@ class RtMaker(Strategy):
         buf.set_double(self._q_ask_size, q.ask_size)
         buf.set_double(self._q_position, position)
         buf.set_long(self._q_reason, reason)
+        buf.set_double(self._q_signal, sig)
         buf.commit()

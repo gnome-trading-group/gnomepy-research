@@ -11,9 +11,10 @@ uses only the standard library and is run by path, not imported as part of the p
     python3 gnomepy_research/dependencies.py extras gnomepy_research.sessions.cs2_series.strategy:CS2Series
     python3 gnomepy_research/dependencies.py constraints    # rewrite constraints.txt after `poetry lock`
 
-constraints.txt pins every package to its poetry.lock version, gnomepy included, so a session installs
-exactly what the tests ran against. platform.properties names the same gnomepy, which the registry's
-launcher reads to install it; platform_versions() reads that file for the check that the two agree.
+constraints.txt pins every package but gnomepy to its poetry.lock version, so a session installs exactly
+what the tests ran against. gnomepy is pinned by whoever installs it: a session by platform.properties (the
+same version as the lock; platform_versions() reads that file for the check that the two agree), and the
+research-job and backtest images by the gnomepy they were built with, which a constraint here would contradict.
 """
 from __future__ import annotations
 
@@ -55,7 +56,7 @@ def strategy_extras(strategy_class: str, root: Path = ROOT) -> tuple[str, ...]:
 
 
 def constraints(lock_text: str) -> str:
-    packages = sorted((p["name"], p["version"]) for p in tomllib.loads(lock_text)["package"])
+    packages = sorted((p["name"], p["version"]) for p in tomllib.loads(lock_text)["package"] if p["name"] != "gnomepy")
     return HEADER + "".join(f"{name}=={version}\n" for name, version in packages)
 
 

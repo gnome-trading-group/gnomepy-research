@@ -10,7 +10,10 @@ import pytest
 
 from gnomepy import OrderStatus, Scales
 from gnomepy_research.sessions.rt_maker import strategy as mod
-from gnomepy_research.sessions.rt_maker.quotes import NONE, Level, Quote, adds, join_price, lots, quote, reducing
+from gnomepy_research.models.rt.review_feed import Review
+from gnomepy_research.models.rt.signal import NO, YES
+from gnomepy_research.sessions.rt_maker.quotes import (BOTH, NONE, PULL, Level, Quote, adds, join_price, lean, lots,
+                                                       one_side, quote, reducing, review_state)
 from tests.sessions.conftest import FakeStreams, stream_of
 
 P, S = Scales.PRICE, Scales.SIZE
@@ -24,6 +27,8 @@ LEGS = ([{"venue": "kalshi", "strike": k, "yes_listing": 5000 + k, "no_listing":
 LISTINGS = {leg[key]: (KALSHI if leg["venue"] == "kalshi" else PM, leg[key] + 10_000)
             for leg in LEGS for key in ("yes_listing", "no_listing")}
 YES40, YES60 = 5040, 5060
+HOUR = 60 * MINUTE
+PULL_NS = 30 * MINUTE
 
 
 # ---- the quoting rules ---------------------------------------------------------------------------------------------
@@ -66,6 +71,90 @@ def test_what_a_quote_adds_counts_only_size_beyond_trading_the_position_back():
     assert reducing(q, 200, 1, 0) == Quote(0, 0, 0.42, 200)
     assert reducing(q, -100, 1, 0) == Quote(0.40, 100, 0, 0)
     assert reducing(q, 0, 1, 0) == NONE
+
+
+# ---- leaning on the review signal ------------------------------------------------------------------------------------
+
+def rv(i, seen_min, fresh=True):
+    return Review(f"u{i}", T0 + seen_min * MINUTE, T0 + seen_min * MINUTE, fresh)
+
+
+def mode(reviews, minute, skew_hours=None):
+    state = review_state(reviews, 0.667, 0.10, 3)
+    return lean(state, T0 + minute * MINUTE, PULL_NS, None if skew_hours is None else int(skew_hours * HOUR))
+
+
+def test_before_any_review_both_sides_are_quoted():
+    assert mode([], 0) == BOTH
+
+
+def test_a_review_before_the_signal_has_enough_reviews_pulls_then_both_come_back():
+    two = [rv(1, 0), rv(2, 5)]
+    assert mode(two, 6) == PULL
+    assert mode(two, 34) == PULL
+    assert mode(two, 35) == BOTH, "30 min after the latest review"
+
+
+def test_a_side_is_quoted_alone_at_once_and_until_the_next_review():
+    fresh = [rv(1, 0), rv(2, 1), rv(3, 2)]
+    assert mode(fresh, 2) == YES, "no pull: the review that gave the side leans straight away"
+    assert mode(fresh, 10 * 60) == YES, "unbounded: still leaning hours later"
+    rotten = [rv(1, 0, False), rv(2, 1, False), rv(3, 2)]
+    assert mode(rotten, 3) == NO
+
+
+def test_a_bounded_lean_returns_to_both_sides_after_skew_hours():
+    fresh = [rv(1, 0), rv(2, 1), rv(3, 2)]
+    assert mode(fresh, 61, skew_hours=1) == YES
+    assert mode(fresh, 62, skew_hours=1) == BOTH
+
+
+def test_a_review_that_leaves_no_side_ends_the_lean_with_a_pull():
+    reviews = [rv(1, 0), rv(2, 1), rv(3, 2), rv(4, 60, False), rv(5, 61, False)]
+    # 3 fresh of 5 = 0.6: within 0.10 of 0.667, no side.
+    assert mode(reviews, 62) == PULL
+    assert mode(reviews, 91) == BOTH
+
+
+def test_a_flip_pulls_both_first_then_leans_the_new_way():
+    reviews = [rv(1, 0), rv(2, 1), rv(3, 2)] + [rv(i, 60, False) for i in range(4, 10)]
+    # 3 fresh of 9 = 0.33: NO, after leaning YES.
+    assert review_state(reviews, 0.667, 0.10, 3).flip
+    assert mode(reviews, 61) == PULL
+    assert mode(reviews, 90) == NO
+
+
+def test_a_flip_counts_against_the_last_side_leaned_even_with_a_no_side_review_between():
+    reviews = ([rv(1, 0), rv(2, 1), rv(3, 2), rv(4, 60, False), rv(5, 61, False)]
+               + [rv(i, 120, False) for i in range(6, 10)])
+    # YES, then no side (3/5), then NO (3/9): a flip from YES.
+    state = review_state(reviews, 0.667, 0.10, 3)
+    assert (state.side, state.flip) == (NO, True)
+    assert mode(reviews, 121) == PULL
+
+
+def test_a_side_without_a_flip_never_pulls_even_after_a_no_side_review_in_between():
+    reviews = ([rv(1, 0), rv(2, 1), rv(3, 2), rv(4, 60, False), rv(5, 61, False)]
+               + [rv(i, 120) for i in range(6, 10)])
+    # YES, then no side (3/5), then YES again (7/9): the same side as the last leaned is no flip.
+    state = review_state(reviews, 0.667, 0.10, 3)
+    assert (state.side, state.flip) == (YES, False)
+    assert mode(reviews, 120) == YES
+
+
+def test_reviews_seen_at_the_same_moment_count_as_one():
+    # Seen one by one, the first two rotten reviews would say NO and the next fresh one would flip to YES.
+    same = [rv(1, 0, False), rv(2, 0, False)] + [rv(i, 0) for i in range(3, 11)]
+    assert review_state(same[:3], 0.667, 0.10, 3).side == NO, "one by one, the third review alone says NO"
+    state = review_state(same, 0.667, 0.10, 3)
+    assert (state.side, state.flip) == (YES, False)
+
+
+def test_one_side_keeps_the_bid_for_yes_and_the_ask_for_no():
+    q = Quote(0.45, 500, 0.47, 400)
+    assert one_side(q, YES) == Quote(0.45, 500, 0, 0)
+    assert one_side(q, NO) == Quote(0, 0, 0.47, 400)
+    assert one_side(q, 0) == q
 
 
 # ---- the session ---------------------------------------------------------------------------------------------------
@@ -140,9 +229,9 @@ class _Book:
         return int(self._asks[i][1] * S) if i < len(self._asks) else 0
 
 
-def _review(url, seen_min):
+def _review(url, seen_min, fresh=True):
     ts = pd.Timestamp(T0 + seen_min * MINUTE, tz="UTC")
-    return {"url": url, "film_id": FILM, "published_at": ts, "first_seen_at": ts, "is_review": True, "fresh": True}
+    return {"url": url, "film_id": FILM, "published_at": ts, "first_seen_at": ts, "is_review": True, "fresh": fresh}
 
 
 @pytest.fixture
@@ -251,3 +340,63 @@ def test_a_film_without_kalshi_strikes_is_refused(make):
     with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry()):
         with pytest.raises(ValueError):
             mod.RtMaker(film_id=FILM, legs=[LEGS[-1]], rewarded_only=False, reload_seconds=0)
+
+
+def _all_pulled(intents):
+    return all(sides(i) == (0, 0, 0, 0) for i in by_listing(intents).values())
+
+
+def test_skew_quotes_only_the_bid_once_the_reviews_say_yes(make):
+    s = make(reviews=[_review("a", 10), _review("b", 11), _review("c", 12)], signal_mode="skew")
+    assert sides(by_listing(books(s, 5))[YES40]) == pytest.approx((0.45, 500, 0.47, 500))
+    assert _all_pulled(books(s, 10)), "the first review: no side yet, pulled"
+    out = by_listing(books(s, 12))
+    assert sides(out[YES40]) == pytest.approx((0.45, 500, 0, 0)), "the third: YES, the bid alone, no pull"
+    assert books(s, 600) == [], "still leaning ten hours on"
+
+
+def test_skew_quotes_only_the_ask_once_the_reviews_say_no(make):
+    s = make(reviews=[_review("a", 10, False), _review("b", 11, False), _review("c", 12, False)], signal_mode="skew")
+    books(s, 5)
+    assert sides(by_listing(books(s, 12))[YES60]) == pytest.approx((0, 0, 0.47, 500))
+
+
+def test_skew_hours_bounds_the_lean(make):
+    s = make(reviews=[_review("a", 10), _review("b", 11), _review("c", 12)], signal_mode="skew", skew_hours=1.0)
+    books(s, 12)
+    assert sides(by_listing(books(s, 73))[YES40]) == pytest.approx((0.45, 500, 0.47, 500))
+
+
+def test_skew_a_tomatometer_change_pulls_then_the_lean_resumes(make):
+    reviews = [_review("a", 10), _review("b", 11), _review("c", 12)]
+    s = make(reviews=reviews, scores=[(FILM, 3, 0, pd.Timestamp(T0 + 20 * MINUTE, tz="UTC"))], signal_mode="skew")
+    books(s, 12)
+    assert _all_pulled(books(s, 20))
+    assert sides(by_listing(books(s, 51))[YES40]) == pytest.approx((0.45, 500, 0, 0))
+
+
+def test_skew_the_leaned_side_still_stops_at_the_position_limit(make):
+    s = make(reviews=[_review("a", 10), _review("b", 11), _review("c", 12)], signal_mode="skew")
+    s.positions.set(YES40, 500, 0.45)
+    assert sides(by_listing(books(s, 12))[YES40]) == (0, 0, 0, 0)
+
+
+def test_skew_a_position_against_the_signal_is_traded_back_by_the_leaned_side(make):
+    s = make(reviews=[_review("a", 10, False), _review("b", 11, False), _review("c", 12, False)],
+             signal_mode="skew")
+    s.positions.set(YES40, 300, 0.45)
+    assert sides(by_listing(books(s, 12))[YES40]) == pytest.approx((0, 0, 0.47, 500)), "NO: sells the YES held"
+
+
+def test_pull_mode_ignores_the_signal(make):
+    s = make(reviews=[_review("a", 10), _review("b", 11), _review("c", 12)])
+    books(s, 5)
+    assert _all_pulled(books(s, 12))
+    assert sides(by_listing(books(s, 43))[YES40]) == pytest.approx((0.45, 500, 0.47, 500))
+
+
+def test_an_unknown_signal_mode_or_skew_hours_is_refused(make):
+    with pytest.raises(ValueError):
+        make(signal_mode="lean")
+    with pytest.raises(ValueError):
+        make(signal_mode="skew", skew_hours=0)

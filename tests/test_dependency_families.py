@@ -166,6 +166,13 @@ def test_constraints_match_the_lock():
         "constraints.txt is stale: run `python3 gnomepy_research/dependencies.py constraints`"
 
 
+def test_constraints_never_pin_gnomepy():
+    # The research-job image installs a task's commit against both its own gnomepy and these constraints.
+    pinned = {line.split("==")[0] for line in (ROOT / "constraints.txt").read_text().splitlines() if "==" in line}
+    assert "gnomepy" not in pinned
+    assert "gnomepy" in {p["name"] for p in tomllib.loads((ROOT / "poetry.lock").read_text())["package"]}
+
+
 def test_platform_pins_releases_and_the_locked_gnomepy():
     versions = platform_versions((ROOT / PLATFORM).read_text())
     assert set(versions) == {"orchestrator", "gnomepy"}

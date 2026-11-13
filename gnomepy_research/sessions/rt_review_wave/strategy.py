@@ -44,8 +44,9 @@ from gnomepy.java.schemas import StreamRecord
 from gnomepy.registry import RegistryClient
 
 from gnomepy_research.fees import registry_fee_rates
-from gnomepy_research.sessions.rt_review_wave.decision import NO, YES, Level, Signal, signal, take, wave_start
 from gnomepy_research.models.rt.review_feed import REVIEWS, SCORES, ReviewFeed
+from gnomepy_research.models.rt.signal import NO, YES, Signal, signal, wave_start
+from gnomepy_research.sessions.rt_review_wave.decision import Level, take
 
 logger = logging.getLogger(__name__)
 
