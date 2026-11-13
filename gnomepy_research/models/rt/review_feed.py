@@ -18,17 +18,24 @@ import bisect
 import logging
 import threading
 import time
+from dataclasses import dataclass
 
 import pandas as pd
 from gnomepy.data import DatasetStore
 from pyiceberg.expressions import EqualTo
 
-from gnomepy_research.sessions.rt_review_wave.decision import Review
-
 logger = logging.getLogger(__name__)
 
 REVIEWS = "rt_reviews"
 SCORES = "rt_scores"
+
+
+@dataclass(frozen=True)
+class Review:
+    url: str
+    seen_ns: int
+    published_ns: int | None
+    fresh: bool
 
 
 def read_rows(source: str, film_id: str) -> pd.DataFrame:
@@ -75,6 +82,7 @@ class Snapshot:
         self._seen = [r.seen_ns for r in reviews]
         self._counts = list(counts)
         self._counted_at = [t for t, _ in self._counts]
+        self._changed_at = [t for i, (t, n) in enumerate(self._counts) if n != (self._counts[i - 1][1] if i else 0)]
 
     def known(self, now_ns: int) -> list[Review]:
         return self._reviews[:bisect.bisect_right(self._seen, now_ns)]
@@ -82,6 +90,10 @@ class Snapshot:
     def counted(self, now_ns: int) -> int:
         i = bisect.bisect_right(self._counted_at, now_ns)
         return self._counts[i - 1][1] if i else 0
+
+    def count_changed(self, now_ns: int) -> int | None:
+        i = bisect.bisect_right(self._changed_at, now_ns)
+        return self._changed_at[i - 1] if i else None
 
 
 class ReviewFeed:
@@ -101,6 +113,10 @@ class ReviewFeed:
     def counted(self, now_ns: int) -> int:
         """How many reviews the film's Tomatometer counted, as last seen by now (0 before any reading)."""
         return self._snapshot.counted(now_ns)
+
+    def count_changed(self, now_ns: int) -> int | None:
+        """When the Tomatometer's count last changed, as seen by now (its first reading counts), or None."""
+        return self._snapshot.count_changed(now_ns)
 
     def _reload_forever(self) -> None:
         while True:

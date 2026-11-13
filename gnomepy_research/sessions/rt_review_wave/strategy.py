@@ -4,7 +4,7 @@ A film's first wave of outlet reviews, traded on every venue listing its Rotten 
 gnome-launcher starts one session per film (the `rt` rule) holding, for each "at least X" strike on each venue
 (Kalshi, Polymarket International, Polymarket US), the strike's YES and NO listings. The session waits, often for days,
 until the film's first review wave: the third review, of a cluster seen within cluster_hours, of those the rt_reviews
-source saw soon after they were published (review_feed.py, decision.py). The research behind it: over Jan-Nov 2026,
+source saw soon after they were published (models/rt/review_feed.py, decision.py). The research behind it: over Jan-Nov 2026,
 taking the side of the reviews known 5 minutes after the wave started made +11c a contract net of the taker fee on
 Kalshi (51 films), fading to +3.5c by an hour, because the venues absorb a wave slowly.
 
@@ -45,7 +45,7 @@ from gnomepy.registry import RegistryClient
 
 from gnomepy_research.fees import registry_fee_rates
 from gnomepy_research.sessions.rt_review_wave.decision import NO, YES, Level, Signal, signal, take, wave_start
-from gnomepy_research.sessions.rt_review_wave.review_feed import REVIEWS, SCORES, ReviewFeed
+from gnomepy_research.models.rt.review_feed import REVIEWS, SCORES, ReviewFeed
 
 logger = logging.getLogger(__name__)
 

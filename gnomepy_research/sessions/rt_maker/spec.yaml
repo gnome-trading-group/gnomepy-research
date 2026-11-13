@@ -1,0 +1,32 @@
+# DRAFT written by Claude on 2026-11-12 for review - spec.yaml is user-authored, so edit freely.
+name: rt_maker
+description: >
+  A resting maker on a film's Kalshi Rotten Tomatoes "at least X" strikes, for Kalshi's liquidity rewards. One session
+  per film; on every strike with a reward program in force it rests 500 contracts at the best bid and best ask other
+  makers show, stops a side at 500 contracts held or sold, keeps the film's money committed under $10k, and pulls every
+  quote for 30 minutes after any review of the film is seen (rt_reviews) or the Tomatometer's count changes (rt_scores).
+
+goals:
+  primary_metric: final_pnl
+  direction: maximize
+  thresholds:
+    final_pnl: ">0"
+    fill_count: ">0"
+
+constraints:
+  strategy_type: market_making
+  avoid:
+    - taking liquidity - quotes only
+    - quoting within pull_minutes of a review or a Tomatometer change
+    - quoting a strike without a reward program in force
+    - more than max_position held or sold on one strike, or max_film_usd committed on the film
+    - staying alone at a level other makers have left (live books show our own orders; paper sets own_orders_in_book false)
+  notes:
+    - Research (~/gnome-research-work/rt/lip/maker_guard_books.py, prod books Nov 10-12 2026, 145 rewarded strikes) - 500 a side at the touch, back of the queue, earned ~$2.6k/day in rewards with fills about flat to the mid an hour later; pulling 30 min after a review did best (+$2.6k/day level reading, +$2.1k queue reading). Under 2 days of books, marked to mid, not settled
+    - The trades-only replay over Apr-Nov (maker_guard.py) lost money under every policy, but its fill model is 1-2c/contract too harsh on the same window (model_check.py), so its absolute numbers don't count
+    - Rewards are Kalshi's LIP for US members (the founder's individual account); Kalshi's stated end of the program is 2027-01-01
+    - Settlement check due Nov 16 (Ebenezer, How to Rob a Bank, Victorian Psycho, Ghost Soldier)
+
+meta:
+  execution_mode: local
+  interaction_mode: interactive

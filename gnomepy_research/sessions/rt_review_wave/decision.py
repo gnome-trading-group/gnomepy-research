@@ -17,15 +17,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from gnomepy_research.models.rt.review_feed import Review
+
 YES, NO = 1, -1
-
-
-@dataclass(frozen=True)
-class Review:
-    url: str
-    seen_ns: int
-    published_ns: int | None
-    fresh: bool
 
 
 @dataclass(frozen=True)

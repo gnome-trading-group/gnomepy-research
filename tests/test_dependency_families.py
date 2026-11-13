@@ -23,7 +23,17 @@ import pytest
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
-from gnomepy_research.dependencies import PACKAGE, ROOT, constraints, declared_extras, module_extras, strategy_extras
+from gnomepy_research.dependencies import (
+    PACKAGE,
+    PLATFORM,
+    ROOT,
+    constraints,
+    declared_extras,
+    locked_version,
+    module_extras,
+    platform_versions,
+    strategy_extras,
+)
 
 PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
 EXTRAS = tuple(PYPROJECT["optional-dependencies"])
@@ -154,3 +164,15 @@ def test_extras_come_from_the_nearest_package():
 def test_constraints_match_the_lock():
     assert (ROOT / "constraints.txt").read_text() == constraints((ROOT / "poetry.lock").read_text()), \
         "constraints.txt is stale: run `python3 gnomepy_research/dependencies.py constraints`"
+
+
+def test_platform_pins_releases_and_the_locked_gnomepy():
+    versions = platform_versions((ROOT / PLATFORM).read_text())
+    assert set(versions) == {"orchestrator", "gnomepy"}
+    for key, version in versions.items():
+        assert version.count(".") == 2 and version.replace(".", "").isdigit(), f"{key}={version} is not a release"
+    locked = locked_version((ROOT / "poetry.lock").read_text(), "gnomepy")
+    assert versions["gnomepy"] == locked, (
+        f"{PLATFORM} pins gnomepy {versions['gnomepy']} but poetry.lock has {locked}: sessions would run another "
+        "gnomepy than the tests; `poetry update gnomepy` or change the pin"
+    )

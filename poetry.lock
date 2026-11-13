@@ -1573,14 +1573,14 @@ tqdm = ["tqdm"]
 
 [[package]]
 name = "gnomepy"
-version = "3.13.0"
+version = "3.16.0"
 description = ""
 optional = false
 python-versions = "<3.14,>=3.13"
 groups = ["main"]
 files = [
-    {file = "gnomepy-3.13.0-py3-none-any.whl", hash = "sha256:edecddf83e369a99f14ad56db94ff229eac02d01f20d239fcebf4369b7daaaac"},
-    {file = "gnomepy-3.13.0.tar.gz", hash = "sha256:428b6cf32b13db38ba2eb82d3c38454383a5f55763af5dfdba0921032b3746b5"},
+    {file = "gnomepy-3.16.0-py3-none-any.whl", hash = "sha256:e506a49798f40fc1d4fdd95e7bc5c6539059cf4ddbf16e7befe180e02ad63818"},
+    {file = "gnomepy-3.16.0.tar.gz", hash = "sha256:4697c2d7cb7d807b552d8a09c5d7f624bd81cbfeab97b7521a95ce9962cad8cd"},
 ]
 
 [package.dependencies]
@@ -5608,4 +5608,4 @@ xgboost = ["joblib", "scikit-learn", "xgboost", "xgboost-cpu"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<3.14"
-content-hash = "f51b36240d1a354b31c69e5eb7e8710b7f484fd8fd4ff247339bb504ecfc250d"
+content-hash = "e672c026956ca7fd97bbf2ed8270d492e3d11c5efe997fb94b2657e9b2f788df"

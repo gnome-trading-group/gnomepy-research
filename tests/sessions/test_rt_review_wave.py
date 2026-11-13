@@ -10,8 +10,8 @@ import pytest
 
 from gnomepy import OrderStatus, Scales, Side
 from gnomepy_research.sessions.rt_review_wave import strategy as mod
-from gnomepy_research.sessions.rt_review_wave.decision import NO, YES, Level, Review, signal, take, wave_start
-from gnomepy_research.sessions.rt_review_wave.review_feed import ReviewFeed, reviews_of
+from gnomepy_research.models.rt.review_feed import Review, ReviewFeed, reviews_of
+from gnomepy_research.sessions.rt_review_wave.decision import NO, YES, Level, signal, take, wave_start
 from tests.sessions.conftest import FakeFeeSchedule, FakeStreams, stream_of
 
 P, S = Scales.PRICE, Scales.SIZE

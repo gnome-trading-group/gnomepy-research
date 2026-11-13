@@ -11,8 +11,9 @@ uses only the standard library and is run by path, not imported as part of the p
     python3 gnomepy_research/dependencies.py extras gnomepy_research.sessions.cs2_series.strategy:CS2Series
     python3 gnomepy_research/dependencies.py constraints    # rewrite constraints.txt after `poetry lock`
 
-constraints.txt pins every package to its poetry.lock version, so a session installs
-exactly what the tests ran against. gnomepy is left out: the launcher pins it per session.
+constraints.txt pins every package to its poetry.lock version, gnomepy included, so a session installs
+exactly what the tests ran against. platform.properties names the same gnomepy, which the registry's
+launcher reads to install it; platform_versions() reads that file for the check that the two agree.
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = "gnomepy_research"
 CONSTRAINTS = "constraints.txt"
-UNCONSTRAINED = {"gnomepy"}
+PLATFORM = "platform.properties"
 HEADER = "# Generated from poetry.lock by `python3 gnomepy_research/dependencies.py constraints` - do not edit.\n"
 
 
@@ -55,7 +56,22 @@ def strategy_extras(strategy_class: str, root: Path = ROOT) -> tuple[str, ...]:
 
 def constraints(lock_text: str) -> str:
     packages = sorted((p["name"], p["version"]) for p in tomllib.loads(lock_text)["package"])
-    return HEADER + "".join(f"{name}=={version}\n" for name, version in packages if name not in UNCONSTRAINED)
+    return HEADER + "".join(f"{name}=={version}\n" for name, version in packages)
+
+
+def locked_version(lock_text: str, package: str) -> str | None:
+    return next((p["version"] for p in tomllib.loads(lock_text)["package"] if p["name"] == package), None)
+
+
+def platform_versions(text: str) -> dict[str, str]:
+    """platform.properties' key=value lines, parsed as the registry's launcher parses them."""
+    versions = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            versions[key.strip()] = value.strip()
+    return versions
 
 
 def main(argv: list[str]) -> None:

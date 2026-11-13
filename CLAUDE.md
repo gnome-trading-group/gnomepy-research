@@ -159,6 +159,7 @@ models/cs2/e12/              e12-wide-mm series model: daily fit (HLTV + FACEIT 
 models/cfb/features/         CFB point-in-time features
 models/cfb/efficiency/       dynamic efficiency model and posteriors
 models/cfb/hyperparameters/  its fitted hyperparameters
+models/rt/                   a film's reviews and Tomatometer as gnome-pipelines' rt_reviews source saw them (review_feed.py)
 ```
 
 Sessions build on `models/`, never the other way round: nothing in `models/` imports from
@@ -171,13 +172,14 @@ A session's `strategy.class` is `gnomepy_research.sessions.<name>.strategy:<Clas
 config entries reach the instance as one `STRATEGY_ARGS_JSON` env var, and gnomepy's runner passes them to the
 class constructor as keyword arguments, so arg names must match `__init__` exactly.
 
-`cs2_series` (gnome-launcher's `cs2` rule) and `rt_review_wave` (its `rt` rule) are launched by the launcher. The rest are backtest/paper research
+`cs2_series` (gnome-launcher's `cs2` rule), `rt_review_wave` (its `rt` rule) and `rt_maker` (its `rt_maker` rule) are launched by the launcher. The rest are backtest/paper research
 whose strategies could be launched the same way.
 
 | Package | Class | Trades | Key args |
 |---|---|---|---|
 | `cs2_series` | `CS2Series` | CS2 BO3 series winner in the last hour before kickoff, one session per HLTV match holding every venue's listings (Polymarket Intl, Kalshi, PM US); e12-wide-mm blended with the market mid, Kelly-sized taker buys of the underpriced team, sold only when the model's price changes and a sale beats holding; held to settlement | `match_id`, `legs` (`[{venue, listing_team_a, listing_team_b}]`, set by the launcher), `bankroll_usd` (required), `min_edge`, `kelly_fraction`, `max_stake_usd` (per match), `window_hours`, `entry_cutoff_hours`, `max_model_age_days`, `liquid_spread` (widest book the mid may come from), `model_path`/`blend_path` (artifact URIs; unpinned = latest) |
 | `rt_review_wave` | `RtReviewWave` | A film's first wave of outlet reviews on Rotten Tomatoes "at least X" markets, one session per film holding every venue's strikes (Kalshi, PM Intl, PM US); from the third review of a cluster for 15 min, buys YES on every strike priced 3-97c when Claude's fresh share (gnome-pipelines' `rt_reviews`, re-read every 5 s) is 0.10 above the 0.667 baseline, NO when below; IOC at most 3c through, side locked once held, held to settlement; never trades once the Tomatometer (`rt_scores`) counts `max_rt_reviews` (5); ends itself after the window | `film_id`, `legs` (`[{venue, strike, yes_listing, no_listing}]`, set by the launcher), `baseline`, `threshold`, `min_reviews`, `window_minutes`, `max_contracts_per_strike`, `max_usd_per_venue`, `max_through`, `min_price`/`max_price` |
+| `rt_maker` | `RtMaker` | Kalshi's liquidity rewards on a film's Rotten Tomatoes strikes, one session per film: on every strike with a reward program in force (registry incentive programs, re-read every 10 min) rests `quote_size` at the best bid and ask other makers show (a level only our own order holds doesn't count, live), a side stops at `max_position`, quotes past `max_film_usd` keep only the side that trades back; every quote pulled for `pull_minutes` after a review (`rt_reviews`) or a Tomatometer change (`rt_scores`); never takes, never ends itself | `film_id`, `legs` (as `rt_review_wave`; Kalshi YES listings quoted), `quote_size`, `max_position`, `max_film_usd`, `pull_minutes`, `min_price`/`max_price`, `own_orders_in_book` (false for paper), `rewarded_only` |
 | `cs2_win_probability` | `CS2WinProbability` | In-play CS2 map/match on Polymarket/Kalshi from GRID telemetry; maker quotes around model fair value | `listing_id_yes`, `listing_id_no`, `model_path`, `level`, `grid_api_key`/`grid_series_id` (live) or `fair_value_series_path` (backtest), `edge_threshold`, `max_position` |
 | `cfb_win_probability` | none | CFB pregame model work; `live/` is a parked drive-level simulator, not a strategy | - |
 | `cross_prediction_arb` | `CrossPredictionArb` | Cross- and intra-venue binary arb (Polymarket/Kalshi) | `outcomes` (list of `{pm, k}` listing pairs), `max_position`, `min_edge_cents`, `price_model` |
@@ -223,8 +225,12 @@ installs only what its code uses:
 - `tests/test_dependency_families.py` follows every module's imports through the package and fails
   if one reaches a library its extras don't install. A new heavy import means adding it to an
   extra (or a new one) and declaring that extra on the package.
-- `constraints.txt` pins every package to its poetry.lock version. Regenerate it after `poetry lock`;
-  the test fails while it is stale.
+- `constraints.txt` pins every package to its poetry.lock version, gnomepy included. Regenerate it after
+  `poetry lock`; the test fails while it is stale.
+- `platform.properties` names the gnome-orchestrator and gnomepy releases this commit's sessions run on; its gnomepy
+  must equal poetry.lock's (a test checks), so tests and sessions run the same gnomepy. To take a platform update,
+  change it (and `poetry update gnomepy` + regenerate `constraints.txt` for a gnomepy bump) and launch from the new
+  commit.
 - Models a live session loads are saved in formats that outlive library versions (xgboost's own
   UBJ format, plain numbers for calibrators), never pickles: a pickle only loads in the exact
   versions that wrote it, and training (gnome-pipelines) and live sessions resolve their
@@ -286,17 +292,17 @@ research jobs; dev is capped at 16 for testing the runner. The runner image is g
 
 **How a live/paper session runs this repo.** Nothing here is built into an image. The registry's session launcher
 starts an EC2 orchestrator whose `start-session.sh` (gnome-orchestrator `ami/files/`), for `strategy.type=python`:
-- clones this repo and checks out the session's `research_commit` (a launcher rule's or the controller form's
-  `research_commit`); unset, it checks out `main` as of boot, so an unpinned session runs whatever `main` was then.
-  The session row records `research_commit`, not the SHA `main` resolved to.
+- clones this repo at the session's `research_commit` (a launcher rule's or the controller form's; unset, `main`),
+  which the launcher has resolved to a SHA at launch and recorded on the session row.
 - installs it with the strategy package's extras (`dependencies.py extras <strategy class>`), pinned by
-  `constraints.txt`, alongside `gnomepy[strategy,live-data]==$GNOMEPY_VERSION` (the session's `gnomepy_version`,
-  else the latest on PyPI at launch) and the gnome-orchestrator jar (`orchestrator_version`, else the latest).
+  `constraints.txt`, alongside the gnomepy and gnome-orchestrator jar that commit's `platform.properties` pins (the
+  launcher reads it from GitHub and passes `GNOMEPY_VERSION` / `ORCHESTRATOR_VERSION`; a commit without it can't
+  launch).
 - runs `python -m gnomepy.java.strategy.runner`, which builds the class from `STRATEGY_CLASS` and
   `STRATEGY_ARGS_JSON` and starts the Java orchestrator around it.
 
-So a fix reaches a session only by relaunching it at a commit that has it; a pushed `main` changes every later
-unpinned launch. Release tags (`scripts/release.sh`) are for gnome-pipelines, not sessions.
+So a fix, or a platform update, reaches a session only by relaunching it at a commit that has it; a pushed `main`
+changes every later unpinned launch. Release tags (`scripts/release.sh`) are for gnome-pipelines, not sessions.
 
 **Logs.** The instance's stdout/stderr (orchestrator log lines and Python tracebacks) go to CloudWatch
 `/gnome/orchestrator/<region>`, stream `ec2/<instance-id>`; the region is the one the session ran in (placed by
