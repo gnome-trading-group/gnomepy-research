@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from gnomepy import OrderStatus, Scales
+from gnomepy.incentives import IncentiveProgram, IncentiveTimeline, ProgramVersions
 from gnomepy_research.sessions.rt_maker import strategy as mod
 from gnomepy_research.models.rt.review_feed import Review
 from gnomepy_research.models.rt.signal import NO, YES
@@ -249,6 +250,8 @@ class _Registry:
 
 
 class _Timeline:
+    programs = ()
+
     def __init__(self, paying):
         self.paying = paying
 
@@ -335,6 +338,10 @@ def make(tmp_path):
     return _make
 
 
+def book_at(listing, at, bids=((0.45, 900),), asks=((0.47, 900),)):
+    return _Book(listing, list(bids), list(asks), at)
+
+
 def books(s, minute, bids=((0.45, 900),), asks=((0.47, 900),), listings=(YES40, YES60, 4060), trade=None):
     out = []
     for lid in listings:
@@ -404,6 +411,49 @@ def test_a_side_stops_at_the_position_limit(make):
     s.positions.set(YES40, 500, 0.45)
     s._strike_of[YES40].sent = None
     assert sides(by_listing(books(s, 1))[YES40]) == pytest.approx((0, 0, 0.47, 500))
+
+
+def test_a_position_is_held_between_fills_and_read_again_after_one(make):
+    s = make()
+    out = by_listing(books(s, 0))
+    s.positions.set(YES40, 500, 0.45)
+    s._strike_of[YES40].sent = None
+    # The same moment, no fill: the position last read stands.
+    assert sides(by_listing(books(s, 0))[YES40]) == pytest.approx((0.45, 500, 0.47, 500))
+    s.on_execution_report(report(out[YES40], OrderStatus.PARTIALLY_FILLED, fill=(0.45, 500)))
+    assert sides(by_listing(books(s, 0))[YES40]) == pytest.approx((0, 0, 0.47, 500))
+
+
+def test_a_position_changed_without_a_fill_is_read_within_the_refresh(make):
+    s = make()
+    books(s, 0)
+    s.positions.set(YES40, 500, 0.45)
+    s._strike_of[YES40].sent = None
+    at = T0 + mod.POSITION_REFRESH_NS
+    out = by_listing(s.on_market_data(book_at(YES40, at)))
+    assert sides(out[YES40]) == pytest.approx((0, 0, 0.47, 500))
+
+
+def _program(start_min, end_min, known_min):
+    return IncentiveProgram("k1", "liquidity", "KXRT", T0 + start_min * MINUTE, T0 + end_min * MINUTE, 100, "PERIOD",
+                            {}, None, T0 + known_min * MINUTE)
+
+
+def test_a_reward_program_counts_from_its_start_to_its_end_as_known_then(make):
+    s = make()
+    strike = s._strike_of[YES40]
+    # Known from minute 5, paying minutes 10 to 20; a second version from minute 15 ends it at 18.
+    s._programs = {YES40: IncentiveTimeline([ProgramVersions("k1", [_program(10, 20, 5), _program(10, 18, 15)])])}
+    paying = {m: s._rewarded(strike, T0 + m * MINUTE) for m in (0, 9, 10, 14, 15, 17, 18, 30)}
+    assert paying == {0: False, 9: False, 10: True, 14: True, 15: True, 17: True, 18: False, 30: False}
+
+
+def test_reloaded_reward_programs_are_read_at_once(make):
+    s = make()
+    strike = s._strike_of[YES40]
+    assert s._rewarded(strike, T0)
+    s._programs = {YES40: _Timeline(False)}
+    assert not s._rewarded(strike, T0)
 
 
 def test_quotes_past_the_film_budget_keep_only_the_side_that_trades_back(make):
@@ -634,4 +684,3 @@ def test_a_partial_fill_puts_its_side_at_the_front(make):
     assert s._strike_of[YES60].ask_spot.ahead == 900, "the fill's price says it was the bid"
     s._position_view.set(YES60, 100, 0.45)
     assert sides(by_listing(books(s, 1, listings=(YES60,)))[YES60]) == pytest.approx((0, 0, 0.47, 500))
-

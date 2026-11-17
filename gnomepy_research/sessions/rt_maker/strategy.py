@@ -44,7 +44,9 @@ A live book shows our own resting orders and a paper session's doesn't: own_orde
 price other makers show is read correctly in both (set it false for paper).
 
 The session never ends itself: the launcher stops it once none of its films is open, or relaunches it when the set of
-films changes. Positions are read from the engine, so a restarted session picks up what it holds.
+films changes. Positions are read from the engine, so a restarted session picks up what it holds; each strike's is
+read again after its fills and otherwise at most every POSITION_REFRESH_NS, as a book update decides every strike of
+its film.
 """
 from __future__ import annotations
 
@@ -83,6 +85,11 @@ PROGRAMS_BATCH = 25
 # cap, a halt) resent at once loops at the record rate, and every round is ledger events the session must write.
 REJECT_BACKOFF_NS = 5_000_000_000
 FILLS = {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}
+# How stale a strike's position may be between its fills. A book update decides every strike of its film, so reading
+# each from the engine every time is the session's main cost; live, a correction booked outside the session shows up
+# this much later.
+POSITION_REFRESH_NS = 1_000_000_000
+NEVER = 1 << 62
 
 
 @dataclass
@@ -106,6 +113,13 @@ class _Strike:
     # When each side was last pulled to be sent again from the back.
     bid_requeued_ns: int = -(1 << 62)
     ask_requeued_ns: int = -(1 << 62)
+    # (YES contracts held, their average price) as last read, and when; None until read and after a fill.
+    position: tuple[float, float] = (0.0, 0.0)
+    position_ns: int | None = None
+    # Whether a reward program was in force, which programs said so, and until when that holds.
+    rewarded: bool = False
+    rewarded_timeline: IncentiveTimeline | None = None
+    rewarded_until_ns: int = -1
 
 
 @dataclass
@@ -310,16 +324,21 @@ class RtMaker(Strategy):
 
     def _position(self, s: _Strike) -> tuple[float, float]:
         """(YES contracts held, negative when sold; their average price)."""
-        pos = self.positions.get_position(s.exchange_id, s.security_id)
-        if pos is None or not pos.net_quantity:
-            return 0.0, 0.0
-        return pos.net_quantity / SIZE_SCALE, pos.avg_entry_price / PRICE_SCALE
+        if s.position_ns is None or self._now_ns - s.position_ns >= POSITION_REFRESH_NS:
+            pos = self.positions.get_position(s.exchange_id, s.security_id)
+            s.position = ((0.0, 0.0) if pos is None or not pos.net_quantity
+                          else (pos.net_quantity / SIZE_SCALE, pos.avg_entry_price / PRICE_SCALE))
+            s.position_ns = self._now_ns
+        return s.position
 
     def _rewarded(self, s: _Strike, now_ns: int) -> bool:
         if not self.rewarded_only:
             return True
         timeline = self._programs.get(s.listing_id)
-        return bool(timeline and timeline.in_force(now_ns))
+        if timeline is not s.rewarded_timeline or now_ns >= s.rewarded_until_ns:
+            s.rewarded = bool(timeline and timeline.in_force(now_ns))
+            s.rewarded_timeline, s.rewarded_until_ns = timeline, _next_program_change(timeline, now_ns)
+        return s.rewarded
 
     def _pull_until(self, film: _Film, now_ns: int) -> int | None:
         """The end of the pull the film's latest review or Tomatometer change started, as seen by now."""
@@ -366,10 +385,8 @@ class RtMaker(Strategy):
         listing_id = self.streams.listing_id(data.stream_id)
         s = self._strike_of.get(listing_id)
         if s is not None:
-            s.bids = [Level(data.bid_price(i) / PRICE_SCALE, data.bid_size(i) / SIZE_SCALE)
-                      for i in range(self.book_depth) if data.bid_size(i) > 0]
-            s.asks = [Level(data.ask_price(i) / PRICE_SCALE, data.ask_size(i) / SIZE_SCALE)
-                      for i in range(self.book_depth) if data.ask_size(i) > 0]
+            s.bids = _levels(data.bid_price, data.bid_size, self.book_depth)
+            s.asks = _levels(data.ask_price, data.ask_size, self.book_depth)
             self._advance(s, data)
         return self._decide(data.event_timestamp, self._film_of.get(listing_id))
 
@@ -397,6 +414,7 @@ class RtMaker(Strategy):
         if s is None:
             return []
         if report.order_status in FILLS and report.filled_qty:
+            s.position_ns = None
             # Reports don't say which side; the fill's price does, as our bid and ask never share one.
             price = report.fill_price / PRICE_SCALE
             for name in ("bid_spot", "ask_spot"):
@@ -535,3 +553,22 @@ class RtMaker(Strategy):
         buf.set_double(self._q_bid_ahead, s.bid_spot.ahead if s.bid_spot else math.nan)
         buf.set_double(self._q_ask_ahead, s.ask_spot.ahead if s.ask_spot else math.nan)
         buf.commit()
+
+
+def _levels(price_at, size_at, depth: int) -> list[Level]:
+    """A side of the book best first, to its first empty level, each level's size read once."""
+    levels = []
+    for i in range(depth):
+        size = size_at(i)
+        if size <= 0:
+            break
+        levels.append(Level(price_at(i) / PRICE_SCALE, size / SIZE_SCALE))
+    return levels
+
+
+def _next_program_change(timeline: IncentiveTimeline | None, now_ns: int) -> int:
+    """When any of the timeline's programs next starts, ends or changes terms after now_ns: until then, which are in
+    force can't change."""
+    upcoming = [t for program in (timeline.programs if timeline else ()) for v in program.versions
+                for t in (v.effective_from, v.period_start, v.period_end) if t > now_ns]
+    return min(upcoming, default=NEVER)
