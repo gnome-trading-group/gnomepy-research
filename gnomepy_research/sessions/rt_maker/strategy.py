@@ -12,7 +12,8 @@ markets' close is no longer quoted; the launcher drops it at the session's next 
 
 A book update decides its own film's quotes. Every record also decides the quotes of any other film whose review state
 moved (a review or Tomatometer change seen, a pull or lean ending, its close passing) or one of whose orders ended, so a
-film reacts at the next record of any of the session's strikes, never waiting for its own book to move.
+film reacts at the next record of any of the session's strikes, never waiting for its own book to move. A strike whose
+order was rejected is quoted again only REJECT_BACKOFF_NS later.
 
 Kalshi pays the rewards for resting size near the touch on both sides; the risk is being filled by a taker who knows
 something the book hasn't priced. On these markets that is mostly a critic's review (gnome-pipelines' rt_reviews,
@@ -71,6 +72,9 @@ PULL_MODE, SKEW_MODE = "pull", "skew"
 QUOTING, PULLED, NOT_REWARDED, CAPPED, LEANING, CLOSED = 0, 1, 2, 3, 4, 5
 # Listings per reward-programs request: a request returns every version of each listing's programs.
 PROGRAMS_BATCH = 25
+# How long a strike whose order was rejected waits before it is quoted again. A refusal that would recur (a gateway
+# cap, a halt) resent at once loops at the record rate, and every round is ledger events the session must write.
+REJECT_BACKOFF_NS = 5_000_000_000
 
 
 @dataclass
@@ -85,6 +89,8 @@ class _Strike:
     asks: list[Level] = field(default_factory=list)
     # The quote last sent, which the OMS keeps resting until told otherwise; None once an order may have ended.
     sent: Quote | None = None
+    # Not quoted again before this, after a rejected order.
+    retry_at_ns: int = 0
 
 
 @dataclass
@@ -183,6 +189,7 @@ class RtMaker(Strategy):
         self.book_depth = book_depth
         self._processing_time_ns = processing_time_ns
         self._quotes_buf = None
+        self._now_ns = 0
 
         self._registry = RegistryClient()
         self._films = [_Film(f["film_id"], pd.Timestamp(f["close"]).value if f.get("close") else None,
@@ -326,12 +333,15 @@ class RtMaker(Strategy):
             # One of the strike's orders is gone, so the quote is sent again at the film's next decision.
             s.sent = None
             self._film_of[listing_id].stale = True
+            if report.order_status == OrderStatus.REJECTED:
+                s.retry_at_ns = self._now_ns + REJECT_BACKOFF_NS
         return []
 
     def _decide(self, now_ns: int, touched: _Film | None) -> list[Intent]:
         """The quotes of the film whose book moved, and of every film whose regime moved or whose orders ended."""
         if self.is_exiting:
             return []
+        self._now_ns = max(self._now_ns, now_ns)
         intents = []
         for film in self._films:
             closed = film.close_ns is not None and now_ns >= film.close_ns
@@ -371,6 +381,10 @@ class RtMaker(Strategy):
                     cost = adds(q, position)
                 budget -= cost
             if q != s.sent:
+                if now_ns < s.retry_at_ns:
+                    # Decided again at every record until it may be sent.
+                    film.stale = True
+                    continue
                 intents.append(self._send(now_ns, s, q, position, reason, sig))
         return intents
 

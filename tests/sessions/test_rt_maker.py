@@ -513,3 +513,17 @@ def test_a_film_named_twice_or_a_listing_in_two_films_is_refused(make):
         make(films=_films((FILM, LEGS, None), (FILM, LEGS_B, None)))
     with pytest.raises(ValueError):
         make(films=_films((FILM, LEGS, None), (FILM_B, LEGS[:1], None)))
+
+
+def test_a_rejected_strike_waits_before_it_is_quoted_again(make):
+    s = make(films=TWO_FILMS)
+    intent = by_listing(books(s, 0, listings=BOTH_BOOKS))[B40]
+    reject = SimpleNamespace(exchange_id=intent.exchange_id, security_id=intent.security_id,
+                             order_status=OrderStatus.REJECTED)
+    s.on_execution_report(reject)
+    seconds = MINUTE // 60
+    assert books(s, 0, listings=(YES40,)) == [], "refused: not resent on the next record"
+    out = s.on_market_data(_Book(YES40, [(0.45, 900)], [(0.47, 900)], T0 + 4 * seconds))
+    assert out == [], "nor inside the backoff"
+    again = by_listing(s.on_market_data(_Book(YES40, [(0.45, 900)], [(0.47, 900)], T0 + 6 * seconds)))
+    assert set(again) == {B40}, "quoted again once the backoff has passed, though its own book hasn't moved"
