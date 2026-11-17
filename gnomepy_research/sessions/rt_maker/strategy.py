@@ -119,9 +119,6 @@ class _Film:
     mode: str | int | None = None
     # (closed, pulled, side) when its quotes were last decided; a change decides them again.
     regime: tuple[bool, bool, int] | None = None
-    # The episode its quotes carry: a new one each time its regime changes, so a wave's quoting (pulled, leaning a
-    # side, back on both) can be told apart in the ledger.
-    episode: int = 0
     # One of its orders ended since its quotes were last decided.
     stale: bool = True
 
@@ -261,7 +258,6 @@ class RtMaker(Strategy):
                 threading.Thread(target=self._reload_programs, args=(programs_reload_seconds,),
                                  name="rt-programs", daemon=True).start()
         self._feed = ReviewFeed([f.film_id for f in self._films], reviews_source, reload_seconds, scores_source)
-        self._next_episode = 1
 
     def _resolve(self, strike: int, listing_id: int) -> _Strike:
         listings = self._registry.get_listing(listing_id=listing_id)
@@ -433,8 +429,6 @@ class RtMaker(Strategy):
             else:
                 pulled = self._pull(film, now_ns)
             regime = (closed, pulled, side)
-            if regime != film.regime:
-                film.episode, self._next_episode = self._next_episode, self._next_episode + 1
             if film is touched or film.stale or regime != film.regime:
                 film.regime, film.stale = regime, False
                 intents += self._quote_film(film, now_ns, closed, pulled, side, sig)
@@ -475,7 +469,7 @@ class RtMaker(Strategy):
                     # Decided again at every record until it may be sent.
                     film.stale = True
                     continue
-                intents.append(self._send(now_ns, s, q, position, reason, sig, film.episode))
+                intents.append(self._send(now_ns, s, q, position, reason, sig))
         return intents
 
     def _requeue(self, s: _Strike, q: Quote, now_ns: int) -> tuple[Quote, bool]:
@@ -513,8 +507,7 @@ class RtMaker(Strategy):
             else:
                 setattr(s, name, joined(price, size, others_at(levels, price, 0.0)))
 
-    def _send(self, now_ns: int, s: _Strike, q: Quote, position: float, reason: int, sig: float,
-              episode: int) -> Intent:
+    def _send(self, now_ns: int, s: _Strike, q: Quote, position: float, reason: int, sig: float) -> Intent:
         s.sent = q
         self._place(s, q)
         self._record(now_ns, s, q, position, reason, sig)
@@ -522,8 +515,7 @@ class RtMaker(Strategy):
                       bid_price=round(q.bid_price * PRICE_SCALE) if q.bid_size else 0,
                       bid_size=round(q.bid_size * SIZE_SCALE),
                       ask_price=round(q.ask_price * PRICE_SCALE) if q.ask_size else 0,
-                      ask_size=round(q.ask_size * SIZE_SCALE),
-                      episode_id=episode)
+                      ask_size=round(q.ask_size * SIZE_SCALE))
 
     def _record(self, now_ns: int, s: _Strike, q: Quote, position: float, reason: int, sig: float) -> None:
         if self._quotes_buf is None:

@@ -635,14 +635,3 @@ def test_a_partial_fill_puts_its_side_at_the_front(make):
     s._position_view.set(YES60, 100, 0.45)
     assert sides(by_listing(books(s, 1, listings=(YES60,)))[YES60]) == pytest.approx((0, 0, 0.47, 500))
 
-
-
-def test_each_regime_a_film_quotes_in_is_its_own_episode(make):
-    """Quotes carry an episode that changes with the film's regime (both sides, pulled after a review, back), so a
-    wave's quoting can be told apart in the ledger."""
-    s = make(reviews=[_review("a", 5)], signal_mode="pull", pull_minutes=10)
-    first, pulled, back = (by_listing(books(s, minute)) for minute in (0, 6, 20))
-    assert sides(pulled[YES40]) == (0, 0, 0, 0)
-    episodes = [first[YES40].episode_id, pulled[YES40].episode_id, back[YES40].episode_id]
-    assert episodes[0] > 0 and len(set(episodes)) == 3
-    assert first[YES60].episode_id == first[YES40].episode_id, "one film, one episode"
