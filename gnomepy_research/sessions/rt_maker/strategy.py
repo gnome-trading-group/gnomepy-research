@@ -10,6 +10,11 @@ position reaches max_position, and quotes that would commit more of the film's m
 to the side that trades the position back towards flat. Positions are held; nothing is ever taken. A film past its
 markets' close is no longer quoted; the launcher drops it at the session's next relaunch.
 
+Fills are where the maker loses, so a side can also keep away from them (quotes.py): queue_policy "requeue" pulls a
+side its estimated queue place puts near the front and sends it again from the back, "behind" rests each side a tick
+behind the price it would join, and inventory skew steps the side that adds to a position back a tick per skew_unit
+contracts held. All are off by default ("join", no skew).
+
 A book update decides its own film's quotes. Every record also decides the quotes of any other film whose review state
 moved (a review or Tomatometer change seen, a pull or lean ending, its close passing) or one of whose orders ended, so a
 film reacts at the next record of any of the session's strikes, never waiting for its own book to move. A strike whose
@@ -56,8 +61,10 @@ from gnomepy.java.schemas import StreamRecord
 from gnomepy.registry import RegistryClient
 
 from gnomepy_research.models.rt.review_feed import REVIEWS, SCORES, ReviewFeed
-from gnomepy_research.sessions.rt_maker.quotes import (NONE, PULL, Level, Quote, ReviewState, adds, held_cost, lean,
-                                                       one_side, quote, reducing, review_state)
+from gnomepy_research.sessions.rt_maker.quotes import (BEHIND, JOIN, NONE, PULL, QUEUE_POLICIES, REQUEUE, Level, Quote,
+                                                       QueueSpot, ReviewState, adds, advance, held_cost, joined, lean,
+                                                       near_front, one_side, others_at, placed, quote, reducing,
+                                                       review_state, skew_ticks)
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +76,13 @@ VENUE = "kalshi"
 HOUR_NS = 60 * MINUTE_NS
 PULL_MODE, SKEW_MODE = "pull", "skew"
 # Why a strike's quote is what it is, in the quotes metric.
-QUOTING, PULLED, NOT_REWARDED, CAPPED, LEANING, CLOSED = 0, 1, 2, 3, 4, 5
+QUOTING, PULLED, NOT_REWARDED, CAPPED, LEANING, CLOSED, REQUEUED = 0, 1, 2, 3, 4, 5, 6
 # Listings per reward-programs request: a request returns every version of each listing's programs.
 PROGRAMS_BATCH = 25
 # How long a strike whose order was rejected waits before it is quoted again. A refusal that would recur (a gateway
 # cap, a halt) resent at once loops at the record rate, and every round is ledger events the session must write.
 REJECT_BACKOFF_NS = 5_000_000_000
+FILLS = {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}
 
 
 @dataclass
@@ -85,12 +93,19 @@ class _Strike:
     security_id: int
     lot: float
     min_size: float
+    tick: float
     bids: list[Level] = field(default_factory=list)
     asks: list[Level] = field(default_factory=list)
     # The quote last sent, which the OMS keeps resting until told otherwise; None once an order may have ended.
     sent: Quote | None = None
     # Not quoted again before this, after a rejected order.
     retry_at_ns: int = 0
+    # Each resting side's estimated place in its level's queue; None while it isn't resting.
+    bid_spot: QueueSpot | None = None
+    ask_spot: QueueSpot | None = None
+    # When each side was last pulled to be sent again from the back.
+    bid_requeued_ns: int = -(1 << 62)
+    ask_requeued_ns: int = -(1 << 62)
 
 
 @dataclass
@@ -104,6 +119,9 @@ class _Film:
     mode: str | int | None = None
     # (closed, pulled, side) when its quotes were last decided; a change decides them again.
     regime: tuple[bool, bool, int] | None = None
+    # The episode its quotes carry: a new one each time its regime changes, so a wave's quoting (pulled, leaning a
+    # side, back on both) can be told apart in the ledger.
+    episode: int = 0
     # One of its orders ended since its quotes were last decided.
     stale: bool = True
 
@@ -127,6 +145,16 @@ class RtMaker(Strategy):
             (the side is quoted alone after the pull): the first minutes of a wave are when the market overshoots.
         min_price, max_price: a side priced outside them isn't quoted: the strike is all but settled.
         min_join_size: least size of others' a level needs to be joined.
+        queue_policy: "join" (rest where the side joins), "requeue" (pull a side near the front of its queue and send
+            it again from the back) or "behind" (rest each side a tick behind the price it would join).
+        requeue_min_ahead, requeue_ahead_fraction: requeue a side once less than requeue_min_ahead contracts, or less
+            than requeue_ahead_fraction of everyone else's size at its level, is estimated ahead of it.
+        assume_cancel_ahead: the share (0 to 1) of a level's shrinks that weren't trades taken to be cancels ahead of
+            our side. 1 errs towards the front, so a side is requeued early rather than filled.
+        requeue_cooldown_seconds: least time between two requeues of one side.
+        max_requeues_per_second: requeues the whole session may make a second, so they stay inside its order limits.
+        skew_unit, max_skew_ticks: the side that adds to a strike's position rests a tick further back per skew_unit
+            contracts held, at most max_skew_ticks (0 for either: no skew).
         own_orders_in_book: whether the book this session reads shows its own orders (live) or not (paper).
         rewarded_only: quote only strikes with a reward program in force.
         reload_seconds: how often to re-read the films' reviews and Tomatometers (0 = once, for replays).
@@ -150,6 +178,14 @@ class RtMaker(Strategy):
         min_price: float = 0.03,
         max_price: float = 0.97,
         min_join_size: float = 1.0,
+        queue_policy: str = JOIN,
+        requeue_min_ahead: float = 0.0,
+        requeue_ahead_fraction: float = 0.0,
+        assume_cancel_ahead: float = 1.0,
+        requeue_cooldown_seconds: float = 5.0,
+        max_requeues_per_second: float = 10.0,
+        skew_unit: float = 0.0,
+        max_skew_ticks: int = 0,
         own_orders_in_book: bool = True,
         rewarded_only: bool = True,
         book_depth: int = 10,
@@ -174,6 +210,13 @@ class RtMaker(Strategy):
             raise ValueError(f"signal_mode must be {PULL_MODE!r} or {SKEW_MODE!r}, got {signal_mode!r}")
         if skew_hours is not None and skew_hours <= 0:
             raise ValueError(f"skew_hours must be positive or None, got {skew_hours}")
+        if queue_policy not in QUEUE_POLICIES:
+            raise ValueError(f"queue_policy must be one of {QUEUE_POLICIES}, got {queue_policy!r}")
+        if not 0 <= assume_cancel_ahead <= 1 or not 0 <= requeue_ahead_fraction <= 1:
+            raise ValueError("assume_cancel_ahead and requeue_ahead_fraction must be within [0, 1]")
+        if requeue_min_ahead < 0 or skew_unit < 0 or max_skew_ticks < 0 or max_requeues_per_second <= 0:
+            raise ValueError("requeue_min_ahead, skew_unit and max_skew_ticks must not be negative, and "
+                             "max_requeues_per_second must be positive")
         self.quote_size = quote_size
         self.max_position = max_position
         self.max_film_usd = max_film_usd
@@ -184,6 +227,13 @@ class RtMaker(Strategy):
         self.pull_every_review = pull_every_review
         self.min_price, self.max_price = min_price, max_price
         self.min_join_size = min_join_size
+        self.queue_policy = queue_policy
+        self.requeue_min_ahead, self.requeue_ahead_fraction = requeue_min_ahead, requeue_ahead_fraction
+        self.assume_cancel_ahead = assume_cancel_ahead
+        self.requeue_cooldown_ns = int(requeue_cooldown_seconds * 1e9)
+        self.max_requeues_per_second = max_requeues_per_second
+        self._requeue_tokens, self._tokens_ns = max_requeues_per_second, 0
+        self.skew_unit, self.max_skew_ticks = skew_unit, max_skew_ticks
         self.own_orders_in_book = own_orders_in_book
         self.rewarded_only = rewarded_only
         self.book_depth = book_depth
@@ -211,6 +261,7 @@ class RtMaker(Strategy):
                 threading.Thread(target=self._reload_programs, args=(programs_reload_seconds,),
                                  name="rt-programs", daemon=True).start()
         self._feed = ReviewFeed([f.film_id for f in self._films], reviews_source, reload_seconds, scores_source)
+        self._next_episode = 1
 
     def _resolve(self, strike: int, listing_id: int) -> _Strike:
         listings = self._registry.get_listing(listing_id=listing_id)
@@ -220,7 +271,8 @@ class RtMaker(Strategy):
         spec = specs[0] if specs else None
         lot = int(spec.lot_size) / SIZE_SCALE if spec and spec.lot_size else 1.0
         min_size = int(spec.min_size) / SIZE_SCALE if spec and spec.min_size else 0.0
-        return _Strike(strike, listing_id, listings[0].exchange_id, listings[0].security_id, lot, min_size)
+        tick = int(spec.tick_size) / PRICE_SCALE if spec and spec.tick_size else 0.01
+        return _Strike(strike, listing_id, listings[0].exchange_id, listings[0].security_id, lot, min_size, tick)
 
     def _load_programs(self) -> dict[int, IncentiveTimeline]:
         ids = list(self._strike_of)
@@ -253,6 +305,8 @@ class RtMaker(Strategy):
         self._q_position = quotes.add_double_column("position")
         self._q_reason = quotes.add_long_column("reason")
         self._q_signal = quotes.add_double_column("signal")
+        self._q_bid_ahead = quotes.add_double_column("bid_ahead")
+        self._q_ask_ahead = quotes.add_double_column("ask_ahead")
         quotes.freeze()
         self._quotes_buf = quotes
 
@@ -320,7 +374,22 @@ class RtMaker(Strategy):
                       for i in range(self.book_depth) if data.bid_size(i) > 0]
             s.asks = [Level(data.ask_price(i) / PRICE_SCALE, data.ask_size(i) / SIZE_SCALE)
                       for i in range(self.book_depth) if data.ask_size(i) > 0]
+            self._advance(s, data)
         return self._decide(data.event_timestamp, self._film_of.get(listing_id))
+
+    def _advance(self, s: _Strike, data: StreamRecord) -> None:
+        """Moves each resting side's queue place by the record: a trade print at its price, and its level's size."""
+        if s.bid_spot is None and s.ask_spot is None:
+            return
+        trade = data.action == "Trade"
+        price = data.price / PRICE_SCALE if trade else math.nan
+        size = data.size / SIZE_SCALE if trade else 0.0
+        for spot, levels in ((s.bid_spot, s.bids), (s.ask_spot, s.asks)):
+            if spot is None:
+                continue
+            traded = size if trade and math.isclose(price, spot.price) else 0.0
+            others = others_at(levels, spot.price, spot.size if self.own_orders_in_book else 0.0)
+            advance(spot, data.event_timestamp, others, traded, self.assume_cancel_ahead)
 
     def on_stream_event(self, stream_id: int, record: StreamRecord) -> list[Intent]:
         # Another stream's records only wake the session, so a review is acted on between the films' book updates.
@@ -329,12 +398,25 @@ class RtMaker(Strategy):
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
         listing_id = self.streams.listing_id_for(report.exchange_id, report.security_id)
         s = self._strike_of.get(listing_id)
-        if s is not None and report.order_status in TERMINAL:
+        if s is None:
+            return []
+        if report.order_status in FILLS and report.filled_qty:
+            # Reports don't say which side; the fill's price does, as our bid and ask never share one.
+            price = report.fill_price / PRICE_SCALE
+            for name in ("bid_spot", "ask_spot"):
+                spot = getattr(s, name)
+                if spot is not None and math.isclose(spot.price, price):
+                    if report.order_status == OrderStatus.FILLED:
+                        setattr(s, name, None)
+                    else:
+                        spot.ahead, spot.size = 0.0, report.leaves_qty / SIZE_SCALE
+        if report.order_status in TERMINAL:
             # One of the strike's orders is gone, so the quote is sent again at the film's next decision.
             s.sent = None
             self._film_of[listing_id].stale = True
             if report.order_status == OrderStatus.REJECTED:
                 s.retry_at_ns = self._now_ns + REJECT_BACKOFF_NS
+                s.bid_spot = s.ask_spot = None
         return []
 
     def _decide(self, now_ns: int, touched: _Film | None) -> list[Intent]:
@@ -351,6 +433,8 @@ class RtMaker(Strategy):
             else:
                 pulled = self._pull(film, now_ns)
             regime = (closed, pulled, side)
+            if regime != film.regime:
+                film.episode, self._next_episode = self._next_episode, self._next_episode + 1
             if film is touched or film.stale or regime != film.regime:
                 film.regime, film.stale = regime, False
                 intents += self._quote_film(film, now_ns, closed, pulled, side, sig)
@@ -375,27 +459,71 @@ class RtMaker(Strategy):
                           self.max_position, self.min_price, self.max_price, self.min_join_size, s.lot, s.min_size)
                 if side:
                     q, reason = one_side(q, side), LEANING
+                q = placed(q, position, s.tick, 1 if self.queue_policy == BEHIND else 0,
+                           skew_ticks(position, self.skew_unit, self.max_skew_ticks), self.min_price, self.max_price)
                 cost = adds(q, position)
                 if cost > budget:
                     q, reason = reducing(q, position, s.lot, s.min_size), CAPPED
                     cost = adds(q, position)
                 budget -= cost
+                if self.queue_policy == REQUEUE:
+                    q, requeued = self._requeue(s, q, now_ns)
+                    if requeued:
+                        reason = REQUEUED
             if q != s.sent:
                 if now_ns < s.retry_at_ns:
                     # Decided again at every record until it may be sent.
                     film.stale = True
                     continue
-                intents.append(self._send(now_ns, s, q, position, reason, sig))
+                intents.append(self._send(now_ns, s, q, position, reason, sig, film.episode))
         return intents
 
-    def _send(self, now_ns: int, s: _Strike, q: Quote, position: float, reason: int, sig: float) -> Intent:
+    def _requeue(self, s: _Strike, q: Quote, now_ns: int) -> tuple[Quote, bool]:
+        """The quote with any side near the front of its queue pulled, so the next decision sends it from the back."""
+        self._requeue_tokens = min(self.max_requeues_per_second, self._requeue_tokens + (now_ns - self._tokens_ns)
+                                   * self.max_requeues_per_second / 1e9)
+        self._tokens_ns = now_ns
+        bid, ask, requeued = (q.bid_price, q.bid_size), (q.ask_price, q.ask_size), False
+        for name, (price, size) in (("bid", bid), ("ask", ask)):
+            spot = getattr(s, f"{name}_spot")
+            if (not size or spot is None or not math.isclose(spot.price, price) or self._requeue_tokens < 1
+                    or now_ns < getattr(s, f"{name}_requeued_ns") + self.requeue_cooldown_ns
+                    or not near_front(spot, self.requeue_min_ahead, self.requeue_ahead_fraction)):
+                continue
+            self._requeue_tokens -= 1
+            setattr(s, f"{name}_requeued_ns", now_ns)
+            setattr(s, f"{name}_spot", None)
+            if name == "bid":
+                bid = (0.0, 0.0)
+            else:
+                ask = (0.0, 0.0)
+            requeued = True
+        return Quote(bid[0], bid[1], ask[0], ask[1]), requeued
+
+    def _place(self, s: _Strike, q: Quote) -> None:
+        """Each side's queue place after sending q: kept where it rests at the same price no larger (a smaller size
+        keeps its place), from the back of the level where it is new, moved or larger, gone where it isn't quoted."""
+        for name, price, size, levels in (("bid_spot", q.bid_price, q.bid_size, s.bids),
+                                          ("ask_spot", q.ask_price, q.ask_size, s.asks)):
+            spot = getattr(s, name)
+            if not size:
+                setattr(s, name, None)
+            elif spot is not None and math.isclose(spot.price, price) and size <= spot.size:
+                spot.size = size
+            else:
+                setattr(s, name, joined(price, size, others_at(levels, price, 0.0)))
+
+    def _send(self, now_ns: int, s: _Strike, q: Quote, position: float, reason: int, sig: float,
+              episode: int) -> Intent:
         s.sent = q
+        self._place(s, q)
         self._record(now_ns, s, q, position, reason, sig)
         return Intent(s.exchange_id, s.security_id,
                       bid_price=round(q.bid_price * PRICE_SCALE) if q.bid_size else 0,
                       bid_size=round(q.bid_size * SIZE_SCALE),
                       ask_price=round(q.ask_price * PRICE_SCALE) if q.ask_size else 0,
-                      ask_size=round(q.ask_size * SIZE_SCALE))
+                      ask_size=round(q.ask_size * SIZE_SCALE),
+                      episode_id=episode)
 
     def _record(self, now_ns: int, s: _Strike, q: Quote, position: float, reason: int, sig: float) -> None:
         if self._quotes_buf is None:
@@ -412,4 +540,6 @@ class RtMaker(Strategy):
         buf.set_double(self._q_position, position)
         buf.set_long(self._q_reason, reason)
         buf.set_double(self._q_signal, sig)
+        buf.set_double(self._q_bid_ahead, s.bid_spot.ahead if s.bid_spot else math.nan)
+        buf.set_double(self._q_ask_ahead, s.ask_spot.ahead if s.ask_spot else math.nan)
         buf.commit()

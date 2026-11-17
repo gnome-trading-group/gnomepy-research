@@ -14,8 +14,9 @@ from gnomepy import OrderStatus, Scales
 from gnomepy_research.sessions.rt_maker import strategy as mod
 from gnomepy_research.models.rt.review_feed import Review
 from gnomepy_research.models.rt.signal import NO, YES
-from gnomepy_research.sessions.rt_maker.quotes import (BOTH, NONE, PULL, Level, Quote, adds, join_price, lean, lots,
-                                                       one_side, quote, reducing, review_state)
+from gnomepy_research.sessions.rt_maker.quotes import (BOTH, NONE, PULL, Level, Quote, QueueSpot, adds, advance,
+                                                       join_price, joined, lean, lots, near_front, one_side, placed,
+                                                       quote, reducing, review_state, skew_ticks)
 from tests.sessions.conftest import FakeStreams, stream_of
 
 P, S = Scales.PRICE, Scales.SIZE
@@ -76,6 +77,56 @@ def test_what_a_quote_adds_counts_only_size_beyond_trading_the_position_back():
     assert reducing(q, 200, 1, 0) == Quote(0, 0, 0.42, 200)
     assert reducing(q, -100, 1, 0) == Quote(0.40, 100, 0, 0)
     assert reducing(q, 0, 1, 0) == NONE
+
+
+# ---- keeping away from fills ----------------------------------------------------------------------------------------
+
+def test_a_trade_the_feed_shows_as_a_shrink_and_a_print_comes_off_the_queue_once():
+    for cancel_ahead in (0.0, 1.0):
+        shrink_first = joined(0.45, 500, 900)
+        advance(shrink_first, 1, 700, 0, cancel_ahead)
+        advance(shrink_first, 1, 700, 200, cancel_ahead)
+        print_first = joined(0.45, 500, 900)
+        advance(print_first, 1, 900, 200, cancel_ahead)
+        advance(print_first, 1, 700, 0, cancel_ahead)
+        assert shrink_first.ahead == print_first.ahead == 700
+
+
+def test_a_shrink_without_a_trade_takes_the_assumed_share_of_cancels_off_the_size_ahead():
+    for cancel_ahead, ahead in ((1.0, 100), (0.5, 200), (0.0, 300)):
+        spot = QueueSpot(0.45, 500, ahead=300, level=900)
+        advance(spot, 1, 700, 0, cancel_ahead)
+        assert spot.ahead == ahead
+
+
+def test_size_joining_the_level_lands_behind_us_and_the_level_bounds_what_is_ahead():
+    spot = QueueSpot(0.45, 500, ahead=300, level=900)
+    advance(spot, 1, 1500, 0, 1.0)
+    assert spot.ahead == 300
+    advance(spot, 2, 100, 0, 0.0)
+    assert spot.ahead == 100, "no more ahead than the level holds"
+
+
+def test_a_side_is_near_the_front_under_either_threshold():
+    spot = QueueSpot(0.45, 500, ahead=100, level=1000)
+    assert near_front(spot, 200, 0)
+    assert not near_front(spot, 0, 0.05)
+    assert near_front(spot, 0, 0.2)
+
+
+def test_inventory_skew_steps_back_a_tick_per_unit_up_to_the_most():
+    assert skew_ticks(0, 250, 2) == 0
+    assert skew_ticks(499, 250, 2) == 1
+    assert skew_ticks(-1000, 250, 2) == 2
+    assert skew_ticks(1000, 0, 2) == 0
+
+
+def test_placing_steps_the_side_that_adds_to_the_position_back_and_both_back_when_behind():
+    q = Quote(0.45, 500, 0.47, 500)
+    assert placed(q, 300, 0.01, 0, 1, 0.03, 0.97) == Quote(0.44, 500, 0.47, 500), "long: the bid adds to it"
+    assert placed(q, -300, 0.01, 0, 2, 0.03, 0.97) == Quote(0.45, 500, 0.49, 500), "short: the ask adds to it"
+    assert placed(q, 0, 0.01, 1, 0, 0.03, 0.97) == Quote(0.44, 500, 0.48, 500)
+    assert placed(Quote(0.03, 500, 0.05, 500), 0, 0.01, 1, 0, 0.03, 0.97) == Quote(0, 0, 0.06, 500), "out of range"
 
 
 # ---- leaning on the review signal ------------------------------------------------------------------------------------
@@ -228,10 +279,14 @@ class _Control:
 
 
 class _Book:
-    def __init__(self, listing, bids, asks, ts):
+    def __init__(self, listing, bids, asks, ts, trade=None):
         self.stream_id = stream_of(listing)
         self.event_timestamp = ts
         self._bids, self._asks = bids, asks
+        # The record's own event: a book change, or a trade print of (price, contracts).
+        self.action = "Trade" if trade else "Add"
+        self.price = int(round(trade[0] * P)) if trade else 0
+        self.size = int(trade[1] * S) if trade else 0
 
     def bid_price(self, i):
         return int(round(self._bids[i][0] * P)) if i < len(self._bids) else 0
@@ -280,15 +335,22 @@ def make(tmp_path):
     return _make
 
 
-def books(s, minute, bids=((0.45, 900),), asks=((0.47, 900),), listings=(YES40, YES60, 4060)):
+def books(s, minute, bids=((0.45, 900),), asks=((0.47, 900),), listings=(YES40, YES60, 4060), trade=None):
     out = []
     for lid in listings:
-        out += s.on_market_data(_Book(lid, list(bids), list(asks), T0 + minute * MINUTE))
+        out += s.on_market_data(_Book(lid, list(bids), list(asks), T0 + minute * MINUTE, trade))
     return out
 
 
 def by_listing(intents):
     return {next(lid for lid, key in LISTINGS.items() if key == (i.exchange_id, i.security_id)): i for i in intents}
+
+
+def report(intent, status, fill=None, leaves=0.0):
+    """An execution report on the intent's listing: a fill of (price, contracts), with leaves contracts resting."""
+    return SimpleNamespace(exchange_id=intent.exchange_id, security_id=intent.security_id, order_status=status,
+                           fill_price=int(round(fill[0] * P)) if fill else 0,
+                           filled_qty=int(fill[1] * S) if fill else 0, leaves_qty=int(leaves * S))
 
 
 def sides(intent):
@@ -315,8 +377,7 @@ def test_an_unchanged_quote_is_not_sent_again_until_one_of_its_orders_ends(make)
     assert books(s, 1) == []
     intent = by_listing(books(s, 2, bids=((0.44, 900),)))[YES40]
     assert sides(intent)[0] == pytest.approx(0.44), "the touch moved"
-    s.on_execution_report(SimpleNamespace(exchange_id=intent.exchange_id, security_id=intent.security_id,
-                                          order_status=OrderStatus.FILLED))
+    s.on_execution_report(report(intent, OrderStatus.FILLED, fill=(0.44, 500)))
     again = by_listing(books(s, 3, bids=((0.44, 900),)))
     assert set(again) == {YES40}, "filled: sent again"
 
@@ -477,8 +538,7 @@ def test_a_pull_ending_on_one_film_is_acted_on_at_any_films_next_record(make):
 def test_an_ended_order_requotes_its_film_at_the_next_record_of_any_film(make):
     s = make(films=TWO_FILMS)
     intent = by_listing(books(s, 0, listings=BOTH_BOOKS))[B40]
-    s.on_execution_report(SimpleNamespace(exchange_id=intent.exchange_id, security_id=intent.security_id,
-                                          order_status=OrderStatus.CANCELED))
+    s.on_execution_report(report(intent, OrderStatus.CANCELED))
     assert set(by_listing(books(s, 1, listings=(YES40,)))) == {B40}
 
 
@@ -518,8 +578,7 @@ def test_a_film_named_twice_or_a_listing_in_two_films_is_refused(make):
 def test_a_rejected_strike_waits_before_it_is_quoted_again(make):
     s = make(films=TWO_FILMS)
     intent = by_listing(books(s, 0, listings=BOTH_BOOKS))[B40]
-    reject = SimpleNamespace(exchange_id=intent.exchange_id, security_id=intent.security_id,
-                             order_status=OrderStatus.REJECTED)
+    reject = report(intent, OrderStatus.REJECTED)
     s.on_execution_report(reject)
     seconds = MINUTE // 60
     assert books(s, 0, listings=(YES40,)) == [], "refused: not resent on the next record"
@@ -527,3 +586,63 @@ def test_a_rejected_strike_waits_before_it_is_quoted_again(make):
     assert out == [], "nor inside the backoff"
     again = by_listing(s.on_market_data(_Book(YES40, [(0.45, 900)], [(0.47, 900)], T0 + 6 * seconds)))
     assert set(again) == {B40}, "quoted again once the backoff has passed, though its own book hasn't moved"
+
+
+
+# ---- keeping away from fills, in the session ------------------------------------------------------------------------
+
+SECOND = MINUTE // 60
+
+
+def test_behind_rests_each_side_a_tick_back_from_the_price_it_would_join(make):
+    s = make(queue_policy="behind")
+    assert sides(by_listing(books(s, 0))[YES60]) == pytest.approx((0.44, 500, 0.48, 500))
+
+
+def test_inventory_skew_steps_the_bid_back_while_long(make):
+    s = make(skew_unit=250, max_skew_ticks=2)
+    s._position_view.set(YES60, 300, 0.45)
+    assert sides(by_listing(books(s, 0))[YES60]) == pytest.approx((0.44, 200, 0.47, 500))
+
+
+def test_a_side_near_the_front_is_pulled_and_sent_again_from_the_back(make):
+    s = make(queue_policy="requeue", requeue_min_ahead=200, own_orders_in_book=False)
+    books(s, 0)
+    # 800 of the 900 ahead of our bid trade away: 100 left ahead of it.
+    pulled = by_listing(books(s, 1, bids=((0.45, 100),), listings=(YES60,), trade=(0.45, 800)))
+    assert sides(pulled[YES60]) == pytest.approx((0, 0, 0.47, 500)), "the bid is pulled, the ask stays"
+    again = by_listing(books(s, 1 + 1 / 60, bids=((0.45, 100),), listings=(YES60,)))
+    assert sides(again[YES60]) == pytest.approx((0.45, 500, 0.47, 500)), "sent again, behind the 100 there"
+    assert s._strike_of[YES60].bid_spot.ahead == 100
+
+
+def test_a_requeued_side_waits_out_the_cooldown_before_its_next_requeue(make):
+    s = make(queue_policy="requeue", requeue_min_ahead=200, requeue_cooldown_seconds=5, own_orders_in_book=False)
+    books(s, 0)
+    books(s, 1, bids=((0.45, 100),), listings=(YES60,), trade=(0.45, 800))
+    books(s, 1 + 1 / 60, bids=((0.45, 100),), listings=(YES60,))
+    assert books(s, 1 + 2 / 60, bids=((0.45, 100),), listings=(YES60,)) == [], "near the front, but requeued 1 s ago"
+    later = by_listing(books(s, 1 + 7 / 60, bids=((0.45, 100),), listings=(YES60,)))
+    assert sides(later[YES60])[:2] == (0, 0)
+
+
+def test_a_partial_fill_puts_its_side_at_the_front(make):
+    s = make(queue_policy="requeue", requeue_min_ahead=1, own_orders_in_book=False)
+    intent = by_listing(books(s, 0))[YES60]
+    s.on_execution_report(report(intent, OrderStatus.PARTIALLY_FILLED, fill=(0.45, 100), leaves=400))
+    assert s._strike_of[YES60].bid_spot.ahead == 0 and s._strike_of[YES60].bid_spot.size == 400
+    assert s._strike_of[YES60].ask_spot.ahead == 900, "the fill's price says it was the bid"
+    s._position_view.set(YES60, 100, 0.45)
+    assert sides(by_listing(books(s, 1, listings=(YES60,)))[YES60]) == pytest.approx((0, 0, 0.47, 500))
+
+
+
+def test_each_regime_a_film_quotes_in_is_its_own_episode(make):
+    """Quotes carry an episode that changes with the film's regime (both sides, pulled after a review, back), so a
+    wave's quoting can be told apart in the ledger."""
+    s = make(reviews=[_review("a", 5)], signal_mode="pull", pull_minutes=10)
+    first, pulled, back = (by_listing(books(s, minute)) for minute in (0, 6, 20))
+    assert sides(pulled[YES40]) == (0, 0, 0, 0)
+    episodes = [first[YES40].episode_id, pulled[YES40].episode_id, back[YES40].episode_id]
+    assert episodes[0] > 0 and len(set(episodes)) == 3
+    assert first[YES60].episode_id == first[YES40].episode_id, "one film, one episode"
