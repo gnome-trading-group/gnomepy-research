@@ -1,9 +1,10 @@
 # DRAFT written by Claude on 2026-11-12 for review - spec.yaml is user-authored, so edit freely.
 name: rt_maker
 description: >
-  A resting maker on a film's Kalshi Rotten Tomatoes "at least X" strikes, for Kalshi's liquidity rewards. One session
-  per film; on every strike with a reward program in force it rests 500 contracts at the best bid and best ask other
-  makers show, stops a side at 500 contracts held or sold, and keeps the film's money committed under $10k. After a
+  A resting maker on films' Kalshi Rotten Tomatoes "at least X" strikes, for Kalshi's liquidity rewards. The launcher
+  packs the open films into as few sessions as a paper gateway holds, each film quoted as if alone; on every strike
+  with a reward program in force it rests 500 contracts at the best bid and best ask other makers show, stops a side at
+  500 contracts held or sold, and keeps each film's money committed under $10k. After a
   review of the film (rt_reviews), signal_mode pull pulls every quote for 30 minutes; signal_mode skew quotes only the
   side Claude's fresh-share signal picks, until the next review, pulling both only when a review gives no side or flips
   it. A change in the Tomatometer's count (rt_scores) pulls every quote for 30 minutes in both.

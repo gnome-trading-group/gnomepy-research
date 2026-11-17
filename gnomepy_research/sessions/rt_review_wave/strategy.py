@@ -168,7 +168,7 @@ class RtReviewWave(Strategy):
             for side, key in ((YES, "yes_listing"), (NO, "no_listing")):
                 self._books.append(self._resolve(registry, leg["venue"], int(leg["strike"]), side, leg[key]))
         self._book_of = {b.listing_id: b for b in self._books}
-        self._feed = ReviewFeed(film_id, reviews_source, reload_seconds, scores_source)
+        self._feed = ReviewFeed([film_id], reviews_source, reload_seconds, scores_source)
 
     @staticmethod
     def _resolve(registry, venue: str, strike: int, side: int, listing_id: int) -> _Book:
@@ -254,12 +254,12 @@ class RtReviewWave(Strategy):
         if self.is_exiting:
             return []
         in_flight = any(b.in_flight for b in self._books)
-        counted = self._feed.counted(now_ns)
+        counted = self._feed.counted(self.film_id, now_ns)
         if counted >= self.max_rt_reviews:
             if not in_flight:
                 self.request_exit(f"film {self.film_id}: its Tomatometer already counts {counted} reviews")
             return []
-        reviews = self._feed.known(now_ns)
+        reviews = self._feed.known(self.film_id, now_ns)
         start = wave_start(reviews, self.min_reviews, self.cluster_ns, self.max_lag_ns)
         if start is None:
             return []

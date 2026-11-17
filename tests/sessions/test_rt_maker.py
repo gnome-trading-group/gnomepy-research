@@ -1,6 +1,8 @@
 """rt_maker: the quoting rules, and the session's quotes against fake books, reviews and reward programs."""
 from __future__ import annotations
 
+import threading
+from collections import Counter
 from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -24,9 +26,12 @@ KALSHI, PM = 5, 4
 STRIKES = (40, 60)
 LEGS = ([{"venue": "kalshi", "strike": k, "yes_listing": 5000 + k, "no_listing": 5100 + k} for k in STRIKES]
         + [{"venue": "polymarket", "strike": 60, "yes_listing": 4060, "no_listing": 4160}])
+FILM_B = "nosferatu"
+LEGS_B = [{"venue": "kalshi", "strike": k, "yes_listing": 6000 + k, "no_listing": 6100 + k} for k in STRIKES]
 LISTINGS = {leg[key]: (KALSHI if leg["venue"] == "kalshi" else PM, leg[key] + 10_000)
-            for leg in LEGS for key in ("yes_listing", "no_listing")}
+            for leg in LEGS + LEGS_B for key in ("yes_listing", "no_listing")}
 YES40, YES60 = 5040, 5060
+B40, B60 = 6040, 6060
 HOUR = 60 * MINUTE
 PULL_NS = 30 * MINUTE
 
@@ -241,22 +246,33 @@ class _Book:
         return int(self._asks[i][1] * S) if i < len(self._asks) else 0
 
 
-def _review(url, seen_min, fresh=True):
+def _review(url, seen_min, fresh=True, film=FILM):
     ts = pd.Timestamp(T0 + seen_min * MINUTE, tz="UTC")
-    return {"url": url, "film_id": FILM, "published_at": ts, "first_seen_at": ts, "is_review": True, "fresh": fresh}
+    return {"url": url, "film_id": film, "published_at": ts, "first_seen_at": ts, "is_review": True, "fresh": fresh}
+
+
+def _films(*films):
+    """The `films` argument: FILM alone by default, or (film_id, legs, close minute or None) each, its strikes the
+    legs' Kalshi ones, as the launcher gives them."""
+    return [{"film_id": f, "close": None if close is None else pd.Timestamp(T0 + close * MINUTE, tz="UTC").isoformat(),
+             "strikes": {str(leg["strike"]): leg["yes_listing"] for leg in legs if leg["venue"] == "kalshi"}}
+            for f, legs, close in (films or [(FILM, LEGS, None)])]
+
+
+TWO_FILMS = _films((FILM, LEGS, None), (FILM_B, LEGS_B, None))
 
 
 @pytest.fixture
 def make(tmp_path):
-    def _make(reviews=(), scores=(), rewarded=(YES40, YES60), **kw):
+    def _make(reviews=(), scores=(), rewarded=(YES40, YES60, B40, B60), films=None, **kw):
         path, scores_path = tmp_path / "rt_reviews.parquet", tmp_path / "rt_scores.parquet"
         pd.DataFrame(list(reviews) or [{**_review("old", -24 * 60), "film_id": "other-film"}]).to_parquet(path)
         pd.DataFrame(list(scores), columns=["film_id", "liked", "not_liked", "first_seen_at"]).to_parquet(scores_path)
-        timelines = {lid: _Timeline(lid in rewarded) for lid in (YES40, YES60)}
+        timelines = {lid: _Timeline(lid in rewarded) for lid in (YES40, YES60, B40, B60)}
         with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry()), \
-                patch.object(mod, "load_incentive_timelines", lambda registry, ids: timelines):
-            s = mod.RtMaker(film_id=FILM, legs=LEGS, reload_seconds=0, programs_reload_seconds=0,
-                            reviews_source=str(path), scores_source=str(scores_path), **kw)
+                patch.object(mod, "load_incentive_timelines", lambda registry, ids: {i: timelines[i] for i in ids}):
+            s = mod.RtMaker(films=films or _films(), reviews_source=str(path), scores_source=str(scores_path),
+                            **{"reload_seconds": 0, "programs_reload_seconds": 0, **kw})
         s._position_view = _Positions()
         s._streams = FakeStreams(LISTINGS)
         s._control = _Control()
@@ -264,9 +280,9 @@ def make(tmp_path):
     return _make
 
 
-def books(s, minute, bids=((0.45, 900),), asks=((0.47, 900),)):
+def books(s, minute, bids=((0.45, 900),), asks=((0.47, 900),), listings=(YES40, YES60, 4060)):
     out = []
-    for lid in (YES40, YES60, 4060):
+    for lid in listings:
         out += s.on_market_data(_Book(lid, list(bids), list(asks), T0 + minute * MINUTE))
     return out
 
@@ -341,7 +357,7 @@ def test_quotes_past_the_film_budget_keep_only_the_side_that_trades_back(make):
 def test_live_a_level_we_are_alone_on_is_left_for_the_others_best(make):
     live = make()
     books(live, 0)
-    alone = by_listing(books(live, 1, bids=((0.45, 500), (0.44, 900))))
+    alone = by_listing(books(live, 1, bids=((0.45, 500), (0.44, 900)), listings=(YES40,)))
     assert sides(alone[YES40])[0] == pytest.approx(0.44), "the 500 at 0.45 is ours"
     paper = make(own_orders_in_book=False)
     books(paper, 0)
@@ -351,7 +367,7 @@ def test_live_a_level_we_are_alone_on_is_left_for_the_others_best(make):
 def test_a_film_without_kalshi_strikes_is_refused(make):
     with patch.object(mod, "RegistryClient", lambda *a, **k: _Registry()):
         with pytest.raises(ValueError):
-            mod.RtMaker(film_id=FILM, legs=[LEGS[-1]], rewarded_only=False, reload_seconds=0)
+            mod.RtMaker(films=_films((FILM, [LEGS[-1]], None)), rewarded_only=False, reload_seconds=0)
 
 
 def _all_pulled(intents):
@@ -420,3 +436,80 @@ def test_skew_pulling_on_every_review_sits_out_the_wave_then_leans(make):
     books(s, 5)
     assert _all_pulled(books(s, 12)), "the review that gave the side pulls too"
     assert sides(by_listing(books(s, 43))[YES40]) == pytest.approx((0.45, 500, 0, 0)), "then the bid alone"
+
+
+# ---- many films in one session ---------------------------------------------------------------------------------------
+
+BOTH_BOOKS = (YES40, YES60, B40, B60)
+
+
+def test_a_book_update_decides_only_its_own_films_quotes(make):
+    s = make(films=TWO_FILMS)
+    assert set(by_listing(books(s, 0, listings=BOTH_BOOKS))) == set(BOTH_BOOKS)
+    moved = by_listing(books(s, 1, bids=((0.44, 900),), listings=(YES40,)))
+    assert set(moved) == {YES40}, "film B's quotes are left resting"
+
+
+def test_each_film_has_its_own_budget(make):
+    s = make(films=TWO_FILMS, max_film_usd=600)
+    s.positions.set(YES40, 200, 0.45)
+    out = by_listing(books(s, 0, listings=BOTH_BOOKS))
+    assert sides(out[YES60]) == (0, 0, 0, 0), "film A's budget is spent"
+    assert sides(out[B40]) == pytest.approx((0.45, 500, 0.47, 500)), "film B's is its own"
+
+
+def test_a_review_pulls_only_its_own_film(make):
+    s = make(films=TWO_FILMS, reviews=[_review("a", 10)])
+    books(s, 5, listings=BOTH_BOOKS)
+    out = by_listing(books(s, 11, listings=BOTH_BOOKS))
+    assert set(out) == {YES40, YES60} and _all_pulled(out.values()), "film B keeps quoting, unchanged"
+
+
+def test_a_pull_ending_on_one_film_is_acted_on_at_any_films_next_record(make):
+    s = make(films=TWO_FILMS, reviews=[_review("b", 10, film=FILM_B)])
+    books(s, 5, listings=BOTH_BOOKS)
+    assert set(by_listing(books(s, 11, listings=(YES40,)))) == {B40, B60}, "pulled on film A's record"
+    back = by_listing(books(s, 41, listings=(YES40,)))
+    assert set(back) == {B40, B60}, "back 30 min on, though film B's books haven't moved"
+    assert sides(back[B60]) == pytest.approx((0.45, 500, 0.47, 500))
+
+
+def test_an_ended_order_requotes_its_film_at_the_next_record_of_any_film(make):
+    s = make(films=TWO_FILMS)
+    intent = by_listing(books(s, 0, listings=BOTH_BOOKS))[B40]
+    s.on_execution_report(SimpleNamespace(exchange_id=intent.exchange_id, security_id=intent.security_id,
+                                          order_status=OrderStatus.CANCELED))
+    assert set(by_listing(books(s, 1, listings=(YES40,)))) == {B40}
+
+
+def test_a_film_past_its_close_is_cancelled_once_then_left_alone(make):
+    s = make(films=_films((FILM, LEGS, None), (FILM_B, LEGS_B, 20)))
+    books(s, 5, listings=BOTH_BOOKS)
+    closed = by_listing(books(s, 21, listings=(YES40,)))
+    assert set(closed) == {B40, B60} and _all_pulled(closed.values())
+    assert books(s, 22, listings=BOTH_BOOKS) == []
+
+
+def test_reward_programs_are_read_in_batches(make, tmp_path):
+    empty = tmp_path / "empty.parquet"
+    pd.DataFrame(columns=["film_id", "liked", "not_liked", "first_seen_at"]).to_parquet(empty)
+    asked = []
+    with patch.object(mod, "PROGRAMS_BATCH", 3), patch.object(mod, "RegistryClient", lambda *a, **k: _Registry()), \
+            patch.object(mod, "load_incentive_timelines", lambda registry, ids: asked.append(list(ids)) or {}):
+        mod.RtMaker(films=TWO_FILMS, reload_seconds=0, programs_reload_seconds=0,
+                    reviews_source=str(empty), scores_source=str(empty))
+    assert asked == [[YES40, YES60, B40], [B60]]
+
+
+def test_one_feed_thread_and_one_programs_thread_serve_every_film(make):
+    before = [t.name for t in threading.enumerate()]
+    make(films=TWO_FILMS, reload_seconds=3600, programs_reload_seconds=3600)
+    started = Counter(t.name for t in threading.enumerate()) - Counter(before)
+    assert started == Counter({"rt-feed": 1, "rt-programs": 1})
+
+
+def test_a_film_named_twice_or_a_listing_in_two_films_is_refused(make):
+    with pytest.raises(ValueError):
+        make(films=_films((FILM, LEGS, None), (FILM, LEGS_B, None)))
+    with pytest.raises(ValueError):
+        make(films=_films((FILM, LEGS, None), (FILM_B, LEGS[:1], None)))

@@ -56,11 +56,16 @@ def test_the_feed_keeps_reviews_with_a_verdict_as_of_when_their_verdict_was_seen
     pd.DataFrame([{"film_id": FILM, "liked": 3, "not_liked": 1, "first_seen_at": pd.Timestamp(T0 + 4 * MINUTE, tz="UTC")},
                   {"film_id": "other-film", "liked": 90, "not_liked": 9,
                    "first_seen_at": pd.Timestamp(T0, tz="UTC")}]).to_parquet(scores)
-    feed = ReviewFeed(FILM, str(path), reload_seconds=0, scores_source=str(scores))
-    assert (feed.counted(T0 + 3 * MINUTE), feed.counted(T0 + 4 * MINUTE)) == (0, 4)
-    assert [x.url for x in feed.known(T0 + 4 * MINUTE)] == ["b"]
-    assert [(x.url, x.fresh) for x in feed.known(T0 + 5 * MINUTE)] == [("b", False), ("a", True)]
+    feed = ReviewFeed([FILM], str(path), reload_seconds=0, scores_source=str(scores))
+    assert (feed.counted(FILM, T0 + 3 * MINUTE), feed.counted(FILM, T0 + 4 * MINUTE)) == (0, 4)
+    assert [x.url for x in feed.known(FILM, T0 + 4 * MINUTE)] == ["b"]
+    assert [(x.url, x.fresh) for x in feed.known(FILM, T0 + 5 * MINUTE)] == [("b", False), ("a", True)]
     assert reviews_of(pd.DataFrame()) == []
+    both = ReviewFeed([FILM, "other-film", "unreviewed"], str(path), reload_seconds=0, scores_source=str(scores))
+    assert [x.url for x in both.known(FILM, T0 + 5 * MINUTE)] == ["b", "a"], "split by film"
+    assert [x.url for x in both.known("other-film", T0 + 5 * MINUTE)] == ["x"]
+    assert both.counted("other-film", T0) == 99
+    assert (both.known("unreviewed", T0 + 5 * MINUTE), both.counted("unreviewed", T0)) == ([], 0)
 
 
 def test_the_feed_opens_the_catalog_once_and_reads_every_reload_through_it():
@@ -77,12 +82,14 @@ def test_the_feed_opens_the_catalog_once_and_reads_every_reload_through_it():
             return pd.DataFrame([_row("a", 0)])
 
     with patch.object(feed_mod, "DatasetStore", _Store):
-        feed = ReviewFeed(FILM, reload_seconds=0)
-        feed._snapshot = feed._load()
-        feed._snapshot = feed._load()
+        feed = ReviewFeed([FILM, "other-film"], reload_seconds=0)
+        first = feed.snapshot(FILM)
+        feed._snapshots = feed._load()
+        feed._snapshots = feed._load()
     assert len(opened) == 1
-    assert loads == ["rt_reviews", "rt_scores"] * 3
-    assert [x.url for x in feed.known(T0 + MINUTE)] == ["a"]
+    assert loads == ["rt_reviews", "rt_scores"] * 3, "one scan of each table per reload, whatever the films"
+    assert [x.url for x in feed.known(FILM, T0 + MINUTE)] == ["a"]
+    assert feed.snapshot(FILM) is not first, "a reload makes a new snapshot"
 
 
 # ---- the session ---------------------------------------------------------------------------------------------------

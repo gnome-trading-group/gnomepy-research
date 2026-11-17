@@ -1,12 +1,18 @@
 """
-A resting maker on a film's Kalshi Rotten Tomatoes strikes, for Kalshi's liquidity rewards.
+A resting maker on films' Kalshi Rotten Tomatoes strikes, for Kalshi's liquidity rewards.
 
-gnome-launcher starts one session per film (the `rt_maker` rule) holding the YES listing of each of the film's Kalshi
-"at least X" strikes. On every strike with a liquidity-reward program in force, the session rests quote_size contracts
-at the best bid and the best ask other makers show (quotes.py): a YES bid, and a YES ask, which Kalshi books as a NO
-bid, so both sides of the reward's scoring are covered. A side stops once the strike's position reaches max_position,
-and quotes that would commit more of max_film_usd than is left are cut back to the side that trades the position back
-towards flat. Positions are held; nothing is ever taken.
+gnome-launcher (the `rt_maker` rule) packs the open films into as few sessions as a paper gateway can hold, each session
+holding the YES listing of each of its films' Kalshi "at least X" strikes. Every film is quoted as if it had the session
+to itself: its own reviews, pulls, lean and budget. On every strike with a liquidity-reward program in force, the
+session rests quote_size contracts at the best bid and the best ask other makers show (quotes.py): a YES bid, and a YES
+ask, which Kalshi books as a NO bid, so both sides of the reward's scoring are covered. A side stops once the strike's
+position reaches max_position, and quotes that would commit more of the film's max_film_usd than is left are cut back
+to the side that trades the position back towards flat. Positions are held; nothing is ever taken. A film past its
+markets' close is no longer quoted; the launcher drops it at the session's next relaunch.
+
+A book update decides its own film's quotes. Every record also decides the quotes of any other film whose review state
+moved (a review or Tomatometer change seen, a pull or lean ending, its close passing) or one of whose orders ended, so a
+film reacts at the next record of any of the session's strikes, never waiting for its own book to move.
 
 Kalshi pays the rewards for resting size near the touch on both sides; the risk is being filled by a taker who knows
 something the book hasn't priced. On these markets that is mostly a critic's review (gnome-pipelines' rt_reviews,
@@ -25,13 +31,14 @@ standard errors, better on 32 films, worse on 7); about half of that is from not
 and half from the side the signal picks (the opposite side gains nothing).
 
 Which strikes pay comes from the registry's incentive programs (Kalshi's, synced every 15 minutes), re-read every
-programs_reload_seconds; with rewarded_only off, every strike is quoted.
+programs_reload_seconds, PROGRAMS_BATCH listings a request so a session of many films keeps each request small; with
+rewarded_only off, every strike is quoted.
 
 A live book shows our own resting orders and a paper session's doesn't: own_orders_in_book says which, so the best
 price other makers show is read correctly in both (set it false for paper).
 
-The session never ends itself: the launcher stops it when the film's markets close. Positions are read from the
-engine, so a restarted session picks up what it holds.
+The session never ends itself: the launcher stops it once none of its films is open, or relaunches it when the set of
+films changes. Positions are read from the engine, so a restarted session picks up what it holds.
 """
 from __future__ import annotations
 
@@ -41,6 +48,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+import pandas as pd
 from gnomepy import ExecutionReport, Intent, OrderStatus, Scales, Strategy
 from gnomepy.incentives import IncentiveTimeline, load_incentive_timelines
 from gnomepy.java.schemas import StreamRecord
@@ -60,7 +68,9 @@ VENUE = "kalshi"
 HOUR_NS = 60 * MINUTE_NS
 PULL_MODE, SKEW_MODE = "pull", "skew"
 # Why a strike's quote is what it is, in the quotes metric.
-QUOTING, PULLED, NOT_REWARDED, CAPPED, LEANING = 0, 1, 2, 3, 4
+QUOTING, PULLED, NOT_REWARDED, CAPPED, LEANING, CLOSED = 0, 1, 2, 3, 4, 5
+# Listings per reward-programs request: a request returns every version of each listing's programs.
+PROGRAMS_BATCH = 25
 
 
 @dataclass
@@ -77,15 +87,30 @@ class _Strike:
     sent: Quote | None = None
 
 
+@dataclass
+class _Film:
+    film_id: str
+    close_ns: int | None
+    strikes: list[_Strike]
+    pulled_until: int | None = None
+    state_key: tuple[int, int] | None = None
+    state: ReviewState | None = None
+    mode: str | int | None = None
+    # (closed, pulled, side) when its quotes were last decided; a change decides them again.
+    regime: tuple[bool, bool, int] | None = None
+    # One of its orders ended since its quotes were last decided.
+    stale: bool = True
+
+
 class RtMaker(Strategy):
     """
     Args:
-        film_id: the film, as rt_films and rt_reviews name it.
-        legs: one {venue, strike, yes_listing, no_listing} per strike per venue, as the launcher sets them; only
-            Kalshi's YES listings are quoted.
+        films: one {film_id, close, strikes} per film, as the launcher sets them: the film as rt_films and rt_reviews
+            name it, its markets' close (ISO-8601, or None), and its Kalshi strikes as {strike: YES listing id}. Kept
+            that small because a session's whole config travels in its host's user data, which EC2 caps at 16 KB.
         quote_size: contracts rested on each side.
         max_position: most YES contracts held, or sold, on one strike.
-        max_film_usd: most money the film's positions and quotes may commit.
+        max_film_usd: most money each film's positions and quotes may commit.
         pull_minutes: how long every quote stays pulled after a review is seen (one the signal gives a side doesn't
             pull in skew mode) or the Tomatometer's count changes.
         signal_mode: "pull" or "skew", what a review does (above).
@@ -98,15 +123,14 @@ class RtMaker(Strategy):
         min_join_size: least size of others' a level needs to be joined.
         own_orders_in_book: whether the book this session reads shows its own orders (live) or not (paper).
         rewarded_only: quote only strikes with a reward program in force.
-        reload_seconds: how often to re-read the film's reviews and Tomatometer (0 = once, for replays).
+        reload_seconds: how often to re-read the films' reviews and Tomatometers (0 = once, for replays).
         programs_reload_seconds: how often to re-read the reward programs (0 = once).
         reviews_source, scores_source: the rt_reviews and rt_scores tables, or parquet extracts of them.
     """
 
     def __init__(
         self,
-        film_id: str,
-        legs: list[dict],
+        films: list[dict],
         quote_size: float = 500.0,
         max_position: float = 500.0,
         max_film_usd: float = 10_000.0,
@@ -129,9 +153,13 @@ class RtMaker(Strategy):
         reviews_source: str = REVIEWS,
         scores_source: str = SCORES,
     ):
-        kalshi = [leg for leg in legs if leg["venue"] == VENUE]
-        if not kalshi:
-            raise ValueError(f"legs name no {VENUE} strikes")
+        if not films:
+            raise ValueError("films is empty")
+        if len({f["film_id"] for f in films}) != len(films):
+            raise ValueError("a film is named twice")
+        for f in films:
+            if not f["strikes"]:
+                raise ValueError(f"film {f['film_id']} has no {VENUE} strikes")
         if not 0 < min_price < max_price < 1:
             raise ValueError(f"need 0 < min_price < max_price < 1, got {min_price}, {max_price}")
         if quote_size <= 0 or max_position <= 0:
@@ -140,7 +168,6 @@ class RtMaker(Strategy):
             raise ValueError(f"signal_mode must be {PULL_MODE!r} or {SKEW_MODE!r}, got {signal_mode!r}")
         if skew_hours is not None and skew_hours <= 0:
             raise ValueError(f"skew_hours must be positive or None, got {skew_hours}")
-        self.film_id = film_id
         self.quote_size = quote_size
         self.max_position = max_position
         self.max_film_usd = max_film_usd
@@ -149,9 +176,6 @@ class RtMaker(Strategy):
         self.baseline, self.threshold, self.min_reviews = baseline, threshold, min_reviews
         self.skew_ns = None if skew_hours is None else int(skew_hours * HOUR_NS)
         self.pull_every_review = pull_every_review
-        self._state_key: tuple[int, int] | None = None
-        self._state: ReviewState | None = None
-        self._mode: str | int | None = None
         self.min_price, self.max_price = min_price, max_price
         self.min_join_size = min_join_size
         self.own_orders_in_book = own_orders_in_book
@@ -159,19 +183,27 @@ class RtMaker(Strategy):
         self.book_depth = book_depth
         self._processing_time_ns = processing_time_ns
         self._quotes_buf = None
-        self._pulled_until: int | None = None
 
         self._registry = RegistryClient()
-        self._strikes = sorted((self._resolve(int(leg["strike"]), int(leg["yes_listing"])) for leg in kalshi),
-                               key=lambda s: s.strike)
-        self._strike_of = {s.listing_id: s for s in self._strikes}
+        self._films = [_Film(f["film_id"], pd.Timestamp(f["close"]).value if f.get("close") else None,
+                             sorted((self._resolve(int(strike), int(listing_id))
+                                     for strike, listing_id in f["strikes"].items()), key=lambda s: s.strike))
+                       for f in films]
+        self._strike_of: dict[int, _Strike] = {}
+        self._film_of: dict[int, _Film] = {}
+        for film in self._films:
+            for s in film.strikes:
+                if s.listing_id in self._strike_of:
+                    raise ValueError(f"listing {s.listing_id} is in two films")
+                self._strike_of[s.listing_id] = s
+                self._film_of[s.listing_id] = film
         self._programs: dict[int, IncentiveTimeline] = {}
         if rewarded_only:
             self._programs = self._load_programs()
             if programs_reload_seconds > 0:
                 threading.Thread(target=self._reload_programs, args=(programs_reload_seconds,),
-                                 name=f"rt-programs-{film_id}", daemon=True).start()
-        self._feed = ReviewFeed(film_id, reviews_source, reload_seconds, scores_source)
+                                 name="rt-programs", daemon=True).start()
+        self._feed = ReviewFeed([f.film_id for f in self._films], reviews_source, reload_seconds, scores_source)
 
     def _resolve(self, strike: int, listing_id: int) -> _Strike:
         listings = self._registry.get_listing(listing_id=listing_id)
@@ -184,7 +216,11 @@ class RtMaker(Strategy):
         return _Strike(strike, listing_id, listings[0].exchange_id, listings[0].security_id, lot, min_size)
 
     def _load_programs(self) -> dict[int, IncentiveTimeline]:
-        return load_incentive_timelines(self._registry, [s.listing_id for s in self._strikes])
+        ids = list(self._strike_of)
+        programs: dict[int, IncentiveTimeline] = {}
+        for i in range(0, len(ids), PROGRAMS_BATCH):
+            programs.update(load_incentive_timelines(self._registry, ids[i:i + PROGRAMS_BATCH]))
+        return programs
 
     def _reload_programs(self, every: float) -> None:
         while True:
@@ -193,7 +229,7 @@ class RtMaker(Strategy):
                 self._programs = self._load_programs()
             except Exception:
                 # A failed refresh keeps the programs already held rather than stopping the session.
-                logger.exception("reloading the reward programs of %s failed", self.film_id)
+                logger.exception("reloading the reward programs of %d listings failed", len(self._strike_of))
 
     def simulate_processing_time(self) -> int:
         return self._processing_time_ns
@@ -228,76 +264,99 @@ class RtMaker(Strategy):
         timeline = self._programs.get(s.listing_id)
         return bool(timeline and timeline.in_force(now_ns))
 
-    def _pull_until(self, now_ns: int) -> int | None:
-        """The end of the pull the latest review or Tomatometer change started, as seen by now."""
-        known = self._feed.known(now_ns)
-        seen = [t for t in (known[-1].seen_ns if known else None, self._feed.count_changed(now_ns)) if t is not None]
+    def _pull_until(self, film: _Film, now_ns: int) -> int | None:
+        """The end of the pull the film's latest review or Tomatometer change started, as seen by now."""
+        known = self._feed.known(film.film_id, now_ns)
+        seen = [t for t in (known[-1].seen_ns if known else None, self._feed.count_changed(film.film_id, now_ns))
+                if t is not None]
         return max(seen) + self.pull_ns if seen else None
 
-    def _review_state(self, now_ns: int) -> ReviewState | None:
-        """The latest review's state, recomputed only when a review has been seen since the last call."""
-        known = self._feed.known(now_ns)
+    def _review_state(self, film: _Film, now_ns: int) -> ReviewState | None:
+        """The film's latest review's state, recomputed only when a review has been seen since the last call."""
+        known = self._feed.known(film.film_id, now_ns)
         key = (len(known), known[-1].seen_ns) if known else (0, 0)
-        if key != self._state_key:
-            self._state_key = key
-            self._state = review_state(known, self.baseline, self.threshold, self.min_reviews)
-        return self._state
+        if key != film.state_key:
+            film.state_key = key
+            film.state = review_state(known, self.baseline, self.threshold, self.min_reviews)
+        return film.state
 
-    def _skew(self, now_ns: int) -> tuple[bool, int, float]:
-        """(pulled, the side to quote alone or 0, the latest signal) in skew mode."""
-        state = self._review_state(now_ns)
+    def _skew(self, film: _Film, now_ns: int) -> tuple[bool, int, float]:
+        """(pulled, the side to quote alone or 0, the latest signal) of a film in skew mode."""
+        state = self._review_state(film, now_ns)
         mode = lean(state, now_ns, self.pull_ns, self.skew_ns, self.pull_every_review)
-        if mode != self._mode:
-            logger.info("film %s: quoting %s (signal %s)", self.film_id, mode,
+        if mode != film.mode:
+            logger.info("film %s: quoting %s (signal %s)", film.film_id, mode,
                         "none" if state is None else f"{state.signal.signal:+.3f} from {state.signal.reviews} reviews")
-            self._mode = mode
-        changed = self._feed.count_changed(now_ns)
+            film.mode = mode
+        changed = self._feed.count_changed(film.film_id, now_ns)
         counting = changed is not None and now_ns < changed + self.pull_ns
         side = mode if isinstance(mode, int) else 0
         return mode == PULL or counting, side, math.nan if state is None else state.signal.signal
 
+    def _pull(self, film: _Film, now_ns: int) -> bool:
+        """Whether a film is pulled in pull mode."""
+        until = self._pull_until(film, now_ns)
+        pulled = until is not None and now_ns < until
+        if pulled and until != film.pulled_until:
+            logger.info("film %s: a review or a Tomatometer change; quotes pulled for %d min", film.film_id,
+                        self.pull_ns // MINUTE_NS)
+        film.pulled_until = until
+        return pulled
+
     # ---- engine callbacks ---------------------------------------------------------------------
 
     def on_market_data(self, data: StreamRecord) -> list[Intent]:
-        s = self._strike_of.get(self.streams.listing_id(data.stream_id))
+        listing_id = self.streams.listing_id(data.stream_id)
+        s = self._strike_of.get(listing_id)
         if s is not None:
             s.bids = [Level(data.bid_price(i) / PRICE_SCALE, data.bid_size(i) / SIZE_SCALE)
                       for i in range(self.book_depth) if data.bid_size(i) > 0]
             s.asks = [Level(data.ask_price(i) / PRICE_SCALE, data.ask_size(i) / SIZE_SCALE)
                       for i in range(self.book_depth) if data.ask_size(i) > 0]
-        return self._evaluate(data.event_timestamp)
+        return self._decide(data.event_timestamp, self._film_of.get(listing_id))
 
     def on_stream_event(self, stream_id: int, record: StreamRecord) -> list[Intent]:
-        # Another stream's records only wake the session, so a review is acted on between this film's book updates.
-        return self._evaluate(record.event_timestamp)
+        # Another stream's records only wake the session, so a review is acted on between the films' book updates.
+        return self._decide(record.event_timestamp, None)
 
     def on_execution_report(self, report: ExecutionReport) -> list[Intent]:
-        s = self._strike_of.get(self.streams.listing_id_for(report.exchange_id, report.security_id))
+        listing_id = self.streams.listing_id_for(report.exchange_id, report.security_id)
+        s = self._strike_of.get(listing_id)
         if s is not None and report.order_status in TERMINAL:
-            # One of the strike's orders is gone, so the quote is sent again at the next decision.
+            # One of the strike's orders is gone, so the quote is sent again at the film's next decision.
             s.sent = None
+            self._film_of[listing_id].stale = True
         return []
 
-    def _evaluate(self, now_ns: int) -> list[Intent]:
+    def _decide(self, now_ns: int, touched: _Film | None) -> list[Intent]:
+        """The quotes of the film whose book moved, and of every film whose regime moved or whose orders ended."""
         if self.is_exiting:
             return []
-        side, sig = 0, math.nan
-        if self.signal_mode == SKEW_MODE:
-            pulled, side, sig = self._skew(now_ns)
-        else:
-            until = self._pull_until(now_ns)
-            pulled = until is not None and now_ns < until
-            if pulled and until != self._pulled_until:
-                logger.info("film %s: a review or a Tomatometer change; quotes pulled for %d min", self.film_id,
-                            self.pull_ns // MINUTE_NS)
-            self._pulled_until = until
-        positions = {s.listing_id: self._position(s) for s in self._strikes}
+        intents = []
+        for film in self._films:
+            closed = film.close_ns is not None and now_ns >= film.close_ns
+            side, sig = 0, math.nan
+            if self.signal_mode == SKEW_MODE:
+                pulled, side, sig = self._skew(film, now_ns)
+            else:
+                pulled = self._pull(film, now_ns)
+            regime = (closed, pulled, side)
+            if film is touched or film.stale or regime != film.regime:
+                film.regime, film.stale = regime, False
+                intents += self._quote_film(film, now_ns, closed, pulled, side, sig)
+        return intents
+
+    def _quote_film(self, film: _Film, now_ns: int, closed: bool, pulled: bool, side: int,
+                    sig: float) -> list[Intent]:
+        positions = {s.listing_id: self._position(s) for s in film.strikes}
         budget = self.max_film_usd - sum(held_cost(*p) for p in positions.values())
         intents = []
-        for s in self._strikes:
+        for s in film.strikes:
             position = positions[s.listing_id][0]
             reason = QUOTING
-            if pulled:
+            if closed:
+                q, reason = NONE, CLOSED
+            elif pulled:
                 q, reason = NONE, PULLED
             elif not self._rewarded(s, now_ns):
                 q, reason = NONE, NOT_REWARDED
