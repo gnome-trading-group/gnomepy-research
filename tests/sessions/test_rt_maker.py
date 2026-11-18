@@ -405,6 +405,46 @@ def test_a_tomatometer_change_pulls_too(make):
     assert all(sides(i) == (0, 0, 0, 0) for i in by_listing(books(s, 11)).values())
 
 
+GUARD = {"guard_ticks": 3, "guard_seconds": 60, "guard_minutes": 5}
+
+
+def test_one_strike_moving_too_fast_pulls_every_strike_of_its_film_for_the_guard(make):
+    s = make(**GUARD)
+    books(s, 0)
+    moved = by_listing(s.on_market_data(book_at(YES40, T0 + 2 * MINUTE, bids=((0.48, 900),), asks=((0.50, 900),))))
+    assert set(moved) == {YES40, YES60} and all(sides(i) == (0, 0, 0, 0) for i in moved.values())
+    assert books(s, 6, listings=(YES60,)) == [], "still guarded"
+    assert sides(by_listing(books(s, 8, listings=(YES60,)))[YES60])[1] == 500, "5 min after the move"
+
+
+def test_a_move_spread_wider_than_the_lookback_does_not_guard(make):
+    s = make(**GUARD)
+    for minute, bid in ((0, 0.45), (2, 0.46), (4, 0.47), (6, 0.48)):
+        out = by_listing(s.on_market_data(book_at(YES40, T0 + minute * MINUTE, bids=((bid, 900),),
+                                                  asks=((bid + 0.02, 900),))))
+        assert sides(out[YES40])[1] == 500, f"a cent every 2 min, at minute {minute}"
+
+
+def test_the_guard_pulls_only_the_film_that_moved(make):
+    s = make(films=TWO_FILMS, **GUARD)
+    books(s, 0, listings=(YES40, YES60, B40, B60))
+    s.on_market_data(book_at(YES40, T0 + 2 * MINUTE, bids=((0.48, 900),), asks=((0.50, 900),)))
+    other = by_listing(s.on_market_data(book_at(B40, T0 + 3 * MINUTE, bids=((0.44, 900),))))
+    assert sides(other[B40])[1] == 500
+
+
+def test_the_guard_is_off_unless_its_ticks_are_set(make):
+    s = make()
+    books(s, 0)
+    moved = by_listing(s.on_market_data(book_at(YES40, T0 + 2 * MINUTE, bids=((0.48, 900),), asks=((0.50, 900),))))
+    assert sides(moved[YES40]) == pytest.approx((0.48, 500, 0.50, 500))
+
+
+def test_a_negative_guard_is_refused(make):
+    with pytest.raises(ValueError):
+        make(guard_ticks=-1)
+
+
 def test_a_side_stops_at_the_position_limit(make):
     s = make()
     books(s, 0)

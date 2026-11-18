@@ -30,6 +30,12 @@ re-read every reload_seconds), and signal_mode says what a review does:
   pull_every_review, every review pulls both for pull_minutes, and the side is quoted alone only after that.
 In both, a change in the Tomatometer's count (rt_scores) pulls every quote for pull_minutes.
 
+The reviews the feed sees don't explain most of the maker's losses: they come in a few hours in which a film's whole
+ladder reprices at once, on news the feed never shows (backtests of 14 films over a week: the worst 5% of film-hours
+held 84-98% of the 1 h markout losses, and none had a review in the feed near it). With guard_ticks set,
+any strike whose mid moves guard_ticks or more within guard_seconds pulls every quote of its film for guard_minutes,
+so the first strike to move warns its siblings.
+
 Why skew: after a film's reviews arrive, Kalshi under-reacts in their direction, so both sides at the touch sell to
 the takers who read them. Over 62 settled films (Apr-Nov 2026, ~/gnome-research-work/rt/outlets/maker_skew.py, trades
 only, held to settlement) quoting the signal's side until the next review beat pulling for 30 minutes by $40k (+5.8
@@ -54,6 +60,7 @@ import logging
 import math
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -78,7 +85,7 @@ VENUE = "kalshi"
 HOUR_NS = 60 * MINUTE_NS
 PULL_MODE, SKEW_MODE = "pull", "skew"
 # Why a strike's quote is what it is, in the quotes metric.
-QUOTING, PULLED, NOT_REWARDED, CAPPED, LEANING, CLOSED, REQUEUED = 0, 1, 2, 3, 4, 5, 6
+QUOTING, PULLED, NOT_REWARDED, CAPPED, LEANING, CLOSED, REQUEUED, GUARDED = 0, 1, 2, 3, 4, 5, 6, 7
 # Listings per reward-programs request: a request returns every version of each listing's programs.
 PROGRAMS_BATCH = 25
 # How long a strike whose order was rejected waits before it is quoted again. A refusal that would recur (a gateway
@@ -120,6 +127,9 @@ class _Strike:
     rewarded: bool = False
     rewarded_timeline: IncentiveTimeline | None = None
     rewarded_until_ns: int = -1
+    # (when, mid) at each change of its mid over the guard's lookback, oldest first; the first is the mid as of the
+    # lookback's start once the history reaches back that far.
+    mids: deque = field(default_factory=deque)
 
 
 @dataclass
@@ -131,10 +141,12 @@ class _Film:
     state_key: tuple[int, int] | None = None
     state: ReviewState | None = None
     mode: str | int | None = None
-    # (closed, pulled, side) when its quotes were last decided; a change decides them again.
-    regime: tuple[bool, bool, int] | None = None
+    # (closed, pulled, guarded, side) when its quotes were last decided; a change decides them again.
+    regime: tuple[bool, bool, bool, int] | None = None
     # One of its orders ended since its quotes were last decided.
     stale: bool = True
+    # Every quote stays pulled until then, after one of its strikes moved too far too fast.
+    guarded_until: int = 0
 
 
 class RtMaker(Strategy):
@@ -166,6 +178,8 @@ class RtMaker(Strategy):
         max_requeues_per_second: requeues the whole session may make a second, so they stay inside its order limits.
         skew_unit, max_skew_ticks: the side that adds to a strike's position rests a tick further back per skew_unit
             contracts held, at most max_skew_ticks (0 for either: no skew).
+        guard_ticks, guard_seconds, guard_minutes: a strike's mid moving guard_ticks ticks or more within
+            guard_seconds pulls every quote of its film for guard_minutes (0 ticks: no guard).
         own_orders_in_book: whether the book this session reads shows its own orders (live) or not (paper).
         rewarded_only: quote only strikes with a reward program in force.
         reload_seconds: how often to re-read the films' reviews and Tomatometers (0 = once, for replays).
@@ -197,6 +211,9 @@ class RtMaker(Strategy):
         max_requeues_per_second: float = 10.0,
         skew_unit: float = 0.0,
         max_skew_ticks: int = 0,
+        guard_ticks: int = 0,
+        guard_seconds: float = 60.0,
+        guard_minutes: float = 5.0,
         own_orders_in_book: bool = True,
         rewarded_only: bool = True,
         book_depth: int = 10,
@@ -228,6 +245,8 @@ class RtMaker(Strategy):
         if requeue_min_ahead < 0 or skew_unit < 0 or max_skew_ticks < 0 or max_requeues_per_second <= 0:
             raise ValueError("requeue_min_ahead, skew_unit and max_skew_ticks must not be negative, and "
                              "max_requeues_per_second must be positive")
+        if guard_ticks < 0 or guard_seconds <= 0 or guard_minutes < 0:
+            raise ValueError("guard_ticks and guard_minutes must not be negative, and guard_seconds must be positive")
         self.quote_size = quote_size
         self.max_position = max_position
         self.max_film_usd = max_film_usd
@@ -245,6 +264,9 @@ class RtMaker(Strategy):
         self.max_requeues_per_second = max_requeues_per_second
         self._requeue_tokens, self._tokens_ns = max_requeues_per_second, 0
         self.skew_unit, self.max_skew_ticks = skew_unit, max_skew_ticks
+        self.guard_ticks = guard_ticks
+        self.guard_lookback_ns = int(guard_seconds * 1e9)
+        self.guard_hold_ns = int(guard_minutes * MINUTE_NS)
         self.own_orders_in_book = own_orders_in_book
         self.rewarded_only = rewarded_only
         self.book_depth = book_depth
@@ -388,7 +410,28 @@ class RtMaker(Strategy):
             s.bids = _levels(data.bid_price, data.bid_size, self.book_depth)
             s.asks = _levels(data.ask_price, data.ask_size, self.book_depth)
             self._advance(s, data)
+            self._watch(s, self._film_of[listing_id], data.event_timestamp)
         return self._decide(data.event_timestamp, self._film_of.get(listing_id))
+
+    def _watch(self, s: _Strike, film: _Film, now_ns: int) -> None:
+        """Guards the strike's film when its mid has moved guard_ticks or more since guard_seconds ago."""
+        if not self.guard_ticks or not s.bids or not s.asks:
+            return
+        mid = (s.bids[0].price + s.asks[0].price) / 2
+        history = s.mids
+        if history and history[-1][1] == mid:
+            return
+        history.append((now_ns, mid))
+        start = now_ns - self.guard_lookback_ns
+        while len(history) > 1 and history[1][0] <= start:
+            history.popleft()
+        then_ns, then = history[0]
+        if then_ns <= start and abs(mid - then) >= self.guard_ticks * s.tick - 1e-9:
+            if now_ns >= film.guarded_until:
+                logger.info("film %s: strike %d moved %+.2f in %ds; every quote pulled for %d min", film.film_id,
+                            s.strike, mid - then, self.guard_lookback_ns // 1_000_000_000,
+                            self.guard_hold_ns // MINUTE_NS)
+            film.guarded_until = max(film.guarded_until, now_ns + self.guard_hold_ns)
 
     def _advance(self, s: _Strike, data: StreamRecord) -> None:
         """Moves each resting side's queue place by the record: a trade print at its price, and its level's size."""
@@ -446,13 +489,14 @@ class RtMaker(Strategy):
                 pulled, side, sig = self._skew(film, now_ns)
             else:
                 pulled = self._pull(film, now_ns)
-            regime = (closed, pulled, side)
+            guarded = now_ns < film.guarded_until
+            regime = (closed, pulled, guarded, side)
             if film is touched or film.stale or regime != film.regime:
                 film.regime, film.stale = regime, False
-                intents += self._quote_film(film, now_ns, closed, pulled, side, sig)
+                intents += self._quote_film(film, now_ns, closed, pulled, guarded, side, sig)
         return intents
 
-    def _quote_film(self, film: _Film, now_ns: int, closed: bool, pulled: bool, side: int,
+    def _quote_film(self, film: _Film, now_ns: int, closed: bool, pulled: bool, guarded: bool, side: int,
                     sig: float) -> list[Intent]:
         positions = {s.listing_id: self._position(s) for s in film.strikes}
         budget = self.max_film_usd - sum(held_cost(*p) for p in positions.values())
@@ -462,8 +506,8 @@ class RtMaker(Strategy):
             reason = QUOTING
             if closed:
                 q, reason = NONE, CLOSED
-            elif pulled:
-                q, reason = NONE, PULLED
+            elif pulled or guarded:
+                q, reason = NONE, PULLED if pulled else GUARDED
             elif not self._rewarded(s, now_ns):
                 q, reason = NONE, NOT_REWARDED
             else:
