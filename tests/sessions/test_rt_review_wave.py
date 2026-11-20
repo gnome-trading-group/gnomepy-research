@@ -13,7 +13,7 @@ from gnomepy_research.sessions.rt_review_wave import strategy as mod
 from gnomepy_research.models.rt import review_feed as feed_mod
 from gnomepy_research.models.rt.review_feed import ReviewFeed, reviews_of
 from gnomepy_research.sessions.rt_review_wave.decision import Level, take
-from tests.sessions.conftest import FakeFeeSchedule, FakeStreams, stream_of
+from tests.sessions.conftest import CENT_GRID, FakeFeeSchedule, FakeStreams, stream_of
 
 P, S = Scales.PRICE, Scales.SIZE
 MINUTE = 60_000_000_000
@@ -75,10 +75,14 @@ def test_the_feed_opens_the_catalog_once_and_reads_every_reload_through_it():
         def __init__(self):
             opened.append(self)
 
-        def load(self, source, row_filter=None):
+        def history(self, source, row_filter=None):
             loads.append(source)
             if source == "rt_scores":
-                return pd.DataFrame(columns=["film_id", "liked", "not_liked", "first_seen_at"])
+                # Every reading the table holds, not only the newest: each change is a moment the count moved.
+                return pd.DataFrame([{"film_id": FILM, "liked": 1, "not_liked": 0,
+                                      "first_seen_at": pd.Timestamp(T0, unit="ns", tz="UTC")},
+                                     {"film_id": FILM, "liked": 3, "not_liked": 1,
+                                      "first_seen_at": pd.Timestamp(T0 + 2 * MINUTE, unit="ns", tz="UTC")}])
             return pd.DataFrame([_row("a", 0)])
 
     with patch.object(feed_mod, "DatasetStore", _Store):
@@ -89,6 +93,8 @@ def test_the_feed_opens_the_catalog_once_and_reads_every_reload_through_it():
     assert len(opened) == 1
     assert loads == ["rt_reviews", "rt_scores"] * 3, "one scan of each table per reload, whatever the films"
     assert [x.url for x in feed.known(FILM, T0 + MINUTE)] == ["a"]
+    assert (feed.counted(FILM, T0 + MINUTE), feed.counted(FILM, T0 + 3 * MINUTE)) == (1, 4)
+    assert feed.count_changed(FILM, T0 + 3 * MINUTE) == T0 + 2 * MINUTE
     assert feed.snapshot(FILM) is not first, "a reload makes a new snapshot"
 
 
@@ -102,7 +108,6 @@ class _Listing:
 
 @dataclass
 class _Spec:
-    tick_size: int = P // 100
     lot_size: int = S
     min_size: int = 0
 
@@ -139,6 +144,12 @@ class _Positions:
 
     def get_effective_quantity(self, exchange_id, security_id):
         return self.filled.get((exchange_id, security_id), (0, 0, 0.0))[0]
+
+    def price_grid(self, exchange_id, security_id):
+        return CENT_GRID
+
+    def compliant_price(self, exchange_id, security_id, price, side):
+        return CENT_GRID.floor(price) if side == Side.BID else CENT_GRID.ceil(price)
 
     def fee_schedule(self, exchange_id, security_id):
         return FakeFeeSchedule(taker=FEE, maker=0.0)

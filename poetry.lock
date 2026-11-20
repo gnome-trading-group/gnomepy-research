@@ -1573,14 +1573,14 @@ tqdm = ["tqdm"]
 
 [[package]]
 name = "gnomepy"
-version = "3.18.3"
+version = "3.21.0"
 description = ""
 optional = false
 python-versions = "<3.14,>=3.13"
 groups = ["main"]
 files = [
-    {file = "gnomepy-3.18.3-py3-none-any.whl", hash = "sha256:79ec186ed79c5cd84b8152317b791f96830d21d9e563f8f58f9c1ab41627f433"},
-    {file = "gnomepy-3.18.3.tar.gz", hash = "sha256:a53e52e3d37d329c318234bd3bfc5ca07d388ce75cb4bd12d31d9c0de2d6bb6f"},
+    {file = "gnomepy-3.21.0-py3-none-any.whl", hash = "sha256:f1cb639f0a5228cec5a87a96eff8fa6e682c67cd4d8546f79554ef70f1dd1156"},
+    {file = "gnomepy-3.21.0.tar.gz", hash = "sha256:5957353e0f3db2443ae0e2169642ae9df8d88e65ac93bff568d050b4100d1904"},
 ]
 
 [package.dependencies]

@@ -11,8 +11,10 @@ from unittest.mock import patch
 import pytest
 
 from gnomepy import Scales
+from gnomepy.price_grid import PriceGrid
 
 PRICE_SCALE = Scales.PRICE
+CENT_GRID = PriceGrid.single(PRICE_SCALE // 100, PRICE_SCALE)
 SIZE_SCALE = Scales.SIZE
 CENT = PRICE_SCALE // 100
 
@@ -102,21 +104,13 @@ class FakeStreams:
 class _Spec:
     min_notional: int
     lot_size: int
-    tick_size: int
     min_size: int = 0
 
 
 class _FakeRegistry:
-    """Stands in for RegistryClient.
+    """Stands in for RegistryClient. Prices are checked on the position view's grid, not the registry's spec."""
 
-    tick_size defaults to the value the real registry currently returns for Kalshi
-    ($0.001), which the market data shows is wrong — Kalshi trades in whole cents.
-    Tests rely on that being the input so the strategy's own guard is what's exercised.
-    """
-
-    def __init__(self, tick_overrides: dict[int, int] | None = None,
-                 min_notional: int = 0, lot_size: int = SIZE_SCALE, min_size: int = 0):
-        self._ticks = tick_overrides or {}
+    def __init__(self, min_notional: int = 0, lot_size: int = SIZE_SCALE, min_size: int = 0):
         self._min_notional = min_notional
         self._lot_size = lot_size
         self._min_size = min_size
@@ -126,12 +120,9 @@ class _FakeRegistry:
         return [_Listing(exchange_id=eid, security_id=sid)]
 
     def get_listing_spec(self, *, listing_id: int, **_):
-        eid, _sid = LISTINGS[listing_id]
-        default_tick = PRICE_SCALE // 1000 if eid == K else CENT
         return [_Spec(
             min_notional=self._min_notional,
             lot_size=self._lot_size,
-            tick_size=self._ticks.get(listing_id, default_tick),
             min_size=self._min_size,
         )]
 
@@ -188,11 +179,14 @@ class FakeFeeSchedule:
 
 
 class FakePositions:
-    """Stands in for the engine's position view."""
+    """Stands in for the engine's position view. Every listing prices on cents unless ``grids`` names its own grid
+    by (exchange_id, security_id)."""
 
-    def __init__(self, positions: dict | None = None, fee_rates: dict[int, tuple[float, float]] | None = None):
+    def __init__(self, positions: dict | None = None, fee_rates: dict[int, tuple[float, float]] | None = None,
+                 grids: dict | None = None):
         self._pos = dict(positions or {})
         self._fee_rates = FEE_RATES if fee_rates is None else fee_rates
+        self._grids = dict(grids or {})
 
     def fee_schedule(self, exchange_id, security_id):
         rates = self._fee_rates.get(exchange_id)
@@ -211,10 +205,13 @@ class FakePositions:
     def get_effective_quantity(self, exchange_id, security_id):
         return self._pos.get((exchange_id, security_id), 0)
 
+    def price_grid(self, exchange_id, security_id):
+        return self._grids.get((exchange_id, security_id), CENT_GRID)
+
     def compliant_price(self, exchange_id, security_id, price, side):
-        """Rounds onto a cent, bids down and asks up, as the engine does on a one-cent tick."""
-        cent = PRICE_SCALE // 100
-        return (price // cent) * cent if str(side).endswith("BID") else -((-price) // cent) * cent
+        """Rounds onto the listing's grid, bids down and asks up, as the engine does."""
+        grid = self.price_grid(exchange_id, security_id)
+        return grid.floor(price) if str(side).endswith("BID") else grid.ceil(price)
 
 
 @pytest.fixture

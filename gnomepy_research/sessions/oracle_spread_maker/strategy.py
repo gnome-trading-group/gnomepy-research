@@ -62,7 +62,6 @@ class OracleSpreadMaker(Strategy):
         self._yes_sid: int = quote_listings[0].security_id
 
         specs = registry.get_listing_spec(listing_id=quote_listing_id)
-        self._tick_size: int = int(specs[0].tick_size) if specs else 1
         self._lot_size: int = int(specs[0].lot_size) if specs else 1
 
         contracts = registry.get_event_contracts(security_id=self._yes_sid)
@@ -232,13 +231,13 @@ class OracleSpreadMaker(Strategy):
 
         tau_multiplier = 2.0 if tau_norm < self._tau_widen_threshold else 1.0
         spread = self.base_spread * tau_multiplier
-        tick = self._tick_size
+        yes_grid = self.positions.price_grid(self._quote_eid, self._yes_sid)
+        no_grid = self.positions.price_grid(self._quote_eid, self._no_sid)
+        if yes_grid is None or no_grid is None:
+            return []
 
-        yes_bid_price = (int((p - spread) * PRICE_SCALE) // tick) * tick
-        yes_bid_price = max(min(yes_bid_price, PRICE_SCALE - tick), tick)
-
-        no_bid_price = (int(((1.0 - p) - spread) * PRICE_SCALE) // tick) * tick
-        no_bid_price = max(min(no_bid_price, PRICE_SCALE - tick), tick)
+        yes_bid_price = min(max(yes_grid.floor(round((p - spread) * PRICE_SCALE)), yes_grid.min), yes_grid.max)
+        no_bid_price = min(max(no_grid.floor(round(((1.0 - p) - spread) * PRICE_SCALE)), no_grid.min), no_grid.max)
 
         yes_scale = max(0.0, 1.0 - yes_qty / self.max_position)
         no_scale = max(0.0, 1.0 - no_qty / self.max_position)

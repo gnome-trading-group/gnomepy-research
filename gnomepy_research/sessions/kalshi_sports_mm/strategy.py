@@ -75,7 +75,6 @@ class KalshiSportsMM(Strategy):
         self._sid_b: int = b_listings[0].security_id
 
         specs = registry.get_listing_spec(listing_id=team_a_listing_id)
-        self._tick_size: int = int(specs[0].tick_size) if specs else 1
         self._lot_size: int = int(specs[0].lot_size) if specs else 1
 
         if resolution_time_override_ns:
@@ -213,27 +212,27 @@ class KalshiSportsMM(Strategy):
         self._last_quote_ts = ts
         self._quote_seq += 1
 
-        p = max(min(self._ref_fair_value, 0.99), 0.01)
+        grid_a = self.positions.price_grid(self._kalshi_eid, self._sid_a)
+        grid_b = self.positions.price_grid(self._kalshi_eid, self._sid_b)
+        if grid_a is None or grid_b is None:
+            return self._cancel_all()
+
+        p = max(min(self._ref_fair_value, grid_a.max / PRICE_SCALE), grid_a.min / PRICE_SCALE)
         tau_multiplier = 2.0 if tau_norm < self._tau_widen_threshold else 1.0
         spread = self.base_spread * tau_multiplier
-        tick = self._tick_size
 
         q_a = self.positions.get_effective_quantity(self._kalshi_eid, self._sid_a) // self._lot_size
         q_b = self.positions.get_effective_quantity(self._kalshi_eid, self._sid_b) // self._lot_size
         D = q_a - q_b
 
-        r_a = max(min(p - q_a * self._inventory_skew, 0.99), 0.01)
-        r_b = max(min((1.0 - p) - q_b * self._inventory_skew, 0.99), 0.01)
+        r_a = max(min(p - q_a * self._inventory_skew, grid_a.max / PRICE_SCALE), grid_a.min / PRICE_SCALE)
+        r_b = max(min((1.0 - p) - q_b * self._inventory_skew, grid_b.max / PRICE_SCALE), grid_b.min / PRICE_SCALE)
 
-        a_bid = (int((r_a - spread) * PRICE_SCALE) // tick) * tick
-        a_bid = max(min(a_bid, PRICE_SCALE - tick), tick)
-        a_ask = (int((r_a + spread) * PRICE_SCALE) + tick - 1) // tick * tick
-        a_ask = max(min(a_ask, PRICE_SCALE - tick), tick)
+        a_bid = min(max(grid_a.floor(round((r_a - spread) * PRICE_SCALE)), grid_a.min), grid_a.max)
+        a_ask = min(max(grid_a.ceil(round((r_a + spread) * PRICE_SCALE)), grid_a.min), grid_a.max)
 
-        b_bid = (int((r_b - spread) * PRICE_SCALE) // tick) * tick
-        b_bid = max(min(b_bid, PRICE_SCALE - tick), tick)
-        b_ask = (int((r_b + spread) * PRICE_SCALE) + tick - 1) // tick * tick
-        b_ask = max(min(b_ask, PRICE_SCALE - tick), tick)
+        b_bid = min(max(grid_b.floor(round((r_b - spread) * PRICE_SCALE)), grid_b.min), grid_b.max)
+        b_ask = min(max(grid_b.ceil(round((r_b + spread) * PRICE_SCALE)), grid_b.min), grid_b.max)
 
         if a_bid >= a_ask:
             a_bid, a_ask = 0, 0

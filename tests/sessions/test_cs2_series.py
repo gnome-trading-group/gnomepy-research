@@ -39,7 +39,7 @@ from gnomepy_research.sessions.cs2_series.decision import (
     taker_fee,
 )
 from gnomepy_research.sessions.cs2_series.match_feed import MatchFeed
-from tests.sessions.conftest import FakeFeeSchedule, FakeStreams, stream_of
+from tests.sessions.conftest import CENT_GRID, FakeFeeSchedule, FakeStreams, stream_of
 
 P, S = Scales.PRICE, Scales.SIZE
 MINUTE = 60_000_000_000
@@ -73,7 +73,7 @@ def test_max_entry_price_without_fee_is_fair_minus_edge():
 
 
 def _side(fair, asks, fee_rate=FEE):
-    return evaluate_side(fair, asks, min_edge=0.05, fee_rate=fee_rate, tick=0.01)
+    return evaluate_side(fair, asks, min_edge=0.05, fee_rate=fee_rate, grid=CENT_GRID)
 
 
 def test_no_entry_when_best_ask_does_not_clear_the_threshold():
@@ -312,7 +312,6 @@ class _Listing:
 
 @dataclass
 class _Spec:
-    tick_size: int = P // 100
     lot_size: int = S // 100
     min_size: int = 0
 
@@ -343,6 +342,7 @@ class _Positions:
         self.filled: dict = {}
         self.pending: dict = {}
         self.rates = rates or {}
+        self.no_spec: set = set()
 
     def fill(self, listing, shares, price, fee=0.0):
         key = LISTINGS[listing]
@@ -360,6 +360,12 @@ class _Positions:
     def get_effective_quantity(self, exchange_id, security_id):
         key = (exchange_id, security_id)
         return self.filled.get(key, (0, 0, 0.0))[0] + self.pending.get(key, 0)
+
+    def price_grid(self, exchange_id, security_id):
+        return None if (exchange_id, security_id) in self.no_spec else CENT_GRID
+
+    def compliant_price(self, exchange_id, security_id, price, side):
+        return CENT_GRID.floor(price) if side == Side.BID else CENT_GRID.ceil(price)
 
     def fee_schedule(self, exchange_id, security_id):
         return FakeFeeSchedule(taker=self.rates.get(exchange_id, FEE), maker=0.0)
@@ -490,6 +496,12 @@ def test_buys_the_underpriced_team_with_a_limit_at_the_deepest_level_it_costed(m
     assert _key(o) == LISTINGS[102], "team B is underpriced, so buy team B's listing"
     assert o.take_side == Side.BID and o.take_order_type == OrderType.LIMIT
     assert o.take_limit_price == round(0.50 * P)
+
+
+def test_a_listing_with_no_spec_is_never_bought(make):
+    s = make()
+    s.positions.no_spec.add(LISTINGS[102])
+    assert _tick(s, 102, B_ASK, 30) == [], "the engine refuses every order on a listing with no spec"
 
 
 def test_buys_on_the_venue_with_the_biggest_edge_after_its_own_fee(make):

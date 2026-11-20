@@ -8,7 +8,9 @@ became known (a verdict that came after the page's first row brings a newer vers
 was), so every lookup is as of an event time and a replay never trades on a review before it was seen. Backfilled rows
 were seen when published.
 
-A Tomatometer reading is likewise as of when it was seen (a row is written when the counts change).
+A Tomatometer reading is likewise as of when it was seen (a row is written when the counts change). Both tables are
+read whole, every version of every row: rt_scores keys a film's readings by film, so its newest row alone would hide
+every change before it. An extract for a replay must be the same full history (DatasetStore.history).
 
 Live, a daemon thread re-reads every film's rows every reload_seconds, one scan of each table for all of them, and swaps
 in a new snapshot per film, so trading callbacks never wait on S3 and a session holding many films reads no more often
@@ -44,12 +46,12 @@ class Review:
 
 
 def read_rows(source: str, film_ids: list[str], store: DatasetStore | None = None) -> pd.DataFrame:
-    """The films' rows of a table, or of a parquet extract of it (for replays). A table is read through store, or a
-    new one when none is given."""
+    """The films' rows of a table, every version of each, or of a parquet extract of it (for replays). A table is read
+    through store, or a new one when none is given."""
     if source.endswith(".parquet"):
         rows = pd.read_parquet(source)
         return rows[rows.film_id.isin(film_ids)].reset_index(drop=True)
-    return (store or DatasetStore()).load(source, row_filter=In("film_id", film_ids))
+    return (store or DatasetStore()).history(source, row_filter=In("film_id", film_ids))
 
 
 def by_film(rows: pd.DataFrame, film_ids: list[str]) -> dict[str, pd.DataFrame]:

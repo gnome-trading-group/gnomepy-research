@@ -36,7 +36,6 @@ config). Reviews arrive by a table re-read every reload_seconds, and are acted o
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass, field
 
 from gnomepy import ExecutionReport, Intent, OrderStatus, OrderType, Scales, Side, Strategy
@@ -68,7 +67,6 @@ class _Book:
     listing_id: int
     exchange_id: int
     security_id: int
-    tick: float
     lot: int
     min_size: int
     asks: list[Level] = field(default_factory=list)
@@ -177,11 +175,10 @@ class RtReviewWave(Strategy):
             raise ValueError(f"listing {listing_id} not found in registry")
         specs = registry.get_listing_spec(listing_id=int(listing_id))
         spec = specs[0] if specs else None
-        tick = int(spec.tick_size) / PRICE_SCALE if spec and spec.tick_size else 0.01
         lot = int(spec.lot_size) if spec and spec.lot_size else SIZE_SCALE
         min_size = int(spec.min_size) if spec and spec.min_size else 0
-        return _Book(venue, strike, side, int(listing_id), listings[0].exchange_id, listings[0].security_id, tick,
-                     lot, min_size)
+        return _Book(venue, strike, side, int(listing_id), listings[0].exchange_id, listings[0].security_id, lot,
+                     min_size)
 
     def simulate_processing_time(self) -> int:
         return self._processing_time_ns
@@ -297,7 +294,12 @@ class RtReviewWave(Strategy):
             best = b.asks[0].price
             if not self.min_price <= best <= self.max_price:
                 continue
-            limit = min(self.max_price, _on_tick(best + self.max_through, b.tick))
+            # The engine refuses every order on a listing with no spec.
+            if self.positions.price_grid(b.exchange_id, b.security_id) is None:
+                continue
+            # Rounded down onto the grid, so a limit never reaches past max_through.
+            limit = min(self.max_price, self.positions.compliant_price(
+                b.exchange_id, b.security_id, round((best + self.max_through) * PRICE_SCALE), Side.BID) / PRICE_SCALE)
             contracts, _ = states[b.listing_id]
             t = take(b.asks, limit, self.max_contracts_per_strike - contracts, self.max_usd_per_venue - spent[b.venue],
                      self._taker_rate(b), b.lot / SIZE_SCALE)
@@ -371,7 +373,3 @@ class RtReviewWave(Strategy):
         buf.set_double(self._o_signal, sig)
         buf.commit()
 
-
-def _on_tick(price: float, tick: float) -> float:
-    """The price rounded down to the tick, so a limit never reaches past max_through."""
-    return math.floor(price / tick + 1e-9) * tick if tick > 0 else price

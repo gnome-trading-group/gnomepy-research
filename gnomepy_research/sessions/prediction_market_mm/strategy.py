@@ -78,8 +78,6 @@ class PredictionMarketMaker(Strategy):
         self.exchange_id: int = listings[0].exchange_id
         self.security_id: int = listings[0].security_id
 
-        specs = registry.get_listing_spec(listing_id=listing_id)
-        self._tick_size: int = int(specs[0].tick_size) if specs else 1
 
         contracts = registry.get_event_contracts(security_id=self.security_id)
         if not contracts:
@@ -173,18 +171,20 @@ class PredictionMarketMaker(Strategy):
         vals = self._interp(pts)
         v_here = vals[0]
 
-        tick = self._tick_size
+        grid = self.positions.price_grid(self.exchange_id, self.security_id)
+        if grid is None:
+            return []
         if can_bid:
             z_b_val = (v_here - vals[1]) / params.delta_q
             pi_b = optimal_bid(z_b_val, p, t_real, params)
-            raw = int(pi_b * PRICE_SCALE)
-            bid_price_int = int(np.clip((raw // tick) * tick, tick, PRICE_SCALE - tick))
+            raw = round(pi_b * PRICE_SCALE)
+            bid_price_int = min(max(grid.floor(raw), grid.min), grid.max)
 
         if can_ask:
             z_a_val = (v_here - vals[-1]) / params.delta_q
             pi_a = optimal_ask(z_a_val, p, t_real, params)
-            raw = int(pi_a * PRICE_SCALE)
-            ask_price_int = int(np.clip(-(-raw // tick) * tick, tick, PRICE_SCALE - tick))
+            raw = round(pi_a * PRICE_SCALE)
+            ask_price_int = min(max(grid.ceil(raw), grid.min), grid.max)
 
         if self._metrics_buf is not None:
             self._metrics_buf.begin()

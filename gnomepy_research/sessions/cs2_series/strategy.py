@@ -96,7 +96,6 @@ class _Leg:
     listing_id: int
     exchange_id: int
     security_id: int
-    tick: float
     lot: int
     min_size: int
     asks: list[Level] = field(default_factory=list)
@@ -258,11 +257,10 @@ class CS2Series(Strategy):
             raise ValueError(f"listing {listing_id} not found in registry")
         specs = registry.get_listing_spec(listing_id=int(listing_id))
         spec = specs[0] if specs else None
-        tick = int(spec.tick_size) / PRICE_SCALE if spec and spec.tick_size else 0.01
         lot = int(spec.lot_size) if spec and spec.lot_size else 1
         min_size = int(spec.min_size) if spec and spec.min_size else 0
         return _Leg(venue=venue, team=team, listing_id=int(listing_id), exchange_id=listings[0].exchange_id,
-                    security_id=listings[0].security_id, tick=tick, lot=lot, min_size=min_size)
+                    security_id=listings[0].security_id, lot=lot, min_size=min_size)
 
     def simulate_processing_time(self) -> int:
         return self._processing_time_ns
@@ -419,8 +417,11 @@ class CS2Series(Strategy):
         for leg in self._legs:
             if leg.team not in teams or leg.backoff_top is not None:
                 continue
+            grid = self.positions.price_grid(leg.exchange_id, leg.security_id)
+            if grid is None:
+                continue
             e = evaluate_side(fairs[leg.team], leg.asks, min_edge=self.min_edge, fee_rate=self._taker_rate(leg),
-                              tick=leg.tick)
+                              grid=grid)
             if e is not None:
                 entries.append((leg, e))
         return max(entries, key=lambda le: le[1].edge_at_best) if entries else None

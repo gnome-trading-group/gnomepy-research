@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from gnomepy import OrderStatus, Scales, Side
+from gnomepy.price_grid import PriceBand, PriceGrid
 from gnomepy_research.sessions.esports_cross_venue_arb.decision import Level, team_ladder
 from gnomepy_research.sessions.esports_cross_venue_arb__pm_maker import strategy as mod
 from gnomepy_research.sessions.esports_cross_venue_arb__pm_maker.quoting import MoveWindow, maker_bid
@@ -16,19 +17,37 @@ from tests.sessions.test_esports_cross_venue_arb import LEGS, LISTINGS, RATES, _
 P, S = Scales.PRICE, Scales.SIZE
 SEC = 1_000_000_000
 
+CENTS = PriceGrid.single(10_000_000, 1_000_000_000)
+TAPERED = PriceGrid.of([
+    PriceBand(0, 100_000_000, 1_000_000),
+    PriceBand(100_000_000, 900_000_000, 10_000_000),
+    PriceBand(900_000_000, 1_000_000_000, 1_000_000),
+])
+
 
 def test_bid_leaves_min_edge_after_the_hedge():
     hedge = team_ladder(302, [Level(0.40, 50), Level(0.405, 30), Level(0.45, 500)], 301, [], 0.0695, False)
-    price, size = maker_bid(hedge, 200, 0.01, 0.0, 0.01, best_ask=0.60, depth_band=0.01)
+    price, size = maker_bid(hedge, 200, 0.01, 0.0, CENTS, best_ask=0.60, depth_band=0.01)
     worst = 0.405 + 0.0695 * 0.405 * 0.595
     assert size == 80
     assert price == pytest.approx(0.56)
     assert price <= 1 - worst - 0.01
 
 
+
+def test_a_tapered_grid_bids_in_tenths_of_a_cent_in_its_tails():
+    hedge = team_ladder(302, [Level(0.9345, 50)], 301, [], 0.0, False)
+    assert maker_bid(hedge, 200, 0.01, 0.0, TAPERED, best_ask=None, depth_band=0.01)[0] == pytest.approx(0.055)
+    assert maker_bid(hedge, 200, 0.01, 0.0, CENTS, best_ask=None, depth_band=0.01)[0] == pytest.approx(0.05)
+
+
+def test_the_bid_stays_one_grid_step_under_an_ask_on_a_band_edge():
+    hedge = team_ladder(302, [Level(0.30, 50)], 301, [], 0.0695, False)
+    assert maker_bid(hedge, 200, 0.01, 0.0, TAPERED, best_ask=0.10, depth_band=0.01)[0] == pytest.approx(0.099)
+
 def test_bid_stays_under_the_ask():
     hedge = team_ladder(302, [Level(0.30, 50)], 301, [], 0.0695, False)
-    assert maker_bid(hedge, 200, 0.01, 0.0, 0.01, best_ask=0.55, depth_band=0.01)[0] == pytest.approx(0.54)
+    assert maker_bid(hedge, 200, 0.01, 0.0, CENTS, best_ask=0.55, depth_band=0.01)[0] == pytest.approx(0.54)
 
 
 def test_move_window_forgets_old_prices():
@@ -41,7 +60,7 @@ def test_move_window_forgets_old_prices():
 
 
 def test_no_bid_without_a_hedge():
-    assert maker_bid([], 200, 0.01, 0.0, 0.01, 0.5, 0.01) is None
+    assert maker_bid([], 200, 0.01, 0.0, CENTS, 0.5, 0.01) is None
 
 
 @pytest.fixture
@@ -83,6 +102,14 @@ def test_bids_each_team_post_only(make):
     # Team A's hedge is team B: Polymarket US asks 0.48x60 is the cheapest all-in.
     hedge_b = 0.48 + 0.0695 * 0.48 * 0.52
     assert q[1101][0] == pytest.approx(int((1 - hedge_b - 0.01) * 100) / 100) and q[1101][1] == 60 and q[1101][2]
+    assert 1102 in q
+
+
+def test_a_listing_with_no_spec_gets_no_bid(make):
+    s = make(min_edge=0.01)
+    s._position_view = FakePositions(fee_rates=RATES, grids={LISTINGS[101]: None})
+    q = quotes(feed(s, BOOKS))
+    assert 1101 not in q, "the engine refuses every order on a listing with no spec"
     assert 1102 in q
 
 

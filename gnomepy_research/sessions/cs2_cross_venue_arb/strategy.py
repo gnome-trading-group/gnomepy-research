@@ -69,7 +69,6 @@ class _Leg:
     exchange_id: int
     security_id: int
     min_size: float
-    tick: float = 0.01
     asks: list[Level] = field(default_factory=list)
     bids: list[Level] = field(default_factory=list)
     bad: bool = True  # no book yet is no book to trust
@@ -153,9 +152,8 @@ class CS2CrossVenueArb(Strategy):
             raise ValueError(f"listing {listing_id} not found in registry")
         specs = registry.get_listing_spec(listing_id=int(listing_id))
         min_size = int(specs[0].min_size) / SIZE_SCALE if specs and specs[0].min_size else 0.0
-        tick = int(specs[0].tick_size) / PRICE_SCALE if specs and getattr(specs[0], "tick_size", None) else 0.01
         return _Leg(venue=venue, team=team, listing_id=int(listing_id), exchange_id=listings[0].exchange_id,
-                    security_id=listings[0].security_id, min_size=min_size, tick=tick)
+                    security_id=listings[0].security_id, min_size=min_size)
 
     def simulate_processing_time(self) -> int:
         return self._processing_time_ns

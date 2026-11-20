@@ -40,10 +40,10 @@ completion_retry_seconds later, and an order the venue rejected is never sent ag
 repeat, once per book update. Completion never waits for the cooldown and never stops for the stake cap: an unhedged
 position is the one risk the strategy exists not to hold.
 
-Every limit is put on the tick the engine enforces, rounded toward the book (a buy up, a sale down), so it still
-reaches the level it was costed on: Polymarket International moves a market between a cent and a tenth of one, and a
-book quoted on the finer tick than the listing's spec says would otherwise be rejected order after order. A limit
-that rounds to 0 or $1 is not sent; an attempt with such a leg is not made.
+Every limit is put on the listing's price grid in force, rounded toward the book (a buy up, a sale down), so it still
+reaches the level it was costed on: Polymarket International moves a market between a cent and a tenth of one, and
+the engine refuses a price off the grid. A limit that rounds to 0 or $1 is not sent; an attempt with such a leg is not
+made.
 
 A venue may hold a taker order before matching it (Polymarket International delays marketable orders on these
 markets by about a second, its secondsDelay, during which makers can pull quotes). An attempt sends the slowest
@@ -114,7 +114,6 @@ class _Leg:
     exchange_id: int
     security_id: int
     min_size: float
-    tick: float = 0.01
     # The venue's market id (Polymarket's condition id), where its listing id carries one.
     market_id: str | None = None
     asks: list[Level] = field(default_factory=list)
@@ -259,10 +258,9 @@ class EsportsCrossVenueArb(Strategy):
             raise ValueError(f"listing {listing_id} not found in registry")
         specs = registry.get_listing_spec(listing_id=int(listing_id))
         min_size = int(specs[0].min_size) / SIZE_SCALE if specs and specs[0].min_size else 0.0
-        tick = int(specs[0].tick_size) / PRICE_SCALE if specs and getattr(specs[0], "tick_size", None) else 0.01
         native = getattr(listings[0], "exchange_security_id", None) or ""
         return _Leg(venue=venue, team=team, listing_id=int(listing_id), exchange_id=listings[0].exchange_id,
-                    security_id=listings[0].security_id, min_size=min_size, tick=tick,
+                    security_id=listings[0].security_id, min_size=min_size,
                     market_id=native.split(":")[0] or None)
 
     def simulate_processing_time(self) -> int:
@@ -492,8 +490,11 @@ class EsportsCrossVenueArb(Strategy):
     # ---- orders --------------------------------------------------------------------------
 
     def _take_limit(self, order: Order) -> int | None:
-        """The order's scaled limit on the engine's tick, rounded toward the book; None where that leaves no price."""
+        """The order's scaled limit on the listing's grid, rounded toward the book; None where that leaves no price or
+        the listing has no spec (the engine would refuse it)."""
         leg = self._leg_of[order.listing_id]
+        if self.positions.price_grid(leg.exchange_id, leg.security_id) is None:
+            return None
         # compliant_price rounds an ask up and a bid down: the way toward the book for a buy and a sale.
         side = Side.ASK if order.direction == BUY else Side.BID
         limit = self.positions.compliant_price(leg.exchange_id, leg.security_id, round(order.limit * PRICE_SCALE),

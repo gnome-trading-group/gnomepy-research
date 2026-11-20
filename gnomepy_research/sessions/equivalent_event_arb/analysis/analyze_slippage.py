@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 
-TICK = 0.01  # prediction market tick size ($0.01)
+CENT = 0.01  # the analysis window is counted in whole cents, whatever the listing's grid
 
 
 def load_backtest(output_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -41,7 +41,7 @@ def cheap_depth(row: pd.Series, side: str, window_cents: float) -> float:
     """Sum of depth within window_cents of best price on the relevant side."""
     if side == "Bid":  # buying, care about asks
         best = row.get("ask_price_0", float("nan"))
-        ceiling = best + window_cents * TICK
+        ceiling = best + window_cents * CENT
         total = 0.0
         for i in range(10):
             p = row.get(f"ask_price_{i}", float("nan"))
@@ -54,7 +54,7 @@ def cheap_depth(row: pd.Series, side: str, window_cents: float) -> float:
         return total
     else:  # selling, care about bids
         best = row.get("bid_price_0", float("nan"))
-        floor = best - window_cents * TICK
+        floor = best - window_cents * CENT
         total = 0.0
         for i in range(10):
             p = row.get(f"bid_price_{i}", float("nan"))

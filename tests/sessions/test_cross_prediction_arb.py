@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from gnomepy import Scales
+from gnomepy.price_grid import PriceBand, PriceGrid
 from gnomepy.java.enums import Action
 from gnomepy_research.sessions.cross_prediction_arb.strategy import (
     BookLevel,
@@ -114,28 +115,32 @@ class TestNotionalConsistency:
 
 
 # ---------------------------------------------------------------------------
-# 1.1 — chase prices must land on a real tick
+# 1.1 — chase prices must land on the listing's grid
 # ---------------------------------------------------------------------------
 
-class TestTickQuantization:
-    def test_kalshi_prices_land_on_whole_cents(self, strategy):
-        """The registry reports a $0.001 tick for Kalshi; the market data is 100%
-        whole-cent. The strategy must not emit prices the exchange cannot accept."""
-        kalshi_leg = next(
-            lg for lg in strategy._pairings[0].legs
-            if strategy._exchange_id_to_label.get(lg.exchange_id) == "k"
-        )
+TAPERED = PriceGrid.of([
+    PriceBand(0, 10 * CENT, CENT // 10),
+    PriceBand(10 * CENT, 90 * CENT, CENT),
+    PriceBand(90 * CENT, 100 * CENT, CENT // 10),
+])
+
+
+class TestGridQuantization:
+    def _leg(self, strategy, label):
+        return next(lg for lg in strategy._pairings[0].legs if strategy._exchange_id_to_label.get(lg.exchange_id) == label)
+
+    def test_a_cent_grid_floors_onto_whole_cents(self, strategy):
+        leg = self._leg(strategy, "k")
         for raw in (43 * CENT + 1, 43 * CENT + CENT // 2, 79 * CENT + 7):
-            q = strategy._quantize_price(kalshi_leg, raw)
+            q = strategy._quantize_price(leg, raw)
             assert q % CENT == 0, f"{q} is not a whole cent"
             assert q <= raw, "quantization must not round a bid up"
 
-    def test_polymarket_prices_land_on_whole_cents(self, strategy):
-        pm_leg = next(
-            lg for lg in strategy._pairings[0].legs
-            if strategy._exchange_id_to_label.get(lg.exchange_id) == "pm"
-        )
-        assert strategy._quantize_price(pm_leg, 52 * CENT + 3) % CENT == 0
+    def test_a_tapered_grid_keeps_tenths_of_a_cent_only_in_its_tails(self, strategy):
+        leg = self._leg(strategy, "k")
+        strategy._position_view = FakePositions(grids={(leg.exchange_id, leg.security_id): TAPERED})
+        assert strategy._quantize_price(leg, 4 * CENT + 75 * CENT // 100) == 4 * CENT + 7 * CENT // 10
+        assert strategy._quantize_price(leg, 47 * CENT + CENT // 2) == 47 * CENT
 
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from gnomepy.price_grid import PriceGrid
+
+PRICE_SCALE = 1_000_000_000
+
 
 @dataclass(frozen=True)
 class Level:
@@ -39,7 +43,7 @@ class Entry:
     fair: float          # probability this listing's team wins
     best_ask: float
     edge_at_best: float  # fair - best_ask - fee(best_ask)
-    limit_price: float   # highest price that still clears min_edge, on tick
+    limit_price: float   # highest price that still clears min_edge, on the listing's grid
     levels: tuple[Level, ...]  # the asks at or below limit_price, cheapest first
 
     @property
@@ -88,15 +92,16 @@ def max_entry_price(fair: float, min_edge: float, fee_rate: float) -> float:
     return max(0.0, min(1.0, (-b - math.sqrt(disc)) / (2 * a)))
 
 
-def _floor_to_tick(price: float, tick: float) -> float:
-    return math.floor(price / tick + 1e-9) * tick
+def _floor_to_grid(price: float, grid: PriceGrid) -> float:
+    return grid.floor(round(price * PRICE_SCALE)) / PRICE_SCALE
 
 
 def _floor_to_lot(shares: float, lot: float) -> float:
     return math.floor(shares / lot + 1e-9) * lot
 
 
-def evaluate_side(fair: float, asks: list[Level], *, min_edge: float, fee_rate: float, tick: float) -> Entry | None:
+def evaluate_side(fair: float, asks: list[Level], *, min_edge: float, fee_rate: float,
+                  grid: PriceGrid) -> Entry | None:
     """An entry on one listing if its best ask clears min_edge after the fee, with every ask that still clears it."""
     if not asks:
         return None
@@ -104,7 +109,7 @@ def evaluate_side(fair: float, asks: list[Level], *, min_edge: float, fee_rate: 
     edge_at_best = fair - best - taker_fee(best, fee_rate)
     if edge_at_best < min_edge:
         return None
-    limit = _floor_to_tick(max_entry_price(fair, min_edge, fee_rate), tick)
+    limit = _floor_to_grid(max_entry_price(fair, min_edge, fee_rate), grid)
     if limit < best - 1e-12:
         return None
     levels = tuple(level for level in asks if level.price <= limit + 1e-12)

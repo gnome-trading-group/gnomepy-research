@@ -120,7 +120,10 @@ class CS2CrossVenueArbPMMaker(CS2CrossVenueArb):
         maker_rate = self._fee_rates(leg.listing_id)[1]
         best_ask = leg.asks[0].price if leg.asks else None
         size = min(self.quote_size, self.max_locked_usd)
-        bid = maker_bid(hedge, size, self.min_edge, maker_rate, leg.tick, best_ask, self.depth_band)
+        grid = self.positions.price_grid(leg.exchange_id, leg.security_id)
+        if grid is None:
+            return None
+        bid = maker_bid(hedge, size, self.min_edge, maker_rate, grid, best_ask, self.depth_band)
         if bid is None or bid[1] < max(1.0, leg.min_size):
             return None
         price = self.positions.compliant_price(leg.exchange_id, leg.security_id, round(bid[0] * PRICE_SCALE),

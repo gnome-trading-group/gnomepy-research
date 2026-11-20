@@ -26,10 +26,6 @@ _PM_TAKER_SETTLE_NS = 500_000_000
 # the new order instead of the old one. 200ms >> 2×latency ensures settlement.
 _CANCEL_SETTLE_NS = 200_000_000
 
-# Prediction-market venues quote in whole cents. The registry currently reports a
-# $0.001 tick for Kalshi, which the recorded books contradict — see _effective_tick.
-_MIN_TICK = PRICE_SCALE // 100
-
 # Close retries before a pairing stops trying and returns to SCANNING. Without a cap
 # an un-closeable residual (sub-lot, or below the min-notional floor) looped forever.
 _MAX_CLOSE_ATTEMPTS = 5
@@ -249,7 +245,7 @@ class AggressiveModel(PriceModel):
     def compute_bid(self, listing, best_bid, best_ask):
         mid = (best_bid + best_ask) // 2
         price = best_bid + int(mid * self._improve_bps / 10000)
-        # best_ask - 1 is one raw scale unit below the ask and lands off-tick; the
+        # best_ask - 1 is one raw scale unit below the ask and lands off the grid; the
         # caller quantizes, which floors it back onto the grid.
         return min(price, best_ask - 1)
 
@@ -319,20 +315,17 @@ class CrossPredictionArb(Strategy):
                 raise ValueError(f"No listing spec for listing_id={listing_id}")
             listing = Listing(listing_id, results[0].exchange_id, results[0].security_id)
             spec = (int(specs[0].min_notional or 0), int(specs[0].lot_size or 0), int(specs[0].min_size or 0))
-            tick_size = int(specs[0].tick_size) if specs[0].tick_size else PRICE_SCALE // 100
-            return listing, spec, tick_size
+            return listing, spec
 
         # Build exchange_id → label mapping and resolve per-outcome listings
         self._exchange_id_to_label: dict[int, str] = {}
-        self._tick_sizes: dict[Listing, int] = {}
         outcome_listings: list[list[Listing]] = []
         listing_specs: dict[Listing, tuple[int, int, int]] = {}
         for outcome in outcomes:
             resolved = []
             for label, lid in outcome.items():
-                r, spec, tick_size = resolve(lid)
+                r, spec = resolve(lid)
                 self._exchange_id_to_label[r.exchange_id] = label
-                self._tick_sizes[r] = tick_size
                 resolved.append(r)
                 listing_specs[r] = spec
             outcome_listings.append(resolved)
@@ -442,10 +435,9 @@ class CrossPredictionArb(Strategy):
                 price_cents = intent.bid_price / CENT
                 qty_contracts = intent.bid_size / SIZE_SCALE if intent.bid_size else 0
                 notional = price_cents / 100 * qty_contracts
-                tick_ok = intent.bid_price % CENT == 0
                 parts.append(
                     f"  MAKER BID {label} sid={sid} "
-                    f"price={price_cents:.2f}¢ {'OK' if tick_ok else 'SUBTICK!'} "
+                    f"price={price_cents:.2f}¢ "
                     f"qty={qty_contracts:.2f}c notional=${notional:.2f}"
                 )
             if intent.take_size is not None and intent.take_size > 0:
@@ -453,10 +445,9 @@ class CrossPredictionArb(Strategy):
                 price_cents = (intent.take_limit_price or 0) / CENT
                 qty_contracts = intent.take_size / SIZE_SCALE
                 notional = price_cents / 100 * qty_contracts
-                tick_ok = (intent.take_limit_price or 0) % CENT == 0
                 parts.append(
                     f"  TAKER {side} {label} sid={sid} "
-                    f"price={price_cents:.2f}¢ {'OK' if tick_ok else 'SUBTICK!'} "
+                    f"price={price_cents:.2f}¢ "
                     f"qty={qty_contracts:.2f}c notional=${notional:.2f}"
                 )
             if not parts:
@@ -816,6 +807,9 @@ class CrossPredictionArb(Strategy):
     def _on_scanning(self, ps: PairingState, ts: int) -> list[Intent]:
         if self._listing_is_busy(ps.pairing):
             return []
+        # The engine refuses every order on a listing with no spec, so a pairing with one could only half fill.
+        if any(self.positions.price_grid(lg.exchange_id, lg.security_id) is None for lg in ps.pairing.legs):
+            return []
 
         for lg in ps.pairing.legs:
             eid, sid = lg.exchange_id, lg.security_id
@@ -896,7 +890,7 @@ class CrossPredictionArb(Strategy):
                     take_limit_price=limit_price,
                 ))
             else:
-                # Quantize here too: join_best_bid lands on-tick, but the other price
+                # Quantize here too: join_best_bid lands on the grid, but the other price
                 # models can return best_ask - 1, which is one raw scale unit.
                 bid = self._quantize_price(leg.listing, bid_prices[leg.listing])
                 leg.entry_bid = bid
@@ -915,18 +909,8 @@ class CrossPredictionArb(Strategy):
         return result
 
     def _quantize_price(self, listing: Listing, price: int) -> int:
-        tick = self._effective_tick(listing)
-        return (price // tick) * tick
-
-    def _effective_tick(self, listing: Listing) -> int:
-        """Tick to quantize to, floored at one cent.
-
-        The registry reports $0.001 for every Kalshi listing, but the recorded books
-        are 100% whole-cent across 1.5M observations. Trusting it produced orders at
-        prices the exchange cannot accept (0.431, 0.824) which the backtest happily
-        filled. Floor until the security master is corrected.
-        """
-        return max(self._tick_sizes.get(listing, _MIN_TICK), _MIN_TICK)
+        """The price floored onto the listing's grid in force, as the engine checks it."""
+        return self.positions.compliant_price(listing.exchange_id, listing.security_id, price, Side.BID)
 
     def _on_post_only_reject(self, ps: PairingState, leg: LegState) -> None:
         """Clear the chase dedupe for a price the exchange refused.
